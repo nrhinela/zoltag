@@ -73,7 +73,7 @@
                     <input
                         id="searchInput"
                         type="text"
-                        placeholder="Search by filename, camera, location..."
+                        placeholder="Search tags..."
                         class="w-full px-4 py-2 border rounded-lg"
                         onkeyup="handleSearch()"
                     >
@@ -487,15 +487,12 @@
         }
 
         function addCategoryKeyword(category, keyword) {
-            console.log('Adding keyword to category:', category, keyword);
-
             if (!selectedKeywordsByCategory[category]) {
                 selectedKeywordsByCategory[category] = new Set();
             }
             selectedKeywordsByCategory[category].add(keyword);
             selectedKeywords.add(keyword);
 
-            console.log('Selected keywords:', Array.from(selectedKeywords));
             renderCategoryTags(category);
             updateFilterCount();
             loadImages();
@@ -617,12 +614,10 @@
         });
 
         async function loadImages() {
-            console.log('loadImages: Starting...');
             const loading = document.getElementById('loading');
             const imageGrid = document.getElementById('imageGrid');
             const emptyState = document.getElementById('emptyState');
 
-            console.log('loadImages: Showing loading spinner');
             loading.classList.remove('hidden');
             imageGrid.innerHTML = '';
             emptyState.classList.add('hidden');
@@ -630,11 +625,6 @@
             try {
                 // Build query parameters
                 const params = new URLSearchParams();
-
-                console.log('loadImages: selectedKeywords:', Array.from(selectedKeywords));
-                console.log('loadImages: selectedKeywords.size:', selectedKeywords.size);
-                console.log('loadImages: categoryOperators:', categoryOperators);
-                console.log('loadImages: selectedKeywordsByCategory:', selectedKeywordsByCategory);
 
                 // Add keyword filters with per-category operators
                 if (selectedKeywords.size > 0) {
@@ -649,46 +639,35 @@
                             };
                         }
                     }
-                    console.log('loadImages: Adding category filters:', categoryFilters);
                     params.append('category_filters', JSON.stringify(categoryFilters));
                 }
 
-                console.log('loadImages: Fetching images from API with params:', params.toString());
                 const response = await fetch(`/api/v1/images?${params.toString()}`, {
                     headers: {
                         'X-Tenant-ID': currentTenant
                     }
                 });
-                
-                console.log('loadImages: Response status:', response.status);
+
                 if (!response.ok) {
                     throw new Error(`HTTP ${response.status}: ${response.statusText}`);
                 }
-                
+
                 const data = await response.json();
-                console.log('Loaded images:', data);
-                console.log('Number of images:', data.images?.length);
                 currentImages = data.images || [];
-                
-                console.log('loadImages: Hiding loading spinner');
+
                 loading.classList.add('hidden');
-                
+
                 if (currentImages.length === 0) {
-                    console.log('loadImages: No images, showing empty state');
                     emptyState.classList.remove('hidden');
                 } else {
-                    console.log('loadImages: Creating image cards...');
                     // Preload thumbnail URLs for better performance
                     currentImages.forEach((image, index) => {
-                        console.log(`Creating card ${index + 1}/${currentImages.length}`);
                         const card = createImageCard(image);
                         imageGrid.appendChild(card);
                     });
                 }
                 // Always update stats, even if no images
-                console.log('loadImages: Updating stats...');
                 updateStats(data);
-                console.log('loadImages: Complete!');
             } catch (error) {
                 console.error('Error loading images:', error);
                 alert('Error loading images: ' + error.message + '\nCheck console for details.');
@@ -701,30 +680,72 @@
             const div = document.createElement('div');
             div.className = 'image-card bg-white rounded-lg shadow overflow-hidden cursor-pointer';
             div.onclick = () => showImageDetail(image);
-            
-            // Group tags by category
-            let tagsHTML = '';
-            if (image.tags && image.tags.length > 0) {
-                const byCategory = {};
+
+            // Build permatag map
+            const permatagMap = {};
+            if (image.permatags) {
+                image.permatags.forEach(p => {
+                    permatagMap[p.keyword] = p.signum;
+                });
+            }
+
+            // Get current tags: machine tags NOT negatively permatagged + positive permatags
+            const currentTags = [];
+
+            // Add machine tags that aren't negatively permatagged
+            if (image.tags) {
                 image.tags.forEach(tag => {
+                    if (permatagMap[tag.keyword] !== -1) {
+                        currentTags.push({
+                            keyword: tag.keyword,
+                            category: tag.category,
+                            confidence: tag.confidence,
+                            source: 'machine'
+                        });
+                    }
+                });
+            }
+
+            // Add positive permatags not already in machine tags
+            if (image.permatags) {
+                image.permatags.forEach(p => {
+                    if (p.signum === 1) {
+                        const alreadyInMachine = image.tags && image.tags.some(t => t.keyword === p.keyword);
+                        if (!alreadyInMachine) {
+                            currentTags.push({
+                                keyword: p.keyword,
+                                category: p.category,
+                                source: 'permatag'
+                            });
+                        }
+                    }
+                });
+            }
+
+            // Group current tags by category
+            let tagsHTML = '';
+            if (currentTags.length > 0) {
+                const byCategory = {};
+                currentTags.forEach(tag => {
                     if (!byCategory[tag.category]) {
                         byCategory[tag.category] = [];
                     }
                     byCategory[tag.category].push(tag);
                 });
-                
+
                 // Define category order
                 const categoryOrder = ['Circus Skills', 'Costume Colors'];
                 const sortedCategories = categoryOrder.filter(cat => byCategory[cat]);
-                
+
                 const categoryLines = sortedCategories.map(category => {
                     const tags = byCategory[category];
-                    const tagsList = tags.map(t => 
-                        `${t.keyword} (${Math.round(t.confidence * 100)}%)`
-                    ).join(', ');
+                    const tagsList = tags.map(t => {
+                        const confidenceText = t.confidence ? ` (${Math.round(t.confidence * 100)}%)` : '';
+                        return `${t.keyword}${confidenceText}`;
+                    }).join(', ');
                     return `<div class="text-xs text-gray-600"><strong>${category}:</strong> ${tagsList}</div>`;
                 }).join('');
-                
+
                 tagsHTML = `<div class="mt-2">${categoryLines}</div>`;
             }
             
@@ -1024,12 +1045,46 @@
                 loadImages();
                 return;
             }
-            
-            const filtered = currentImages.filter(img => 
-                img.filename.toLowerCase().includes(query) ||
-                (img.camera_model && img.camera_model.toLowerCase().includes(query))
-            );
-            
+
+            const filtered = currentImages.filter(img => {
+                // Build permatag map for this image
+                const permatagMap = {};
+                if (img.permatags) {
+                    img.permatags.forEach(p => {
+                        permatagMap[p.keyword] = p.signum;
+                    });
+                }
+
+                // Get current tags: machine tags NOT negatively permatagged + positive permatags
+                const currentTags = [];
+
+                // Add machine tags that aren't negatively permatagged
+                if (img.tags) {
+                    img.tags.forEach(tag => {
+                        if (permatagMap[tag.keyword] !== -1) {
+                            currentTags.push(tag.keyword);
+                        }
+                    });
+                }
+
+                // Add positive permatags not already in machine tags
+                if (img.permatags) {
+                    img.permatags.forEach(p => {
+                        if (p.signum === 1) {
+                            const alreadyInMachine = img.tags && img.tags.some(t => t.keyword === p.keyword);
+                            if (!alreadyInMachine) {
+                                currentTags.push(p.keyword);
+                            }
+                        }
+                    });
+                }
+
+                // Search in current tags
+                return currentTags.some(keyword =>
+                    keyword.toLowerCase().includes(query)
+                );
+            });
+
             const imageGrid = document.getElementById('imageGrid');
             imageGrid.innerHTML = '';
             filtered.forEach(image => {

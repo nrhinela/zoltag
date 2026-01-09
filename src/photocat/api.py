@@ -168,32 +168,61 @@ async def list_images(
                 if not category_keywords:
                     continue
 
+                # Get all images and their tags/permatags to compute "current tags"
+                # This is necessary because we need to exclude machine tags that are negatively permatagged
+                all_images = db.query(ImageMetadata.id).filter_by(tenant_id=tenant.id).all()
+                all_image_ids = [img[0] for img in all_images]
+
+                # Get all tags for these images
+                all_tags = db.query(ImageTag).filter(
+                    ImageTag.tenant_id == tenant.id,
+                    ImageTag.image_id.in_(all_image_ids)
+                ).all()
+
+                # Get all permatags for these images
+                all_permatags = db.query(Permatag).filter(
+                    Permatag.tenant_id == tenant.id,
+                    Permatag.image_id.in_(all_image_ids)
+                ).all()
+
+                # Build permatag map by image_id and keyword
+                permatag_map = {}
+                for p in all_permatags:
+                    if p.image_id not in permatag_map:
+                        permatag_map[p.image_id] = {}
+                    permatag_map[p.image_id][p.keyword] = p.signum
+
+                # Compute current tags for each image
+                current_tags_by_image = {}
+                for tag in all_tags:
+                    # Include machine tag only if not negatively permatagged
+                    if tag.image_id in permatag_map and permatag_map[tag.image_id].get(tag.keyword) == -1:
+                        continue  # Skip negatively permatagged machine tags
+                    if tag.image_id not in current_tags_by_image:
+                        current_tags_by_image[tag.image_id] = []
+                    current_tags_by_image[tag.image_id].append(tag.keyword)
+
+                # Add positive permatags
+                for p in all_permatags:
+                    if p.signum == 1:
+                        # Only add if not already in machine tags
+                        if p.image_id not in current_tags_by_image or p.keyword not in current_tags_by_image[p.image_id]:
+                            if p.image_id not in current_tags_by_image:
+                                current_tags_by_image[p.image_id] = []
+                            current_tags_by_image[p.image_id].append(p.keyword)
+
+                # Now filter based on current tags
                 if category_operator == "OR":
-                    # Image must have ANY of the keywords in this category
-                    matching_ids = db.query(ImageTag.image_id).filter(
-                        ImageTag.keyword.in_(category_keywords),
-                        ImageTag.tenant_id == tenant.id
-                    ).distinct().all()
-                    category_image_ids.extend([id[0] for id in matching_ids])
+                    # Image must have ANY of the keywords in this category (in current tags)
+                    for image_id, current_keywords in current_tags_by_image.items():
+                        if any(kw in category_keywords for kw in current_keywords):
+                            category_image_ids.append(image_id)
 
                 elif category_operator == "AND":
-                    # Image must have ALL keywords in this category
-                    # Start with images that have the first keyword
-                    and_query = db.query(ImageTag.image_id).filter(
-                        ImageTag.keyword == category_keywords[0],
-                        ImageTag.tenant_id == tenant.id
-                    )
-
-                    # Intersect with images that have each additional keyword
-                    for keyword in category_keywords[1:]:
-                        keyword_subquery = db.query(ImageTag.image_id).filter(
-                            ImageTag.keyword == keyword,
-                            ImageTag.tenant_id == tenant.id
-                        ).subquery()
-                        and_query = and_query.filter(ImageTag.image_id.in_(keyword_subquery))
-
-                    matching_ids = and_query.distinct().all()
-                    category_image_ids.extend([id[0] for id in matching_ids])
+                    # Image must have ALL keywords in this category (in current tags)
+                    for image_id, current_keywords in current_tags_by_image.items():
+                        if all(kw in current_keywords for kw in category_keywords):
+                            category_image_ids.append(image_id)
 
             if category_image_ids:
                 # Remove duplicates
@@ -314,7 +343,13 @@ async def list_images(
         ImageTag.image_id.in_(image_ids),
         ImageTag.tenant_id == tenant.id
     ).all()
-    
+
+    # Get permatags for all images
+    permatags = db.query(Permatag).filter(
+        Permatag.image_id.in_(image_ids),
+        Permatag.tenant_id == tenant.id
+    ).all()
+
     # Group tags by image_id
     tags_by_image = {}
     for tag in tags:
@@ -324,6 +359,17 @@ async def list_images(
             "keyword": tag.keyword,
             "category": tag.category,
             "confidence": round(tag.confidence, 2)
+        })
+
+    # Group permatags by image_id
+    permatags_by_image = {}
+    for permatag in permatags:
+        if permatag.image_id not in permatags_by_image:
+            permatags_by_image[permatag.image_id] = []
+        permatags_by_image[permatag.image_id].append({
+            "keyword": permatag.keyword,
+            "category": permatag.category,
+            "signum": permatag.signum
         })
     
     return {
@@ -348,7 +394,8 @@ async def list_images(
                 "thumbnail_url": f"https://storage.googleapis.com/{settings.thumbnail_bucket}/{img.thumbnail_path}" if img.thumbnail_path else None,
                 "tags_applied": img.tags_applied,
                 "faces_detected": img.faces_detected,
-                "tags": sorted(tags_by_image.get(img.id, []), key=lambda x: x['confidence'], reverse=True)
+                "tags": sorted(tags_by_image.get(img.id, []), key=lambda x: x['confidence'], reverse=True),
+                "permatags": permatags_by_image.get(img.id, [])
             }
             for img in images
         ],
