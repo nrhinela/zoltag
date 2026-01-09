@@ -27,30 +27,48 @@ def cli():
 @click.option('--recursive/--no-recursive', default=True, help='Process subdirectories')
 def ingest(directory: str, tenant_id: str, recursive: bool):
     """Ingest images from a local directory."""
-    
-    # Setup tenant context
-    tenant = Tenant(id=tenant_id, name=f"Tenant {tenant_id}")
+
+    # Setup database
+    engine = create_engine(settings.database_url)
+    Session = sessionmaker(bind=engine)
+    session = Session()
+
+    # Load tenant from database
+    from sqlalchemy import text
+    result = session.execute(
+        text("SELECT id, name, storage_bucket, thumbnail_bucket FROM tenants WHERE id = :tenant_id"),
+        {"tenant_id": tenant_id}
+    ).first()
+
+    if not result:
+        click.echo(f"Error: Tenant {tenant_id} not found in database", err=True)
+        return
+
+    tenant = Tenant(
+        id=result[0],
+        name=result[1],
+        storage_bucket=result[2],
+        thumbnail_bucket=result[3]
+    )
     TenantContext.set(tenant)
-    
+
+    click.echo(f"Using tenant: {tenant.name}")
+    click.echo(f"  Storage bucket: {tenant.get_storage_bucket(settings)}")
+    click.echo(f"  Thumbnail bucket: {tenant.get_thumbnail_bucket(settings)}")
+
     # Load tenant config
     try:
         config = TenantConfig.load(tenant_id)
-        click.echo(f"Loaded config for tenant {tenant_id}")
         click.echo(f"  Keywords: {len(config.get_all_keywords())} total")
         click.echo(f"  People: {len(config.people)}")
     except FileNotFoundError:
         click.echo(f"Warning: No config found for tenant {tenant_id}", err=True)
         config = None
-    
-    # Setup database
-    engine = create_engine(settings.database_url)
-    Session = sessionmaker(bind=engine)
-    session = Session()
-    
+
     # Setup storage client
     storage_client = storage.Client(project=settings.gcp_project_id)
-    bucket = storage_client.bucket(settings.storage_bucket_name)
-    thumbnail_bucket = storage_client.bucket(settings.thumbnail_bucket)
+    bucket = storage_client.bucket(tenant.get_storage_bucket(settings))
+    thumbnail_bucket = storage_client.bucket(tenant.get_thumbnail_bucket(settings))
     
     # Setup image processor
     processor = ImageProcessor(thumbnail_size=(settings.thumbnail_size, settings.thumbnail_size))

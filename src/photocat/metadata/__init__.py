@@ -25,7 +25,11 @@ class Tenant(Base):
     # Secret Manager paths constructed from tenant_id:
     # - dropbox-app-secret-{tenant_id}
     # - dropbox-token-{tenant_id}
-    
+
+    # Storage buckets
+    storage_bucket = Column(String(255), nullable=True)  # GCS bucket for full-size images
+    thumbnail_bucket = Column(String(255), nullable=True)  # GCS bucket for thumbnails
+
     # Flexible settings (JSON)
     settings = Column(JSONB, default=dict)
     

@@ -7,11 +7,13 @@ from typing import Optional
 @dataclass
 class Tenant:
     """Represents a tenant in the system."""
-    
+
     id: str
     name: str
     active: bool = True
     dropbox_token_secret: Optional[str] = None  # Secret Manager reference
+    storage_bucket: Optional[str] = None  # GCS bucket for full-size images
+    thumbnail_bucket: Optional[str] = None  # GCS bucket for thumbnails
     
     def __post_init__(self) -> None:
         """Validate tenant data."""
@@ -19,6 +21,18 @@ class Tenant:
             raise ValueError("Tenant ID is required")
         if not self.name:
             raise ValueError("Tenant name is required")
+
+    def get_storage_bucket(self, settings) -> str:
+        """Get storage bucket name, falling back to global settings."""
+        return self.storage_bucket or settings.storage_bucket_name
+
+    def get_thumbnail_bucket(self, settings) -> str:
+        """Get thumbnail bucket name, falling back to storage bucket or global settings."""
+        if self.thumbnail_bucket:
+            return self.thumbnail_bucket
+        if self.storage_bucket:
+            return self.storage_bucket
+        return settings.thumbnail_bucket
 
 
 class TenantContext:

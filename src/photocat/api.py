@@ -13,6 +13,7 @@ from google.cloud import storage
 from google.cloud import secretmanager
 import io
 import json
+import hashlib
 
 from photocat.tenant import Tenant, TenantContext
 from photocat.settings import settings
@@ -93,14 +94,28 @@ def get_db():
         db.close()
 
 
-async def get_tenant(x_tenant_id: Optional[str] = Header(None)) -> Tenant:
+async def get_tenant(
+    x_tenant_id: Optional[str] = Header(None),
+    db: Session = Depends(get_db)
+) -> Tenant:
     """Extract and validate tenant from request headers."""
     if not x_tenant_id:
         raise HTTPException(status_code=400, detail="X-Tenant-ID header required")
-    
-    tenant = Tenant(id=x_tenant_id, name=f"Tenant {x_tenant_id}")
+
+    # Load tenant from database
+    tenant_row = db.query(TenantModel).filter(TenantModel.id == x_tenant_id).first()
+    if not tenant_row:
+        raise HTTPException(status_code=404, detail=f"Tenant {x_tenant_id} not found")
+
+    tenant = Tenant(
+        id=tenant_row.id,
+        name=tenant_row.name,
+        active=tenant_row.active,
+        storage_bucket=tenant_row.storage_bucket,
+        thumbnail_bucket=tenant_row.thumbnail_bucket
+    )
     TenantContext.set(tenant)
-    
+
     return tenant
 
 
@@ -400,7 +415,7 @@ async def list_images(
                 "capture_timestamp": img.capture_timestamp.isoformat() if img.capture_timestamp else None,
                 "modified_time": img.modified_time.isoformat() if img.modified_time else None,
                 "thumbnail_path": img.thumbnail_path,
-                "thumbnail_url": f"https://storage.googleapis.com/{settings.thumbnail_bucket}/{img.thumbnail_path}" if img.thumbnail_path else None,
+                "thumbnail_url": f"https://storage.googleapis.com/{tenant.get_thumbnail_bucket(settings)}/{img.thumbnail_path}" if img.thumbnail_path else None,
                 "tags_applied": img.tags_applied,
                 "faces_detected": img.faces_detected,
                 "tags": sorted(tags_by_image.get(img.id, []), key=lambda x: x['confidence'], reverse=True),
@@ -743,7 +758,8 @@ async def upload_images(
     """Upload and process images in real-time."""
     processor = ImageProcessor(thumbnail_size=(settings.thumbnail_size, settings.thumbnail_size))
     storage_client = storage.Client(project=settings.gcp_project_id)
-    thumbnail_bucket = storage_client.bucket(settings.thumbnail_bucket)
+    storage_bucket = storage_client.bucket(tenant.get_storage_bucket(settings))
+    thumbnail_bucket = storage_client.bucket(tenant.get_thumbnail_bucket(settings))
     
     results = []
     
@@ -763,8 +779,13 @@ async def upload_images(
             
             # Extract features
             features = processor.extract_features(image_data)
-            
-            # Check for duplicate based on perceptual hash
+
+            # Generate unique dropbox_id using hash of filename + timestamp
+            timestamp = datetime.utcnow().isoformat()
+            unique_string = f"{file.filename}_{timestamp}_{tenant.id}"
+            dropbox_id = f"upload_{hashlib.sha256(unique_string.encode()).hexdigest()[:16]}"
+
+            # Check for duplicate based on perceptual hash only (not dropbox_id since it's always unique now)
             existing = db.query(ImageMetadata).filter(
                 ImageMetadata.tenant_id == tenant.id,
                 ImageMetadata.perceptual_hash == features['perceptual_hash']
@@ -799,7 +820,7 @@ async def upload_images(
             metadata = ImageMetadata(
                 tenant_id=tenant.id,
                 dropbox_path=f"/uploads/{file.filename}",
-                dropbox_id=f"upload_{Path(file.filename).stem}",
+                dropbox_id=dropbox_id,
                 filename=file.filename,
                 file_size=len(image_data),
                 content_hash=None,
@@ -932,7 +953,7 @@ async def analyze_image_keywords(
     # Setup tagger and storage
     tagger = get_tagger(model_type=settings.tagging_model)
     storage_client = storage.Client(project=settings.gcp_project_id)
-    thumbnail_bucket = storage_client.bucket(settings.thumbnail_bucket)
+    thumbnail_bucket = storage_client.bucket(tenant.get_thumbnail_bucket(settings))
 
     try:
         # Download thumbnail
@@ -1006,7 +1027,7 @@ async def retag_single_image(
     # Setup CLIP tagger and storage
     tagger = get_tagger(model_type=settings.tagging_model)
     storage_client = storage.Client(project=settings.gcp_project_id)
-    thumbnail_bucket = storage_client.bucket(settings.thumbnail_bucket)
+    thumbnail_bucket = storage_client.bucket(tenant.get_thumbnail_bucket(settings))
 
     try:
         # Delete existing tags
@@ -1094,7 +1115,7 @@ async def retag_all_images(
     # Setup CLIP tagger and storage
     tagger = get_tagger(model_type=settings.tagging_model)
     storage_client = storage.Client(project=settings.gcp_project_id)
-    thumbnail_bucket = storage_client.bucket(settings.thumbnail_bucket)
+    thumbnail_bucket = storage_client.bucket(tenant.get_thumbnail_bucket(settings))
     
     processed = 0
     failed = 0
@@ -1239,7 +1260,7 @@ async def trigger_sync(
         # Setup image processor
         processor = ImageProcessor()
         storage_client = storage.Client(project=settings.gcp_project_id)
-        thumbnail_bucket = storage_client.bucket(settings.thumbnail_bucket)
+        thumbnail_bucket = storage_client.bucket(tenant.get_thumbnail_bucket(settings))
         
         # Load config for tagging
         config_mgr = ConfigManager(db, tenant.id)
@@ -1506,6 +1527,8 @@ async def list_tenants(db: Session = Depends(get_db)):
         "active": t.active,
         "dropbox_app_key": t.dropbox_app_key,
         "dropbox_configured": bool(t.dropbox_app_key),  # Has app key configured
+        "storage_bucket": t.storage_bucket,
+        "thumbnail_bucket": t.thumbnail_bucket,
         "settings": t.settings,
         "created_at": t.created_at.isoformat() if t.created_at else None,
         "updated_at": t.updated_at.isoformat() if t.updated_at else None
@@ -1566,6 +1589,10 @@ async def update_tenant(
         tenant.active = tenant_data["active"]
     if "dropbox_app_key" in tenant_data:
         tenant.dropbox_app_key = tenant_data["dropbox_app_key"]
+    if "storage_bucket" in tenant_data:
+        tenant.storage_bucket = tenant_data["storage_bucket"]
+    if "thumbnail_bucket" in tenant_data:
+        tenant.thumbnail_bucket = tenant_data["thumbnail_bucket"]
     if "settings" in tenant_data:
         tenant.settings = tenant_data["settings"]
     

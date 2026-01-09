@@ -309,6 +309,7 @@
                         <th>ID</th>
                         <th>Name</th>
                         <th>Status</th>
+                        <th>Storage</th>
                         <th>Dropbox</th>
                         <th>Created</th>
                         <th>Actions</th>
@@ -358,6 +359,19 @@
                         <input type="checkbox" id="settings-active">
                         <label for="settings-active">Active</label>
                     </div>
+
+                    <h3 style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee;">Storage Configuration</h3>
+                    <div style="background: #e7f3ff; border-left: 4px solid #0066cc; padding: 12px; margin-bottom: 20px; border-radius: 4px;">
+                        <p style="margin: 0; color: #333; font-size: 14px;"><strong>Per-Tenant Thumbnails:</strong> Configure a dedicated GCS bucket for this tenant's thumbnails.</p>
+                        <p style="margin: 8px 0 0 0; color: #666; font-size: 13px;">Leave blank to use global default bucket. Full-size images are not stored in GCS. To set up a new bucket, run:</p>
+                        <code style="display: block; margin-top: 8px; padding: 8px; background: white; border-radius: 4px; font-family: monospace; font-size: 12px;">python scripts/setup_tenant_buckets.py --tenant-id <span id="bucket-setup-tenant-id">TENANT_ID</span></code>
+                    </div>
+                    <div class="form-group">
+                        <label>Thumbnail Bucket</label>
+                        <input type="text" id="settings-thumbnail-bucket" placeholder="e.g., photocat-483622-demo-thumbnails">
+                        <small style="color: #666;">GCS bucket for thumbnails (public for CDN access)</small>
+                    </div>
+
                     <div style="display: flex; gap: 10px; justify-content: flex-end;">
                         <button type="submit" class="btn btn-primary">Save Changes</button>
                     </div>
@@ -609,7 +623,11 @@
             document.getElementById('settings-id').value = tenant.id;
             document.getElementById('settings-name').value = tenant.name;
             document.getElementById('settings-active').checked = tenant.active;
-            
+            document.getElementById('settings-thumbnail-bucket').value = tenant.thumbnail_bucket || '';
+
+            // Update bucket setup command with actual tenant ID
+            document.getElementById('bucket-setup-tenant-id').textContent = tenant.id;
+
             // Populate Dropbox form
             document.getElementById('dropbox-tenant-id').value = tenant.id;
             document.getElementById('dropbox-app-key').value = tenant.dropbox_app_key || '';
@@ -654,13 +672,20 @@
                 const tenants = await response.json();
                 
                 const tbody = document.querySelector('#tenants-table tbody');
-                tbody.innerHTML = tenants.map(t => `
+                tbody.innerHTML = tenants.map(t => {
+                    const hasStorage = t.thumbnail_bucket;
+                    return `
                     <tr>
                         <td>${t.id}</td>
                         <td>${t.name}</td>
                         <td>
                             <span class="badge ${t.active ? 'badge-success' : 'badge-danger'}">
                                 ${t.active ? 'Active' : 'Inactive'}
+                            </span>
+                        </td>
+                        <td>
+                            <span class="badge ${hasStorage ? 'badge-success' : 'badge-danger'}" title="${hasStorage ? 'Dedicated buckets configured' : 'Using shared buckets'}">
+                                ${hasStorage ? 'Dedicated' : 'Shared'}
                             </span>
                         </td>
                         <td>
@@ -673,7 +698,8 @@
                             <button class="btn btn-primary" onclick="openTenantEditor('${t.id}')">Edit</button>
                         </td>
                     </tr>
-                `).join('');
+                `;
+                }).join('');
 
                 // Update people tenant filter
                 const select = document.getElementById('people-tenant-filter');
@@ -747,13 +773,16 @@
 
         async function saveTenantSettings(event) {
             event.preventDefault();
-            
+
             const tenantId = document.getElementById('settings-tenant-id').value;
-            
+
+            const thumbnailBucket = document.getElementById('settings-thumbnail-bucket').value.trim();
+
             const data = {
                 id: tenantId,
                 name: document.getElementById('settings-name').value,
-                active: document.getElementById('settings-active').checked
+                active: document.getElementById('settings-active').checked,
+                thumbnail_bucket: thumbnailBucket || null
             };
 
             try {
