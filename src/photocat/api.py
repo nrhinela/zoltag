@@ -115,8 +115,17 @@ async def root():
 
 @app.get("/admin")
 async def admin():
-    """Serve the admin interface."""
+    """Serve the system administration interface."""
     html_file = static_dir / "admin.html"
+    if html_file.exists():
+        return HTMLResponse(content=html_file.read_text())
+    return RedirectResponse(url="/health")
+
+
+@app.get("/tagging-admin")
+async def tagging_admin():
+    """Serve the tagging administration interface."""
+    html_file = static_dir / "tagging-admin.html"
     if html_file.exists():
         return HTMLResponse(content=html_file.read_text())
     return RedirectResponse(url="/health")

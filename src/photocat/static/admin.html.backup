@@ -3,8 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PhotoCat System Administration</title>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <title>PhotoCat Admin</title>
     <style>
         * {
             box-sizing: border-box;
@@ -268,17 +267,12 @@
     <div class="header">
         <div style="display: flex; justify-content: space-between; align-items: center;">
             <div>
-                <h1>PhotoCat System Administration</h1>
-                <p>Tenant configuration and system management</p>
+                <h1>PhotoCat Admin</h1>
+                <p>Multi-tenant configuration and management</p>
             </div>
-            <div style="display: flex; gap: 10px;">
-                <button class="btn btn-secondary" onclick="window.location.href='/tagging-admin'">
-                    <i class="fas fa-tags"></i> Tagging Settings
-                </button>
-                <button class="btn btn-secondary" onclick="window.location.href='/'">
-                    <i class="fas fa-arrow-left"></i> Back to Gallery
-                </button>
-            </div>
+            <button class="btn btn-secondary" onclick="window.location.href='/'">
+                ← Back to Gallery
+            </button>
         </div>
     </div>
 
@@ -330,12 +324,53 @@
         </div>
 
         <div class="tabs">
-            <div class="tab active" data-tab="tenant-settings">Settings</div>
+            <div class="tab active" data-tab="tenant-keywords">Keywords</div>
+            <div class="tab" data-tab="tenant-people">People</div>
             <div class="tab" data-tab="tenant-dropbox">Dropbox Setup</div>
+            <div class="tab" data-tab="tenant-settings">Settings</div>
+        </div>
+
+        <!-- Keywords Tab -->
+        <div id="tenant-keywords" class="tab-content active">
+            <div style="background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                <h3 style="margin-bottom: 15px;">Keywords Configuration</h3>
+                <div id="keywords-error" class="error" style="display: none;"></div>
+                <div id="keywords-success" class="success" style="display: none;"></div>
+                <textarea id="keywords-editor" style="width: 100%; min-height: 500px; font-family: 'Monaco', 'Consolas', monospace; font-size: 13px; padding: 15px; border: 1px solid #ddd; border-radius: 4px;" placeholder="Loading..."></textarea>
+                <div style="display: flex; gap: 10px; margin-top: 15px;">
+                    <button class="btn btn-primary" onclick="saveKeywords()">Save Keywords</button>
+                    <button class="btn btn-secondary" onclick="loadKeywords()">Reload</button>
+                    <button class="btn btn-secondary" onclick="formatKeywords()">Format JSON</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- People Tab -->
+        <div id="tenant-people" class="tab-content">
+            <div style="background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                    <h3>People Management</h3>
+                    <button class="btn btn-primary" onclick="showPersonModal()">+ New Person</button>
+                </div>
+                <div id="people-error" class="error" style="display: none;"></div>
+                <div id="people-success" class="success" style="display: none;"></div>
+                <table id="people-table">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Name</th>
+                            <th>Aliases</th>
+                            <th>Face Data</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
         </div>
 
         <!-- Settings Tab -->
-        <div id="tenant-settings" class="tab-content active">
+        <div id="tenant-settings" class="tab-content">
             <div id="settings-error" class="error" style="display: none;"></div>
             <div id="settings-success" class="success" style="display: none;"></div>
             <div style="background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">

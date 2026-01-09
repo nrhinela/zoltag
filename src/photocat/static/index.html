@@ -53,12 +53,14 @@
                     <div class="flex items-center space-x-2">
                         <label for="tenantSelect" class="text-gray-700 font-medium">Tenant:</label>
                         <select id="tenantSelect" class="px-4 py-2 border rounded-lg" onchange="switchTenant(this.value)">
-                            *** End Patch
                             <option value="">Loading tenants...</option>
                         </select>
                     </div>
-                    <button onclick="window.location.href='/admin'" class="bg-gray-600 text-white px-4 py-2 rounded-lg hover:bg-gray-700" title="Admin Panel">
-                        <i class="fas fa-cog mr-2"></i>Settings
+                    <button onclick="window.location.href='/tagging-admin'" class="bg-gray-600 text-white px-4 py-2 rounded-lg hover:bg-gray-700" title="Tagging Settings">
+                        <i class="fas fa-tags mr-2"></i>Tagging
+                    </button>
+                    <button onclick="window.location.href='/admin'" class="bg-gray-600 text-white px-4 py-2 rounded-lg hover:bg-gray-700" title="System Administration">
+                        <i class="fas fa-cog mr-2"></i>Admin
                     </button>
                 </div>
             </div>

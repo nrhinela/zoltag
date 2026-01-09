@@ -1,0 +1,647 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PhotoCat - Tagging Administration</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            line-height: 1.6;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+
+        .header {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+        }
+
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            border-bottom: 2px solid #ddd;
+        }
+
+        .tab {
+            padding: 12px 24px;
+            background: white;
+            border: 1px solid #ddd;
+            border-bottom: none;
+            border-radius: 8px 8px 0 0;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            color: #666;
+            transition: all 0.2s;
+        }
+
+        .tab:hover {
+            background: #f8f9fa;
+            color: #333;
+        }
+
+        .tab.active {
+            background: white;
+            color: #007bff;
+            border-color: #007bff;
+            position: relative;
+            bottom: -2px;
+        }
+
+        .tab-content {
+            display: none;
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            min-height: 500px;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: #007bff;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #0056b3;
+        }
+
+        .btn-secondary {
+            background: #6c757d;
+            color: white;
+        }
+
+        .btn-secondary:hover {
+            background: #5a6268;
+        }
+
+        .btn-danger {
+            background: #dc3545;
+            color: white;
+        }
+
+        .btn-danger:hover {
+            background: #c82333;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+
+        th {
+            background: #f8f9fa;
+            font-weight: 600;
+            color: #333;
+        }
+
+        tr:hover {
+            background: #f8f9fa;
+        }
+
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 12px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+        }
+
+        .success {
+            background: #d4edda;
+            color: #155724;
+            padding: 12px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+
+        .modal.active {
+            display: flex;
+        }
+
+        .modal-content {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            max-width: 500px;
+            width: 90%;
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 500;
+            color: #333;
+        }
+
+        .form-group input,
+        .form-group select,
+        .form-group textarea {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+
+        .tenant-selector {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .tenant-selector label {
+            font-weight: 600;
+            color: #333;
+        }
+
+        .tenant-selector select {
+            flex: 1;
+            max-width: 300px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div>
+                <h1><i class="fas fa-tags"></i> PhotoCat Tagging Administration</h1>
+                <p>Configure keywords and manage people for facial recognition</p>
+            </div>
+            <div style="display: flex; gap: 10px;">
+                <button class="btn btn-secondary" onclick="window.location.href='/admin'">
+                    <i class="fas fa-cog"></i> System Settings
+                </button>
+                <button class="btn btn-secondary" onclick="window.location.href='/'">
+                    <i class="fas fa-arrow-left"></i> Back to Gallery
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tenant Selector -->
+    <div class="tenant-selector">
+        <label for="tenant-selector"><i class="fas fa-user"></i> Select Tenant:</label>
+        <select id="tenant-selector" onchange="handleTenantChange()">
+            <option value="">Loading tenants...</option>
+        </select>
+    </div>
+
+    <!-- Tabs -->
+    <div class="tabs">
+        <div class="tab active" data-tab="keywords"><i class="fas fa-tag"></i> Keywords</div>
+        <div class="tab" data-tab="people"><i class="fas fa-users"></i> People</div>
+    </div>
+
+    <!-- Keywords Tab -->
+    <div id="keywords" class="tab-content active">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <h2><i class="fas fa-tags"></i> Keywords Configuration</h2>
+        </div>
+        <p style="color: #666; margin-bottom: 20px;">Define categories and keywords for image tagging. Keywords are used by the ML model to categorize images.</p>
+        <div id="keywords-error" class="error" style="display: none;"></div>
+        <div id="keywords-success" class="success" style="display: none;"></div>
+        <textarea id="keywords-editor" style="width: 100%; min-height: 500px; font-family: 'Monaco', 'Consolas', monospace; font-size: 13px; padding: 15px; border: 1px solid #ddd; border-radius: 4px;" placeholder="Select a tenant to load keywords..."></textarea>
+        <div style="margin-top: 20px; display: flex; gap: 10px;">
+            <button class="btn btn-primary" onclick="saveKeywords()"><i class="fas fa-save"></i> Save Keywords</button>
+            <button class="btn btn-secondary" onclick="loadKeywords()"><i class="fas fa-sync-alt"></i> Reload</button>
+            <button class="btn btn-secondary" onclick="formatKeywords()"><i class="fas fa-align-left"></i> Format JSON</button>
+        </div>
+    </div>
+
+    <!-- People Tab -->
+    <div id="people" class="tab-content">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <h2><i class="fas fa-users"></i> People Management</h2>
+            <button class="btn btn-primary" onclick="showPersonModal()"><i class="fas fa-plus"></i> Add Person</button>
+        </div>
+        <p style="color: #666; margin-bottom: 20px;">Manage known people for facial recognition. Each person can have aliases and reference face embeddings.</p>
+        <div id="people-error" class="error" style="display: none;"></div>
+        <div id="people-success" class="success" style="display: none;"></div>
+        <table id="people-table">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Aliases</th>
+                    <th>Face Embedding</th>
+                    <th>Created</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr><td colspan="5" style="text-align: center; color: #999;">Select a tenant to view people</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Person Modal -->
+    <div id="person-modal" class="modal">
+        <div class="modal-content">
+            <h3 style="margin-bottom: 20px;" id="person-modal-title">Add Person</h3>
+            <form id="person-form" onsubmit="savePerson(event)">
+                <input type="hidden" id="person-id">
+                <div class="form-group">
+                    <label>Name *</label>
+                    <input type="text" id="person-name" required>
+                </div>
+                <div class="form-group">
+                    <label>Aliases (comma-separated)</label>
+                    <input type="text" id="person-aliases" placeholder="e.g., Bob, Bobby, Robert">
+                </div>
+                <div class="form-group">
+                    <label>Face Embedding Reference</label>
+                    <input type="text" id="person-face-embedding-ref" placeholder="Cloud Storage path to face encodings">
+                </div>
+                <div style="display: flex; gap: 10px; justify-content: flex-end;">
+                    <button type="button" class="btn btn-secondary" onclick="closePersonModal()">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        // Global state
+        let currentTenantId = null;
+
+        // Tab switching
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                const tabName = tab.dataset.tab;
+
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.tab-content').forEach(tc => tc.classList.remove('active'));
+
+                tab.classList.add('active');
+                document.getElementById(tabName).classList.add('active');
+
+                // Load data when switching tabs
+                if (tabName === 'keywords' && currentTenantId) loadKeywords();
+                if (tabName === 'people' && currentTenantId) loadPeople();
+            });
+        });
+
+        // Load tenants on page load
+        async function loadTenants() {
+            try {
+                const response = await fetch('/api/v1/admin/tenants');
+                const tenants = await response.json();
+
+                const select = document.getElementById('tenant-selector');
+                const activeTenants = tenants.filter(t => t.active);
+
+                if (activeTenants.length === 0) {
+                    select.innerHTML = '<option value="">No active tenants</option>';
+                    return;
+                }
+
+                select.innerHTML = '<option value="">Select a tenant...</option>' +
+                    activeTenants.map(t => `<option value="${t.id}">${t.name}</option>`).join('');
+
+                // Auto-select first tenant or restore from localStorage
+                const storedTenant = localStorage.getItem('taggingAdminTenant');
+                if (storedTenant && activeTenants.some(t => t.id === storedTenant)) {
+                    currentTenantId = storedTenant;
+                    select.value = storedTenant;
+                    loadKeywords();
+                } else if (activeTenants.length > 0) {
+                    currentTenantId = activeTenants[0].id;
+                    select.value = activeTenants[0].id;
+                    loadKeywords();
+                }
+            } catch (error) {
+                console.error('Error loading tenants:', error);
+                showError('keywords', 'Failed to load tenants: ' + error.message);
+            }
+        }
+
+        function handleTenantChange() {
+            const select = document.getElementById('tenant-selector');
+            currentTenantId = select.value;
+
+            if (currentTenantId) {
+                localStorage.setItem('taggingAdminTenant', currentTenantId);
+
+                // Load data for current tab
+                const activeTab = document.querySelector('.tab.active').dataset.tab;
+                if (activeTab === 'keywords') {
+                    loadKeywords();
+                } else if (activeTab === 'people') {
+                    loadPeople();
+                }
+            }
+        }
+
+        // Keywords functions
+        async function loadKeywords() {
+            if (!currentTenantId) {
+                showError('keywords', 'Please select a tenant first');
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/v1/config/keywords', {
+                    headers: { 'X-Tenant-ID': currentTenantId }
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+
+                const keywords = await response.json();
+                const categories = keywordsToCategories(keywords);
+                document.getElementById('keywords-editor').value = JSON.stringify(categories, null, 2);
+                showSuccess('keywords', 'Keywords loaded successfully');
+            } catch (error) {
+                showError('keywords', 'Error loading keywords: ' + error.message);
+            }
+        }
+
+        async function saveKeywords() {
+            if (!currentTenantId) {
+                showError('keywords', 'Please select a tenant first');
+                return;
+            }
+
+            try {
+                const json = document.getElementById('keywords-editor').value;
+                const categories = JSON.parse(json);
+
+                const response = await fetch('/api/v1/config/keywords', {
+                    method: 'POST',
+                    headers: {
+                        'X-Tenant-ID': currentTenantId,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(categoriesToKeywords(categories))
+                });
+
+                if (response.ok) {
+                    showSuccess('keywords', 'Keywords saved successfully!');
+                } else {
+                    const error = await response.json();
+                    showError('keywords', 'Error saving keywords: ' + (error.detail || 'Unknown error'));
+                }
+            } catch (error) {
+                showError('keywords', 'Error saving keywords: ' + error.message);
+            }
+        }
+
+        function formatKeywords() {
+            try {
+                const json = document.getElementById('keywords-editor').value;
+                const parsed = JSON.parse(json);
+                document.getElementById('keywords-editor').value = JSON.stringify(parsed, null, 2);
+                showSuccess('keywords', 'JSON formatted successfully');
+            } catch (error) {
+                showError('keywords', 'Invalid JSON: ' + error.message);
+            }
+        }
+
+        // Convert keywords array to categories object for display
+        function keywordsToCategories(keywords) {
+            const categories = {};
+            keywords.forEach(kw => {
+                if (!categories[kw.category]) {
+                    categories[kw.category] = [];
+                }
+                categories[kw.category].push(kw.keyword);
+            });
+            return categories;
+        }
+
+        // Convert categories object back to keywords array for API
+        function categoriesToKeywords(categories) {
+            const keywords = [];
+            for (const [category, kws] of Object.entries(categories)) {
+                kws.forEach(keyword => {
+                    keywords.push({ category, keyword });
+                });
+            }
+            return keywords;
+        }
+
+        // People functions
+        async function loadPeople() {
+            if (!currentTenantId) {
+                const tbody = document.querySelector('#people-table tbody');
+                tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: #999;">Select a tenant to view people</td></tr>';
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/v1/admin/people?tenant_id=${currentTenantId}`);
+                const people = await response.json();
+
+                const tbody = document.querySelector('#people-table tbody');
+                if (people.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: #999;">No people defined for this tenant</td></tr>';
+                } else {
+                    tbody.innerHTML = people.map(p => `
+                        <tr>
+                            <td>${p.name}</td>
+                            <td>${Array.isArray(p.aliases) ? p.aliases.join(', ') : ''}</td>
+                            <td>${p.face_embedding_ref || '-'}</td>
+                            <td>${p.created_at ? new Date(p.created_at).toLocaleDateString() : '-'}</td>
+                            <td>
+                                <button class="btn btn-secondary" style="padding: 6px 12px; margin-right: 5px;" onclick="editPerson(${p.id})">
+                                    <i class="fas fa-edit"></i> Edit
+                                </button>
+                                <button class="btn btn-danger" style="padding: 6px 12px;" onclick="deletePerson(${p.id})">
+                                    <i class="fas fa-trash"></i> Delete
+                                </button>
+                            </td>
+                        </tr>
+                    `).join('');
+                }
+            } catch (error) {
+                showError('people', 'Failed to load people: ' + error.message);
+            }
+        }
+
+        function showPersonModal(personId = null) {
+            document.getElementById('person-modal').classList.add('active');
+            document.getElementById('person-form').reset();
+            document.getElementById('person-id').value = '';
+            document.getElementById('person-modal-title').textContent = personId ? 'Edit Person' : 'Add Person';
+
+            if (personId) {
+                editPerson(personId);
+            }
+        }
+
+        function closePersonModal() {
+            document.getElementById('person-modal').classList.remove('active');
+            document.getElementById('person-form').reset();
+        }
+
+        async function savePerson(event) {
+            event.preventDefault();
+
+            if (!currentTenantId) {
+                showError('people', 'Please select a tenant first');
+                return;
+            }
+
+            const personId = document.getElementById('person-id').value;
+            const aliases = document.getElementById('person-aliases').value
+                .split(',')
+                .map(a => a.trim())
+                .filter(a => a);
+
+            const data = {
+                tenant_id: currentTenantId,
+                name: document.getElementById('person-name').value,
+                aliases: aliases,
+                face_embedding_ref: document.getElementById('person-face-embedding-ref').value || null
+            };
+
+            try {
+                const url = personId ? `/api/v1/admin/people/${personId}` : '/api/v1/admin/people';
+                const method = personId ? 'PUT' : 'POST';
+
+                const response = await fetch(url, {
+                    method: method,
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(data)
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Failed to save person');
+                }
+
+                closePersonModal();
+                showSuccess('people', 'Person saved successfully');
+                loadPeople();
+            } catch (error) {
+                showError('people', error.message);
+            }
+        }
+
+        async function editPerson(personId) {
+            try {
+                const response = await fetch(`/api/v1/admin/people`);
+                const people = await response.json();
+                const person = people.find(p => p.id === personId);
+
+                if (!person) {
+                    showError('people', 'Person not found');
+                    return;
+                }
+
+                document.getElementById('person-id').value = person.id;
+                document.getElementById('person-name').value = person.name;
+                document.getElementById('person-aliases').value = Array.isArray(person.aliases) ? person.aliases.join(', ') : '';
+                document.getElementById('person-face-embedding-ref').value = person.face_embedding_ref || '';
+
+                showPersonModal(personId);
+            } catch (error) {
+                showError('people', 'Failed to load person: ' + error.message);
+            }
+        }
+
+        async function deletePerson(personId) {
+            if (!confirm('Are you sure you want to delete this person?')) return;
+
+            try {
+                const response = await fetch(`/api/v1/admin/people/${personId}`, {
+                    method: 'DELETE'
+                });
+
+                if (!response.ok) throw new Error('Failed to delete person');
+
+                showSuccess('people', 'Person deleted successfully');
+                loadPeople();
+            } catch (error) {
+                showError('people', error.message);
+            }
+        }
+
+        // Utility functions
+        function showError(tab, message) {
+            const errorDiv = document.getElementById(`${tab}-error`);
+            errorDiv.textContent = message;
+            errorDiv.style.display = 'block';
+            document.getElementById(`${tab}-success`).style.display = 'none';
+            setTimeout(() => errorDiv.style.display = 'none', 5000);
+        }
+
+        function showSuccess(tab, message) {
+            const successDiv = document.getElementById(`${tab}-success`);
+            successDiv.textContent = message;
+            successDiv.style.display = 'block';
+            document.getElementById(`${tab}-error`).style.display = 'none';
+            setTimeout(() => successDiv.style.display = 'none', 3000);
+        }
+
+        // Initialize on page load
+        document.addEventListener('DOMContentLoaded', () => {
+            loadTenants();
+        });
+    </script>
+</body>
+</html>
