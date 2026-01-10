@@ -264,6 +264,21 @@
             <h2><i class="fas fa-tags"></i> Keywords Configuration</h2>
         </div>
         <p style="color: #666; margin-bottom: 10px;">Define categories and keywords for image tagging. Keywords are used by the ML model to categorize images.</p>
+
+        <!-- Model Selection -->
+        <div style="background: #fff3cd; border-left: 4px solid #ffc107; padding: 12px; margin-bottom: 20px; border-radius: 4px;">
+            <div style="display: flex; align-items: center; gap: 15px;">
+                <label for="tagging-model-select" style="font-weight: 600; color: #333; margin: 0;">
+                    <i class="fas fa-brain"></i> Tagging Model:
+                </label>
+                <select id="tagging-model-select" onchange="updateTaggingModel()" style="padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; background: #f5f5f5; cursor: not-allowed;" disabled>
+                    <option value="siglip">SigLIP</option>
+                </select>
+                <span style="color: #666; font-size: 13px;">(CLIP and SigLIP2 are currently disabled)</span>
+            </div>
+            <p style="margin: 8px 0 0 0; color: #666; font-size: 13px;">Using SigLIP for all tagging operations.</p>
+        </div>
+
         <div style="background: #e7f3ff; border-left: 4px solid #0066cc; padding: 12px; margin-bottom: 20px; border-radius: 4px;">
             <p style="margin: 0; color: #333; font-size: 14px;"><strong>Format:</strong> Each keyword can be a string or an object with <code>keyword</code> and optional <code>prompt</code> fields.</p>
             <p style="margin: 8px 0 0 0; color: #666; font-size: 13px;">Example: <code>{"keyword": "juggling", "prompt": "a photo of someone juggling balls or clubs"}</code></p>
@@ -385,11 +400,50 @@
 
                 // Load keywords for the selected tab
                 loadKeywords();
+                loadTaggingModel();
             } catch (error) {
                 console.error('Error loading tenant:', error);
                 showError('keywords', 'Failed to load tenant: ' + error.message);
                 document.getElementById('current-tenant-name').textContent = 'Error loading tenant';
             }
+        }
+
+        // Model selection functions
+        async function loadTaggingModel() {
+            try {
+                const response = await fetch('/api/v1/config/tagging-model');
+                if (response.ok) {
+                    const data = await response.json();
+
+                    // Get model from localStorage or use default
+                    const savedModel = localStorage.getItem('taggingModel') || data.default_model;
+
+                    const select = document.getElementById('tagging-model-select');
+                    select.value = savedModel;
+
+                    const statusEl = document.getElementById('model-status');
+                    statusEl.textContent = `Active: ${savedModel}`;
+                }
+            } catch (error) {
+                console.error('Error loading tagging model:', error);
+            }
+        }
+
+        function updateTaggingModel() {
+            const select = document.getElementById('tagging-model-select');
+            const model = select.value;
+
+            // Save to localStorage
+            localStorage.setItem('taggingModel', model);
+
+            const statusEl = document.getElementById('model-status');
+            statusEl.textContent = `✓ Saved! Active: ${model}`;
+            statusEl.style.color = '#28a745';
+
+            setTimeout(() => {
+                statusEl.textContent = `Active: ${model}`;
+                statusEl.style.color = '#28a745';
+            }, 2000);
         }
 
         // Keywords functions

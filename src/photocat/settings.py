@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     # Models
     face_detection_model: str = "hog"  # 'hog' or 'cnn'
     embedding_model: str = "clip-vit-base-patch32"
-    tagging_model: str = "clip"  # 'clip' or 'ram++'
+    tagging_model: str = "siglip"  # Currently only 'siglip' is active (clip and siglip2 are commented out)
     
     # API
     api_host: str = "0.0.0.0"

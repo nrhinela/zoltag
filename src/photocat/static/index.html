@@ -31,13 +31,6 @@
                     <h1 class="text-2xl font-bold text-gray-800">PhotoCat</h1>
                 </div>
                 <div class="flex items-center space-x-4">
-                    <div class="flex items-center space-x-2">
-                        <label for="modelSelect" class="text-gray-700 font-medium">Model:</label>
-                        <select id="modelSelect" class="px-4 py-2 border rounded-lg" title="Select tagging model">
-                            <option value="siglip">SigLIP</option>
-                            <option value="clip">CLIP</option>
-                        </select>
-                    </div>
                     <button onclick="syncDropbox()" id="syncButton" class="bg-teal-600 text-white px-4 py-2 rounded-lg hover:bg-teal-700">
                         <i class="fas fa-sync mr-2"></i>Sync
                     </button>
@@ -47,6 +40,10 @@
                     <button onclick="retagAllImages()" id="retagButton" class="bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700">
                         <i class="fas fa-tags mr-2"></i>Retag All
                     </button>
+                    <div class="text-sm text-gray-600" style="display: flex; align-items: center; gap: 4px;">
+                        <i class="fas fa-brain"></i>
+                        <span id="current-model-display">siglip</span>
+                    </div>
                     <button onclick="showUploadModal()" class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700">
                         <i class="fas fa-upload mr-2"></i>Upload
                     </button>
@@ -298,6 +295,37 @@
         let selectedKeywordsByCategory = {}; // Track which category each keyword belongs to
         let categoryOperators = {}; // Track OR/AND operator per category
         let availableKeywords = {};
+
+        // Get current tagging model from localStorage or use default
+        function getCurrentModel() {
+            return localStorage.getItem('taggingModel') || 'siglip';
+        }
+
+        // Update model display
+        function updateModelDisplay() {
+            const model = getCurrentModel();
+            const displayEl = document.getElementById('current-model-display');
+            if (displayEl) {
+                displayEl.textContent = model;
+            }
+        }
+
+        // Initialize on page load
+        document.addEventListener('DOMContentLoaded', () => {
+            updateModelDisplay();
+        });
+
+        // Update display when navigating back to the page
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden) {
+                updateModelDisplay();
+            }
+        });
+
+        // Also update on focus (when clicking back to the tab/window)
+        window.addEventListener('focus', () => {
+            updateModelDisplay();
+        });
 
         function openConfig() {
             window.location.href = `/static/config.html?tenant=${currentTenant}`;
@@ -1008,7 +1036,8 @@
             
             try {
                 console.log('Uploading to tenant:', currentTenant);
-                const response = await fetch('/api/v1/images/upload', {
+                const model = getCurrentModel();
+                const response = await fetch(`/api/v1/images/upload?model=${encodeURIComponent(model)}`, {
                     method: 'POST',
                     headers: {
                         'X-Tenant-ID': currentTenant
@@ -1113,7 +1142,8 @@
             button.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
 
             try {
-                const response = await fetch(`/api/v1/images/${imageId}/retag`, {
+                const model = getCurrentModel();
+                const response = await fetch(`/api/v1/images/${imageId}/retag?model=${encodeURIComponent(model)}`, {
                     method: 'POST',
                     headers: {
                         'X-Tenant-ID': currentTenant
@@ -1155,7 +1185,8 @@
             button.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Retagging...';
 
             try {
-                const response = await fetch(`/api/v1/images/${imageId}/retag`, {
+                const model = getCurrentModel();
+                const response = await fetch(`/api/v1/images/${imageId}/retag?model=${encodeURIComponent(model)}`, {
                     method: 'POST',
                     headers: {
                         'X-Tenant-ID': currentTenant
@@ -1174,24 +1205,8 @@
 
                 // Reload the image details to show new tags
                 setTimeout(async () => {
-                    const detailsResponse = await fetch(`/api/v1/images/${imageId}`, {
-                        headers: {
-                            'X-Tenant-ID': currentTenant
-                        }
-                    });
-                    const details = await detailsResponse.json();
-
-                    // Update tags in modal
-                    const tagsDiv = document.getElementById('imageTags');
-                    if (details.tags && details.tags.length > 0) {
-                        tagsDiv.innerHTML = details.tags.map(tag =>
-                            `<span class="inline-block bg-blue-100 text-blue-800 px-3 py-1 rounded-full text-sm">
-                                ${tag.keyword} <span class="text-xs text-gray-500">(${Math.round(tag.confidence * 100)}%)</span>
-                            </span>`
-                        ).join(' ');
-                    } else {
-                        tagsDiv.innerHTML = '<div class="text-gray-400">No tags</div>';
-                    }
+                    // Reload all image details (this updates both Current Tags and Machine Generated Tags)
+                    await showImageDetails(imageId);
 
                     // Reload the main gallery to show updated tags on thumbnails
                     loadImages();
@@ -1318,7 +1333,8 @@
             button.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Retagging...';
 
             try {
-                const response = await fetch('/api/v1/retag', {
+                const model = getCurrentModel();
+                const response = await fetch(`/api/v1/retag?model=${encodeURIComponent(model)}`, {
                     method: 'POST',
                     headers: {
                         'X-Tenant-ID': currentTenant
@@ -1373,12 +1389,12 @@
             
             try {
                 const tenantId = document.getElementById('tenantSelect').value;
-                const model = document.getElementById('modelSelect').value;
+                const model = getCurrentModel();
                 let hasMore = true;
-                
+
                 while (hasMore && !syncShouldStop) {
-                    syncButton.innerHTML = `<i class="fas fa-spinner fa-spin mr-2"></i>Syncing (${model.toUpperCase()})... (${totalProcessed})`;
-                    
+                    syncButton.innerHTML = `<i class="fas fa-spinner fa-spin mr-2"></i>Syncing... (${totalProcessed})`;
+
                     const response = await fetch(`/api/v1/sync?model=${encodeURIComponent(model)}`, {
                         method: 'POST',
                         headers: {

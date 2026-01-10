@@ -995,6 +995,7 @@ async def analyze_image_keywords(
 @app.post("/api/v1/images/{image_id}/retag")
 async def retag_single_image(
     image_id: int,
+    model: str = None,
     tenant: Tenant = Depends(get_tenant),
     db: Session = Depends(get_db)
 ):
@@ -1025,7 +1026,8 @@ async def retag_single_image(
         by_category[cat].append(kw)
 
     # Setup CLIP tagger and storage
-    tagger = get_tagger(model_type=settings.tagging_model)
+    model_type = model or settings.tagging_model
+    tagger = get_tagger(model_type=model_type)
     storage_client = storage.Client(project=settings.gcp_project_id)
     thumbnail_bucket = storage_client.bucket(tenant.get_thumbnail_bucket(settings))
 
@@ -1087,6 +1089,7 @@ async def retag_single_image(
 
 @app.post("/api/v1/retag")
 async def retag_all_images(
+    model: str = None,
     tenant: Tenant = Depends(get_tenant),
     db: Session = Depends(get_db)
 ):
@@ -1094,11 +1097,11 @@ async def retag_all_images(
     from photocat.config import TenantConfig
     from photocat.tagging import get_tagger
     from google.cloud import storage
-    
+
     # Load config
     config_mgr = ConfigManager(db, tenant.id)
     all_keywords = config_mgr.get_all_keywords()
-    
+
     # Group keywords by category
     by_category = {}
     for kw in all_keywords:
@@ -1106,14 +1109,15 @@ async def retag_all_images(
         if cat not in by_category:
             by_category[cat] = []
         by_category[cat].append(kw)
-    
+
     # Get all images
     images = db.query(ImageMetadata).filter(
         ImageMetadata.tenant_id == tenant.id
     ).all()
-    
+
     # Setup CLIP tagger and storage
-    tagger = get_tagger(model_type=settings.tagging_model)
+    model_type = model or settings.tagging_model
+    tagger = get_tagger(model_type=model_type)
     storage_client = storage.Client(project=settings.gcp_project_id)
     thumbnail_bucket = storage_client.bucket(tenant.get_thumbnail_bucket(settings))
     

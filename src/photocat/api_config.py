@@ -1,11 +1,13 @@
 """API endpoints for configuration management."""
 
+import os
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from photocat.tenant import Tenant
+from photocat.settings import settings
 
 
 router = APIRouter(prefix="/api/v1/config", tags=["configuration"])
@@ -115,3 +117,17 @@ async def get_full_config(
         keywords=manager.get_all_keywords(),
         people=manager.get_people()
     )
+
+
+class TaggingModelInput(BaseModel):
+    """Input model for tagging model selection."""
+    model: str
+
+
+@router.get("/tagging-model")
+async def get_tagging_model():
+    """Get default tagging model configuration."""
+    return {
+        "default_model": "siglip",
+        "available_models": ["siglip"]
+    }
