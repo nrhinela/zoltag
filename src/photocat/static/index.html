@@ -29,6 +29,7 @@
                 <div class="flex items-center space-x-2">
                     <i class="fas fa-camera text-blue-600 text-2xl"></i>
                     <h1 class="text-2xl font-bold text-gray-800">PhotoCat</h1>
+                    <span id="environment-badge" style="font-size: 12px; padding: 4px 10px; border-radius: 4px; font-weight: 600;">...</span>
                 </div>
                 <div class="flex items-center space-x-4">
                     <button onclick="syncDropbox()" id="syncButton" class="bg-teal-600 text-white px-4 py-2 rounded-lg hover:bg-teal-700">
@@ -40,10 +41,6 @@
                     <button onclick="retagAllImages()" id="retagButton" class="bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700">
                         <i class="fas fa-tags mr-2"></i>Retag All
                     </button>
-                    <div class="text-sm text-gray-600" style="display: flex; align-items: center; gap: 4px;">
-                        <i class="fas fa-brain"></i>
-                        <span id="current-model-display">siglip</span>
-                    </div>
                     <button onclick="showUploadModal()" class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700">
                         <i class="fas fa-upload mr-2"></i>Upload
                     </button>
@@ -191,6 +188,28 @@
                                 </div>
                             </div>
                             <div>
+                                <h3 class="font-semibold text-gray-700 mb-2 cursor-pointer hover:text-gray-900 flex items-center" onclick="toggleExifDetails()">
+                                    <i id="exifDetailsIcon" class="fas fa-chevron-right mr-2 text-sm transition-transform"></i>
+                                    <span>EXIF Metadata</span>
+                                </h3>
+                                <div id="exifDetailsSection" class="hidden">
+                                    <div id="exifMetadata" class="text-xs text-gray-600 space-y-1 ml-4 mt-2 max-h-64 overflow-y-auto">
+                                        <!-- EXIF metadata will be loaded here -->
+                                    </div>
+                                </div>
+                            </div>
+                            <div>
+                                <h3 class="font-semibold text-gray-700 mb-2 cursor-pointer hover:text-gray-900 flex items-center" onclick="toggleDropboxProperties()">
+                                    <i id="dropboxPropertiesIcon" class="fas fa-chevron-right mr-2 text-sm transition-transform"></i>
+                                    <span>Dropbox Properties</span>
+                                </h3>
+                                <div id="dropboxPropertiesSection" class="hidden">
+                                    <div id="dropboxProperties" class="text-xs text-gray-600 space-y-1 ml-4 mt-2 max-h-64 overflow-y-auto">
+                                        <!-- Dropbox properties will be loaded here -->
+                                    </div>
+                                </div>
+                            </div>
+                            <div>
                                 <h3 class="font-semibold text-gray-700 mb-2">Current Tags</h3>
                                 <div class="text-xs text-gray-500 mb-2 flex items-center gap-4">
                                     <span class="flex items-center gap-1">
@@ -289,7 +308,7 @@
     </div>
 
     <script>
-        let currentTenant = 'demo';
+        let currentTenant = 'bcg';
         let currentImages = [];
         let selectedKeywords = new Set();
         let selectedKeywordsByCategory = {}; // Track which category each keyword belongs to
@@ -871,7 +890,61 @@
                     ${details.iso ? `<div><strong>ISO:</strong> ${details.iso}</div>` : ''}
                     ${details.aperture ? `<div><strong>Aperture:</strong> f/${details.aperture}</div>` : ''}
                 ` : '<div class="text-gray-400">No camera information</div>';
-                
+
+                // EXIF metadata
+                const exifDiv = document.getElementById('exifMetadata');
+                if (details.exif_data && Object.keys(details.exif_data).length > 0) {
+                    // Sort EXIF keys alphabetically for easier browsing
+                    const sortedKeys = Object.keys(details.exif_data).sort();
+                    exifDiv.innerHTML = sortedKeys.map(key => {
+                        const value = details.exif_data[key];
+                        // Format the value nicely
+                        let displayValue;
+                        if (Array.isArray(value)) {
+                            displayValue = value.join(', ');
+                        } else if (typeof value === 'object' && value !== null) {
+                            displayValue = JSON.stringify(value);
+                        } else {
+                            displayValue = String(value);
+                        }
+                        // Truncate very long values
+                        if (displayValue.length > 100) {
+                            displayValue = displayValue.substring(0, 100) + '...';
+                        }
+                        return `<div class="py-1 border-b border-gray-100"><strong class="text-gray-700">${key}:</strong> <span class="text-gray-600">${displayValue}</span></div>`;
+                    }).join('');
+                } else {
+                    exifDiv.innerHTML = '<div class="text-gray-400">No EXIF metadata available</div>';
+                }
+
+                // Dropbox properties
+                const dropboxPropsDiv = document.getElementById('dropboxProperties');
+                if (details.dropbox_properties && Object.keys(details.dropbox_properties).length > 0) {
+                    // Sort property keys alphabetically
+                    const sortedKeys = Object.keys(details.dropbox_properties).sort();
+                    dropboxPropsDiv.innerHTML = sortedKeys.map(key => {
+                        const value = details.dropbox_properties[key];
+                        // Format the value nicely
+                        let displayValue;
+                        if (Array.isArray(value)) {
+                            displayValue = value.join(', ');
+                        } else if (typeof value === 'object' && value !== null) {
+                            displayValue = JSON.stringify(value);
+                        } else {
+                            displayValue = String(value);
+                        }
+                        // Truncate very long values
+                        if (displayValue.length > 100) {
+                            displayValue = displayValue.substring(0, 100) + '...';
+                        }
+                        // Clean up property key display (remove template ID prefix if present)
+                        const displayKey = key.includes('.') ? key.split('.').slice(1).join('.') : key;
+                        return `<div class="py-1 border-b border-gray-100"><strong class="text-gray-700">${displayKey}:</strong> <span class="text-gray-600">${displayValue}</span></div>`;
+                    }).join('');
+                } else {
+                    dropboxPropsDiv.innerHTML = '<div class="text-gray-400">No Dropbox custom properties</div>';
+                }
+
                 // Build permatag lookup maps
                 const permatagMap = {};
                 if (details.permatags) {
@@ -1205,8 +1278,16 @@
 
                 // Reload the image details to show new tags
                 setTimeout(async () => {
+                    // Refetch the updated image data
+                    const response = await fetch(`/api/v1/images/${imageId}`, {
+                        headers: {
+                            'X-Tenant-ID': currentTenant
+                        }
+                    });
+                    const updatedImage = await response.json();
+
                     // Reload all image details (this updates both Current Tags and Machine Generated Tags)
-                    await showImageDetails(imageId);
+                    await showImageDetail(updatedImage);
 
                     // Reload the main gallery to show updated tags on thumbnails
                     loadImages();
@@ -1388,7 +1469,6 @@
             let totalProcessed = 0;
             
             try {
-                const tenantId = document.getElementById('tenantSelect').value;
                 const model = getCurrentModel();
                 let hasMore = true;
 
@@ -1398,7 +1478,7 @@
                     const response = await fetch(`/api/v1/sync?model=${encodeURIComponent(model)}`, {
                         method: 'POST',
                         headers: {
-                            'X-Tenant-ID': tenantId
+                            'X-Tenant-ID': currentTenant
                         }
                     });
                     
@@ -1467,7 +1547,33 @@
         function toggleTagDetails() {
             const section = document.getElementById('tagDetailsSection');
             const icon = document.getElementById('tagDetailsIcon');
-            
+
+            if (section.classList.contains('hidden')) {
+                section.classList.remove('hidden');
+                icon.style.transform = 'rotate(90deg)';
+            } else {
+                section.classList.add('hidden');
+                icon.style.transform = 'rotate(0deg)';
+            }
+        }
+
+        function toggleExifDetails() {
+            const section = document.getElementById('exifDetailsSection');
+            const icon = document.getElementById('exifDetailsIcon');
+
+            if (section.classList.contains('hidden')) {
+                section.classList.remove('hidden');
+                icon.style.transform = 'rotate(90deg)';
+            } else {
+                section.classList.add('hidden');
+                icon.style.transform = 'rotate(0deg)';
+            }
+        }
+
+        function toggleDropboxProperties() {
+            const section = document.getElementById('dropboxPropertiesSection');
+            const icon = document.getElementById('dropboxPropertiesIcon');
+
             if (section.classList.contains('hidden')) {
                 section.classList.remove('hidden');
                 icon.style.transform = 'rotate(90deg)';
@@ -1806,9 +1912,35 @@
                 loadKeywords();
                 loadImages();
             };
-            loadKeywords();
+            loadEnvironment();
             loadTenants();
         });
+
+        // Load environment badge
+        async function loadEnvironment() {
+            try {
+                const response = await fetch('/api/v1/config/system');
+                const systemSettings = await response.json();
+
+                const badge = document.getElementById('environment-badge');
+                const env = systemSettings.environment.toUpperCase();
+                badge.textContent = env;
+
+                // Color-code environment
+                if (systemSettings.environment.toLowerCase() === 'prod') {
+                    badge.style.backgroundColor = '#c53030';
+                    badge.style.color = 'white';
+                } else {
+                    badge.style.backgroundColor = '#38a169';
+                    badge.style.color = 'white';
+                }
+            } catch (error) {
+                console.error('Error loading environment:', error);
+                document.getElementById('environment-badge').textContent = 'ERROR';
+                document.getElementById('environment-badge').style.backgroundColor = '#999';
+                document.getElementById('environment-badge').style.color = 'white';
+            }
+        }
 
         // Close modals on escape
         document.addEventListener('keydown', (e) => {

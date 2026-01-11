@@ -293,7 +293,7 @@
         <div style="margin-bottom: 20px;">
             <button id="show-new-tenant-btn" class="btn btn-primary" onclick="showNewTenantForm()">+ New Tenant</button>
             <form id="new-tenant-form" onsubmit="createNewTenant(event)" style="display:none; margin-top: 15px; gap: 10px; align-items: flex-end;">
-                <input type="text" id="new-tenant-id" required pattern="[a-z0-9-]+" placeholder="ID" maxlength="32" autocomplete="off" style="width: 120px; display: inline-block; margin-right: 10px; padding: 6px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px;" title="Lowercase letters, numbers, and hyphens only">
+                <input type="text" id="new-tenant-id" required pattern="[a-z0-9\-]+" placeholder="ID" maxlength="32" autocomplete="off" style="width: 120px; display: inline-block; margin-right: 10px; padding: 6px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px;" title="Lowercase letters, numbers, and hyphens only">
                 <input type="text" id="new-tenant-name" required placeholder="Display Name" style="width: 260px; display: inline-block; margin-right: 10px; padding: 6px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px;">
                 <button type="submit" class="btn btn-success" style="padding: 6px 18px; margin-right: 6px;">Create</button>
                 <button type="button" class="btn btn-secondary" onclick="hideNewTenantForm()">Cancel</button>
@@ -342,6 +342,30 @@
         <div id="tenant-settings" class="tab-content active">
             <div id="settings-error" class="error" style="display: none;"></div>
             <div id="settings-success" class="success" style="display: none;"></div>
+
+            <!-- System Settings (Read-Only) -->
+            <div style="background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 20px;">
+                <h3 style="margin-bottom: 15px;">System Settings (Read-Only)</h3>
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px;">
+                    <div style="padding: 12px; background: #f8f9fa; border-radius: 6px;">
+                        <div style="font-size: 12px; color: #666; margin-bottom: 4px;">Environment</div>
+                        <div style="font-size: 16px; font-weight: 600; font-family: monospace; color: #333;" id="system-environment">-</div>
+                    </div>
+                    <div style="padding: 12px; background: #f8f9fa; border-radius: 6px;">
+                        <div style="font-size: 12px; color: #666; margin-bottom: 4px;">GCP Project</div>
+                        <div style="font-size: 14px; font-weight: 500; font-family: monospace; color: #333;" id="system-project">-</div>
+                    </div>
+                    <div style="padding: 12px; background: #f8f9fa; border-radius: 6px;">
+                        <div style="font-size: 12px; color: #666; margin-bottom: 4px;">Region</div>
+                        <div style="font-size: 14px; font-weight: 500; font-family: monospace; color: #333;" id="system-region">-</div>
+                    </div>
+                    <div style="padding: 12px; background: #f8f9fa; border-radius: 6px;">
+                        <div style="font-size: 12px; color: #666; margin-bottom: 4px;">Default Storage Bucket</div>
+                        <div style="font-size: 13px; font-weight: 500; font-family: monospace; color: #333;" id="system-storage-bucket">-</div>
+                    </div>
+                </div>
+            </div>
+
             <div style="background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
                 <h3>Tenant Details</h3>
                 <form id="tenant-settings-form" onsubmit="saveTenantSettings(event)">
@@ -362,14 +386,23 @@
 
                     <h3 style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee;">Storage Configuration</h3>
                     <div style="background: #e7f3ff; border-left: 4px solid #0066cc; padding: 12px; margin-bottom: 20px; border-radius: 4px;">
-                        <p style="margin: 0; color: #333; font-size: 14px;"><strong>Per-Tenant Thumbnails:</strong> Configure a dedicated GCS bucket for this tenant's thumbnails.</p>
-                        <p style="margin: 8px 0 0 0; color: #666; font-size: 13px;">Leave blank to use global default bucket. Full-size images are not stored in GCS. To set up a new bucket, run:</p>
+                        <p style="margin: 0; color: #333; font-size: 14px;"><strong>Storage Bucket Convention:</strong></p>
+                        <ul style="margin: 8px 0 0 0; padding-left: 20px; color: #666; font-size: 13px;">
+                            <li><strong>Shared bucket (default):</strong> <code id="shared-bucket-name">{project}-{ENV}-shared</code></li>
+                            <li><strong>Tenant-specific:</strong> <code id="dedicated-bucket-name">{project}-{ENV}-{tenant_id}</code></li>
+                            <li>Paths always include tenant ID: <code>{tenant_id}/thumbnails/image.jpg</code></li>
+                        </ul>
+                        <p style="margin: 8px 0 0 0; color: #666; font-size: 13px;">To set up a dedicated bucket, check the box below and run:</p>
                         <code style="display: block; margin-top: 8px; padding: 8px; background: white; border-radius: 4px; font-family: monospace; font-size: 12px;">python scripts/setup_tenant_buckets.py --tenant-id <span id="bucket-setup-tenant-id">TENANT_ID</span></code>
                     </div>
-                    <div class="form-group">
-                        <label>Thumbnail Bucket</label>
-                        <input type="text" id="settings-thumbnail-bucket" placeholder="e.g., photocat-483622-demo-thumbnails">
-                        <small style="color: #666;">GCS bucket for thumbnails (public for CDN access)</small>
+                    <div class="form-group checkbox">
+                        <input type="checkbox" id="settings-dedicated-bucket" onchange="updateBucketDisplay()">
+                        <label for="settings-dedicated-bucket">Use dedicated bucket for this tenant</label>
+                    </div>
+                    <div id="bucket-display" style="padding: 12px; background: #f8f9fa; border-radius: 6px; margin-top: 10px;">
+                        <div style="font-size: 12px; color: #666; margin-bottom: 4px;">Active bucket:</div>
+                        <div style="font-size: 14px; font-weight: 500; font-family: monospace; color: #333;" id="computed-bucket-name">-</div>
+                        <div style="font-size: 12px; color: #999; margin-top: 4px;" id="bucket-type-label">Shared bucket (default)</div>
                     </div>
 
                     <div style="display: flex; gap: 10px; justify-content: flex-end;">
@@ -439,7 +472,31 @@
                         <small style="color: #666; display: block; margin-top: 5px;">Automatically populated by OAuth flow</small>
                     </div>
                 </div>
-                
+
+                <!-- Sync Folders Configuration -->
+                <div style="margin-bottom: 30px; padding: 20px; background: #f8f9fa; border-radius: 6px; border-left: 4px solid #17a2b8;">
+                    <h4 style="margin-top: 0; color: #17a2b8;">4. Sync Folders (Optional)</h4>
+                    <p style="color: #666; margin-bottom: 15px;">Specify which Dropbox folders to sync. Leave empty to sync all folders in your Dropbox.</p>
+
+                    <div id="sync-folders-list" style="margin-bottom: 15px;">
+                        <!-- Folder paths will be added here -->
+                    </div>
+
+                    <div style="display: flex; gap: 10px; margin-bottom: 10px;">
+                        <input type="text" id="new-sync-folder" placeholder="/Archive - Photo/Events/2025 Events" style="flex: 1; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                        <button type="button" class="btn btn-primary" onclick="addSyncFolder()">Add Folder</button>
+                    </div>
+
+                    <div style="margin-top: 15px;">
+                        <button type="button" class="btn btn-primary" onclick="saveSyncFolders()">Save Sync Folders</button>
+                    </div>
+
+                    <small style="color: #666; display: block; margin-top: 10px;">
+                        Examples: /Archive - Photo/Events/2025 Events, /Camera Uploads, /Photos<br>
+                        Leave list empty to sync entire Dropbox without folder restrictions.
+                    </small>
+                </div>
+
                 <!-- Setup Instructions -->
                 <div style="padding: 20px; background: #e7f3ff; border-radius: 6px; border-left: 4px solid #0066cc;">
                     <h4 style="margin-top: 0; color: #0066cc;">📋 Initial Setup Instructions</h4>
@@ -460,6 +517,7 @@
                 </div>
             </div>
         </div>
+
     </div>
 
     <!-- Old tab structure (hidden) -->
@@ -580,6 +638,7 @@
     <script>
         // Global state
         let currentTenantId = null;
+        let systemSettings = null;
 
         // Tab switching for tenant editor
         document.querySelectorAll('.tab').forEach(tab => {
@@ -592,41 +651,76 @@
                 
                 tab.classList.add('active');
                 document.getElementById(tabName).classList.add('active');
-                
+
                 // Load data for active tab in tenant editor
-                if (tabName === 'tenant-keywords') loadKeywords();
                 if (tabName === 'tenant-people') loadPeopleForTenant();
             });
         });
 
+        // Load system settings
+        async function loadSystemSettings() {
+            try {
+                const response = await fetch('/api/v1/config/system');
+                systemSettings = await response.json();
+
+                // Update UI
+                document.getElementById('system-environment').textContent = systemSettings.environment.toUpperCase();
+                document.getElementById('system-project').textContent = systemSettings.gcp_project_id;
+                document.getElementById('system-region').textContent = systemSettings.gcp_region;
+                document.getElementById('system-storage-bucket').textContent = systemSettings.storage_bucket_name;
+
+                // Update bucket convention display
+                document.getElementById('shared-bucket-name').textContent = systemSettings.storage_bucket_name;
+
+                // Color-code environment
+                const envEl = document.getElementById('system-environment');
+                if (systemSettings.environment.toLowerCase() === 'prod') {
+                    envEl.style.color = '#c53030';
+                } else {
+                    envEl.style.color = '#38a169';
+                }
+            } catch (error) {
+                console.error('Failed to load system settings:', error);
+            }
+        }
+
         // Tenant Editor Functions
         async function openTenantEditor(tenantId) {
             currentTenantId = tenantId;
-            
+
+            // Load system settings
+            await loadSystemSettings();
+
             // Fetch tenant details
             const response = await fetch('/api/v1/admin/tenants');
             const tenants = await response.json();
             const tenant = tenants.find(t => t.id === tenantId);
-            
+
             if (!tenant) {
                 alert('Tenant not found');
                 return;
             }
-            
+
             // Update UI
             document.getElementById('current-tenant-name').textContent = tenant.name;
             document.getElementById('tenant-list-view').style.display = 'none';
             document.getElementById('tenant-editor-view').style.display = 'block';
-            
+
             // Populate settings form
             document.getElementById('settings-tenant-id').value = tenant.id;
             document.getElementById('settings-id').value = tenant.id;
             document.getElementById('settings-name').value = tenant.name;
             document.getElementById('settings-active').checked = tenant.active;
-            document.getElementById('settings-thumbnail-bucket').value = tenant.thumbnail_bucket || '';
+
+            // Check if tenant has dedicated bucket
+            const hasDedicatedBucket = tenant.thumbnail_bucket && tenant.thumbnail_bucket !== '';
+            document.getElementById('settings-dedicated-bucket').checked = hasDedicatedBucket;
 
             // Update bucket setup command with actual tenant ID
             document.getElementById('bucket-setup-tenant-id').textContent = tenant.id;
+
+            // Update bucket display
+            updateBucketDisplay();
 
             // Populate Dropbox form
             document.getElementById('dropbox-tenant-id').value = tenant.id;
@@ -644,7 +738,10 @@
             // Update tenant ID placeholders in instructions
             document.getElementById('secret-tenant-id').textContent = tenant.id;
             document.querySelectorAll('.tenant-id-display').forEach(el => el.textContent = tenant.id);
-            
+
+            // Load sync folders
+            loadSyncFolders(tenant);
+
             // Load initial data
             loadKeywords();
         }
@@ -653,6 +750,90 @@
             // For now, just display the path
             // In production, you could call an API endpoint to verify
             document.getElementById(elementId).textContent = secretPath;
+        }
+
+        // Sync folders management
+        let syncFolders = [];
+
+        function loadSyncFolders(tenant) {
+            // Load sync folders from tenant settings
+            syncFolders = (tenant.settings && tenant.settings.dropbox_sync_folders) || [];
+            renderSyncFolders();
+        }
+
+        function renderSyncFolders() {
+            const container = document.getElementById('sync-folders-list');
+            if (syncFolders.length === 0) {
+                container.innerHTML = '<p style="color: #999; font-style: italic;">No folders configured - will sync entire Dropbox</p>';
+            } else {
+                container.innerHTML = syncFolders.map((folder, index) => `
+                    <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px; padding: 8px; background: white; border: 1px solid #dee2e6; border-radius: 4px;">
+                        <code style="flex: 1; color: #212529; font-size: 13px;">${folder}</code>
+                        <button type="button" class="btn" onclick="removeSyncFolder(${index})" style="padding: 4px 12px; font-size: 12px; background: #dc3545; color: white;">Remove</button>
+                    </div>
+                `).join('');
+            }
+        }
+
+        function addSyncFolder() {
+            const input = document.getElementById('new-sync-folder');
+            if (!input) {
+                console.error('Input element not found');
+                return;
+            }
+
+            const folder = input.value.trim();
+
+            if (!folder) {
+                alert('Please enter a folder path');
+                return;
+            }
+
+            if (!folder.startsWith('/')) {
+                alert('Folder path must start with /');
+                return;
+            }
+
+            if (syncFolders.includes(folder)) {
+                alert('This folder is already in the list');
+                return;
+            }
+
+            syncFolders.push(folder);
+            renderSyncFolders();
+            input.value = '';
+            input.focus();
+        }
+
+        function removeSyncFolder(index) {
+            syncFolders.splice(index, 1);
+            renderSyncFolders();
+        }
+
+        async function saveSyncFolders() {
+            if (!currentTenantId) {
+                alert('No tenant selected');
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/v1/admin/tenants/${currentTenantId}/settings`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        dropbox_sync_folders: syncFolders
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error('Failed to save sync folders');
+                }
+
+                alert('Sync folders saved successfully!');
+            } catch (error) {
+                console.error('Error saving sync folders:', error);
+                alert('Failed to save sync folders: ' + error.message);
+            }
         }
 
         function closeTenantEditor() {
@@ -771,18 +952,55 @@
             }
         }
 
+        function updateBucketDisplay() {
+            const tenantId = document.getElementById('settings-id').value;
+            const useDedicated = document.getElementById('settings-dedicated-bucket').checked;
+            const computedBucketName = document.getElementById('computed-bucket-name');
+            const bucketTypeLabel = document.getElementById('bucket-type-label');
+
+            if (!systemSettings) return;
+
+            // Use lowercase for GCS bucket name compatibility
+            const env = systemSettings.environment.toLowerCase();
+            const projectId = systemSettings.gcp_project_id;
+
+            if (useDedicated && tenantId) {
+                // Dedicated bucket
+                const bucketName = `${projectId}-${env}-${tenantId}`;
+                computedBucketName.textContent = bucketName;
+                bucketTypeLabel.textContent = 'Dedicated tenant bucket';
+                bucketTypeLabel.style.color = '#0066cc';
+
+                // Update the dedicated bucket example in the convention display
+                document.getElementById('dedicated-bucket-name').textContent = bucketName;
+            } else {
+                // Shared bucket
+                const sharedBucket = `${projectId}-${env}-shared`;
+                computedBucketName.textContent = sharedBucket;
+                bucketTypeLabel.textContent = 'Shared bucket (default)';
+                bucketTypeLabel.style.color = '#999';
+            }
+        }
+
         async function saveTenantSettings(event) {
             event.preventDefault();
 
             const tenantId = document.getElementById('settings-tenant-id').value;
+            const useDedicatedBucket = document.getElementById('settings-dedicated-bucket').checked;
 
-            const thumbnailBucket = document.getElementById('settings-thumbnail-bucket').value.trim();
+            // Compute bucket name if dedicated bucket is checked
+            let thumbnailBucket = null;
+            if (useDedicatedBucket && systemSettings) {
+                const env = systemSettings.environment.toUpperCase();
+                const projectId = systemSettings.gcp_project_id;
+                thumbnailBucket = `${projectId}-${env}-${tenantId}`;
+            }
 
             const data = {
                 id: tenantId,
                 name: document.getElementById('settings-name').value,
                 active: document.getElementById('settings-active').checked,
-                thumbnail_bucket: thumbnailBucket || null
+                thumbnail_bucket: thumbnailBucket
             };
 
             try {
@@ -1188,6 +1406,7 @@
             el.style.display = 'block';
             setTimeout(() => el.style.display = 'none', 3000);
         }
+
     </script>
     </div>
 </body>

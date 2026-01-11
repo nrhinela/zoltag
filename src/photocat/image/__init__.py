@@ -9,19 +9,34 @@ import numpy as np
 from PIL import Image, ExifTags
 import cv2
 
+# Register HEIC support if available
+try:
+    from pillow_heif import register_heif_opener
+    register_heif_opener()
+    HEIC_SUPPORTED = True
+except ImportError:
+    HEIC_SUPPORTED = False
+    print("Warning: pillow-heif not installed. HEIC files will not be supported.")
+
 
 class ImageProcessor:
     """Process images and extract features."""
-    
-    SUPPORTED_FORMATS = {".jpg", ".jpeg", ".png", ".heic", ".webp", ".bmp", ".tiff"}
-    
+
+    SUPPORTED_FORMATS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tiff"}
+
     def __init__(self, thumbnail_size: Tuple[int, int] = (256, 256)):
         """Initialize processor."""
         self.thumbnail_size = thumbnail_size
-    
+
     def is_supported(self, filename: str) -> bool:
         """Check if file format is supported."""
-        return Path(filename).suffix.lower() in self.SUPPORTED_FORMATS
+        suffix = Path(filename).suffix.lower()
+
+        # Check HEIC separately since it requires pillow-heif
+        if suffix in {".heic", ".heif"}:
+            return HEIC_SUPPORTED
+
+        return suffix in self.SUPPORTED_FORMATS
     
     def load_image(self, data: bytes) -> Image.Image:
         """Load image from bytes."""
@@ -84,10 +99,12 @@ class ImageProcessor:
                     value = converted_list
                 
                 exif_data[tag_name] = value
-        except Exception:
+        except Exception as e:
             # Some images may have corrupted EXIF data
-            pass
-        
+            print(f"Warning: Error extracting EXIF data: {e}")
+            import traceback
+            traceback.print_exc()
+
         return exif_data
     
     def compute_perceptual_hash(self, image: Image.Image) -> str:

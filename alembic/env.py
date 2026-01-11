@@ -1,5 +1,6 @@
 """Alembic database migrations configuration."""
 
+import os
 from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config
@@ -12,6 +13,10 @@ from photocat.metadata import Base
 
 # this is the Alembic Config object
 config = context.config
+
+# Override sqlalchemy.url with DATABASE_URL from environment if set
+if os.getenv("DATABASE_URL"):
+    config.set_main_option("sqlalchemy.url", os.getenv("DATABASE_URL"))
 
 # Interpret the config file for Python logging
 if config.config_file_name is not None:

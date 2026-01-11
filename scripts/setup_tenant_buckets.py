@@ -50,10 +50,16 @@ def create_bucket_if_not_exists(storage_client, bucket_name, make_public=False):
 
 
 def setup_tenant_buckets(tenant_id: str):
-    """Setup thumbnail bucket for a tenant."""
+    """Setup dedicated thumbnail bucket for a tenant using environment-aware naming."""
 
     # Verify DATABASE_URL is set and looks valid
     db_url = settings.database_url
+    env = settings.environment
+
+    # Determine database environment from URL
+    is_dev_db = "photocat-dev" in db_url
+    is_prod_db = "photocat-prod" in db_url
+
     if db_url == "postgresql://localhost/photocat":
         print("⚠️  Using LOCAL database (postgresql://localhost/photocat)")
         confirm = input("Is this correct? Type 'yes' to continue: ")
@@ -61,8 +67,19 @@ def setup_tenant_buckets(tenant_id: str):
             print("Aborted. Set DATABASE_URL environment variable to target the correct database.")
             return False
     elif "localhost:5432" in db_url or "127.0.0.1:5432" in db_url:
-        print(f"⚠️  Using database via Cloud SQL Proxy: {db_url}")
-        confirm = input("Is this PRODUCTION database? Type 'yes' to continue: ")
+        # Cloud SQL Proxy connection
+        if is_dev_db:
+            print(f"⚠️  Using DEV database via Cloud SQL Proxy")
+            print(f"   Database: photocat-dev")
+            print(f"   Environment: {env}")
+        elif is_prod_db:
+            print(f"⚠️  Using PRODUCTION database via Cloud SQL Proxy")
+            print(f"   Database: photocat-prod")
+            print(f"   Environment: {env}")
+        else:
+            print(f"⚠️  Using database via Cloud SQL Proxy: {db_url}")
+
+        confirm = input("Continue? Type 'yes' to proceed: ")
         if confirm.lower() != 'yes':
             print("Aborted.")
             return False
@@ -76,12 +93,15 @@ def setup_tenant_buckets(tenant_id: str):
     # Initialize storage client
     storage_client = storage.Client(project=settings.gcp_project_id)
 
-    # Generate bucket name (only thumbnails, no full-size images stored)
+    # Generate bucket name using environment-aware convention (lowercase for GCS)
     project_id = settings.gcp_project_id
-    thumbnail_bucket_name = f"{project_id}-{tenant_id}-thumbnails"
+    env = settings.environment.lower()
+    thumbnail_bucket_name = f"{project_id}-{env}-{tenant_id}"
 
-    print(f"\n=== Setting up thumbnail bucket for tenant: {tenant_id} ===")
-    print(f"Thumbnail bucket: {thumbnail_bucket_name}")
+    print(f"\n=== Setting up dedicated bucket for tenant: {tenant_id} ===")
+    print(f"Environment: {env}")
+    print(f"Bucket name: {thumbnail_bucket_name}")
+    print(f"Convention: {{project}}-{{env}}-{{tenant_id}}")
     print()
 
     # Create thumbnail bucket (public for CDN access)
@@ -124,9 +144,14 @@ def setup_tenant_buckets(tenant_id: str):
         session.close()
 
     print("\n=== Setup complete! ===")
-    print(f"\nThumbnail URLs will be:")
-    print(f"  https://storage.googleapis.com/{thumbnail_bucket_name}/{{path}}")
-    print(f"\nNote: Full-size images are not stored in GCS (only thumbnails)")
+    print(f"\nDedicated bucket created: {thumbnail_bucket_name}")
+    print(f"Thumbnail URLs will be:")
+    print(f"  https://storage.googleapis.com/{thumbnail_bucket_name}/{{tenant_id}}/thumbnails/{{filename}}")
+    print(f"\nExample path: {tenant_id}/thumbnails/image_thumb.jpg")
+    print(f"\nNote:")
+    print(f"  - Bucket name follows convention: {{project}}-{{env}}-{{tenant_id}}")
+    print(f"  - Paths always include tenant ID prefix: {{tenant_id}}/thumbnails/...")
+    print(f"  - Full-size images are not stored in GCS (only thumbnails)")
 
     return True
 

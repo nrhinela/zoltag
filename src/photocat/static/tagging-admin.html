@@ -232,7 +232,11 @@
         <div class="header">
             <div style="display: flex; justify-content: space-between; align-items: center;">
                 <div>
-                    <h1><i class="fas fa-tags"></i> PhotoCat Tagging Administration</h1>
+                    <h1>
+                        <i class="fas fa-tags"></i> PhotoCat
+                        <span id="environment-badge" style="font-size: 14px; padding: 4px 12px; border-radius: 4px; font-weight: 600; margin-left: 12px;">...</span>
+                        <span style="font-weight: 400; font-size: 20px; color: #666;">Tagging Administration</span>
+                    </h1>
                     <p>Configure keywords and manage people for facial recognition</p>
                 </div>
                 <div>
@@ -265,31 +269,25 @@
         </div>
         <p style="color: #666; margin-bottom: 10px;">Define categories and keywords for image tagging. Keywords are used by the ML model to categorize images.</p>
 
-        <!-- Model Selection -->
-        <div style="background: #fff3cd; border-left: 4px solid #ffc107; padding: 12px; margin-bottom: 20px; border-radius: 4px;">
-            <div style="display: flex; align-items: center; gap: 15px;">
-                <label for="tagging-model-select" style="font-weight: 600; color: #333; margin: 0;">
-                    <i class="fas fa-brain"></i> Tagging Model:
-                </label>
-                <select id="tagging-model-select" onchange="updateTaggingModel()" style="padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; background: #f5f5f5; cursor: not-allowed;" disabled>
-                    <option value="siglip">SigLIP</option>
-                </select>
-                <span style="color: #666; font-size: 13px;">(CLIP and SigLIP2 are currently disabled)</span>
+        <!-- Info Box -->
+        <div style="background: #e7f3ff; border-left: 4px solid #0066cc; padding: 12px 15px; margin-bottom: 20px; border-radius: 4px;">
+            <div style="display: flex; align-items: start; gap: 10px;">
+                <i class="fas fa-info-circle" style="color: #0066cc; margin-top: 2px;"></i>
+                <div style="font-size: 13px; color: #333;">
+                    <strong>How scoring works:</strong> Keywords within the same category are scored relative to each other.
+                    When you improve one keyword's description, it may affect the confidence scores of other keywords in that category.
+                    Keywords in different categories are scored independently.
+                </div>
             </div>
-            <p style="margin: 8px 0 0 0; color: #666; font-size: 13px;">Using SigLIP for all tagging operations.</p>
         </div>
 
-        <div style="background: #e7f3ff; border-left: 4px solid #0066cc; padding: 12px; margin-bottom: 20px; border-radius: 4px;">
-            <p style="margin: 0; color: #333; font-size: 14px;"><strong>Format:</strong> Each keyword can be a string or an object with <code>keyword</code> and optional <code>prompt</code> fields.</p>
-            <p style="margin: 8px 0 0 0; color: #666; font-size: 13px;">Example: <code>{"keyword": "juggling", "prompt": "a photo of someone juggling balls or clubs"}</code></p>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <div></div>
+            <button class="btn btn-primary" onclick="showCategoryModal()"><i class="fas fa-plus"></i> New Category</button>
         </div>
-        <div id="keywords-error" class="error" style="display: none;"></div>
-        <div id="keywords-success" class="success" style="display: none;"></div>
-        <textarea id="keywords-editor" style="width: 100%; min-height: 500px; font-family: 'Monaco', 'Consolas', monospace; font-size: 13px; padding: 15px; border: 1px solid #ddd; border-radius: 4px;" placeholder="Select a tenant to load keywords..."></textarea>
-        <div style="margin-top: 20px; display: flex; gap: 10px;">
-            <button class="btn btn-primary" onclick="saveKeywords()"><i class="fas fa-save"></i> Save Keywords</button>
-            <button class="btn btn-secondary" onclick="loadKeywords()"><i class="fas fa-sync-alt"></i> Reload</button>
-            <button class="btn btn-secondary" onclick="formatKeywords()"><i class="fas fa-align-left"></i> Format JSON</button>
+
+        <div id="keywords-list" style="margin-top: 20px;">
+            <!-- Categories will be loaded here -->
         </div>
     </div>
 
@@ -368,18 +366,26 @@
         // Load current tenant from gallery selection
         async function loadCurrentTenant() {
             try {
-                // Get tenant from localStorage (set by main gallery)
-                const storedTenant = localStorage.getItem('currentTenant');
-
-                if (!storedTenant) {
-                    showError('keywords', 'No tenant selected. Please select a tenant in the gallery first.');
-                    document.getElementById('current-tenant-name').textContent = 'No tenant selected';
-                    return;
-                }
-
                 // Fetch tenant details to display name
                 const response = await fetch('/api/v1/admin/tenants');
                 const tenants = await response.json();
+
+                // Get tenant from localStorage (set by main gallery)
+                let storedTenant = localStorage.getItem('currentTenant');
+
+                // If no tenant stored, default to first active tenant
+                if (!storedTenant) {
+                    const activeTenants = tenants.filter(t => t.active);
+                    if (activeTenants.length > 0) {
+                        storedTenant = activeTenants[0].id;
+                        localStorage.setItem('currentTenant', storedTenant);
+                    } else {
+                        showError('keywords', 'No active tenants found. Please create a tenant first.');
+                        document.getElementById('current-tenant-name').textContent = 'No active tenants';
+                        return;
+                    }
+                }
+
                 const tenant = tenants.find(t => t.id === storedTenant);
 
                 if (!tenant) {
@@ -447,102 +453,324 @@
         }
 
         // Keywords functions
+        // ============================================================================
+        // Modern Keyword Management Functions
+        // ============================================================================
+
+        let categories = [];
+        let expandedCategories = new Set();
+
         async function loadKeywords() {
             if (!currentTenantId) {
-                showError('keywords', 'Please select a tenant first');
                 return;
             }
 
             try {
-                const response = await fetch('/api/v1/config/keywords', {
+                const response = await fetch('/api/v1/admin/keywords/categories', {
                     headers: { 'X-Tenant-ID': currentTenantId }
                 });
-
-                if (!response.ok) {
-                    throw new Error(`HTTP ${response.status}`);
-                }
-
-                const keywords = await response.json();
-                const categories = keywordsToCategories(keywords);
-                document.getElementById('keywords-editor').value = JSON.stringify(categories, null, 2);
-                showSuccess('keywords', 'Keywords loaded successfully');
+                categories = await response.json();
+                renderCategories();
             } catch (error) {
-                showError('keywords', 'Error loading keywords: ' + error.message);
+                console.error('Error loading categories:', error);
+                showError('keywords', 'Failed to load keyword categories');
             }
         }
 
-        async function saveKeywords() {
-            if (!currentTenantId) {
-                showError('keywords', 'Please select a tenant first');
+        function renderCategories() {
+            const container = document.getElementById('keywords-list');
+            if (categories.length === 0) {
+                container.innerHTML = '<p style="color: #999; font-style: italic; padding: 20px; background: white; border-radius: 6px;">No categories yet. Click "+ New Category" to create one.</p>';
+                return;
+            }
+
+            container.innerHTML = categories.map(cat => {
+                const isExpanded = expandedCategories.has(cat.id);
+                return `
+                    <div style="background: white; border: 1px solid #ddd; border-radius: 6px; margin-bottom: 15px; overflow: hidden;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; padding: 15px; background: #f8f9fa; cursor: pointer;" onclick="toggleCategory(${cat.id})">
+                            <div style="display: flex; align-items: center; gap: 10px;">
+                                <span style="font-size: 12px;">${isExpanded ? '▼' : '▶'}</span>
+                                <strong>${cat.name}</strong>
+                                <span style="color: #666; font-size: 13px;">(${cat.keyword_count} keywords)</span>
+                            </div>
+                            <div style="display: flex; gap: 8px;" onclick="event.stopPropagation()">
+                                <button class="btn btn-primary" style="padding: 4px 12px; font-size: 12px;" onclick="showKeywordModal(null, ${cat.id})">+ Add Keyword</button>
+                                <button class="btn" style="padding: 4px 12px; font-size: 12px; background: #6c757d; color: white;" onclick="editCategory(${cat.id})">Edit</button>
+                                <button class="btn" style="padding: 4px 12px; font-size: 12px; background: #dc3545; color: white;" onclick="deleteCategory(${cat.id})">Delete</button>
+                            </div>
+                        </div>
+                        <div id="category-keywords-${cat.id}" style="display: ${isExpanded ? 'block' : 'none'}; padding: 15px;">
+                            <!-- Keywords will be loaded here -->
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            // Load keywords for expanded categories
+            expandedCategories.forEach(catId => loadKeywordsForCategory(catId));
+        }
+
+        async function toggleCategory(categoryId) {
+            if (expandedCategories.has(categoryId)) {
+                expandedCategories.delete(categoryId);
+            } else {
+                expandedCategories.add(categoryId);
+                await loadKeywordsForCategory(categoryId);
+            }
+            renderCategories();
+        }
+
+        async function loadKeywordsForCategory(categoryId) {
+            try {
+                const response = await fetch(`/api/v1/admin/keywords/categories/${categoryId}/keywords`);
+                const keywords = await response.json();
+
+                const container = document.getElementById(`category-keywords-${categoryId}`);
+                if (keywords.length === 0) {
+                    container.innerHTML = '<p style="color: #999; font-style: italic;">No keywords in this category yet.</p>';
+                    return;
+                }
+
+                container.innerHTML = `
+                    <table style="width: 100%; border-collapse: collapse;">
+                        <thead>
+                            <tr style="background: #f8f9fa;">
+                                <th style="padding: 10px; text-align: left; border-bottom: 2px solid #dee2e6;">Keyword</th>
+                                <th style="padding: 10px; text-align: left; border-bottom: 2px solid #dee2e6;">Prompt</th>
+                                <th style="padding: 10px; text-align: left; border-bottom: 2px solid #dee2e6; width: 100px;">Order</th>
+                                <th style="padding: 10px; text-align: right; border-bottom: 2px solid #dee2e6; width: 150px;">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${keywords.map((kw, index) => `
+                                <tr style="border-bottom: 1px solid #dee2e6;">
+                                    <td style="padding: 10px;"><strong>${kw.keyword}</strong></td>
+                                    <td style="padding: 10px; color: #666; font-size: 13px;">${kw.prompt.substring(0, 80)}${kw.prompt.length > 80 ? '...' : ''}</td>
+                                    <td style="padding: 10px;">
+                                        <div style="display: flex; gap: 4px; align-items: center;">
+                                            <button onclick="moveKeyword(${kw.id}, ${categoryId}, 'up')" ${index === 0 ? 'disabled' : ''} style="padding: 2px 6px; font-size: 11px; cursor: pointer;">↑</button>
+                                            <span>${kw.sort_order}</span>
+                                            <button onclick="moveKeyword(${kw.id}, ${categoryId}, 'down')" ${index === keywords.length - 1 ? 'disabled' : ''} style="padding: 2px 6px; font-size: 11px; cursor: pointer;">↓</button>
+                                        </div>
+                                    </td>
+                                    <td style="padding: 10px; text-align: right;">
+                                        <button class="btn" style="padding: 4px 12px; font-size: 12px; background: #6c757d; color: white;" onclick="editKeyword(${kw.id})">Edit</button>
+                                        <button class="btn" style="padding: 4px 12px; font-size: 12px; background: #dc3545; color: white;" onclick="deleteKeyword(${kw.id}, ${categoryId})">Delete</button>
+                                    </td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                `;
+            } catch (error) {
+                console.error('Error loading keywords:', error);
+            }
+        }
+
+        // Category Modal Functions
+        function showCategoryModal(categoryId = null) {
+            document.getElementById('category-modal-title').textContent = categoryId ? 'Edit Category' : 'New Category';
+            document.getElementById('category-edit-id').value = categoryId || '';
+            document.getElementById('category-name').value = '';
+
+            if (categoryId) {
+                const category = categories.find(c => c.id === categoryId);
+                if (category) {
+                    document.getElementById('category-name').value = category.name;
+                }
+            }
+
+            document.getElementById('category-modal').style.display = 'block';
+        }
+
+        function closeCategoryModal() {
+            document.getElementById('category-modal').style.display = 'none';
+        }
+
+        function editCategory(categoryId) {
+            showCategoryModal(categoryId);
+        }
+
+        async function saveCategory(event) {
+            event.preventDefault();
+
+            const categoryId = document.getElementById('category-edit-id').value;
+            const name = document.getElementById('category-name').value;
+
+            try {
+                const url = categoryId
+                    ? `/api/v1/admin/keywords/categories/${categoryId}`
+                    : '/api/v1/admin/keywords/categories';
+
+                const method = categoryId ? 'PUT' : 'POST';
+                const headers = { 'Content-Type': 'application/json' };
+
+                if (!categoryId) {
+                    headers['X-Tenant-ID'] = currentTenantId;
+                }
+
+                const response = await fetch(url, {
+                    method,
+                    headers,
+                    body: JSON.stringify({ name })
+                });
+
+                if (!response.ok) throw new Error('Failed to save category');
+
+                closeCategoryModal();
+                await loadKeywords();
+                showSuccess('keywords', 'Category saved successfully!');
+            } catch (error) {
+                console.error('Error saving category:', error);
+                showError('keywords', 'Failed to save category: ' + error.message);
+            }
+        }
+
+        async function deleteCategory(categoryId) {
+            const category = categories.find(c => c.id === categoryId);
+            if (!confirm(`Delete category "${category.name}" and all its keywords? This cannot be undone.`)) {
                 return;
             }
 
             try {
-                const json = document.getElementById('keywords-editor').value;
-                const categories = JSON.parse(json);
-
-                const response = await fetch('/api/v1/config/keywords', {
-                    method: 'POST',
-                    headers: {
-                        'X-Tenant-ID': currentTenantId,
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify(categoriesToKeywords(categories))
+                const response = await fetch(`/api/v1/admin/keywords/categories/${categoryId}`, {
+                    method: 'DELETE'
                 });
 
-                if (response.ok) {
-                    showSuccess('keywords', 'Keywords saved successfully!');
-                } else {
-                    const error = await response.json();
-                    showError('keywords', 'Error saving keywords: ' + (error.detail || 'Unknown error'));
-                }
+                if (!response.ok) throw new Error('Failed to delete category');
+
+                await loadKeywords();
+                showSuccess('keywords', 'Category deleted successfully!');
             } catch (error) {
-                showError('keywords', 'Error saving keywords: ' + error.message);
+                console.error('Error deleting category:', error);
+                showError('keywords', 'Failed to delete category: ' + error.message);
             }
         }
 
-        function formatKeywords() {
+        // Keyword Modal Functions
+        function showKeywordModal(keywordId = null, categoryId = null) {
+            document.getElementById('keyword-modal-title').textContent = keywordId ? 'Edit Keyword' : 'New Keyword';
+            document.getElementById('keyword-edit-id').value = keywordId || '';
+            document.getElementById('keyword-category-id').value = categoryId || '';
+            document.getElementById('keyword-text').value = '';
+            document.getElementById('keyword-prompt').value = '';
+
+            if (keywordId) {
+                loadKeywordData(keywordId);
+            }
+
+            document.getElementById('keyword-modal').style.display = 'block';
+        }
+
+        function closeKeywordModal() {
+            document.getElementById('keyword-modal').style.display = 'none';
+        }
+
+        async function loadKeywordData(keywordId) {
+            for (const cat of categories) {
+                const response = await fetch(`/api/v1/admin/keywords/categories/${cat.id}/keywords`);
+                const keywords = await response.json();
+                const keyword = keywords.find(k => k.id === keywordId);
+
+                if (keyword) {
+                    document.getElementById('keyword-category-id').value = keyword.category_id;
+                    document.getElementById('keyword-text').value = keyword.keyword;
+                    document.getElementById('keyword-prompt').value = keyword.prompt;
+                    break;
+                }
+            }
+        }
+
+        function editKeyword(keywordId) {
+            showKeywordModal(keywordId);
+        }
+
+        async function saveKeyword(event) {
+            event.preventDefault();
+
+            const keywordId = document.getElementById('keyword-edit-id').value;
+            const categoryId = document.getElementById('keyword-category-id').value;
+            const keyword = document.getElementById('keyword-text').value;
+            const prompt = document.getElementById('keyword-prompt').value;
+
             try {
-                const json = document.getElementById('keywords-editor').value;
-                const parsed = JSON.parse(json);
-                document.getElementById('keywords-editor').value = JSON.stringify(parsed, null, 2);
-                showSuccess('keywords', 'JSON formatted successfully');
-            } catch (error) {
-                showError('keywords', 'Invalid JSON: ' + error.message);
-            }
-        }
+                const url = keywordId
+                    ? `/api/v1/admin/keywords/${keywordId}`
+                    : `/api/v1/admin/keywords/categories/${categoryId}/keywords`;
 
-        // Convert keywords array to categories object for display
-        function keywordsToCategories(keywords) {
-            const categories = {};
-            keywords.forEach(kw => {
-                if (!categories[kw.category]) {
-                    categories[kw.category] = [];
-                }
-                // Preserve the full keyword object (with prompt if it exists)
-                const kwObj = { keyword: kw.keyword };
-                if (kw.prompt) kwObj.prompt = kw.prompt;
-                categories[kw.category].push(kwObj);
-            });
-            return categories;
-        }
+                const method = keywordId ? 'PUT' : 'POST';
 
-        // Convert categories object back to keywords array for API
-        function categoriesToKeywords(categories) {
-            const keywords = [];
-            for (const [category, kws] of Object.entries(categories)) {
-                kws.forEach(kw => {
-                    // Handle both string format and object format
-                    if (typeof kw === 'string') {
-                        keywords.push({ category, keyword: kw });
-                    } else {
-                        const kwObj = { category, keyword: kw.keyword };
-                        if (kw.prompt) kwObj.prompt = kw.prompt;
-                        keywords.push(kwObj);
-                    }
+                const response = await fetch(url, {
+                    method,
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ keyword, prompt })
                 });
+
+                if (!response.ok) throw new Error('Failed to save keyword');
+
+                closeKeywordModal();
+                await loadKeywordsForCategory(categoryId);
+                await loadKeywords(); // Refresh counts
+                showSuccess('keywords', 'Keyword saved successfully!');
+            } catch (error) {
+                console.error('Error saving keyword:', error);
+                showError('keywords', 'Failed to save keyword: ' + error.message);
             }
-            return keywords;
+        }
+
+        async function deleteKeyword(keywordId, categoryId) {
+            if (!confirm('Delete this keyword? This cannot be undone.')) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/v1/admin/keywords/${keywordId}`, {
+                    method: 'DELETE'
+                });
+
+                if (!response.ok) throw new Error('Failed to delete keyword');
+
+                await loadKeywordsForCategory(categoryId);
+                await loadKeywords(); // Refresh counts
+                showSuccess('keywords', 'Keyword deleted successfully!');
+            } catch (error) {
+                console.error('Error deleting keyword:', error);
+                showError('keywords', 'Failed to delete keyword: ' + error.message);
+            }
+        }
+
+        async function moveKeyword(keywordId, categoryId, direction) {
+            try {
+                const response = await fetch(`/api/v1/admin/keywords/categories/${categoryId}/keywords`);
+                const keywords = await response.json();
+
+                const index = keywords.findIndex(k => k.id === keywordId);
+                if (index === -1) return;
+
+                const newIndex = direction === 'up' ? index - 1 : index + 1;
+                if (newIndex < 0 || newIndex >= keywords.length) return;
+
+                const currentKeyword = keywords[index];
+                const otherKeyword = keywords[newIndex];
+
+                await fetch(`/api/v1/admin/keywords/${currentKeyword.id}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ sort_order: otherKeyword.sort_order })
+                });
+
+                await fetch(`/api/v1/admin/keywords/${otherKeyword.id}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ sort_order: currentKeyword.sort_order })
+                });
+
+                await loadKeywordsForCategory(categoryId);
+            } catch (error) {
+                console.error('Error moving keyword:', error);
+                showError('keywords', 'Failed to reorder keyword');
+            }
         }
 
         // People functions
@@ -701,11 +929,87 @@
             setTimeout(() => successDiv.style.display = 'none', 3000);
         }
 
+        // Load environment badge
+        async function loadEnvironment() {
+            try {
+                const response = await fetch('/api/v1/config/system');
+                const systemSettings = await response.json();
+
+                const badge = document.getElementById('environment-badge');
+                const env = systemSettings.environment.toUpperCase();
+                badge.textContent = env;
+
+                // Color-code environment
+                if (systemSettings.environment.toLowerCase() === 'prod') {
+                    badge.style.backgroundColor = '#c53030';
+                    badge.style.color = 'white';
+                } else {
+                    badge.style.backgroundColor = '#38a169';
+                    badge.style.color = 'white';
+                }
+            } catch (error) {
+                console.error('Error loading environment:', error);
+                document.getElementById('environment-badge').textContent = 'ERROR';
+                document.getElementById('environment-badge').style.backgroundColor = '#999';
+                document.getElementById('environment-badge').style.color = 'white';
+            }
+        }
+
         // Initialize on page load
         document.addEventListener('DOMContentLoaded', () => {
+            loadEnvironment();
             loadCurrentTenant();
         });
     </script>
+
+    <!-- Category Modal -->
+    <div id="category-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="category-modal-title">New Category</h2>
+                <span class="close" onclick="closeCategoryModal()">&times;</span>
+            </div>
+            <form id="category-form" onsubmit="saveCategory(event)">
+                <input type="hidden" id="category-edit-id">
+                <div class="form-group">
+                    <label>Category Name *</label>
+                    <input type="text" id="category-name" required>
+                </div>
+                <div style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px;">
+                    <button type="button" class="btn btn-secondary" onclick="closeCategoryModal()">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Keyword Modal -->
+    <div id="keyword-modal" class="modal">
+        <div class="modal-content" style="max-width: 600px;">
+            <div class="modal-header">
+                <h2 id="keyword-modal-title">New Keyword</h2>
+                <span class="close" onclick="closeKeywordModal()">&times;</span>
+            </div>
+            <form id="keyword-form" onsubmit="saveKeyword(event)">
+                <input type="hidden" id="keyword-edit-id">
+                <input type="hidden" id="keyword-category-id">
+                <div class="form-group">
+                    <label>Keyword *</label>
+                    <input type="text" id="keyword-text" required placeholder="e.g., juggling">
+                </div>
+                <div class="form-group">
+                    <label>Prompt *</label>
+                    <textarea id="keyword-prompt" required rows="4" placeholder="Describe what to look for in images..." style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; font-family: inherit;"></textarea>
+                    <small style="color: #666;">Describe the visual elements that identify this keyword in images</small>
+                </div>
+                <div style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px;">
+                    <button type="button" class="btn btn-secondary" onclick="closeKeywordModal()">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     </div>
 </body>
 </html>

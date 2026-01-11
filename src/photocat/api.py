@@ -7,7 +7,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse, RedirectResponse
 from typing import Optional, List
 from pathlib import Path
 from datetime import datetime
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, func
 from sqlalchemy.orm import sessionmaker, Session
 from google.cloud import storage
 from google.cloud import secretmanager
@@ -18,6 +18,7 @@ import hashlib
 from photocat.tenant import Tenant, TenantContext
 from photocat.settings import settings
 from photocat.metadata import ImageMetadata, ImageTag, DropboxCursor, Permatag, Tenant as TenantModel, Person
+from photocat.models.config import Keyword, KeywordCategory
 from photocat.image import ImageProcessor
 from photocat.config import TenantConfig
 from photocat.config.db_config import ConfigManager
@@ -107,15 +108,20 @@ async def get_tenant(
     if not tenant_row:
         raise HTTPException(status_code=404, detail=f"Tenant {x_tenant_id} not found")
 
+    # Convert database row to Tenant dataclass
+    # Note: dropbox_token_secret and dropbox_app_secret are in Secret Manager
+    # Secret paths: dropbox-token-{tenant_id}, dropbox-app-secret-{tenant_id}
     tenant = Tenant(
         id=tenant_row.id,
         name=tenant_row.name,
         active=tenant_row.active,
+        dropbox_token_secret=f"dropbox-token-{tenant_row.id}",  # Secret Manager reference
+        dropbox_app_key=tenant_row.dropbox_app_key,  # Stored in database (public identifier)
+        dropbox_app_secret=f"dropbox-app-secret-{tenant_row.id}",  # Secret Manager reference
         storage_bucket=tenant_row.storage_bucket,
         thumbnail_bucket=tenant_row.thumbnail_bucket
     )
     TenantContext.set(tenant)
-
     return tenant
 
 
@@ -257,10 +263,10 @@ async def list_images(
                 for filter_data in filters.values():
                     all_keywords.extend(filter_data.get('keywords', []))
 
-                # Query with relevance ordering
+                # Query with relevance ordering (by sum of confidence scores)
                 query = db.query(
                     ImageMetadata,
-                    func.count(ImageTag.id).label('match_count')
+                    func.sum(ImageTag.confidence).label('relevance_score')
                 ).join(
                     ImageTag,
                     and_(
@@ -274,7 +280,7 @@ async def list_images(
                 ).group_by(
                     ImageMetadata.id
                 ).order_by(
-                    func.count(ImageTag.id).desc(),
+                    func.sum(ImageTag.confidence).desc(),
                     ImageMetadata.id.desc()
                 )
 
@@ -305,10 +311,10 @@ async def list_images(
                 ImageTag.tenant_id == tenant.id
             ).distinct().subquery()
 
-            # Main query with relevance ordering
+            # Main query with relevance ordering (by sum of confidence scores)
             query = db.query(
                 ImageMetadata,
-                func.count(ImageTag.id).label('match_count')
+                func.sum(ImageTag.confidence).label('relevance_score')
             ).join(
                 ImageTag,
                 and_(
@@ -322,7 +328,7 @@ async def list_images(
             ).group_by(
                 ImageMetadata.id
             ).order_by(
-                func.count(ImageTag.id).desc(),
+                func.sum(ImageTag.confidence).desc(),
                 ImageMetadata.id.desc()
             )
 
@@ -337,7 +343,7 @@ async def list_images(
         elif keyword_list and operator.upper() == "AND":
             # AND: Image must have ALL selected keywords
             # Start with images that have tenant_id
-            base_query = db.query(ImageMetadata).filter_by(tenant_id=tenant.id)
+            base_query = db.query(ImageMetadata.id).filter_by(tenant_id=tenant.id)
 
             # For each keyword, filter images that have that keyword
             for keyword in keyword_list:
@@ -348,8 +354,37 @@ async def list_images(
 
                 base_query = base_query.filter(ImageMetadata.id.in_(subquery))
 
-            total = base_query.count()
-            images = base_query.order_by(ImageMetadata.id.desc()).limit(limit).offset(offset).all() if limit else base_query.order_by(ImageMetadata.id.desc()).offset(offset).all()
+            # Get matching image IDs
+            matching_image_ids = base_query.subquery()
+
+            # Query with relevance ordering (by sum of confidence scores)
+            query = db.query(
+                ImageMetadata,
+                func.sum(ImageTag.confidence).label('relevance_score')
+            ).join(
+                ImageTag,
+                and_(
+                    ImageTag.image_id == ImageMetadata.id,
+                    ImageTag.keyword.in_(keyword_list),
+                    ImageTag.tenant_id == tenant.id
+                )
+            ).filter(
+                ImageMetadata.tenant_id == tenant.id,
+                ImageMetadata.id.in_(matching_image_ids)
+            ).group_by(
+                ImageMetadata.id
+            ).order_by(
+                func.sum(ImageTag.confidence).desc(),
+                ImageMetadata.id.desc()
+            )
+
+            total = db.query(ImageMetadata).filter(
+                ImageMetadata.tenant_id == tenant.id,
+                ImageMetadata.id.in_(matching_image_ids)
+            ).count()
+
+            results = query.limit(limit).offset(offset).all() if limit else query.offset(offset).all()
+            images = [img for img, _ in results]
         else:
             # No valid keywords, return all
             query = db.query(ImageMetadata).filter_by(tenant_id=tenant.id)
@@ -514,6 +549,7 @@ async def get_image(
         "tags": [{"keyword": t.keyword, "category": t.category, "confidence": round(t.confidence, 2), "created_at": t.created_at.isoformat() if t.created_at else None} for t in tags],
         "permatags": [{"id": p.id, "keyword": p.keyword, "category": p.category, "signum": p.signum, "created_at": p.created_at.isoformat() if p.created_at else None} for p in permatags],
         "exif_data": image.exif_data,
+        "dropbox_properties": image.dropbox_properties,
     }
 
 
@@ -526,13 +562,29 @@ async def get_thumbnail(
     image = db.query(ImageMetadata).filter_by(
         id=image_id
     ).first()
-    
+
     if not image or not image.thumbnail_path:
         raise HTTPException(status_code=404, detail="Thumbnail not found")
-    
+
+    # Get tenant to determine correct bucket
+    tenant_row = db.query(TenantModel).filter(TenantModel.id == image.tenant_id).first()
+    if not tenant_row:
+        raise HTTPException(status_code=404, detail=f"Tenant {image.tenant_id} not found")
+
+    tenant = Tenant(
+        id=tenant_row.id,
+        name=tenant_row.name,
+        active=tenant_row.active,
+        dropbox_token_secret=f"dropbox-token-{tenant_row.id}",
+        dropbox_app_key=f"dropbox-app-key-{tenant_row.id}",
+        dropbox_app_secret=f"dropbox-app-secret-{tenant_row.id}",
+        storage_bucket=tenant_row.storage_bucket,
+        thumbnail_bucket=tenant_row.thumbnail_bucket
+    )
+
     try:
         storage_client = storage.Client(project=settings.gcp_project_id)
-        bucket = storage_client.bucket(settings.thumbnail_bucket)
+        bucket = storage_client.bucket(tenant.get_thumbnail_bucket(settings))
         blob = bucket.blob(image.thumbnail_path)
         
         if not blob.exists():
@@ -809,7 +861,8 @@ async def upload_images(
                 db.commit()
             
             # Upload thumbnail to Cloud Storage with cache headers
-            thumbnail_path = f"{tenant.id}/thumbnails/{Path(file.filename).stem}_thumb.jpg"
+            thumbnail_filename = f"{Path(file.filename).stem}_thumb.jpg"
+            thumbnail_path = tenant.get_storage_path(thumbnail_filename, "thumbnails")
             blob = thumbnail_bucket.blob(thumbnail_path)
             blob.cache_control = "public, max-age=31536000, immutable"  # 1 year cache
             blob.upload_from_string(features['thumbnail'], content_type='image/jpeg')
@@ -1188,10 +1241,31 @@ async def trigger_sync(
 ):
     """Trigger Dropbox sync for tenant."""
     try:
+        # Check if Dropbox credentials are configured
+        if not tenant.dropbox_app_key:
+            raise HTTPException(
+                status_code=400,
+                detail="Dropbox app key not configured. Please set it in the admin interface."
+            )
+
         # Get tenant's Dropbox credentials
-        refresh_token = get_secret(f"dropbox-token-{tenant.id}")
+        try:
+            refresh_token = get_secret(f"dropbox-token-{tenant.id}")
+        except Exception as e:
+            raise HTTPException(
+                status_code=400,
+                detail="Dropbox not connected. Please click 'Connect Dropbox Account' first."
+            )
+
         app_key = tenant.dropbox_app_key
-        app_secret = get_secret(f"dropbox-app-secret-{tenant.id}")
+
+        try:
+            app_secret = get_secret(f"dropbox-app-secret-{tenant.id}")
+        except Exception as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Dropbox app secret not found in Secret Manager. Please create secret: dropbox-app-secret-{tenant.id}"
+            )
         
         # Use Dropbox SDK directly with refresh token
         from dropbox import Dropbox
@@ -1200,52 +1274,95 @@ async def trigger_sync(
             app_key=app_key,
             app_secret=app_secret
         )
-        
-        # Define folders to sync
-        sync_folders = [
-            "/Archive - Photo/Events/2025 Events",
-            "/Archive - Photo/Events/2024 Events",
-            "/Archive - Photo/Events/2023 Events"
-        ]
-        
+
+        # Get tenant settings from database to access sync folders
+        tenant_row = db.query(TenantModel).filter(TenantModel.id == tenant.id).first()
+        sync_folders = tenant_row.settings.get('dropbox_sync_folders', []) if tenant_row.settings else []
+
+        print(f"[Sync] Tenant {tenant.id} sync folders: {sync_folders}")
+
         # Only fetch unprocessed files by checking what's already in DB
         from dropbox.files import FileMetadata
-        
+
         # Get already processed dropbox IDs
         processed_ids = set(
             row[0] for row in db.query(ImageMetadata.dropbox_id)
             .filter(ImageMetadata.tenant_id == tenant.id)
             .all()
         )
-        
-        # Find next unprocessed image (process only first folder that has unprocessed files)
+
+        # Find next unprocessed image
         file_entry = None
-        for folder_path in sync_folders:
+
+        if sync_folders:
+            # Sync only configured folders
+            for folder_path in sync_folders:
+                try:
+                    print(f"[Sync] Listing folder: {folder_path}")
+                    result = dbx.files_list_folder(folder_path, recursive=True)
+                    entries = list(result.entries)
+                    print(f"[Sync] Got {len(entries)} entries from {folder_path}")
+
+                    # Handle pagination
+                    page_count = 1
+                    while result.has_more:
+                        print(f"[Sync] Fetching page {page_count + 1} for {folder_path}")
+                        result = dbx.files_list_folder_continue(result.cursor)
+                        entries.extend(result.entries)
+                        page_count += 1
+
+                    print(f"[Sync] Total entries after pagination: {len(entries)}")
+
+                    # Filter to images, sort by date, find first unprocessed
+                    file_entries = [e for e in entries if isinstance(e, FileMetadata)]
+                    print(f"[Sync] Found {len(file_entries)} files (filtering images)")
+                    file_entries.sort(key=lambda e: e.server_modified, reverse=True)
+
+                    for entry in file_entries:
+                        if entry.id not in processed_ids:
+                            processor = ImageProcessor()
+                            if processor.is_supported(entry.name):
+                                file_entry = entry
+                                print(f"[Sync] Found unprocessed image: {entry.name}")
+                                break
+
+                    if file_entry:
+                        break  # Found one, stop searching
+                    else:
+                        print(f"[Sync] No unprocessed images in {folder_path}")
+
+                except Exception as e:
+                    print(f"[Sync] Error listing folder {folder_path}: {e}")
+                    import traceback
+                    traceback.print_exc()
+        else:
+            # No folder constraint - sync entire Dropbox (limit to first batch to avoid hanging)
             try:
-                result = dbx.files_list_folder(folder_path, recursive=True)
+                print(f"[Sync] Listing entire Dropbox for tenant {tenant.id} (limited to first batch)")
+                result = dbx.files_list_folder("", recursive=True)
                 entries = list(result.entries)
-                
-                # Handle pagination
-                while result.has_more:
-                    result = dbx.files_list_folder_continue(result.cursor)
-                    entries.extend(result.entries)
-                
+
+                # Don't paginate through everything - just check first batch
+                # This prevents hanging on large Dropboxes
+                print(f"[Sync] Found {len(entries)} entries in first batch")
+
                 # Filter to images, sort by date, find first unprocessed
                 file_entries = [e for e in entries if isinstance(e, FileMetadata)]
+                print(f"[Sync] Found {len(file_entries)} image files")
                 file_entries.sort(key=lambda e: e.server_modified, reverse=True)
-                
+
                 for entry in file_entries:
                     if entry.id not in processed_ids:
                         processor = ImageProcessor()
                         if processor.is_supported(entry.name):
                             file_entry = entry
+                            print(f"[Sync] Found unprocessed image: {entry.name}")
                             break
-                
-                if file_entry:
-                    break  # Found one, stop searching
-                    
+
             except Exception as e:
-                print(f"Error listing folder {folder_path}: {e}")
+                print(f"Error listing Dropbox root: {e}")
+                import traceback
+                traceback.print_exc()
         
         if not file_entry:
             return {
@@ -1291,53 +1408,114 @@ async def trigger_sync(
             if isinstance(entry, FileMetadata) and processor.is_supported(entry.name):
                 try:
                     status_messages = []
-                    
-                    # Download thumbnail for faster processing (skip HEIC - not supported)
+
+                    # Fetch Dropbox metadata with media info and custom properties
+                    # This is MUCH more efficient than downloading the full file
+                    dropbox_props = {}
+                    dropbox_exif = {}
+                    try:
+                        from dropbox.files import IncludePropertyGroups
+                        metadata_result = dbx.files_get_metadata(
+                            entry.path_display,
+                            include_media_info=True,
+                            include_property_groups=IncludePropertyGroups.filter_some([])
+                        )
+                        print(f"[Sync] Fetched Dropbox metadata for {entry.name}")
+
+                        # Extract media info (EXIF-like data from Dropbox without downloading)
+                        if hasattr(metadata_result, 'media_info') and metadata_result.media_info:
+                            media_info = metadata_result.media_info.get_metadata()
+                            print(f"[Sync] Media info type: {type(media_info).__name__}")
+
+                            # Photo metadata
+                            if hasattr(media_info, 'dimensions') and media_info.dimensions:
+                                dropbox_exif['ImageWidth'] = media_info.dimensions.width
+                                dropbox_exif['ImageLength'] = media_info.dimensions.height
+                                print(f"[Sync] Dimensions: {media_info.dimensions.width}x{media_info.dimensions.height}")
+
+                            if hasattr(media_info, 'location') and media_info.location:
+                                dropbox_exif['GPSLatitude'] = media_info.location.latitude
+                                dropbox_exif['GPSLongitude'] = media_info.location.longitude
+                                print(f"[Sync] GPS: {media_info.location.latitude}, {media_info.location.longitude}")
+
+                            if hasattr(media_info, 'time_taken') and media_info.time_taken:
+                                dropbox_exif['DateTimeOriginal'] = media_info.time_taken.isoformat()
+                                dropbox_exif['DateTime'] = media_info.time_taken.isoformat()
+                                print(f"[Sync] Time taken: {media_info.time_taken}")
+
+                        # Extract custom properties
+                        if hasattr(metadata_result, 'property_groups') and metadata_result.property_groups:
+                            print(f"[Sync] Found {len(metadata_result.property_groups)} property groups")
+                            for prop_group in metadata_result.property_groups:
+                                template_name = prop_group.template_id
+                                for field in prop_group.fields:
+                                    key = f"{template_name}.{field.name}"
+                                    dropbox_props[key] = field.value
+                        else:
+                            print(f"[Sync] No custom property groups")
+
+                    except Exception as metadata_error:
+                        print(f"Could not fetch Dropbox metadata for {entry.name}: {metadata_error}")
+                        import traceback
+                        traceback.print_exc()
+
+                    # Download thumbnail for fast processing (~50-100KB vs 3MB)
+                    # Get metadata from Dropbox API (dimensions, GPS, date)
+                    # Don't download full image - not worth the bandwidth/time
                     from dropbox.files import ThumbnailFormat, ThumbnailSize
                     image_data = None
-                    
-                    # HEIC files don't support thumbnails, download full file
+
+                    # Try to get thumbnail
                     if not entry.name.lower().endswith(('.heic', '.heif')):
                         try:
                             status_messages.append(f"Downloading thumbnail: {entry.name}")
                             _, thumbnail_response = dbx.files_get_thumbnail(
                                 path=entry.path_display,
                                 format=ThumbnailFormat.jpeg,
-                                size=ThumbnailSize.w480h320
+                                size=ThumbnailSize.w640h480
                             )
                             image_data = thumbnail_response.content
+                            print(f"[Sync] Downloaded thumbnail ({len(image_data)} bytes)")
                         except Exception as thumb_error:
-                            print(f"Thumbnail failed for {entry.name}: {thumb_error}")
-                    
-                    # Fallback to full download if thumbnail not available
+                            print(f"Thumbnail download failed for {entry.name}: {thumb_error}")
+
+                    # Fallback to full download only if thumbnail completely fails
+                    # (e.g., for HEIC files or unsupported formats)
                     if image_data is None:
-                        status_messages.append(f"Downloading full image: {entry.name}")
+                        status_messages.append(f"Downloading image: {entry.name}")
                         _, response = dbx.files_download(entry.path_display)
                         image_data = response.content
-                    
+                        print(f"[Sync] Downloaded full image ({len(image_data)} bytes)")
+
                     # Extract features
-                    status_messages.append(f"Extracting metadata and EXIF data")
+                    status_messages.append(f"Extracting visual features")
                     features = processor.extract_features(image_data)
-                    
+
+                    # Merge EXIF: Dropbox API data (no download needed) + any data from image
+                    # Dropbox API data takes precedence as it's more reliable
+                    exif = features.get('exif', {})
+                    exif.update(dropbox_exif)  # Dropbox media_info overwrites
+                    print(f"[Sync] Combined EXIF data: {len(exif)} fields")
+                    if exif:
+                        print(f"[Sync] EXIF keys: {list(exif.keys())[:10]}")
+
                     # Check if already exists
                     existing = db.query(ImageMetadata).filter(
                         ImageMetadata.tenant_id == tenant.id,
                         ImageMetadata.dropbox_id == entry.id
                     ).first()
-                    
+
                     if existing:
                         # Skip already processed, don't count toward limit
                         continue
-                    
+
                     # Upload thumbnail with cache headers
                     status_messages.append(f"Saving thumbnail and metadata")
-                    thumbnail_path = f"{tenant.id}/thumbnails/{Path(entry.name).stem}_thumb.jpg"
+                    thumbnail_filename = f"{Path(entry.name).stem}_thumb.jpg"
+                    thumbnail_path = tenant.get_storage_path(thumbnail_filename, "thumbnails")
                     blob = thumbnail_bucket.blob(thumbnail_path)
                     blob.cache_control = "public, max-age=31536000, immutable"  # 1 year cache
                     blob.upload_from_string(features['thumbnail'], content_type='image/jpeg')
-                    
-                    # Create new metadata
-                    exif = features['exif']
                     metadata = ImageMetadata(
                         tenant_id=tenant.id,
                         dropbox_path=entry.path_display,
@@ -1352,6 +1530,7 @@ async def trigger_sync(
                         perceptual_hash=features['perceptual_hash'],
                         color_histogram=features['color_histogram'],
                         exif_data=exif,
+                        dropbox_properties=dropbox_props if dropbox_props else None,
                         camera_make=exif.get('Make'),
                         camera_model=exif.get('Model'),
                         lens_model=exif.get('LensModel'),
@@ -1392,8 +1571,40 @@ async def trigger_sync(
                     processed += 1
                     
                 except Exception as e:
-                    print(f"Error processing {entry.name}: {e}")
-                    status_messages = [f"Error: {str(e)}"]
+                    error_msg = f"Error processing {entry.name}: {e}"
+                    print(error_msg)
+                    import traceback
+                    traceback.print_exc()
+
+                    # Mark as processed (failed) so we don't retry it immediately
+                    # Store minimal metadata to track the failure
+                    try:
+                        existing = db.query(ImageMetadata).filter(
+                            ImageMetadata.tenant_id == tenant.id,
+                            ImageMetadata.dropbox_id == entry.id
+                        ).first()
+
+                        if not existing:
+                            metadata = ImageMetadata(
+                                tenant_id=tenant.id,
+                                dropbox_path=entry.path_display,
+                                dropbox_id=entry.id,
+                                filename=entry.name,
+                                file_size=entry.size,
+                                modified_time=entry.server_modified,
+                                tags_applied=False,
+                                embedding_generated=False,
+                                faces_detected=False,
+                            )
+                            db.add(metadata)
+                            db.commit()
+                            print(f"Marked {entry.name} as failed (will skip in future syncs)")
+                    except Exception as db_error:
+                        print(f"Failed to mark {entry.name} as failed: {db_error}")
+                        db.rollback()
+
+                    # Continue to next file instead of stopping
+                    continue
         
         return {
             "tenant_id": tenant.id,
@@ -1612,6 +1823,42 @@ async def update_tenant(
     }
 
 
+@app.patch("/api/v1/admin/tenants/{tenant_id}/settings")
+async def update_tenant_settings(
+    tenant_id: str,
+    settings_update: dict,
+    db: Session = Depends(get_db)
+):
+    """Partially update tenant settings (merge with existing settings)."""
+    from sqlalchemy.orm.attributes import flag_modified
+
+    tenant = db.query(TenantModel).filter(TenantModel.id == tenant_id).first()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    # Get existing settings or initialize empty dict
+    current_settings = tenant.settings or {}
+
+    # Merge with new settings
+    current_settings.update(settings_update)
+
+    # Update tenant
+    tenant.settings = current_settings
+    tenant.updated_at = datetime.utcnow()
+
+    # Mark settings as modified so SQLAlchemy detects the JSONB change
+    flag_modified(tenant, "settings")
+
+    db.commit()
+    db.refresh(tenant)
+
+    return {
+        "id": tenant.id,
+        "settings": tenant.settings,
+        "updated_at": tenant.updated_at.isoformat()
+    }
+
+
 @app.delete("/api/v1/admin/tenants/{tenant_id}")
 async def delete_tenant(
     tenant_id: str,
@@ -1621,7 +1868,7 @@ async def delete_tenant(
     tenant = db.query(TenantModel).filter(TenantModel.id == tenant_id).first()
     if not tenant:
         raise HTTPException(status_code=404, detail="Tenant not found")
-    
+
     db.delete(tenant)
     db.commit()
     
@@ -1731,6 +1978,229 @@ async def delete_person(
     db.commit()
     
     return {"status": "deleted", "person_id": person_id}
+
+
+# ============================================================================
+# Keyword Admin Endpoints
+# ============================================================================
+
+@app.get("/api/v1/admin/keywords/categories")
+async def list_keyword_categories(
+    tenant_id: str = Header(None, alias="X-Tenant-ID"),
+    db: Session = Depends(get_db)
+):
+    """List all keyword categories for a tenant."""
+    if not tenant_id:
+        raise HTTPException(status_code=400, detail="X-Tenant-ID header required")
+
+    categories = db.query(KeywordCategory).filter(
+        KeywordCategory.tenant_id == tenant_id
+    ).order_by(KeywordCategory.sort_order).all()
+
+    return [{
+        "id": cat.id,
+        "tenant_id": cat.tenant_id,
+        "name": cat.name,
+        "parent_id": cat.parent_id,
+        "sort_order": cat.sort_order,
+        "keyword_count": db.query(Keyword).filter(Keyword.category_id == cat.id).count()
+    } for cat in categories]
+
+
+@app.post("/api/v1/admin/keywords/categories")
+async def create_keyword_category(
+    category_data: dict,
+    tenant_id: str = Header(None, alias="X-Tenant-ID"),
+    db: Session = Depends(get_db)
+):
+    """Create a new keyword category."""
+    if not tenant_id:
+        raise HTTPException(status_code=400, detail="X-Tenant-ID header required")
+
+    if not category_data.get("name"):
+        raise HTTPException(status_code=400, detail="name is required")
+
+    # Get max sort_order for this tenant
+    max_sort = db.query(func.max(KeywordCategory.sort_order)).filter(
+        KeywordCategory.tenant_id == tenant_id
+    ).scalar() or -1
+
+    category = KeywordCategory(
+        tenant_id=tenant_id,
+        name=category_data["name"],
+        parent_id=category_data.get("parent_id"),
+        sort_order=category_data.get("sort_order", max_sort + 1)
+    )
+
+    db.add(category)
+    db.commit()
+    db.refresh(category)
+
+    return {
+        "id": category.id,
+        "tenant_id": category.tenant_id,
+        "name": category.name,
+        "parent_id": category.parent_id,
+        "sort_order": category.sort_order
+    }
+
+
+@app.put("/api/v1/admin/keywords/categories/{category_id}")
+async def update_keyword_category(
+    category_id: int,
+    category_data: dict,
+    db: Session = Depends(get_db)
+):
+    """Update a keyword category."""
+    category = db.query(KeywordCategory).filter(KeywordCategory.id == category_id).first()
+    if not category:
+        raise HTTPException(status_code=404, detail="Category not found")
+
+    if "name" in category_data:
+        category.name = category_data["name"]
+    if "parent_id" in category_data:
+        category.parent_id = category_data["parent_id"]
+    if "sort_order" in category_data:
+        category.sort_order = category_data["sort_order"]
+
+    category.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(category)
+
+    return {
+        "id": category.id,
+        "name": category.name,
+        "parent_id": category.parent_id,
+        "sort_order": category.sort_order
+    }
+
+
+@app.delete("/api/v1/admin/keywords/categories/{category_id}")
+async def delete_keyword_category(
+    category_id: int,
+    db: Session = Depends(get_db)
+):
+    """Delete a keyword category and all its keywords."""
+    category = db.query(KeywordCategory).filter(KeywordCategory.id == category_id).first()
+    if not category:
+        raise HTTPException(status_code=404, detail="Category not found")
+
+    # Delete all keywords in this category
+    db.query(Keyword).filter(Keyword.category_id == category_id).delete()
+
+    # Delete the category
+    db.delete(category)
+    db.commit()
+
+    return {"status": "deleted", "category_id": category_id}
+
+
+@app.get("/api/v1/admin/keywords/categories/{category_id}/keywords")
+async def list_keywords_in_category(
+    category_id: int,
+    db: Session = Depends(get_db)
+):
+    """List all keywords in a category."""
+    keywords = db.query(Keyword).filter(
+        Keyword.category_id == category_id
+    ).order_by(Keyword.sort_order).all()
+
+    return [{
+        "id": kw.id,
+        "category_id": kw.category_id,
+        "keyword": kw.keyword,
+        "prompt": kw.prompt,
+        "sort_order": kw.sort_order
+    } for kw in keywords]
+
+
+@app.post("/api/v1/admin/keywords/categories/{category_id}/keywords")
+async def create_keyword(
+    category_id: int,
+    keyword_data: dict,
+    db: Session = Depends(get_db)
+):
+    """Create a new keyword in a category."""
+    if not keyword_data.get("keyword"):
+        raise HTTPException(status_code=400, detail="keyword is required")
+
+    # Verify category exists
+    category = db.query(KeywordCategory).filter(KeywordCategory.id == category_id).first()
+    if not category:
+        raise HTTPException(status_code=404, detail="Category not found")
+
+    # Get max sort_order for this category
+    max_sort = db.query(func.max(Keyword.sort_order)).filter(
+        Keyword.category_id == category_id
+    ).scalar() or -1
+
+    keyword = Keyword(
+        category_id=category_id,
+        keyword=keyword_data["keyword"],
+        prompt=keyword_data.get("prompt", ""),
+        sort_order=keyword_data.get("sort_order", max_sort + 1)
+    )
+
+    db.add(keyword)
+    db.commit()
+    db.refresh(keyword)
+
+    return {
+        "id": keyword.id,
+        "category_id": keyword.category_id,
+        "keyword": keyword.keyword,
+        "prompt": keyword.prompt,
+        "sort_order": keyword.sort_order
+    }
+
+
+@app.put("/api/v1/admin/keywords/{keyword_id}")
+async def update_keyword(
+    keyword_id: int,
+    keyword_data: dict,
+    db: Session = Depends(get_db)
+):
+    """Update a keyword."""
+    keyword = db.query(Keyword).filter(Keyword.id == keyword_id).first()
+    if not keyword:
+        raise HTTPException(status_code=404, detail="Keyword not found")
+
+    if "keyword" in keyword_data:
+        keyword.keyword = keyword_data["keyword"]
+    if "prompt" in keyword_data:
+        keyword.prompt = keyword_data["prompt"]
+    if "sort_order" in keyword_data:
+        keyword.sort_order = keyword_data["sort_order"]
+    if "category_id" in keyword_data:
+        keyword.category_id = keyword_data["category_id"]
+
+    keyword.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(keyword)
+
+    return {
+        "id": keyword.id,
+        "category_id": keyword.category_id,
+        "keyword": keyword.keyword,
+        "prompt": keyword.prompt,
+        "sort_order": keyword.sort_order
+    }
+
+
+@app.delete("/api/v1/admin/keywords/{keyword_id}")
+async def delete_keyword(
+    keyword_id: int,
+    db: Session = Depends(get_db)
+):
+    """Delete a keyword."""
+    keyword = db.query(Keyword).filter(Keyword.id == keyword_id).first()
+    if not keyword:
+        raise HTTPException(status_code=404, detail="Keyword not found")
+
+    db.delete(keyword)
+    db.commit()
+
+    return {"status": "deleted", "keyword_id": keyword_id}
 
 
 if __name__ == "__main__":

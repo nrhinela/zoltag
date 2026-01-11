@@ -7,17 +7,18 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     """Application settings loaded from environment."""
-    
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False
     )
-    
+
     # Application
     app_name: str = "PhotoCat"
     debug: bool = False
     worker_mode: bool = False
+    environment: str = "dev"  # 'dev' or 'prod'
     
     # Database
     database_url: str = "postgresql://localhost/photocat"
@@ -63,6 +64,16 @@ class Settings(BaseSettings):
     def thumbnail_bucket(self) -> str:
         """Get thumbnail bucket name (defaults to main bucket)."""
         return self.thumbnail_bucket_name or self.storage_bucket_name
+
+    @property
+    def is_production(self) -> bool:
+        """Check if running in production environment."""
+        return self.environment.lower() == "prod"
+
+    @property
+    def is_development(self) -> bool:
+        """Check if running in development environment."""
+        return self.environment.lower() == "dev"
 
 
 settings = Settings()

@@ -96,6 +96,9 @@ class ImageMetadata(Base):
     capture_timestamp = Column(DateTime, index=True)
     gps_latitude = Column(Float)
     gps_longitude = Column(Float)
+
+    # Dropbox custom properties
+    dropbox_properties = Column(JSONB)  # Dropbox file properties and tags
     
     # Processing state
     last_processed = Column(DateTime, default=datetime.utcnow)

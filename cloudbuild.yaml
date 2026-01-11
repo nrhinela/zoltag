@@ -12,14 +12,14 @@ steps:
     args: [
       'build',
       '--cache-from', 'gcr.io/$PROJECT_ID/photocat:latest',
-      '-t', 'gcr.io/$PROJECT_ID/photocat:$COMMIT_SHA',
+      '-t', 'gcr.io/$PROJECT_ID/photocat:$_COMMIT_SHA',
       '-t', 'gcr.io/$PROJECT_ID/photocat:latest',
       '.'
     ]
   
   # Push the container image to Container Registry
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['push', 'gcr.io/$PROJECT_ID/photocat:$COMMIT_SHA']
+    args: ['push', 'gcr.io/$PROJECT_ID/photocat:$_COMMIT_SHA']
   
   - name: 'gcr.io/cloud-builders/docker'
     args: ['push', 'gcr.io/$PROJECT_ID/photocat:latest']
@@ -32,7 +32,7 @@ steps:
       - 'deploy'
       - 'photocat-api'
       - '--image'
-      - 'gcr.io/$PROJECT_ID/photocat:$COMMIT_SHA'
+      - 'gcr.io/$PROJECT_ID/photocat:$_COMMIT_SHA'
       - '--region'
       - 'us-central1'
       - '--platform'

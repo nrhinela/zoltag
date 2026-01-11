@@ -131,3 +131,21 @@ async def get_tagging_model():
         "default_model": "siglip",
         "available_models": ["siglip"]
     }
+
+
+@router.get("/system")
+async def get_system_settings():
+    """Get system-level settings (read-only)."""
+    # Compute the shared bucket name using environment convention (lowercase for GCS)
+    env = settings.environment.lower()
+    shared_bucket = f"{settings.gcp_project_id}-{env}-shared"
+
+    return {
+        "environment": settings.environment,
+        "gcp_project_id": settings.gcp_project_id,
+        "gcp_region": settings.gcp_region,
+        "storage_bucket_name": shared_bucket,  # Show computed shared bucket
+        "thumbnail_bucket_name": settings.thumbnail_bucket_name,
+        "app_name": settings.app_name,
+        "debug": settings.debug
+    }
