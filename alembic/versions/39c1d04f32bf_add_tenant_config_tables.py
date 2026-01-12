@@ -1,21 +1,18 @@
+
 """add_tenant_config_tables
 
 Revision ID: 39c1d04f32bf
 Revises: 7c78a8bd4b5f
 Create Date: 2026-01-08 15:01:40.899222
-
 """
 from typing import Sequence, Union
-
 from alembic import op
 import sqlalchemy as sa
-
-
 # revision identifiers, used by Alembic.
-revision: str = '39c1d04f32bf'
-down_revision: Union[str, None] = '7c78a8bd4b5f'
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+revision = '39c1d04f32bf'
+down_revision = '7c78a8bd4b5f'
+branch_labels = None
+depends_on = None
 
 
 def upgrade() -> None:

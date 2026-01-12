@@ -6,7 +6,8 @@ import yaml
 
 from sqlalchemy.orm import Session
 
-from photocat.models.config import KeywordCategory as DBKeywordCategory, Keyword as DBKeyword, Person as DBPerson
+from photocat.models.config import KeywordCategory as DBKeywordCategory, Keyword as DBKeyword
+from photocat.metadata import Person as DBPerson
 from photocat.config import TenantConfig as YAMLConfig, KeywordCategory, Person
 
 

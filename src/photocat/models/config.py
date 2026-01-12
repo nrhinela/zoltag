@@ -5,6 +5,8 @@ from typing import List
 
 from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, JSON
 from sqlalchemy.orm import relationship, DeclarativeBase
+
+import sqlalchemy as sa
 from sqlalchemy.sql import func
 
 
@@ -48,16 +50,36 @@ class Keyword(Base):
     category = relationship("KeywordCategory", back_populates="keywords")
 
 
-class Person(Base):
-    """Person for facial recognition."""
-    
-    __tablename__ = "people"
-    
+
+# ...existing code...
+
+class PhotoList(Base):
+    """A list of photos for a tenant. Only one active per tenant."""
+    __tablename__ = "photo_lists"
+
     id = Column(Integer, primary_key=True)
     tenant_id = Column(String(50), nullable=False, index=True)
-    name = Column(String(100), nullable=False)
-    aliases = Column(JSON, nullable=True)  # List of alternative names
-    face_embedding_ref = Column(String(255), nullable=True)  # Reference to stored face embedding
+    title = Column(String(255), nullable=False)
+    notebox = Column(Text, nullable=True)
+    is_active = Column(sa.Boolean, nullable=False, default=False, server_default=sa.text('false'))
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    # Relationships
+    items = relationship("PhotoListItem", back_populates="list", cascade="all, delete-orphan")
+
+
+class PhotoListItem(Base):
+    """A photo added to a list."""
+    __tablename__ = "photo_list_items"
+
+    id = Column(Integer, primary_key=True)
+    list_id = Column(Integer, ForeignKey('photo_lists.id', ondelete='CASCADE'), nullable=False, index=True)
+    photo_id = Column(Integer, nullable=False, index=True)
+    added_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    # Relationships
+    list = relationship("PhotoList", back_populates="items")
     created_at = Column(DateTime, nullable=False, server_default=func.now())
     updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
     

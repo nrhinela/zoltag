@@ -1,4 +1,4 @@
-"""FastAPI application entry point."""
+
 
 from fastapi import FastAPI, Depends, HTTPException, Header, UploadFile, File, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,18 +18,276 @@ import hashlib
 from photocat.tenant import Tenant, TenantContext
 from photocat.settings import settings
 from photocat.metadata import ImageMetadata, ImageTag, DropboxCursor, Permatag, Tenant as TenantModel, Person
-from photocat.models.config import Keyword, KeywordCategory
-from photocat.image import ImageProcessor
-from photocat.config import TenantConfig
-from photocat.config.db_config import ConfigManager
-from photocat.tagging import get_tagger
-from photocat.dropbox import DropboxClient, DropboxWebhookValidator
+from photocat.models.config import Keyword, KeywordCategory, PhotoList, PhotoListItem
+
+
+
+from fastapi import Body
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy import and_
+
+"""FastAPI application entry point."""
 
 app = FastAPI(
     title="PhotoCat",
     description="Multi-tenant image organization and search utility",
     version="0.1.0"
 )
+
+# Add the endpoint after app = FastAPI(...)
+from pydantic import BaseModel
+# Request model for add-photo endpoint
+class AddPhotoRequest(BaseModel):
+    photo_id: int
+
+def get_active_list(db: Session, tenant_id: str):
+    return db.query(PhotoList).filter_by(tenant_id=tenant_id, is_active=True).first()
+
+
+
+
+
+
+
+
+# Move get_tenant definition above its first usage
+from typing import Optional
+from fastapi import Header, HTTPException, Depends
+from sqlalchemy.orm import Session
+from photocat.metadata import Tenant as TenantModel
+from photocat.tenant import Tenant
+
+def get_db():
+    """Get database session."""
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+async def get_tenant(
+    x_tenant_id: Optional[str] = Header(None),
+    db: Session = Depends(get_db)
+) -> Tenant:
+    """Extract and validate tenant from request headers."""
+    if not x_tenant_id:
+        raise HTTPException(status_code=400, detail="X-Tenant-ID header required")
+
+    # Load tenant from database
+    tenant_row = db.query(TenantModel).filter(TenantModel.id == x_tenant_id).first()
+    if not tenant_row:
+        raise HTTPException(status_code=404, detail=f"Tenant {x_tenant_id} not found")
+
+    # Convert database row to Tenant dataclass
+    tenant = Tenant(
+        id=tenant_row.id,
+        name=tenant_row.name,
+        active=tenant_row.active,
+        dropbox_token_secret=f"dropbox-token-{tenant_row.id}",
+        dropbox_app_key=tenant_row.dropbox_app_key,
+        dropbox_app_secret=f"dropbox-app-secret-{tenant_row.id}",
+        storage_bucket=tenant_row.storage_bucket,
+        thumbnail_bucket=tenant_row.thumbnail_bucket,
+    )
+    return tenant
+
+# --- Photo List Management API ---
+
+@app.get("/api/v1/lists/{list_id}", response_model=dict)
+async def get_list(
+    list_id: int,
+    tenant: Tenant = Depends(get_tenant),
+    db: Session = Depends(get_db)
+):
+    """Get a single list by ID for the tenant."""
+    lst = db.query(PhotoList).filter_by(id=list_id, tenant_id=tenant.id).first()
+    if not lst:
+        raise HTTPException(status_code=404, detail="List not found")
+    return {
+        "id": lst.id,
+        "title": lst.title,
+        "notebox": lst.notebox,
+        "is_active": lst.is_active,
+        "created_at": lst.created_at,
+        "updated_at": lst.updated_at
+    }
+
+# Remove a photo from a list by item ID
+@app.delete("/api/v1/lists/items/{item_id}", response_model=dict)
+async def delete_list_item(
+    item_id: int,
+    tenant: Tenant = Depends(get_tenant),
+    db: Session = Depends(get_db)
+):
+    """Remove a photo from a list by PhotoListItem ID (must belong to tenant)."""
+    item = db.query(PhotoListItem).join(PhotoList, PhotoListItem.list_id == PhotoList.id).filter(PhotoListItem.id == item_id, PhotoList.tenant_id == tenant.id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="List item not found")
+    db.delete(item)
+    db.commit()
+    return {"deleted": True, "item_id": item_id}
+
+
+@app.post("/api/v1/lists", response_model=dict)
+async def create_list(
+    title: str = Body(...),
+    notebox: Optional[str] = Body(None),
+    is_active: bool = Body(False),
+    tenant: Tenant = Depends(get_tenant),
+    db: Session = Depends(get_db)
+):
+    """Create a new list (inactive by default unless is_active=True)."""
+    if is_active:
+        # Deactivate any existing active list
+        db.query(PhotoList).filter_by(tenant_id=tenant.id, is_active=True).update({"is_active": False})
+    new_list = PhotoList(
+        tenant_id=tenant.id,
+        title=title,
+        notebox=notebox,
+        is_active=is_active
+    )
+    db.add(new_list)
+    db.commit()
+    db.refresh(new_list)
+    return {"id": new_list.id, "title": new_list.title, "is_active": new_list.is_active}
+
+@app.get("/api/v1/lists", response_model=list)
+async def list_lists(
+    tenant: Tenant = Depends(get_tenant),
+    db: Session = Depends(get_db)
+):
+    """List all lists for the tenant."""
+    lists = db.query(PhotoList).filter_by(tenant_id=tenant.id).order_by(PhotoList.created_at.asc()).all()
+    return [
+        {
+            "id": l.id,
+            "title": l.title,
+            "notebox": l.notebox,
+            "is_active": l.is_active,
+            "created_at": l.created_at,
+            "updated_at": l.updated_at
+        } for l in lists
+    ]
+
+@app.get("/api/v1/lists/active", response_model=dict)
+async def get_active_list_api(
+    tenant: Tenant = Depends(get_tenant),
+    db: Session = Depends(get_db)
+):
+    """Get the current active list for the tenant (if any)."""
+    active = get_active_list(db, tenant.id)
+    if not active:
+        return {}
+    return {
+        "id": active.id,
+        "title": active.title,
+        "notebox": active.notebox,
+        "is_active": active.is_active,
+        "created_at": active.created_at,
+        "updated_at": active.updated_at
+    }
+
+@app.patch("/api/v1/lists/{list_id}", response_model=dict)
+async def edit_list(
+    list_id: int,
+    title: Optional[str] = Body(None),
+    notebox: Optional[str] = Body(None),
+    is_active: Optional[bool] = Body(None),
+    tenant: Tenant = Depends(get_tenant),
+    db: Session = Depends(get_db)
+):
+    """Edit a list (title, notebox, and/or active status)."""
+    lst = db.query(PhotoList).filter_by(id=list_id, tenant_id=tenant.id).first()
+    if not lst:
+        raise HTTPException(status_code=404, detail="List not found")
+    if title is not None:
+        lst.title = title
+    if notebox is not None:
+        lst.notebox = notebox
+    if is_active is not None:
+        if is_active:
+            db.query(PhotoList).filter_by(tenant_id=tenant.id, is_active=True).update({"is_active": False})
+        lst.is_active = is_active
+    db.commit()
+    db.refresh(lst)
+    return {
+        "id": lst.id,
+        "title": lst.title,
+        "notebox": lst.notebox,
+        "is_active": lst.is_active,
+        "created_at": lst.created_at,
+        "updated_at": lst.updated_at
+    }
+
+@app.delete("/api/v1/lists/{list_id}", response_model=dict)
+async def delete_list(
+    list_id: int,
+    tenant: Tenant = Depends(get_tenant),
+    db: Session = Depends(get_db)
+):
+    """Delete a list and its items. If active, leaves tenant with no active list."""
+    lst = db.query(PhotoList).filter_by(id=list_id, tenant_id=tenant.id).first()
+    if not lst:
+        raise HTTPException(status_code=404, detail="List not found")
+    was_active = lst.is_active
+    db.delete(lst)
+    db.commit()
+    return {"deleted": True, "was_active": was_active}
+
+@app.get("/api/v1/lists/{list_id}/items", response_model=list)
+async def get_list_items(
+    list_id: int,
+    tenant: Tenant = Depends(get_tenant),
+    db: Session = Depends(get_db)
+):
+    """Get all items in a list, ordered by added_at ascending."""
+    lst = db.query(PhotoList).filter_by(id=list_id, tenant_id=tenant.id).first()
+    if not lst:
+        raise HTTPException(status_code=404, detail="List not found")
+    items = db.query(PhotoListItem).filter_by(list_id=list_id).order_by(PhotoListItem.added_at.asc()).all()
+    return [
+        {
+            "id": item.id,
+            "photo_id": item.photo_id,
+            "added_at": item.added_at
+        } for item in items
+    ]
+
+@app.post("/api/v1/lists/add-photo", response_model=dict)
+async def add_photo_to_list(
+    req: AddPhotoRequest,
+    tenant: Tenant = Depends(get_tenant),
+    db: Session = Depends(get_db)
+):
+    """Add a photo to the current active list. If no active list, create one and add the photo."""
+    photo_id = req.photo_id
+    active = get_active_list(db, tenant.id)
+    if not active:
+        # Auto-create new active list
+        active = PhotoList(
+            tenant_id=tenant.id,
+            title="Untitled List",
+            is_active=True
+        )
+        db.add(active)
+        db.commit()
+        db.refresh(active)
+    # Prevent duplicate items in the list
+    existing_item = db.query(PhotoListItem).filter_by(list_id=active.id, photo_id=photo_id).first()
+    if existing_item:
+        # Silent no-op if already present
+        return {"list_id": active.id, "item_id": existing_item.id, "added_at": existing_item.added_at}
+    item = PhotoListItem(list_id=active.id, photo_id=photo_id)
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return {"list_id": active.id, "item_id": item.id, "added_at": item.added_at}
+from photocat.image import ImageProcessor
+from photocat.config import TenantConfig
+from photocat.config.db_config import ConfigManager
+from photocat.tagging import get_tagger
+from photocat.dropbox import DropboxClient, DropboxWebhookValidator
+
 
 # Add CORS middleware
 app.add_middleware(
@@ -534,6 +792,11 @@ async def get_image(
         Permatag.tenant_id == tenant.id
     ).all()
     
+    # Compute thumbnail_url as in the batch endpoint
+    if image.thumbnail_path:
+        thumbnail_url = f"https://storage.googleapis.com/{tenant.get_thumbnail_bucket(settings)}/{image.thumbnail_path}"
+    else:
+        thumbnail_url = None
     return {
         "id": image.id,
         "filename": image.filename,
@@ -546,6 +809,7 @@ async def get_image(
         "camera_model": image.camera_model,
         "perceptual_hash": image.perceptual_hash,
         "thumbnail_path": image.thumbnail_path,
+        "thumbnail_url": thumbnail_url,
         "tags": [{"keyword": t.keyword, "category": t.category, "confidence": round(t.confidence, 2), "created_at": t.created_at.isoformat() if t.created_at else None} for t in tags],
         "permatags": [{"id": p.id, "keyword": p.keyword, "category": p.category, "signum": p.signum, "created_at": p.created_at.isoformat() if p.created_at else None} for p in permatags],
         "exif_data": image.exif_data,

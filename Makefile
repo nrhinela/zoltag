@@ -5,7 +5,7 @@
 .PHONY: deploy-api deploy-worker deploy-all status logs-api logs-worker check-proxy env-check
 
 # Default environment
-ENV ?= dev
+ENV ?= prod
 DB_PASSWORD = EcrZH7UymHpa6kqduFHG
 PROJECT_ID = photocat-483622
 REGION = us-central1

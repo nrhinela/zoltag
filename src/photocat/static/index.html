@@ -8,6 +8,51 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
         .image-card {
+            /* ...existing code... */
+        }
+    </style>
+    <script>
+    // Add Photo to List handler
+    async function addPhotoToList(photoId, event) {
+        const btn = event && event.target ? event.target.closest('button') : null;
+        if (btn) {
+            btn.disabled = true;
+            const orig = btn.innerHTML;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+        }
+        try {
+            const resp = await fetch('/api/v1/lists/add-photo', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Tenant-ID': currentTenant
+                },
+                body: JSON.stringify({ photo_id: photoId })
+            });
+            if (!resp.ok) throw new Error('Failed to add photo to list');
+            if (btn) {
+                btn.innerHTML = '<i class="fas fa-check"></i> Added!';
+                setTimeout(() => { btn.innerHTML = '<i class="fas fa-list"></i> Add to List'; btn.disabled = false; }, 1200);
+            }
+        } catch (err) {
+            if (btn) {
+                btn.innerHTML = '<i class="fas fa-times"></i> Error';
+                setTimeout(() => { btn.innerHTML = '<i class="fas fa-list"></i> Add to List'; btn.disabled = false; }, 1500);
+            }
+            alert('Failed to add photo to list.');
+        }
+    }
+    </script>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PhotoCat - Image Gallery</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        .image-card {
             transition: transform 0.2s;
         }
         .image-card:hover {
@@ -22,6 +67,7 @@
     </style>
 </head>
 <body class="bg-gray-100">
+
     <!-- Header -->
     <nav class="bg-white shadow-lg">
         <div class="max-w-7xl mx-auto px-4 py-4">
@@ -61,8 +107,22 @@
         </div>
     </nav>
 
-    <!-- Search & Filters -->
-    <div class="max-w-7xl mx-auto px-4 py-6">
+    <!-- Tab Bar -->
+    <div class="bg-gray-50 border-b border-gray-200">
+        <div class="max-w-7xl mx-auto px-4">
+            <nav class="flex space-x-8" aria-label="Tabs">
+                <button id="tab-search" class="text-blue-700 border-b-2 border-blue-600 py-3 px-4 text-sm font-medium focus:outline-none" aria-current="page" onclick="showTab('search')">
+                    <i class="fas fa-search mr-1"></i> Search
+                </button>
+                <button id="tab-lists" class="text-gray-700 border-b-2 border-transparent py-3 px-4 text-sm font-medium focus:outline-none" onclick="showListsScreen()">
+                    <i class="fas fa-book mr-1"></i> Lists
+                </button>
+            </nav>
+        </div>
+    </div>
+
+    <!-- Tab Content -->
+    <div id="tab-search-content" class="max-w-7xl mx-auto px-4 py-6">
         <div class="bg-white rounded-lg shadow p-6 mb-6">
             <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
                 <div class="md:col-span-2">
@@ -130,6 +190,453 @@
             </div>
         </div>
 
+        <!-- Display Mode Toggle -->
+
+        <div class="flex justify-end items-center mb-4">
+            <div class="flex items-center mr-6">
+                <label for="activeListSelect" class="mr-2 text-gray-600 font-medium">Active List:</label>
+                <select id="activeListSelect" class="px-3 py-2 border rounded-lg text-gray-700 bg-white" style="min-width: 160px;"></select>
+            </div>
+            <span class="mr-2 text-gray-600 font-medium">Display:</span>
+            <button id="gridModeBtn" onclick="setDisplayMode('grid')" class="px-3 py-2 rounded-l-lg border border-gray-300 bg-white text-gray-700 hover:bg-blue-50 focus:outline-none">
+                <i class="fas fa-th-large"></i>
+            </button>
+            <button id="listModeBtn" onclick="setDisplayMode('list')" class="px-3 py-2 border-t border-b border-gray-300 bg-white text-gray-700 hover:bg-blue-50 focus:outline-none">
+                <i class="fas fa-list"></i>
+            </button>
+        </div>
+            <script>
+            // --- Active List Dropdown Logic ---
+            async function loadActiveListDropdown() {
+                const select = document.getElementById('activeListSelect');
+                if (!select) return;
+                select.innerHTML = '<option>Loading...</option>';
+                try {
+                    const resp = await fetch('/api/v1/lists', { headers: { 'X-Tenant-ID': currentTenant } });
+                    const lists = await resp.json();
+                    if (!lists.length) {
+                        select.innerHTML = '<option value="">No lists</option>';
+                        select.disabled = true;
+                        return;
+                    }
+                    select.disabled = false;
+                    // Find active list
+                    let activeId = null;
+                    for (const l of lists) { if (l.is_active) { activeId = l.id; break; } }
+                    select.innerHTML = lists.map(l => `<option value="${l.id}" ${l.is_active ? 'selected' : ''}>${l.title || '(Untitled)'}</option>`).join('');
+                    select.value = activeId || lists[0].id;
+                } catch (e) {
+                    select.innerHTML = '<option>Error loading lists</option>';
+                    select.disabled = true;
+                }
+            }
+
+            document.addEventListener('DOMContentLoaded', loadActiveListDropdown);
+
+            // Also reload dropdown when switching tenants or after list changes
+            window.loadActiveListDropdown = loadActiveListDropdown;
+
+            // Set active list when user changes dropdown
+            document.addEventListener('change', async function(e) {
+                if (e.target && e.target.id === 'activeListSelect') {
+                    const listId = e.target.value;
+                    if (!listId) return;
+                    // Patch the list to set is_active=true
+                    try {
+                        await fetch(`/api/v1/lists/${listId}`, {
+                            method: 'PATCH',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'X-Tenant-ID': currentTenant
+                            },
+                            body: JSON.stringify({ is_active: true })
+                        });
+                        // Reload dropdown and refresh UI as needed
+                        await loadActiveListDropdown();
+                        // Optionally, reload images or lists if needed
+                    } catch (err) {
+                        alert('Failed to set active list.');
+                    }
+                }
+            });
+            </script>
+    <!-- Lists Tab Content -->
+    </div> <!-- close tab-search-content -->
+    <div id="tab-lists-content" class="max-w-7xl mx-auto px-4 py-6">
+        <div id="listsMainArea"></div>
+    </div>
+
+        <!-- Lists Screen (renders in imageGrid) -->
+        <script>
+        window.showListsScreen = async function showListsScreen() {
+            // Switch to Lists tab and load content
+            showTab('lists');
+            // Fetch lists
+            const resp = await fetch('/api/v1/lists', { headers: { 'X-Tenant-ID': currentTenant } });
+            const lists = await resp.json();
+            let html = `<div class='bg-white rounded-lg shadow p-6 mb-6'>`;
+            html += `<div class='flex justify-between items-center mb-4'>`;
+            html += `<h2 class='text-2xl font-bold flex items-center'><i class='fas fa-book mr-2'></i> Lists</h2>`;
+            html += `<button onclick='showListEditorModal()' class='bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded'><i class="fas fa-plus mr-1"></i> New List</button>`;
+            html += `</div>`;
+            if (!lists.length) {
+                html += `<div class='text-gray-500'>No lists found. Click "New List" to create one.</div>`;
+            } else {
+                html += `<table class='min-w-full divide-y divide-gray-200 mb-4'><thead><tr><th class='px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase'>Title</th><th class='px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase'>Notes</th><th class='px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase'>Items</th><th class='px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase'>Active</th><th class='px-4 py-2'></th></tr></thead><tbody>`;
+                // Fetch item counts for all lists in parallel
+                const itemCounts = {};
+                await Promise.all(lists.map(async (list) => {
+                    try {
+                        const resp = await fetch(`/api/v1/lists/${list.id}/items`, { headers: { 'X-Tenant-ID': currentTenant } });
+                        const items = await resp.json();
+                        itemCounts[list.id] = Array.isArray(items) ? items.length : 0;
+                    } catch { itemCounts[list.id] = 0; }
+                }));
+                for (const list of lists) {
+                    html += `<tr class='hover:bg-gray-50'>`;
+                    html += `<td class='px-4 py-2 font-semibold'>${list.title || '(Untitled)'}</td>`;
+                    html += `<td class='px-4 py-2 text-gray-600'>${list.notebox ? list.notebox.substring(0, 60) : ''}</td>`;
+                    html += `<td class='px-4 py-2 text-center'>${itemCounts[list.id] ?? ''}</td>`;
+                    html += `<td class='px-4 py-2'>${list.is_active ? `<span class='inline-block px-2 py-1 text-xs rounded bg-green-100 text-green-800'>Active</span>` : `<span class='inline-block px-2 py-1 text-xs rounded bg-gray-200 text-gray-600'>Inactive</span>`}</td>`;
+                    html += `<td class='px-4 py-2 text-right'>`;
+                    html += `<button onclick='viewList(${list.id})' class='bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded mr-2'><i class=\"fas fa-eye mr-1\"></i>View</button>`;
+                    html += `<button onclick='editList(${list.id})' class='bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded mr-2'><i class=\"fas fa-edit mr-1\"></i>Edit</button>`;
+                    html += `<button onclick='deleteList(${list.id})' class='bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded'><i class=\"fas fa-trash mr-1\"></i>Delete</button>`;
+                    html += `</td></tr>`;
+                }
+                html += `</tbody></table>`;
+            }
+            html += `</div>`;
+            document.getElementById('listsMainArea').innerHTML = html;
+        }
+
+                // View list handler (classic view in main area)
+                async function viewList(listId) {
+                    // Fetch list details
+                    window.currentListViewId = listId;
+
+                    const resp = await fetch(`/api/v1/lists/${listId}`, { headers: { 'X-Tenant-ID': currentTenant } });
+                    if (!resp.ok) {
+                        alert('Failed to load list.');
+                        return;
+                    }
+                    const list = await resp.json();
+                    let html = `<div class='bg-white rounded-lg shadow-lg p-6 w-full max-w-5xl mx-auto'>`;
+                    html += `<button class='mb-4 text-blue-600 hover:underline' onclick='showListsScreen()'><i class="fas fa-arrow-left mr-1"></i>Back to Lists</button>`;
+                    html += `<h3 class='text-2xl font-bold mb-2 flex items-center'><i class="fas fa-book mr-2"></i> ${list.title || '(Untitled)'}</h3>`;
+                    html += `<div class='mb-2 text-gray-600'>${list.notebox ? list.notebox : ''}</div>`;
+                    html += `<div class='mb-4 flex justify-between items-center'>`;
+                    html += `<span class='font-semibold'>Photos in List:</span>`;
+                    html += `<span class='flex items-center gap-2'>`;
+                    html += `<span class="mr-2 text-gray-600 font-medium">Display:</span>`;
+                    html += `<button id="listGridModeBtn" class="px-3 py-2 rounded-l-lg border border-gray-300 bg-white text-gray-700 hover:bg-blue-50 focus:outline-none"><i class="fas fa-th-large"></i></button>`;
+                    html += `<button id="listListModeBtn" class="px-3 py-2 border-t border-b border-gray-300 bg-white text-gray-700 hover:bg-blue-50 focus:outline-none"><i class="fas fa-list"></i></button>`;
+                    html += `</span></div>`;
+                    html += `<div id='listItemsContainer'></div>`;
+                    html += `</div>`;
+                    document.getElementById('listsMainArea').innerHTML = html;
+                    // Default to grid mode
+                    window.listDisplayMode = 'grid';
+                    document.getElementById('listGridModeBtn').onclick = function() {
+                        window.listDisplayMode = 'grid';
+                        renderListItems();
+                    };
+                    document.getElementById('listListModeBtn').onclick = function() {
+                        window.listDisplayMode = 'list';
+                        renderListItems();
+                    };
+                    // Load and render items
+                    async function renderListItems() {
+                        const container = document.getElementById('listItemsContainer');
+                        container.innerHTML = '<div class="col-span-full text-center py-8"><i class="fas fa-spinner fa-spin text-2xl text-blue-600"></i> Loading...</div>';
+                        const resp = await fetch(`/api/v1/lists/${listId}/items`, { headers: { 'X-Tenant-ID': currentTenant } });
+                        const items = await resp.json();
+                        if (!items.length) {
+                            container.innerHTML = '<div class="col-span-full text-center text-gray-500 py-8">No photos in this list.</div>';
+                            return;
+                        }
+                        const images = await Promise.all(items.map(async item => {
+                            const resp = await fetch(`/api/v1/images/${item.photo_id}`, { headers: { 'X-Tenant-ID': currentTenant } });
+                            const image = await resp.json();
+                            return { image, item };
+                        }));
+                        if (window.listDisplayMode === 'list') {
+                            container.className = '';
+                            container.innerHTML = images.map(({image, item}) => renderListImageRow(image, item)).join('');
+                        } else {
+                            container.className = 'grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4';
+                            container.innerHTML = images.map(({image, item}) => renderListImageCard(image, item)).join('');
+                        }
+                    }
+                    renderListItems();
+            }
+
+        // Show modal for new/edit list
+        function showListEditorModal(list) {
+            const modal = document.createElement('div');
+            modal.className = 'fixed inset-0 flex items-center justify-center z-50 bg-black bg-opacity-40';
+            modal.innerHTML = `
+                <div class='bg-white rounded-lg shadow-lg p-6 w-full max-w-md relative'>
+                    <button class='absolute top-2 right-2 text-gray-400 hover:text-gray-700 text-xl' onclick='this.closest(".fixed").remove()'>&times;</button>
+                    <h3 class='text-xl font-bold mb-4'>${list ? 'Edit List' : 'New List'}</h3>
+                    <form id='listEditorForm'>
+                        <div class='mb-4'>
+                            <label class='block text-gray-700 font-semibold mb-1'>Title</label>
+                            <input type='text' id='listEditorTitle' class='border px-3 py-2 rounded w-full' value='${list ? list.title : ''}' required>
+                        </div>
+                        <div class='mb-4'>
+                            <label class='block text-gray-700 font-semibold mb-1'>Notes</label>
+                            <textarea id='listEditorNotes' class='border px-3 py-2 rounded w-full' rows='3'>${list ? list.notebox || '' : ''}</textarea>
+                        </div>
+                        <div class='flex justify-end gap-2'>
+                            <button type='button' class='bg-gray-300 hover:bg-gray-400 text-gray-800 px-4 py-2 rounded' onclick='this.closest(".fixed").remove()'>Cancel</button>
+                            <button type='submit' class='bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded'>Save</button>
+                        </div>
+                    </form>
+                </div>
+            `;
+            document.body.appendChild(modal);
+            document.getElementById('listEditorForm').onsubmit = async function(e) {
+                e.preventDefault();
+                const title = document.getElementById('listEditorTitle').value;
+                const notebox = document.getElementById('listEditorNotes').value;
+                if (list) {
+                    // Edit existing
+                    const resp = await fetch(`/api/v1/lists/${list.id}`, {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json', 'X-Tenant-ID': currentTenant },
+                        body: JSON.stringify({ title, notebox })
+                    });
+                    if (resp.ok) {
+                        modal.remove();
+                        showListsScreen();
+                    } else {
+                        alert('Failed to update list.');
+                    }
+                } else {
+                    // New list
+                    const resp = await fetch('/api/v1/lists', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'X-Tenant-ID': currentTenant },
+                        body: JSON.stringify({ title, notebox })
+                    });
+                    if (resp.ok) {
+                        modal.remove();
+                        showListsScreen();
+                    } else {
+                        alert('Failed to create list.');
+                    }
+                }
+            };
+        }
+
+        // Edit list handler
+        async function editList(listId) {
+            const resp = await fetch(`/api/v1/lists/${listId}`, { headers: { 'X-Tenant-ID': currentTenant } });
+            if (resp.ok) {
+                const list = await resp.json();
+                showListEditorModal(list);
+            } else {
+                alert('Failed to load list.');
+            }
+        }
+
+        // Delete list handler
+        async function deleteList(listId) {
+            if (!confirm('Delete this list? This cannot be undone.')) return;
+            const resp = await fetch(`/api/v1/lists/${listId}`, { method: 'DELETE', headers: { 'X-Tenant-ID': currentTenant } });
+            if (resp.ok) {
+                showListsScreen();
+            } else {
+                alert('Failed to delete list.');
+            }
+        }
+        // Tab switching logic
+        function showTab(tab) {
+            const imageGridContainer = document.getElementById('imageGrid')?.parentElement;
+            // Tab buttons
+            const searchBtn = document.getElementById('tab-search');
+            const listsBtn = document.getElementById('tab-lists');
+            // Tab content
+            const searchContent = document.getElementById('tab-search-content');
+            const listsContent = document.getElementById('tab-lists-content');
+
+            // Hide all tab contents first
+            if (searchContent) searchContent.classList.add('hidden');
+            if (listsContent) listsContent.classList.add('hidden');
+            // Remove active/selected styles from all tabs
+            if (searchBtn) {
+                searchBtn.classList.remove('text-blue-700', 'border-blue-600');
+                searchBtn.classList.add('text-gray-700', 'border-transparent');
+            }
+            if (listsBtn) {
+                listsBtn.classList.remove('text-blue-700', 'border-blue-600');
+                listsBtn.classList.add('text-gray-700', 'border-transparent');
+            }
+
+            // Show selected tab content and set active style
+            if (tab === 'search') {
+                if (searchBtn) {
+                    searchBtn.classList.add('text-blue-700', 'border-blue-600');
+                    searchBtn.classList.remove('text-gray-700', 'border-transparent');
+                }
+                if (searchContent) searchContent.classList.remove('hidden');
+                if (imageGridContainer) imageGridContainer.classList.remove('hidden');
+            } else if (tab === 'lists') {
+                if (listsBtn) {
+                    listsBtn.classList.add('text-blue-700', 'border-blue-600');
+                    listsBtn.classList.remove('text-gray-700', 'border-transparent');
+                }
+                if (listsContent) listsContent.classList.remove('hidden');
+                if (imageGridContainer) imageGridContainer.classList.add('hidden');
+            }
+        }
+        // Default to Search tab on load, or Lists if hash is #lists
+        document.addEventListener('DOMContentLoaded', () => {
+            if (window.location.hash === '#lists') {
+                showListsScreen();
+            } else {
+                showTab('search');
+            }
+        });
+
+        function showGallery() {
+            renderImages();
+        }
+
+        async function loadListItems(listId) {
+            console.log('loadListItems called with', listId);
+            const container = document.getElementById('listItemsContainer');
+            if (!container) {
+                console.log('listItemsContainer not found');
+                return;
+            }
+            container.innerHTML = '<div class="col-span-full text-center py-8"><i class="fas fa-spinner fa-spin text-2xl text-blue-600"></i> Loading...</div>';
+            const resp = await fetch(`/api/v1/lists/${listId}/items`, { headers: { 'X-Tenant-ID': currentTenant } });
+            console.log('list items fetch response', resp);
+            const items = await resp.json();
+            console.log('list items data', items);
+            if (!items.length) {
+                container.innerHTML = '<div class="col-span-full text-center text-gray-500 py-8">No photos in this list.</div>';
+                return;
+            }
+            // For each item, fetch image details (could be optimized with batch API)
+            const images = await Promise.all(items.map(async item => {
+                const resp = await fetch(`/api/v1/images/${item.photo_id}`, { headers: { 'X-Tenant-ID': currentTenant } });
+                const image = await resp.json();
+                return { image, item };
+            }));
+            console.log('list images', images);
+            if (window.listDisplayMode === 'list') {
+                container.className = '';
+                const html = images.map(({image, item}) => renderListImageRow(image, item)).join('');
+                console.log('list row HTML', html);
+                container.innerHTML = html;
+            } else {
+                container.className = 'grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4';
+                const html = images.map(({image, item}) => renderListImageCard(image, item)).join('');
+                console.log('list card HTML', html);
+                container.innerHTML = html;
+            }
+        }
+
+        // ...existing code...
+        function renderListImageCard(image, item) {
+            // Use the same logic as the main page for thumbnails
+            const thumbUrl = image.thumbnail_url || `/api/v1/images/${image.id}/thumbnail`;
+            return `<div class='image-card bg-white rounded-lg shadow overflow-hidden relative'>
+                <img src='${thumbUrl}' alt='${image.filename}' class='w-full h-48 object-cover'>
+                <div class='p-3'>
+                    <div class='font-semibold text-gray-800 truncate'>${image.filename}</div>
+                    <div class='text-xs text-gray-500 truncate mb-2'>${image.dropbox_path}</div>
+                    <button onclick='removePhotoFromList(${item.id})' class='absolute top-2 right-2 bg-red-600 hover:bg-red-700 text-white px-2 py-1 rounded text-xs'><i class='fas fa-trash'></i></button>
+                </div>
+            </div>`;
+        }
+
+        function renderListImageRow(image, item) {
+            // ...existing code...
+            const thumbUrl = image.thumbnail_url || `/api/v1/images/${image.id}/thumbnail`;
+            return `<div class="flex items-center p-3 hover:bg-gray-50 cursor-pointer border-b">
+                <img src="${thumbUrl}" alt="${image.filename}" class="w-20 h-20 object-cover rounded shadow mr-4 flex-shrink-0">
+                <div class="flex-1 min-w-0">
+                    <div class="font-semibold text-gray-800 truncate">${image.filename}</div>
+                    <div class="text-xs text-gray-500 truncate">${image.dropbox_path}</div>
+                </div>
+                <button onclick="removePhotoFromList(${item.id})" class="ml-4 bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded shadow text-xs flex items-center"><i class="fas fa-trash mr-1"></i> Remove</button>
+            </div>`;
+        }
+
+        // Returns the correct image URL for a given image and type ('thumbnail', 'full', etc.)
+        function getImageUrl(image, type) {
+            // If image has a cloud URL for the thumbnail, use it
+            if (type === 'thumbnail' && image.thumbnail_url) {
+                return image.thumbnail_url;
+            }
+            // If image has a GCS or HTTP(S) path for the thumbnail, use it
+            if (type === 'thumbnail' && image.thumbnail_path && (image.thumbnail_path.startsWith('http://') || image.thumbnail_path.startsWith('https://') || image.thumbnail_path.startsWith('gs://'))) {
+                return image.thumbnail_path.replace('gs://', 'https://storage.googleapis.com/');
+            }
+            // Fallback to API endpoint
+            return `/api/v1/images/${image.id}/thumbnail`;
+        }
+
+        // List display mode state and toggle
+        window.listDisplayMode = window.listDisplayMode || 'grid';
+        function setListDisplayMode(mode) {
+            window.listDisplayMode = mode;
+            // Update button active states
+            document.getElementById('listGridModeBtn').classList.toggle('bg-blue-100', mode === 'grid');
+            document.getElementById('listListModeBtn').classList.toggle('bg-blue-100', mode === 'list');
+            // Reload items
+            const activeListId = document.getElementById('listTitleInput') ? parseInt(document.getElementById('listTitleInput').closest('div.bg-white').querySelector('button[onclick^="saveListMeta"]').getAttribute('onclick').match(/\d+/)[0]) : null;
+            if (activeListId) loadListItems(activeListId);
+        }
+
+        async function removePhotoFromList(itemId) {
+            if (!confirm('Remove this photo from the list?')) return;
+    const resp = await fetch(`/api/v1/lists/items/${itemId}`, { method: 'DELETE', headers: { 'X-Tenant-ID': currentTenant } });
+    if (resp.ok) {
+        // Refresh the current list view if available
+        if (window.currentListViewId) {
+            viewList(window.currentListViewId);
+        } else {
+            showListsScreen();
+        }
+    } else {
+        alert('Failed to remove photo from list.');
+    }
+}
+        
+        async function saveListMeta(listId) {
+            const title = document.getElementById('listTitleInput').value;
+            const notebox = document.getElementById('listNoteboxInput').value;
+            const resp = await fetch(`/api/v1/lists/${listId}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json', 'X-Tenant-ID': currentTenant },
+                body: JSON.stringify({ title, notebox })
+            });
+            if (resp.ok) {
+                alert('List updated!');
+            } else {
+                alert('Failed to update list.');
+            }
+        }
+
+        async function createActiveList() {
+            const resp = await fetch('/api/v1/lists', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-Tenant-ID': currentTenant },
+                body: JSON.stringify({ title: 'New List', is_active: true })
+            });
+            if (resp.ok) {
+                showListsScreen();
+            } else {
+                alert('Failed to create list.');
+            }
+        }
+        </script>
+
         <!-- Sync Status -->
         <div id="syncStatus" class="hidden bg-blue-50 border-l-4 border-blue-500 p-4 mb-6 rounded">
             <div class="flex items-center">
@@ -141,8 +648,10 @@
         </div>
 
         <!-- Image Gallery -->
-        <div id="imageGrid" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-            <!-- Images will be loaded here -->
+        <div class="max-w-7xl mx-auto px-4">
+            <div id="imageGrid" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                <!-- Images will be loaded here -->
+            </div>
         </div>
 
         <!-- Loading -->
@@ -308,6 +817,45 @@
     </div>
 
     <script>
+    // Lists Modal logic
+    function openListsModal() {
+        document.getElementById('listsModal').classList.remove('hidden');
+        fetchAndRenderLists();
+    }
+    function closeListsModal() {
+        document.getElementById('listsModal').classList.add('hidden');
+    }
+    async function fetchAndRenderLists() {
+        const container = document.getElementById('listsContainer');
+        const loading = document.getElementById('listsLoading');
+        const error = document.getElementById('listsError');
+        container.innerHTML = '';
+        error.classList.add('hidden');
+        loading.classList.remove('hidden');
+        try {
+            const resp = await fetch('/api/v1/lists', {
+                headers: { 'X-Tenant-ID': currentTenant }
+            });
+            if (!resp.ok) throw new Error('Failed to fetch lists');
+            const lists = await resp.json();
+            loading.classList.add('hidden');
+            if (!lists.length) {
+                container.innerHTML = '<li class="text-gray-500 py-4 text-center">No lists found.</li>';
+                return;
+            }
+            container.innerHTML = lists.map(l => `
+                <li class="py-3 px-2 flex flex-col">
+                    <span class="font-semibold">${l.title}</span>
+                    <span class="text-xs text-gray-500">${l.is_active ? '<span class=\'text-green-600\'>Active</span>' : 'Inactive'} | Created: ${l.created_at ? new Date(l.created_at).toLocaleString() : ''}</span>
+                    <span class="text-gray-600 text-sm mt-1">${l.notebox || ''}</span>
+                </li>
+            `).join('');
+        } catch (err) {
+            loading.classList.add('hidden');
+            error.textContent = 'Failed to load lists.';
+            error.classList.remove('hidden');
+        }
+    }
         let currentTenant = 'bcg';
         let currentImages = [];
         let selectedKeywords = new Set();
@@ -662,6 +1210,144 @@
             }
         });
 
+
+        // --- Display Mode State ---
+        let displayMode = localStorage.getItem('displayMode') || 'grid';
+
+        function setDisplayMode(mode) {
+            displayMode = mode;
+            localStorage.setItem('displayMode', mode);
+            updateDisplayModeButtons();
+            renderImages();
+        }
+
+        function updateDisplayModeButtons() {
+            const gridBtn = document.getElementById('gridModeBtn');
+            const listBtn = document.getElementById('listModeBtn');
+            if (!gridBtn || !listBtn) return;
+            if (displayMode === 'grid') {
+                gridBtn.classList.add('bg-blue-100', 'text-blue-700');
+                listBtn.classList.remove('bg-blue-100', 'text-blue-700');
+            } else {
+                listBtn.classList.add('bg-blue-100', 'text-blue-700');
+                gridBtn.classList.remove('bg-blue-100', 'text-blue-700');
+            }
+        }
+
+        function renderImages() {
+            const imageGrid = document.getElementById('imageGrid');
+            imageGrid.innerHTML = '';
+            if (currentImages.length === 0) {
+                document.getElementById('emptyState').classList.remove('hidden');
+                return;
+            } else {
+                document.getElementById('emptyState').classList.add('hidden');
+            }
+            if (displayMode === 'grid') {
+                imageGrid.className = 'grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4';
+                currentImages.forEach(image => {
+                    const card = createImageCard(image);
+                    imageGrid.appendChild(card);
+                });
+            } else {
+                imageGrid.className = 'divide-y divide-gray-200';
+                renderImageList(imageGrid, currentImages);
+            }
+        }
+
+        function renderImageList(container, images) {
+            images.forEach(image => {
+                const row = document.createElement('div');
+                row.className = 'flex items-center p-3 hover:bg-gray-50 cursor-pointer';
+                row.onclick = () => showImageDetail(image);
+
+                // Thumbnail
+                const thumb = document.createElement('img');
+                thumb.src = image.thumbnail_url || `/api/v1/images/${image.id}/thumbnail`;
+                thumb.alt = image.filename;
+                thumb.className = 'w-20 h-20 object-cover rounded shadow mr-4 flex-shrink-0';
+                thumb.onerror = function() {
+                    this.src = 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 400 400%22%3E%3Crect fill=%22%23ddd%22 width=%22400%22 height=%22400%22/%3E%3Ctext fill=%22%23999%22 x=%2250%25%22 y=%2250%25%22 dominant-baseline=%22middle%22 text-anchor=%22middle%22%3ENo Image%3C/text%3E%3C/svg%3E';
+                };
+                row.appendChild(thumb);
+
+                // Info
+                const info = document.createElement('div');
+                info.className = 'flex-1 min-w-0';
+                info.innerHTML = `
+                    <div class="font-semibold text-gray-800 truncate">${image.filename}</div>
+                    <div class="text-xs text-gray-500 truncate">${image.dropbox_path}</div>
+                    <div class="flex flex-wrap gap-2 mt-1">
+                        ${getTagBadges(image)}
+                    </div>
+                `;
+                row.appendChild(info);
+
+                // Add to List button
+                const addBtn = document.createElement('button');
+                addBtn.className = 'ml-4 bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded shadow text-xs flex items-center';
+                addBtn.innerHTML = '<i class="fas fa-list mr-1"></i> Add to List';
+                addBtn.onclick = (e) => { e.stopPropagation(); addPhotoToList(image.id, e); };
+                row.appendChild(addBtn);
+
+                // Dropbox link
+                const dbx = document.createElement('a');
+                dbx.href = `https://www.dropbox.com/home${encodeURIComponent(image.dropbox_path)}`;
+                dbx.target = 'dropbox';
+                dbx.onclick = e => e.stopPropagation();
+                dbx.className = 'ml-4 text-blue-600 hover:text-blue-800 flex items-center';
+                dbx.title = 'Open in Dropbox';
+                dbx.innerHTML = '<i class="fab fa-dropbox fa-lg"></i>';
+                row.appendChild(dbx);
+
+                container.appendChild(row);
+            });
+        }
+
+        function getTagBadges(image) {
+            // Build permatag map
+            const permatagMap = {};
+            if (image.permatags) {
+                image.permatags.forEach(p => {
+                    permatagMap[p.keyword] = p.signum;
+                });
+            }
+            // Get current tags: machine tags NOT negatively permatagged + positive permatags
+            const currentTags = [];
+            if (image.tags) {
+                image.tags.forEach(tag => {
+                    if (permatagMap[tag.keyword] !== -1) {
+                        currentTags.push({
+                            keyword: tag.keyword,
+                            category: tag.category,
+                            confidence: tag.confidence,
+                            source: 'machine'
+                        });
+                    }
+                });
+            }
+            if (image.permatags) {
+                image.permatags.forEach(p => {
+                    if (p.signum === 1) {
+                        const alreadyInMachine = image.tags && image.tags.some(t => t.keyword === p.keyword);
+                        if (!alreadyInMachine) {
+                            currentTags.push({
+                                keyword: p.keyword,
+                                category: p.category,
+                                source: 'permatag'
+                            });
+                        }
+                    }
+                });
+            }
+            return currentTags.map(tag => {
+                const isInPermatags = permatagMap.hasOwnProperty(tag.keyword);
+                const bgColor = isInPermatags ? 'bg-green-100 text-green-800' : 'bg-blue-100 text-blue-800';
+                const confidenceText = tag.confidence ? ` <span class="text-xs text-gray-500">(${Math.round(tag.confidence * 100)}%)</span>` : '';
+                return `<span class="inline-block ${bgColor} px-2 py-0.5 rounded-full text-xs">${tag.keyword}${confidenceText}</span>`;
+            }).join(' ');
+        }
+
         async function loadImages() {
             const loading = document.getElementById('loading');
             const imageGrid = document.getElementById('imageGrid');
@@ -680,10 +1366,9 @@
                     // Build category filter data
                     const categoryFilters = {};
                     for (const [category, keywords] of Object.entries(selectedKeywordsByCategory)) {
-                        // keywords is a Set, so check size
                         if (keywords && keywords.size > 0) {
                             categoryFilters[category] = {
-                                keywords: Array.from(keywords),  // Convert Set to Array
+                                keywords: Array.from(keywords),
                                 operator: categoryOperators[category] || 'OR'
                             };
                         }
@@ -706,16 +1391,7 @@
 
                 loading.classList.add('hidden');
 
-                if (currentImages.length === 0) {
-                    emptyState.classList.remove('hidden');
-                } else {
-                    // Preload thumbnail URLs for better performance
-                    currentImages.forEach((image, index) => {
-                        const card = createImageCard(image);
-                        imageGrid.appendChild(card);
-                    });
-                }
-                // Always update stats, even if no images
+                renderImages();
                 updateStats(data);
             } catch (error) {
                 console.error('Error loading images:', error);
@@ -817,6 +1493,11 @@
                        title="Reprocess this image with current keywords">
                         <i class="fas fa-sync-alt"></i> Retag
                     </button>
+                    <button onclick="event.stopPropagation(); addPhotoToList(${image.id}, event)"
+                       class="absolute bottom-2 left-2 bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded shadow-lg transition-colors text-xs"
+                       title="Add to List">
+                        <i class="fas fa-list"></i> Add to List
+                    </button>
                     ${image.tags_applied ? '<div class="absolute top-2 right-2 bg-green-500 text-white px-2 py-1 rounded text-xs"><i class="fas fa-tag"></i></div>' : ''}
                 </div>
                 <div class="p-3">
@@ -874,6 +1555,11 @@
                            id="modalAnalyzeButton"
                            class="inline-flex items-center bg-gray-600 hover:bg-gray-700 text-white px-4 py-2 rounded-lg transition-colors ml-2">
                             <i class="fas fa-chart-bar mr-2"></i>Show All Scores
+                        </button>
+                        <button onclick="addPhotoToList(${image.id}, event)"
+                           id="modalAddToListButton"
+                           class="inline-flex items-center bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg transition-colors ml-2">
+                            <i class="fas fa-list mr-2"></i>Add to List
                         </button>
                     </div>
                     <div id="analysisResults" class="mt-4 hidden">

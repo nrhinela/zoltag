@@ -44,7 +44,7 @@ steps:
       - '--max-instances=10'
       - '--min-instances=1'
       - '--set-env-vars'
-      - 'GCP_PROJECT_ID=$PROJECT_ID,TAGGING_MODEL=siglip,THUMBNAIL_BUCKET_NAME=photocat-483622-thumbnails,DATABASE_URL=postgresql://photocat-user:photocat123@/photocat?host=/cloudsql/${_CLOUDSQL_INSTANCE}'
+      - 'GCP_PROJECT_ID=$PROJECT_ID,ENVIRONMENT=prod,TAGGING_MODEL=siglip,THUMBNAIL_BUCKET_NAME=photocat-483622-thumbnails,DATABASE_URL=postgresql://photocat-user:EcrZH7UymHpa6kqduFHG@/photocat_prod?host=/cloudsql/${_CLOUDSQL_INSTANCE}'
       - '--set-secrets'
       - 'DROPBOX_APP_KEY=dropbox-app-key:latest,DROPBOX_APP_SECRET=dropbox-app-secret:latest'
       - '--add-cloudsql-instances'
@@ -58,7 +58,7 @@ steps:
       - 'deploy'
       - 'photocat-worker'
       - '--image'
-      - 'gcr.io/$PROJECT_ID/photocat:$COMMIT_SHA'
+      - 'gcr.io/$PROJECT_ID/photocat:$_COMMIT_SHA'
       - '--region'
       - 'us-central1'
       - '--platform'
@@ -69,14 +69,14 @@ steps:
       - '--timeout=900'
       - '--max-instances=10'
       - '--set-env-vars'
-      - 'GCP_PROJECT_ID=$PROJECT_ID,WORKER_MODE=true,TAGGING_MODEL=siglip,THUMBNAIL_BUCKET_NAME=photocat-483622-thumbnails,DATABASE_URL=postgresql://photocat-user:photocat123@/photocat?host=/cloudsql/${_CLOUDSQL_INSTANCE}'
+      - 'GCP_PROJECT_ID=$PROJECT_ID,ENVIRONMENT=prod,WORKER_MODE=true,TAGGING_MODEL=siglip,THUMBNAIL_BUCKET_NAME=photocat-483622-thumbnails,DATABASE_URL=postgresql://photocat-user:EcrZH7UymHpa6kqduFHG@/photocat_prod?host=/cloudsql/${_CLOUDSQL_INSTANCE}'
       - '--set-secrets'
       - 'DROPBOX_APP_KEY=dropbox-app-key:latest,DROPBOX_APP_SECRET=dropbox-app-secret:latest'
       - '--add-cloudsql-instances'
       - '${_CLOUDSQL_INSTANCE}'
 
 images:
-  - 'gcr.io/$PROJECT_ID/photocat:$COMMIT_SHA'
+  - 'gcr.io/$PROJECT_ID/photocat:$_COMMIT_SHA'
 
 substitutions:
   _CLOUDSQL_INSTANCE: 'photocat-483622:us-central1:photocat-db'

@@ -1,21 +1,18 @@
+
 """add_permatags_table
 
 Revision ID: 99f16914f12a
 Revises: 39c1d04f32bf
 Create Date: 2026-01-08 22:34:21.770067
-
 """
 from typing import Sequence, Union
-
 from alembic import op
 import sqlalchemy as sa
-
-
 # revision identifiers, used by Alembic.
-revision: str = '99f16914f12a'
-down_revision: Union[str, None] = '39c1d04f32bf'
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+revision = '99f16914f12a'
+down_revision = '39c1d04f32bf'
+branch_labels = None
+depends_on = None
 
 
 def upgrade() -> None:

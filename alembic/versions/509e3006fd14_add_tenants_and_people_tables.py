@@ -1,21 +1,18 @@
+
 """add_tenants_and_people_tables
 
 Revision ID: 509e3006fd14
 Revises: 99f16914f12a
 Create Date: 2026-01-09 10:58:09.015484
-
 """
 from typing import Sequence, Union
-
 from alembic import op
 import sqlalchemy as sa
-
-
 # revision identifiers, used by Alembic.
-revision: str = '509e3006fd14'
-down_revision: Union[str, None] = '99f16914f12a'
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+revision = '509e3006fd14'
+down_revision = '99f16914f12a'
+branch_labels = None
+depends_on = None
 
 
 def upgrade() -> None:
