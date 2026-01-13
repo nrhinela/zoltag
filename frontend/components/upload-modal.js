@@ -1,8 +1,9 @@
 import { LitElement, html, css } from 'lit';
 import { uploadImages } from '../services/api.js';
+import { tailwind } from './tailwind-lit.js';
 
 class UploadModal extends LitElement {
-  static styles = css`
+  static styles = [tailwind, css`
     .modal {
         display: none;
         position: fixed;
@@ -40,7 +41,7 @@ class UploadModal extends LitElement {
         text-decoration: none;
         cursor: pointer;
     }
-  `;
+  `];
 
   static properties = {
     active: { type: Boolean, reflect: true },
@@ -51,9 +52,6 @@ class UploadModal extends LitElement {
     super();
     this.active = false;
   }
-    createRenderRoot() {
-      return this;
-    }
 
   render() {
     return html`

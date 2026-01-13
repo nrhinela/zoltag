@@ -1,15 +1,13 @@
 import { LitElement, html, css } from 'lit';
 import { getTenants, sync, retagAll } from '../services/api.js';
+import { tailwind } from './tailwind-lit.js';
 
 class AppHeader extends LitElement {
-    createRenderRoot() {
-        return this;
-    }
-    static styles = css`
+    static styles = [tailwind, css`
         :host {
             display: block;
         }
-    `;
+    `];
 
   static properties = {
       tenants: { type: Array },

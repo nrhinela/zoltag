@@ -5,8 +5,10 @@ import './filter-controls.js';
 import './image-modal.js';
 import './upload-modal.js';
 
+import { tailwind } from './tailwind-lit.js';
+
 class PhotoCatApp extends LitElement {
-  static styles = css`
+  static styles = [tailwind, css`
     :host {
       display: block;
     }
@@ -15,7 +17,7 @@ class PhotoCatApp extends LitElement {
         margin: 0 auto;
         padding: 16px;
     }
-  `;
+  `];
 
   static properties = {
       filters: { type: Object },
@@ -24,9 +26,6 @@ class PhotoCatApp extends LitElement {
       showUploadModal: { type: Boolean },
   }
 
-  createRenderRoot() {
-    return this;
-  }
   constructor() {
       super();
       this.filters = {};

@@ -1,3 +1,4 @@
 // Helper to inject Tailwind CSS into LitElement components
-import tailwindStyles from '../styles.css' assert { type: 'css' };
-export const tailwind = tailwindStyles;
+import { css } from 'lit';
+import tailwindRaw from './tailwind-output.css?raw';
+export const tailwind = css([tailwindRaw]);

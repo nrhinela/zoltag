@@ -1,8 +1,9 @@
 import { LitElement, html, css } from 'lit';
 import { getKeywords } from '../services/api.js';
+import { tailwind } from './tailwind-lit.js';
 
 class FilterControls extends LitElement {
-  static styles = css`
+  static styles = [tailwind, css`
     :host {
       display: block;
     }
@@ -28,7 +29,7 @@ class FilterControls extends LitElement {
         border-radius: 0.25rem;
         font-size: 0.875rem;
     }
-  `;
+  `];
 
   static properties = {
     keywords: { type: Object },
@@ -38,10 +39,6 @@ class FilterControls extends LitElement {
     categoryOperators: { type: Object },
     tenant: { type: String },
   };
-
-    createRenderRoot() {
-      return this;
-    }
   constructor() {
     super();
     this.keywords = {};
@@ -206,10 +203,14 @@ class FilterControls extends LitElement {
   }
 
   _emitFilterChangeEvent() {
+      const searchInput = this.shadowRoot.querySelector('#searchInput');
+      const sortSelect = this.shadowRoot.querySelector('#sortSelect');
+      const dateFilter = this.shadowRoot.querySelector('#dateFilter');
+
       const filters = {
-          search: this.shadowRoot.getElementById('searchInput').value,
-          sort: this.shadowRoot.getElementById('sortSelect').value,
-          date: this.shadowRoot.getElementById('dateFilter').value,
+          search: searchInput ? searchInput.value : '',
+          sort: sortSelect ? sortSelect.value : 'date_desc',
+          date: dateFilter ? dateFilter.value : '',
           keywords: this.selectedKeywords,
           operators: this.categoryOperators,
       };
@@ -232,9 +233,9 @@ class FilterControls extends LitElement {
     Object.keys(this.keywords).forEach(category => {
         this.selectedKeywords[category].clear();
     });
-    this.shadowRoot.getElementById('searchInput').value = '';
-    this.shadowRoot.getElementById('sortSelect').value = 'date_desc';
-    this.shadowRoot.getElementById('dateFilter').value = '';
+    this.querySelector('#searchInput').value = '';
+    this.querySelector('#sortSelect').value = 'date_desc';
+    this.querySelector('#dateFilter').value = '';
     this.requestUpdate();
     this._emitFilterChangeEvent();
   }

@@ -1,8 +1,9 @@
 import { LitElement, html, css } from 'lit';
 import { setRating, addToList, retagImage } from '../services/api.js';
+import { tailwind } from './tailwind-lit.js';
 
 class ImageCard extends LitElement {
-  static styles = css`
+  static styles = [tailwind, css`
     .image-card {
       transition: transform 0.2s;
       cursor: pointer;
@@ -13,7 +14,7 @@ class ImageCard extends LitElement {
     .image-card .fa-star {
       color: #fbbf24; /* text-yellow-400 */
     }
-  `;
+  `];
 
   static properties = {
     image: { type: Object },
@@ -24,9 +25,6 @@ class ImageCard extends LitElement {
     super();
     this.image = {};
   }
-    createRenderRoot() {
-      return this;
-    }
 
   _handleRetag(e) {
     e.stopPropagation();

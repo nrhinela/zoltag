@@ -1,8 +1,9 @@
 import { LitElement, html, css } from 'lit';
 import { getImageDetails } from '../services/api.js';
+import { tailwind } from './tailwind-lit.js';
 
 class ImageModal extends LitElement {
-  static styles = css`
+  static styles = [tailwind, css`
     .modal {
         display: none;
         position: fixed;
@@ -40,7 +41,7 @@ class ImageModal extends LitElement {
         text-decoration: none;
         cursor: pointer;
     }
-  `;
+  `];
 
   static properties = {
     image: { type: Object },
@@ -60,10 +61,6 @@ class ImageModal extends LitElement {
       this.fetchDetails();
     }
   }
-
-          createRenderRoot() {
-            return this;
-          }
   async fetchDetails() {
       if (!this.image) return;
       try {

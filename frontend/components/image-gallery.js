@@ -1,13 +1,14 @@
 import { LitElement, html, css } from 'lit';
 import './image-card.js';
 import { getImages } from '../services/api.js';
+import { tailwind } from './tailwind-lit.js';
 
 class ImageGallery extends LitElement {
-  static styles = css`
+  static styles = [tailwind, css`
     :host {
       display: block;
     }
-  `;
+  `];
 
   static properties = {
     images: { type: Array },
@@ -15,11 +16,6 @@ class ImageGallery extends LitElement {
     tenant: { type: String },
   };
   
-  createRenderRoot() {
-      return this;
-  }
-  
-
   constructor() {
     super();
     this.images = [];

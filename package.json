@@ -9,6 +9,7 @@
   },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
+    "build:css": "tailwindcss -i ./frontend/styles.css -o ./frontend/components/tailwind-output.css --minify",
     "dev": "vite"
   },
   "repository": {
