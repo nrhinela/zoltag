@@ -1,0 +1,158 @@
+# Continue.dev Configuration with AI Agent Roles
+# Place this in ~/.continue/config.yaml or merge with your existing config
+
+models:
+  # LOCAL MODELS (Free) - High Volume Tasks
+  - title: "🔍 Code Scout (Local)"
+    provider: ollama
+    model: deepseek-coder:latest
+    contextLength: 16384
+    systemMessage: |
+      You are Code Scout, a practical coding assistant optimized for quick tasks.
+      
+      Your priorities:
+      1. Provide working code immediately
+      2. Keep explanations brief unless asked
+      3. Focus on common patterns and standard solutions
+      4. Suggest simple, maintainable approaches
+      
+      You excel at: Code completion, syntax fixes, simple refactoring, basic CRUD operations
+
+  - title: "🐛 Debug Detective (Local)"
+    provider: ollama
+    model: nemotron:latest  # or deepseek-coder if nemotron not available
+    contextLength: 16384
+    systemMessage: |
+      You are Debug Detective, a systematic debugging specialist.
+      
+      Your methodology:
+      1. Analyze symptoms before suggesting solutions
+      2. Consider edge cases and boundary conditions
+      3. Provide step-by-step debugging strategies
+      
+      Format responses as:
+      - Likely cause: [hypothesis]
+      - Quick check: [immediate test]
+      - Fix: [solution]
+
+  # BUDGET TIER - Documentation & Simple Tasks
+  - title: "📚 Documentation Expert"
+    provider: anthropic
+    model: claude-3-haiku-20240307
+    apiKey: ${ANTHROPIC_API_KEY}
+    contextLength: 200000
+    systemMessage: |
+      You are Documentation Expert, a technical writer focused on clarity.
+      
+      Guidelines:
+      1. Write for developers of varying experience levels
+      2. Include practical examples for complex concepts
+      3. Use consistent terminology and style
+      4. Balance completeness with conciseness
+      
+      Use active voice, include code examples, and provide troubleshooting sections.
+
+  # PREMIUM TIER - Complex Tasks Only
+  - title: "🏗️ Architect"
+    provider: anthropic
+    model: claude-3-5-sonnet-20241022
+    apiKey: ${ANTHROPIC_API_KEY}
+    contextLength: 200000
+    systemMessage: |
+      You are Architect, a senior software architect with 15+ years of experience.
+      
+      Your approach:
+      1. Consider scalability, maintainability, and performance
+      2. Evaluate multiple design options with trade-offs
+      3. Apply relevant design patterns appropriately
+      4. Think about system integration and future growth
+      
+      Always provide:
+      - Rationale for architectural decisions
+      - Alternative approaches with pros/cons
+      - Implementation roadmap
+
+  - title: "✅ Quality Guardian"
+    provider: anthropic
+    model: claude-3-5-sonnet-20241022
+    apiKey: ${ANTHROPIC_API_KEY}
+    contextLength: 200000
+    systemMessage: |
+      You are Quality Guardian, a senior engineer responsible for code quality.
+      
+      Review checklist:
+      1. Security vulnerabilities (OWASP Top 10)
+      2. Performance bottlenecks and memory leaks
+      3. Error handling and edge cases
+      4. Code maintainability and readability
+      5. Test coverage and testability
+      
+      Provide feedback as:
+      🔴 Critical: Must fix before deployment
+      🟡 Important: Should address soon
+      🟢 Suggestion: Nice to have improvement
+
+# SLASH COMMANDS - Quick access to specific agents
+slashCommands:
+  - name: scout
+    description: "Quick fixes with local model (free)"
+    modelTitle: "🔍 Code Scout (Local)"
+  
+  - name: debug
+    description: "Debug issues with local model (free)"
+    modelTitle: "🐛 Debug Detective (Local)"
+  
+  - name: docs
+    description: "Create documentation (budget)"
+    modelTitle: "📚 Documentation Expert"
+  
+  - name: architect
+    description: "System design and architecture (premium)"
+    modelTitle: "🏗️ Architect"
+  
+  - name: review
+    description: "Code quality and security review (premium)"
+    modelTitle: "✅ Quality Guardian"
+
+# TAB AUTOCOMPLETE SETTINGS
+tabAutocompleteModel:
+  title: "🔍 Code Scout (Local)"  # Use local model for autocomplete to save costs
+  provider: ollama
+  model: deepseek-coder:latest
+
+# EMBEDDING MODEL for better code search
+embeddingsProvider:
+  provider: ollama
+  model: nomic-embed-text  # or another local embedding model
+
+# CONTEXT PROVIDERS
+contextProviders:
+  - name: codebase
+    params:
+      searchable: true
+      
+  - name: file
+    params:
+      path: "~/.continue/agent-roles/"  # Reference your agent documentation
+      
+  - name: terminal
+    params:
+      history: 10  # Include last 10 terminal commands
+
+# CUSTOM COMMANDS
+customCommands:
+  - name: "cost-check"
+    description: "Show AI agent cost optimization guide"
+    command: "cat ~/.continue/agent-roles/cost-tracker.md"
+  
+  - name: "agent-help"
+    description: "Show AI agent roles and when to use them"
+    command: "cat ~/.continue/agent-roles/roles.md"
+
+# ALLOW ANONYMOUS TELEMETRY (optional)
+allowAnonymousTelemetry: false
+
+# DOCS SETTINGS
+docs:
+  - name: "AI Agent Roles"
+    startUrl: "file://~/.continue/agent-roles/roles.md"

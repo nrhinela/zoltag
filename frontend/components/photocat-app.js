@@ -4,6 +4,8 @@ import './image-gallery.js';
 import './filter-controls.js';
 import './image-modal.js';
 import './upload-modal.js';
+import './tab-container.js'; // Import the new tab container
+import './list-editor.js'; // Import the new list editor
 
 import { tailwind } from './tailwind-lit.js';
 
@@ -24,6 +26,7 @@ class PhotoCatApp extends LitElement {
       tenant: { type: String },
       selectedImage: { type: Object },
       showUploadModal: { type: Boolean },
+      activeTab: { type: String }, // New property for active tab
   }
 
   constructor() {
@@ -32,6 +35,7 @@ class PhotoCatApp extends LitElement {
       this.tenant = 'bcg'; // Default tenant
       this.selectedImage = null;
       this.showUploadModal = false;
+      this.activeTab = 'search'; // Default to search tab
   }
 
   _handleFilterChange(e) {
@@ -60,8 +64,8 @@ class PhotoCatApp extends LitElement {
     }
     
     _handleUploadComplete() {
+        this.shadowRoot.querySelector('tab-container').querySelector('image-gallery').fetchImages();
         this.showUploadModal = false;
-        this.shadowRoot.querySelector('image-gallery').fetchImages();
     }
 
   render() {
@@ -70,11 +74,20 @@ class PhotoCatApp extends LitElement {
             .tenant=${this.tenant} 
             @tenant-change=${this._handleTenantChange}
             @open-upload-modal=${this._handleOpenUploadModal}
+            .activeTab=${this.activeTab}
+            @tab-change=${(e) => this.activeTab = e.detail}
         ></app-header>
-        <div class="container">
-            <filter-controls .tenant=${this.tenant} @filter-change=${this._handleFilterChange}></filter-controls>
-            <image-gallery .tenant=${this.tenant} .filters=${this.filters} @image-selected=${this._handleImageSelected}></image-gallery>
-        </div>
+        
+        <tab-container .activeTab=${this.activeTab}>
+            <div slot="search" class="container">
+                <filter-controls .tenant=${this.tenant} @filter-change=${this._handleFilterChange}></filter-controls>
+                <image-gallery .tenant=${this.tenant} .filters=${this.filters} @image-selected=${this._handleImageSelected}></image-gallery>
+            </div>
+            <div slot="lists" class="container p-4">
+                <list-editor .tenant=${this.tenant}></list-editor>
+            </div>
+        </tab-container>
+
         ${this.selectedImage ? html`<image-modal .image=${this.selectedImage} .tenant=${this.tenant} .active=${true} @close=${this._handleCloseModal}></image-modal>` : ''}
         ${this.showUploadModal ? html`<upload-modal .tenant=${this.tenant} @close=${this._handleCloseUploadModal} @upload-complete=${this._handleUploadComplete} active></upload-modal>` : ''}
     `;

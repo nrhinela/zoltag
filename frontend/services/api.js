@@ -194,3 +194,18 @@ export async function uploadImages(tenantId, files) {
     const data = await response.json();
     return data;
 }
+
+export async function getLists(tenantId) {
+    const response = await fetch(`${API_BASE_URL}/lists`, {
+        headers: {
+            'X-Tenant-ID': tenantId,
+        },
+    });
+
+    if (!response.ok) {
+        throw new Error('Failed to fetch lists');
+    }
+
+    const data = await response.json();
+    return data || []; // Return the data directly, or an empty array if data is null/undefined
+}

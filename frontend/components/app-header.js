@@ -9,16 +9,17 @@ class AppHeader extends LitElement {
         }
     `];
 
-  static properties = {
-      tenants: { type: Array },
-      tenant: { type: String },
-  }
-
-  constructor() {
-      super();
-      this.tenants = [];
-  }
-
+      static properties = {
+        tenants: { type: Array },
+        tenant: { type: String },
+        activeTab: { type: String },
+    }
+  
+    constructor() {
+        super();
+        this.tenants = [];
+        this.activeTab = 'search'; // Default
+    }
   connectedCallback() {
       super.connectedCallback();
       this.fetchTenants();
@@ -70,8 +71,29 @@ class AppHeader extends LitElement {
                     </div>
                 </div>
             </div>
+            <!-- Tab Navigation moved to a separate bar -->
+            <div class="bg-gray-100 border-b border-gray-200">
+                <div class="max-w-7xl mx-auto px-4">
+                    <button 
+                        @click=${() => this._handleTabChange('search')} 
+                        class="py-3 px-6 text-base font-semibold ${this.activeTab === 'search' ? 'border-b-4 border-blue-600 text-blue-800 bg-blue-50' : 'text-gray-600 hover:text-gray-800 hover:bg-gray-100'} transition-all duration-200"
+                    >
+                        Search
+                    </button>
+                    <button 
+                        @click=${() => this._handleTabChange('lists')} 
+                        class="py-3 px-6 text-base font-semibold ${this.activeTab === 'lists' ? 'border-b-4 border-blue-600 text-blue-800 bg-blue-50' : 'text-gray-600 hover:text-gray-800 hover:bg-gray-100'} transition-all duration-200"
+                    >
+                        Lists
+                    </button>
+                </div>
+            </div>
         </nav>
     `;
+  }
+
+  _handleTabChange(tabName) {
+      this.dispatchEvent(new CustomEvent('tab-change', { detail: tabName, bubbles: true, composed: true }));
   }
 
   async _sync() {
