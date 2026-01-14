@@ -7,6 +7,9 @@ class ListEditor extends LitElement {
     :host {
       display: block;
     }
+    .left-justified-header {
+      text-align: left;
+    }
   `];
 
   static properties = {
@@ -65,11 +68,16 @@ class ListEditor extends LitElement {
             <table class="min-w-full bg-white border border-gray-300">
               <thead>
                 <tr>
-                  <th class="py-2 px-4 border-b">Active</th>
-                  <th class="py-2 px-4 border-b">Item Count</th>
-                  <th class="py-2 px-4 border-b">Created At</th>
-                  <th class="py-2 px-4 border-b">Description</th>
-                  <th class="py-2 px-4 border-b">Actions</th>
+
+
+
+
+
+                  <th class="py-2 px-4 border-b left-justified-header">Active</th>
+                  <th class="py-2 px-4 border-b left-justified-header">Item Count</th>
+                  <th class="py-2 px-4 border-b left-justified-header">Created At</th>
+                  <th class="py-2 px-4 border-b left-justified-header">Description</th>
+                  <th class="py-2 px-4 border-b left-justified-header">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -94,3 +102,4 @@ class ListEditor extends LitElement {
 }
 
 customElements.define('list-editor', ListEditor);
+
