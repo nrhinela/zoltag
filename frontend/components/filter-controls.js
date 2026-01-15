@@ -66,12 +66,25 @@ class FilterControls extends LitElement {
       if (changedProperties.has('tenant')) {
           this.fetchKeywords();
       }
+      // Refetch keywords when filters change to reflect counts
+      if (changedProperties.has('ratingFilter') ||
+          changedProperties.has('ratingOperator') ||
+          changedProperties.has('hideZeroRating') ||
+          changedProperties.has('listFilterId')) {
+          this.fetchKeywords();
+      }
   }
 
   async fetchKeywords() {
     if (!this.tenant) return;
     try {
-      this.keywords = await getKeywords(this.tenant);
+      const filters = {
+        rating: this.ratingFilter,
+        ratingOperator: this.ratingOperator,
+        hideZeroRating: this.hideZeroRating,
+        listId: this.listFilterId,
+      };
+      this.keywords = await getKeywords(this.tenant, filters);
       Object.keys(this.keywords).forEach(category => {
         this.selectedKeywords[category] = new Set();
         this.categoryOperators[category] = 'OR'; // Default to OR

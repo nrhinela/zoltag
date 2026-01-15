@@ -68,8 +68,27 @@ export async function getImages(tenantId, filters = {}) {
   return data;
 }
 
-export async function getKeywords(tenantId) {
-    const response = await fetch(`${API_BASE_URL}/keywords`, {
+export async function getKeywords(tenantId, filters = {}) {
+    const params = new URLSearchParams();
+
+    // Pass filter parameters to match the images endpoint
+    if (filters.rating !== undefined && filters.rating !== '') {
+        params.append('rating', filters.rating);
+        if (filters.ratingOperator) {
+            params.append('rating_operator', filters.ratingOperator);
+        }
+    }
+
+    if (filters.hideZeroRating) {
+        params.append('hide_zero_rating', 'true');
+    }
+
+    if (filters.listId) {
+        params.append('list_id', filters.listId);
+    }
+
+    const url = params.toString() ? `${API_BASE_URL}/keywords?${params.toString()}` : `${API_BASE_URL}/keywords`;
+    const response = await fetch(url, {
         headers: {
         'X-Tenant-ID': tenantId,
         },
@@ -80,12 +99,6 @@ export async function getKeywords(tenantId) {
     }
 
     const data = await response.json();
-
-  // NEW LOG: Inspect the raw data and the specific property we're trying to return
-    console.log('API Service: Raw data from /keywords:', data);
-    console.log('API Service: data.keywords_by_category:', data.keywords_by_category);
-
-
     return data.keywords_by_category || {};
 }
 
