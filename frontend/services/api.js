@@ -4,6 +4,9 @@ const API_BASE_URL = '/api/v1';
 export async function getImages(tenantId, filters = {}) {
   const params = new URLSearchParams();
 
+  // Set a reasonable default limit to control pagination
+  params.append('limit', '100');
+
   if (filters.search) {
       // The backend doesn't seem to have a direct text search endpoint,
       // but the old frontend had a client-side search. We will add a 'keywords'

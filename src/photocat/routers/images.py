@@ -118,8 +118,12 @@ async def list_images(
 
                 # Get all images and their tags/permatags to compute "current tags"
                 # This is necessary because we need to exclude machine tags that are negatively permatagged
-                all_images = db.query(ImageMetadata.id).filter_by(tenant_id=tenant.id).all()
-                all_image_ids = [img[0] for img in all_images]
+                # Only consider images matching active filters (rating, list, hide_zero_rating)
+                if filter_ids is not None:
+                    all_image_ids = list(filter_ids)
+                else:
+                    all_images = db.query(ImageMetadata.id).filter_by(tenant_id=tenant.id).all()
+                    all_image_ids = [img[0] for img in all_images]
 
                 # Get all tags for these images
                 all_tags = db.query(ImageTag).filter(
