@@ -8,6 +8,7 @@ from . import admin_tenants
 from . import admin_keywords
 from . import dropbox
 from . import sync
+from . import config
 
 __all__ = [
     "keywords",
@@ -18,4 +19,5 @@ __all__ = [
     "admin_keywords",
     "dropbox",
     "sync",
+    "config",
 ]
