@@ -175,35 +175,40 @@ async def get_tag_stats(
     db: Session = Depends(get_db)
 ):
     """Get tag counts by category for different tag sources."""
+    # Get zero-shot (SigLIP) tags from machine_tags
     zero_shot_rows = db.query(
-        ImageTag.category,
-        ImageTag.keyword,
-        func.count(distinct(ImageTag.image_id)).label("count")
+        MachineTag.category,
+        MachineTag.keyword,
+        func.count(distinct(MachineTag.image_id)).label("count")
     ).filter(
-        ImageTag.tenant_id == tenant.id
+        MachineTag.tenant_id == tenant.id,
+        MachineTag.tag_type == 'siglip'
     ).group_by(
-        ImageTag.category,
-        ImageTag.keyword
+        MachineTag.category,
+        MachineTag.keyword
     ).all()
 
+    # Get latest keyword model name
     model_row = db.query(KeywordModel.model_name).filter(
         KeywordModel.tenant_id == tenant.id
     ).order_by(
         func.coalesce(KeywordModel.updated_at, KeywordModel.created_at).desc()
     ).first()
 
+    # Get trained keyword model tags from machine_tags
     keyword_model_rows = []
     if model_row:
         keyword_model_rows = db.query(
-            TrainedImageTag.category,
-            TrainedImageTag.keyword,
-            func.count(distinct(TrainedImageTag.image_id)).label("count")
+            MachineTag.category,
+            MachineTag.keyword,
+            func.count(distinct(MachineTag.image_id)).label("count")
         ).filter(
-            TrainedImageTag.tenant_id == tenant.id,
-            TrainedImageTag.model_name == model_row.model_name
+            MachineTag.tenant_id == tenant.id,
+            MachineTag.tag_type == 'trained',
+            MachineTag.model_name == model_row.model_name
         ).group_by(
-            TrainedImageTag.category,
-            TrainedImageTag.keyword
+            MachineTag.category,
+            MachineTag.keyword
         ).all()
 
     permatag_rows = db.query(
