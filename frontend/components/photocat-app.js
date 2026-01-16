@@ -276,9 +276,9 @@ class PhotoCatApp extends LitElement {
                         <div class="text-xs text-gray-500 uppercase font-semibold mb-2">Tag Counts</div>
                         <div class="flex items-center gap-2 mb-3 text-xs font-semibold text-gray-600">
                           ${[
-                            { key: 'zero_shot', label: 'Zero-Shot' },
-                            { key: 'keyword_model', label: 'Keyword-Model' },
                             { key: 'permatags', label: 'Permatags' },
+                            { key: 'keyword_model', label: 'Keyword-Model' },
+                            { key: 'zero_shot', label: 'Zero-Shot' },
                           ].map((tab) => html`
                             <button
                               class="px-2 py-1 rounded border ${this.activeTagSource === tab.key ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-200'}"

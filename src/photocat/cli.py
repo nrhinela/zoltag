@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 import click
-from sqlalchemy import create_engine, func
+from sqlalchemy import create_engine, func, or_
 from sqlalchemy.orm import sessionmaker
 from google.cloud import storage
 
@@ -204,6 +204,7 @@ def build_embeddings(tenant_id: str, limit: Optional[int], force: bool):
     model_version = getattr(tagger, "model_version", model_name)
 
     query = session.query(ImageMetadata).filter_by(tenant_id=tenant.id)
+    query = query.filter(or_(ImageMetadata.rating.is_(None), ImageMetadata.rating != 0))
     if not force:
         query = query.filter(ImageMetadata.embedding_generated.is_(False))
     if limit:
