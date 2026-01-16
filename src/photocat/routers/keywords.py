@@ -5,12 +5,11 @@ from sqlalchemy import func, distinct
 from sqlalchemy.orm import Session
 from typing import Optional
 
-from photocat.dependencies import get_db, get_tenant
+from photocat.dependencies import get_db, get_tenant, get_tenant_setting
 from photocat.config.db_config import ConfigManager
 from photocat.tenant import Tenant
-from photocat.metadata import ImageTag, ImageMetadata, Permatag, TrainedImageTag, KeywordModel
+from photocat.metadata import ImageTag, ImageMetadata, Permatag, TrainedImageTag, KeywordModel, MachineTag
 from photocat.models.config import PhotoList, PhotoListItem
-from photocat.config.db_config import ConfigManager
 
 router = APIRouter(
     prefix="/api/v1",
@@ -100,10 +99,15 @@ async def get_available_keywords(
         all_img_ids = db.query(ImageMetadata.id).filter_by(tenant_id=tenant.id).all()
         effective_images = {row[0] for row in all_img_ids}
 
-    # Get all tags for filtered images
-    all_tags = db.query(ImageTag).filter(
-        ImageTag.tenant_id == tenant.id,
-        ImageTag.image_id.in_(effective_images)
+    # Get active tag type from tenant config (must be added in PR 2 or earlier)
+    # Fallback to 'siglip' if not configured (for backward compatibility)
+    active_tag_type = get_tenant_setting(db, tenant.id, 'active_machine_tag_type', default='siglip')
+
+    # Get all tags for filtered images (from primary algorithm only)
+    all_tags = db.query(MachineTag).filter(
+        MachineTag.tenant_id == tenant.id,
+        MachineTag.image_id.in_(effective_images),
+        MachineTag.tag_type == active_tag_type  # Filter by primary algorithm
     ).all() if effective_images else []
 
     # Get all permatags for filtered images

@@ -13,11 +13,11 @@ from sqlalchemy import func, distinct, and_
 from sqlalchemy.orm import Session, aliased
 from google.cloud import storage
 
-from photocat.dependencies import get_db, get_tenant
+from photocat.dependencies import get_db, get_tenant, get_tenant_setting
 from photocat.tenant import Tenant
 from photocat.metadata import (
     ImageMetadata, ImageTag, Permatag,
-    Tenant as TenantModel, TrainedImageTag, KeywordModel, ImageEmbedding
+    Tenant as TenantModel, TrainedImageTag, KeywordModel, ImageEmbedding, MachineTag
 )
 from photocat.models.config import PhotoList, PhotoListItem
 from photocat.settings import settings
@@ -147,10 +147,14 @@ async def list_images(
                     all_images = db.query(ImageMetadata.id).filter_by(tenant_id=tenant.id).all()
                     all_image_ids = [img[0] for img in all_images]
 
-                # Get all tags for these images
-                all_tags = db.query(ImageTag).filter(
-                    ImageTag.tenant_id == tenant.id,
-                    ImageTag.image_id.in_(all_image_ids)
+                # Get active tag type from tenant config for filtering
+                active_tag_type = get_tenant_setting(db, tenant.id, 'active_machine_tag_type', default='siglip')
+
+                # Get all tags for these images (from primary algorithm only)
+                all_tags = db.query(MachineTag).filter(
+                    MachineTag.tenant_id == tenant.id,
+                    MachineTag.image_id.in_(all_image_ids),
+                    MachineTag.tag_type == active_tag_type  # Filter by primary algorithm
                 ).all()
 
                 # Get all permatags for these images
@@ -216,14 +220,15 @@ async def list_images(
 
                     # Get tags for these images to calculate relevance scores
                     image_tags = db.query(
-                        ImageTag.image_id,
-                        func.sum(ImageTag.confidence).label('relevance_score')
+                        MachineTag.image_id,
+                        func.sum(MachineTag.confidence).label('relevance_score')
                     ).filter(
-                        ImageTag.image_id.in_(unique_image_ids),
-                        ImageTag.keyword.in_(all_keywords),
-                        ImageTag.tenant_id == tenant.id
+                        MachineTag.image_id.in_(unique_image_ids),
+                        MachineTag.keyword.in_(all_keywords),
+                        MachineTag.tenant_id == tenant.id,
+                        MachineTag.tag_type == active_tag_type  # Filter by primary algorithm
                     ).group_by(
-                        ImageTag.image_id
+                        MachineTag.image_id
                     ).all()
 
                     # Create a score map for ordering
@@ -269,22 +274,27 @@ async def list_images(
 
         if keyword_list and operator.upper() == "OR":
             # OR: Image must have ANY of the selected keywords
+            # Get active tag type for filtering
+            active_tag_type = get_tenant_setting(db, tenant.id, 'active_machine_tag_type', default='siglip')
+
             # Use subquery to get image IDs that match keywords
-            matching_image_ids = db.query(ImageTag.image_id).filter(
-                ImageTag.keyword.in_(keyword_list),
-                ImageTag.tenant_id == tenant.id
+            matching_image_ids = db.query(MachineTag.image_id).filter(
+                MachineTag.keyword.in_(keyword_list),
+                MachineTag.tenant_id == tenant.id,
+                MachineTag.tag_type == active_tag_type
             ).distinct().subquery()
 
             # Main query with relevance ordering (by sum of confidence scores)
             query = db.query(
                 ImageMetadata,
-                func.sum(ImageTag.confidence).label('relevance_score')
+                func.sum(MachineTag.confidence).label('relevance_score')
             ).join(
-                ImageTag,
+                MachineTag,
                 and_(
-                    ImageTag.image_id == ImageMetadata.id,
-                    ImageTag.keyword.in_(keyword_list),
-                    ImageTag.tenant_id == tenant.id
+                    MachineTag.image_id == ImageMetadata.id,
+                    MachineTag.keyword.in_(keyword_list),
+                    MachineTag.tenant_id == tenant.id,
+                    MachineTag.tag_type == active_tag_type
                 )
             ).filter(
                 ImageMetadata.tenant_id == tenant.id,
@@ -292,7 +302,7 @@ async def list_images(
             ).group_by(
                 ImageMetadata.id
             ).order_by(
-                func.sum(ImageTag.confidence).desc(),
+                func.sum(MachineTag.confidence).desc(),
                 ImageMetadata.id.desc()
             )
 
@@ -314,14 +324,18 @@ async def list_images(
 
         elif keyword_list and operator.upper() == "AND":
             # AND: Image must have ALL selected keywords
+            # Get active tag type for filtering
+            active_tag_type = get_tenant_setting(db, tenant.id, 'active_machine_tag_type', default='siglip')
+
             # Start with images that have tenant_id
             base_query = db.query(ImageMetadata.id).filter_by(tenant_id=tenant.id)
 
             # For each keyword, filter images that have that keyword
             for keyword in keyword_list:
-                subquery = db.query(ImageTag.image_id).filter(
-                    ImageTag.keyword == keyword,
-                    ImageTag.tenant_id == tenant.id
+                subquery = db.query(MachineTag.image_id).filter(
+                    MachineTag.keyword == keyword,
+                    MachineTag.tenant_id == tenant.id,
+                    MachineTag.tag_type == active_tag_type
                 ).subquery()
 
                 base_query = base_query.filter(ImageMetadata.id.in_(subquery))
@@ -335,13 +349,14 @@ async def list_images(
             # Query with relevance ordering (by sum of confidence scores)
             query = db.query(
                 ImageMetadata,
-                func.sum(ImageTag.confidence).label('relevance_score')
+                func.sum(MachineTag.confidence).label('relevance_score')
             ).join(
-                ImageTag,
+                MachineTag,
                 and_(
-                    ImageTag.image_id == ImageMetadata.id,
-                    ImageTag.keyword.in_(keyword_list),
-                    ImageTag.tenant_id == tenant.id
+                    MachineTag.image_id == ImageMetadata.id,
+                    MachineTag.keyword.in_(keyword_list),
+                    MachineTag.tenant_id == tenant.id,
+                    MachineTag.tag_type == active_tag_type
                 )
             ).filter(
                 ImageMetadata.tenant_id == tenant.id,
@@ -349,7 +364,7 @@ async def list_images(
             ).group_by(
                 ImageMetadata.id
             ).order_by(
-                func.sum(ImageTag.confidence).desc(),
+                func.sum(MachineTag.confidence).desc(),
                 ImageMetadata.id.desc()
             )
 
