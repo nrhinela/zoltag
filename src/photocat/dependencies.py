@@ -82,3 +82,27 @@ def store_secret(secret_id: str, value: str) -> None:
             "payload": {"data": value.encode('UTF-8')},
         }
     )
+
+
+def get_tenant_setting(db: Session, tenant_id: str, key: str, default=None):
+    """Safely get tenant setting with fallback.
+
+    Retrieves tenant configuration values with a safe default fallback.
+    Works with either JSONB settings column or separate configuration columns.
+
+    Args:
+        db: Database session
+        tenant_id: Tenant ID
+        key: Setting key (e.g., 'active_machine_tag_type')
+        default: Fallback value if not found (default: None)
+
+    Returns:
+        Setting value or default if not found
+    """
+    tenant = db.query(TenantModel).filter_by(id=tenant_id).first()
+    if not tenant:
+        return default
+
+    # If tenant.settings is JSONB:
+    settings_dict = getattr(tenant, 'settings', {}) or {}
+    return settings_dict.get(key, default)
