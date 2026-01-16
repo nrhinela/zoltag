@@ -8,7 +8,7 @@ from typing import Optional
 from photocat.dependencies import get_db, get_tenant, get_tenant_setting
 from photocat.config.db_config import ConfigManager
 from photocat.tenant import Tenant
-from photocat.metadata import ImageTag, ImageMetadata, Permatag, TrainedImageTag, KeywordModel, MachineTag
+from photocat.metadata import ImageMetadata, Permatag, KeywordModel, MachineTag
 from photocat.models.config import PhotoList, PhotoListItem
 
 router = APIRouter(
