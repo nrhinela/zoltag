@@ -12,7 +12,7 @@ from photocat.settings import settings
 from photocat.tenant import Tenant, TenantContext
 from photocat.config import TenantConfig
 from photocat.image import ImageProcessor
-from photocat.metadata import ImageMetadata, KeywordModel, TrainedImageTag
+from photocat.metadata import ImageMetadata, KeywordModel, MachineTag
 from photocat.learning import (
     build_keyword_models,
     ensure_image_embedding,
@@ -322,10 +322,11 @@ def recompute_trained_tags(tenant_id: str, batch_size: int, limit: Optional[int]
                 skipped += 1
                 continue
             if not replace:
-                existing = session.query(TrainedImageTag.id).filter(
-                    TrainedImageTag.tenant_id == tenant.id,
-                    TrainedImageTag.image_id == image.id,
-                    TrainedImageTag.model_name == model_name
+                existing = session.query(MachineTag.id).filter(
+                    MachineTag.tenant_id == tenant.id,
+                    MachineTag.image_id == image.id,
+                    MachineTag.tag_type == 'trained',
+                    MachineTag.model_name == model_name
                 ).first()
                 if existing:
                     skipped += 1
@@ -425,7 +426,7 @@ def show_config(tenant_id: str):
 def retag(tenant_id: str):
     """Reprocess all images to regenerate tags with current keywords."""
     from photocat.tenant import Tenant, TenantContext
-    from photocat.metadata import ImageMetadata, ImageTag
+    from photocat.metadata import ImageMetadata, MachineTag
     from photocat.config import TenantConfig
     from photocat.tagging import get_tagger
     from photocat.settings import settings
@@ -453,16 +454,21 @@ def retag(tenant_id: str):
     
     click.echo(f"Reprocessing {len(images)} images for tenant {tenant_id}")
     
-    # Setup CLIP tagger and storage
+    # Setup tagger and storage
     tagger = get_tagger()
+    model_name = getattr(tagger, "model_name", settings.tagging_model)
+    model_version = getattr(tagger, "model_version", model_name)
     storage_client = storage.Client(project=settings.gcp_project_id)
     thumbnail_bucket = storage_client.bucket(settings.thumbnail_bucket)
     
     with click.progressbar(images, label='Retagging images') as bar:
         for image in bar:
             try:
-                # Delete existing tags
-                db.query(ImageTag).filter(ImageTag.image_id == image.id).delete()
+                # Delete existing SigLIP tags
+                db.query(MachineTag).filter(
+                    MachineTag.image_id == image.id,
+                    MachineTag.tag_type == 'siglip'
+                ).delete()
                 
                 # Download thumbnail from Cloud Storage
                 blob = thumbnail_bucket.blob(image.thumbnail_path)
@@ -506,13 +512,15 @@ def retag(tenant_id: str):
                 keyword_to_category = {kw['keyword']: kw['category'] for kw in all_keywords}
                 
                 for keyword, confidence in tags_with_confidence:
-                    tag = ImageTag(
+                    tag = MachineTag(
                         image_id=image.id,
                         tenant_id=tenant_id,
                         keyword=keyword,
                         category=keyword_to_category[keyword],
                         confidence=confidence,
-                        manual=False
+                        tag_type='siglip',
+                        model_name=model_name,
+                        model_version=model_version
                     )
                     db.add(tag)
                 

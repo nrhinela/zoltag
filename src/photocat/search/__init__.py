@@ -6,7 +6,7 @@ from typing import List, Optional
 from sqlalchemy import and_, or_, func
 from sqlalchemy.orm import Session
 
-from photocat.metadata import ImageMetadata, ImageTag, DetectedFace
+from photocat.metadata import ImageMetadata, MachineTag, DetectedFace
 
 
 class SearchQuery:
@@ -20,10 +20,11 @@ class SearchQuery:
             ImageMetadata.tenant_id == tenant_id
         )
     
-    def with_keywords(self, keywords: List[str]) -> "SearchQuery":
+    def with_keywords(self, keywords: List[str], tag_type: str = 'siglip') -> "SearchQuery":
         """Filter by keywords (OR condition)."""
-        self._query = self._query.join(ImageTag).filter(
-            ImageTag.keyword.in_(keywords)
+        self._query = self._query.join(MachineTag).filter(
+            MachineTag.keyword.in_(keywords),
+            MachineTag.tag_type == tag_type
         )
         return self
     

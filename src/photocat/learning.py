@@ -8,7 +8,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 import numpy as np
 from sqlalchemy.orm import Session
 
-from photocat.metadata import ImageEmbedding, ImageMetadata, KeywordModel, Permatag, TrainedImageTag
+from photocat.metadata import ImageEmbedding, ImageMetadata, KeywordModel, Permatag, MachineTag
 from photocat.settings import settings
 from photocat.tagging import get_image_embedding, get_tagger
 
@@ -144,19 +144,21 @@ def recompute_trained_tags_for_image(
     ]
     trained_tags.sort(key=lambda x: x["confidence"], reverse=True)
 
-    db.query(TrainedImageTag).filter(
-        TrainedImageTag.tenant_id == tenant_id,
-        TrainedImageTag.image_id == image_id,
-        TrainedImageTag.model_name == model_name
+    db.query(MachineTag).filter(
+        MachineTag.tenant_id == tenant_id,
+        MachineTag.image_id == image_id,
+        MachineTag.tag_type == 'trained',
+        MachineTag.model_name == model_name
     ).delete()
 
     for tag in trained_tags:
-        db.add(TrainedImageTag(
+        db.add(MachineTag(
             tenant_id=tenant_id,
             image_id=image_id,
             keyword=tag["keyword"],
             category=tag["category"],
             confidence=tag["confidence"],
+            tag_type='trained',
             model_name=model_name,
             model_version=model_version
         ))

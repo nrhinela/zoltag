@@ -761,6 +761,7 @@ async def list_ml_training_images(
             "id": image.id,
             "filename": image.filename,
             "thumbnail_url": f"https://storage.googleapis.com/{tenant.get_thumbnail_bucket(settings)}/{image.thumbnail_path}" if image.thumbnail_path else None,
+            "embedding_generated": bool(image.embedding_generated),
             "positive_permatags": positive_permatags,
             "ml_tags": machine_tags,
             "trained_tags": trained_tags

@@ -298,6 +298,7 @@ python -m photocat.cli recompute-trained-tags --tenant-id &lt;tenant&gt; --batch
             <thead class="bg-gray-50 text-gray-600">
               <tr>
                 <th class="text-left px-3 py-2 font-semibold">Image</th>
+                <th class="text-left px-3 py-2 font-semibold">Embedding</th>
                 <th class="text-left px-3 py-2 font-semibold">Positive Permatags</th>
                 <th class="text-left px-3 py-2 font-semibold">Zero-Shot</th>
                 <th class="text-left px-3 py-2 font-semibold">Keyword-Model</th>
@@ -317,6 +318,11 @@ python -m photocat.cli recompute-trained-tags --tenant-id &lt;tenant&gt; --batch
                           ${image.id !== undefined && image.id !== null ? `ID ${image.id}: ` : ''}${image.filename}
                         </div>
                       </div>
+                  </td>
+                  <td class="px-3 py-3 align-top">
+                    ${image.embedding_generated
+                      ? html`<span class="text-xs font-semibold text-green-600">Yes</span>`
+                      : html`<span class="text-xs text-gray-400">No</span>`}
                   </td>
                   <td class="px-3 py-3 align-top">
                     ${this.renderTagList(image.positive_permatags, 'No positives')}
