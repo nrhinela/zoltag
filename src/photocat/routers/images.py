@@ -54,60 +54,27 @@ async def list_images(
     db: Session = Depends(get_db)
 ):
     """List images for tenant with optional faceted search by keywords."""
+    from .filtering import (
+        apply_list_filter,
+        apply_rating_filter,
+        apply_hide_zero_rating_filter,
+        apply_reviewed_filter,
+        apply_category_filters,
+        calculate_relevance_scores
+    )
+
     filter_ids = None
     if list_id is not None:
-        lst = db.query(PhotoList).filter_by(id=list_id, tenant_id=tenant.id).first()
-        if not lst:
-            raise HTTPException(status_code=404, detail="List not found")
-        list_image_ids = db.query(PhotoListItem.photo_id).filter(
-            PhotoListItem.list_id == list_id
-        ).all()
-        filter_ids = {row[0] for row in list_image_ids}
+        filter_ids = apply_list_filter(db, tenant, list_id)
 
     if rating is not None:
-        rating_query = db.query(ImageMetadata.id).filter(
-            ImageMetadata.tenant_id == tenant.id
-        )
-        if rating_operator == "gte":
-            rating_query = rating_query.filter(ImageMetadata.rating >= rating)
-        elif rating_operator == "gt":
-            rating_query = rating_query.filter(ImageMetadata.rating > rating)
-        else:
-            rating_query = rating_query.filter(ImageMetadata.rating == rating)
-        rating_image_ids = rating_query.all()
-        rating_ids = {row[0] for row in rating_image_ids}
-        if filter_ids is None:
-            filter_ids = rating_ids
-        else:
-            filter_ids = filter_ids.intersection(rating_ids)
+        filter_ids = apply_rating_filter(db, tenant, rating, rating_operator, filter_ids)
 
     if hide_zero_rating:
-        zero_rating_ids = db.query(ImageMetadata.id).filter(
-            ImageMetadata.tenant_id == tenant.id,
-            ImageMetadata.rating == 0
-        ).all()
-        zero_ids = {row[0] for row in zero_rating_ids}
-        if filter_ids is None:
-            all_image_ids = db.query(ImageMetadata.id).filter(
-                ImageMetadata.tenant_id == tenant.id
-            ).all()
-            filter_ids = {row[0] for row in all_image_ids} - zero_ids
-        else:
-            filter_ids = filter_ids - zero_ids
+        filter_ids = apply_hide_zero_rating_filter(db, tenant, filter_ids)
 
     if reviewed is not None:
-        reviewed_rows = db.query(Permatag.image_id).filter(
-            Permatag.tenant_id == tenant.id
-        ).distinct().all()
-        reviewed_ids = {row[0] for row in reviewed_rows}
-        if filter_ids is None:
-            all_image_ids = db.query(ImageMetadata.id).filter(
-                ImageMetadata.tenant_id == tenant.id
-            ).all()
-            base_ids = {row[0] for row in all_image_ids}
-            filter_ids = reviewed_ids if reviewed else (base_ids - reviewed_ids)
-        else:
-            filter_ids = filter_ids.intersection(reviewed_ids) if reviewed else (filter_ids - reviewed_ids)
+        filter_ids = apply_reviewed_filter(db, tenant, reviewed, filter_ids)
 
     if filter_ids is not None and not filter_ids:
         return {
@@ -122,89 +89,12 @@ async def list_images(
     if category_filters:
         try:
             filters = json.loads(category_filters)
-            # filters structure: {category: {keywords: [...], operator: "OR"|"AND"}}
 
-            # Start with base query
-            base_query = db.query(ImageMetadata).filter_by(tenant_id=tenant.id)
+            # Apply category filters using helper
+            unique_image_ids_set = apply_category_filters(db, tenant, category_filters, filter_ids)
 
-            # For each category, apply its filter
-            # Categories are combined with OR (image matches any category's criteria)
-            category_image_ids = []
-
-            for category, filter_data in filters.items():
-                category_keywords = filter_data.get('keywords', [])
-                category_operator = filter_data.get('operator', 'OR').upper()
-
-                if not category_keywords:
-                    continue
-
-                # Get all images and their tags/permatags to compute "current tags"
-                # This is necessary because we need to exclude machine tags that are negatively permatagged
-                # Only consider images matching active filters (rating, list, hide_zero_rating)
-                if filter_ids is not None:
-                    all_image_ids = list(filter_ids)
-                else:
-                    all_images = db.query(ImageMetadata.id).filter_by(tenant_id=tenant.id).all()
-                    all_image_ids = [img[0] for img in all_images]
-
-                # Get active tag type from tenant config for filtering
-                active_tag_type = get_tenant_setting(db, tenant.id, 'active_machine_tag_type', default='siglip')
-
-                # Get all tags for these images (from primary algorithm only)
-                all_tags = db.query(MachineTag).filter(
-                    MachineTag.tenant_id == tenant.id,
-                    MachineTag.image_id.in_(all_image_ids),
-                    MachineTag.tag_type == active_tag_type  # Filter by primary algorithm
-                ).all()
-
-                # Get all permatags for these images
-                all_permatags = db.query(Permatag).filter(
-                    Permatag.tenant_id == tenant.id,
-                    Permatag.image_id.in_(all_image_ids)
-                ).all()
-
-                # Build permatag map by image_id and keyword
-                permatag_map = {}
-                for p in all_permatags:
-                    if p.image_id not in permatag_map:
-                        permatag_map[p.image_id] = {}
-                    permatag_map[p.image_id][p.keyword] = p.signum
-
-                # Initialize current tags for ALL images (not just ones with tags)
-                current_tags_by_image = {img_id: [] for img_id in all_image_ids}
-
-                # Add machine tags for each image
-                for tag in all_tags:
-                    # Include machine tag only if not negatively permatagged
-                    if tag.image_id in permatag_map and permatag_map[tag.image_id].get(tag.keyword) == -1:
-                        continue  # Skip negatively permatagged machine tags
-                    current_tags_by_image[tag.image_id].append(tag.keyword)
-
-                # Add positive permatags
-                for p in all_permatags:
-                    if p.signum == 1:
-                        # Only add if not already in machine tags
-                        if p.keyword not in current_tags_by_image[p.image_id]:
-                            current_tags_by_image[p.image_id].append(p.keyword)
-
-                # Now filter based on current tags
-                if category_operator == "OR":
-                    # Image must have ANY of the keywords in this category (in current tags)
-                    for image_id, current_keywords in current_tags_by_image.items():
-                        if any(kw in category_keywords for kw in current_keywords):
-                            category_image_ids.append(image_id)
-
-                elif category_operator == "AND":
-                    # Image must have ALL keywords in this category (in current tags)
-                    for image_id, current_keywords in current_tags_by_image.items():
-                        if all(kw in current_keywords for kw in category_keywords):
-                            category_image_ids.append(image_id)
-
-            if category_image_ids:
-                # Remove duplicates
-                unique_image_ids = list(set(category_image_ids))
-                if filter_ids is not None:
-                    unique_image_ids = [image_id for image_id in unique_image_ids if image_id in filter_ids]
+            if unique_image_ids_set:
+                unique_image_ids = list(unique_image_ids_set)
 
                 # Get all keywords for relevance counting
                 all_keywords = []
@@ -215,24 +105,11 @@ async def list_images(
                 total = len(unique_image_ids)
 
                 if total:
-                    # For ordering by relevance, we need to calculate confidence scores
-                    # But we've already filtered to unique_image_ids, so just order those
+                    # Get active tag type for scoring
+                    active_tag_type = get_tenant_setting(db, tenant.id, 'active_machine_tag_type', default='siglip')
 
-                    # Get tags for these images to calculate relevance scores
-                    image_tags = db.query(
-                        MachineTag.image_id,
-                        func.sum(MachineTag.confidence).label('relevance_score')
-                    ).filter(
-                        MachineTag.image_id.in_(unique_image_ids),
-                        MachineTag.keyword.in_(all_keywords),
-                        MachineTag.tenant_id == tenant.id,
-                        MachineTag.tag_type == active_tag_type  # Filter by primary algorithm
-                    ).group_by(
-                        MachineTag.image_id
-                    ).all()
-
-                    # Create a score map for ordering
-                    score_map = {img_id: score for img_id, score in image_tags}
+                    # Calculate relevance scores using helper
+                    score_map = calculate_relevance_scores(db, tenant, unique_image_ids, all_keywords, active_tag_type)
 
                     # Sort unique_image_ids by relevance score (descending), then by ID (descending)
                     sorted_ids = sorted(
