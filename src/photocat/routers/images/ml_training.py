@@ -3,11 +3,18 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, distinct
 from sqlalchemy.orm import Session
+from google.cloud import storage
 
 from photocat.dependencies import get_db, get_tenant, get_tenant_setting
 from photocat.tenant import Tenant
-from photocat.metadata import ImageMetadata, MachineTag, Permatag, KeywordModel
-from photocat.tagging import calculate_tags
+from photocat.metadata import ImageMetadata, MachineTag, Permatag, KeywordModel, ImageEmbedding
+from photocat.settings import settings
+from photocat.config.db_config import ConfigManager
+from photocat.tagging import calculate_tags, get_tagger
+from photocat.learning import (
+    load_keyword_models,
+    recompute_trained_tags_for_image,
+)
 
 # Sub-router with no prefix/tags (inherits from parent)
 router = APIRouter()
