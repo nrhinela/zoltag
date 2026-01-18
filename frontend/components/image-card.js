@@ -27,6 +27,7 @@ class ImageCard extends LitElement {
     isRetagging: { type: Boolean },
     keywords: { type: Array },
     listMode: { type: Boolean },
+    metadataOpen: { type: Boolean },
   };
 
   constructor() {
@@ -38,6 +39,7 @@ class ImageCard extends LitElement {
     this.isRetagging = false;
     this.keywords = [];
     this.listMode = false;
+    this.metadataOpen = false;
     this._handleQueueComplete = (event) => {
       const detail = event?.detail;
       if (detail?.type === 'retag' && detail.imageId === this.image.id) {
@@ -62,6 +64,15 @@ class ImageCard extends LitElement {
     window.removeEventListener('queue-command-complete', this._handleQueueComplete);
     window.removeEventListener('queue-command-failed', this._handleQueueFailed);
     super.disconnectedCallback();
+  }
+
+  updated(changedProperties) {
+    if (changedProperties.has('image')) {
+      const previousImage = changedProperties.get('image');
+      if (previousImage?.id !== this.image?.id) {
+        this.metadataOpen = false;
+      }
+    }
   }
 
   _handleRetag(e) {
@@ -196,6 +207,66 @@ class ImageCard extends LitElement {
     return path.replace(/_/g, '_\u200b');
   }
 
+  _formatDateTime(value) {
+    if (!value) return 'Unknown';
+    const date = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(date.getTime())) return 'Unknown';
+    return date.toLocaleString();
+  }
+
+  _handleMetadataToggle(event) {
+    this.metadataOpen = event.target.open;
+  }
+
+  _renderMetadataAccordion() {
+    const camera = [this.image.camera_make, this.image.camera_model].filter(Boolean).join(' ');
+    const gpsLat = this.image.gps_latitude;
+    const gpsLon = this.image.gps_longitude;
+    const metadataRows = [
+      { label: 'Photo taken', value: this._formatDateTime(this.image.capture_timestamp) },
+      { label: 'Dropbox modified', value: this._formatDateTime(this.image.modified_time) },
+      { label: 'Ingested', value: this._formatDateTime(this.image.created_at) },
+      { label: 'Camera', value: camera || null },
+      { label: 'Lens', value: this.image.lens_model },
+      { label: 'ISO', value: this.image.iso },
+      { label: 'Aperture', value: this.image.aperture ? `f/${this.image.aperture}` : null },
+      { label: 'Shutter', value: this.image.shutter_speed },
+      { label: 'Focal length', value: this.image.focal_length ? `${this.image.focal_length}mm` : null },
+      { label: 'GPS', value: (gpsLat !== null && gpsLat !== undefined && gpsLon !== null && gpsLon !== undefined)
+        ? `${gpsLat}, ${gpsLon}`
+        : null },
+      { label: 'Dimensions', value: (this.image.width && this.image.height)
+        ? `${this.image.width} × ${this.image.height}`
+        : null },
+      { label: 'Format', value: this.image.format },
+    ];
+
+    const rows = metadataRows.filter((row, index) => {
+      if (index < 3) {
+        return true;
+      }
+      return row.value !== null && row.value !== undefined && row.value !== '';
+    });
+
+    return html`
+      <details
+        class="mt-2 text-xs text-gray-600"
+        ?open=${this.metadataOpen}
+        @toggle=${this._handleMetadataToggle}
+      >
+        <summary class="cursor-pointer font-semibold text-gray-700">Metadata</summary>
+        <div class="mt-2 space-y-1">
+          ${rows.map((row) => html`
+            <div class="flex justify-between gap-3">
+              <span class="font-medium text-gray-600">${row.label}:</span>
+              <span class="text-right text-gray-700">${row.value}</span>
+            </div>
+          `)}
+        </div>
+      </details>
+    `;
+  }
+
   render() {
     if (!this.image.id) {
       return html`<div>Loading...</div>`;
@@ -211,6 +282,8 @@ class ImageCard extends LitElement {
       ? `https://www.dropbox.com/home${encodeURIComponent(dropboxPath)}`
       : '';
     const formattedPath = this._formatDropboxPath(dropboxPath);
+    const photoCreatedAt = this.image.capture_timestamp ? this._formatDateTime(this.image.capture_timestamp) : null;
+    const uploadedAt = this._formatDateTime(this.image.modified_time);
     const listName = this.activeListName || 'None';
     const canAddToList = !!this.activeListName && this.showAddToList;
     const addLabel = this.isInActiveList ? 'Added' : 'Add';
@@ -228,6 +301,16 @@ class ImageCard extends LitElement {
           ${this.image.tags_applied ? html`<div class="absolute top-2 right-2 bg-green-500 text-white px-2 py-1 rounded text-xs"><i class="fas fa-tag"></i></div>` : ''}
         </div>
         <div class="p-3 text-sm text-gray-700 space-y-2">
+          ${photoCreatedAt ? html`
+            <div>
+              <span class="font-semibold text-gray-700">photo created:</span>
+              <span class="ml-1">${photoCreatedAt}</span>
+            </div>
+          ` : html``}
+          <div>
+            <span class="font-semibold text-gray-700">uploaded:</span>
+            <span class="ml-1">${uploadedAt}</span>
+          </div>
           <div>
             <span class="font-semibold text-gray-700">file:</span>
             ${dropboxHref ? html`
@@ -243,15 +326,12 @@ class ImageCard extends LitElement {
             ` : html`<span class="ml-1 text-gray-400">Unknown</span>`}
           </div>
           <div>
-            <span class="font-semibold text-gray-700">uploaded:</span>
-            <span class="ml-1">${this.image.modified_time ? new Date(this.image.modified_time).toLocaleDateString() : 'Unknown'}</span>
-          </div>
-          <div>
             <span class="font-semibold text-gray-700">last review:</span>
             <span class="ml-1">
               ${this.image.reviewed_at ? new Date(this.image.reviewed_at).toLocaleDateString() : 'Unreviewed'}
             </span>
           </div>
+          ${this._renderMetadataAccordion()}
           <div>
             <span class="font-semibold text-gray-700">list [${listName}]:</span>
             ${this.showAddToList ? html`
@@ -331,6 +411,8 @@ class ImageCard extends LitElement {
     const dropboxHref = dropboxPath
       ? `https://www.dropbox.com/home${encodeURIComponent(dropboxPath)}`
       : '';
+    const photoCreatedAt = this.image.capture_timestamp ? this._formatDateTime(this.image.capture_timestamp) : null;
+    const uploadedAt = this._formatDateTime(this.image.modified_time);
     const listName = this.activeListName || 'None';
     const canAddToList = !!this.activeListName && this.showAddToList;
     const addLabel = this.isInActiveList ? 'Added' : `Add to list: ${listName}`;
@@ -349,6 +431,10 @@ class ImageCard extends LitElement {
         </div>
         <div class="flex-1 min-w-0">
           <div class="text-sm font-semibold text-gray-800 truncate">${this.image.filename}</div>
+          ${photoCreatedAt ? html`
+            <div class="text-xs text-gray-500">photo created: ${photoCreatedAt}</div>
+          ` : html``}
+          <div class="text-xs text-gray-500">uploaded: ${uploadedAt}</div>
           ${dropboxHref ? html`
             <a
               href=${dropboxHref}

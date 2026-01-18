@@ -10,13 +10,14 @@ from alembic import context
 
 # Import all models to ensure they're registered
 from photocat.metadata import Base
+from photocat.settings import settings
 
 # this is the Alembic Config object
 config = context.config
 
-# Override sqlalchemy.url with DATABASE_URL from environment if set
-if os.getenv("DATABASE_URL"):
-    config.set_main_option("sqlalchemy.url", os.getenv("DATABASE_URL"))
+db_url = os.getenv("DATABASE_URL") or settings.database_url
+if db_url:
+    config.set_main_option("sqlalchemy.url", db_url)
 
 # Interpret the config file for Python logging
 if config.config_file_name is not None:

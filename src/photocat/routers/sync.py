@@ -10,6 +10,13 @@ from google.cloud import storage
 
 from photocat.dependencies import get_db, get_tenant, get_secret
 from photocat.tenant import Tenant
+from photocat.exif import (
+    get_exif_value,
+    parse_exif_datetime,
+    parse_exif_float,
+    parse_exif_int,
+    parse_exif_str,
+)
 from photocat.metadata import Tenant as TenantModel, ImageMetadata, MachineTag
 from photocat.settings import settings
 from photocat.image import ImageProcessor
@@ -207,12 +214,17 @@ async def trigger_sync(
                     dropbox_props = {}
                     dropbox_exif = {}
                     try:
-                        from dropbox.files import IncludePropertyGroups
-                        metadata_result = dbx.files_get_metadata(
-                            entry.path_display,
-                            include_media_info=True,
-                            include_property_groups=IncludePropertyGroups.filter_some([])
-                        )
+                        try:
+                            from dropbox.files import IncludePropertyGroups
+                            include_property_groups = IncludePropertyGroups.filter_some([])
+                        except ImportError:
+                            include_property_groups = None
+                        metadata_kwargs = {
+                            "include_media_info": True,
+                        }
+                        if include_property_groups is not None:
+                            metadata_kwargs["include_property_groups"] = include_property_groups
+                        metadata_result = dbx.files_get_metadata(entry.path_display, **metadata_kwargs)
                         print(f"[Sync] Fetched Dropbox metadata for {entry.name}")
 
                         # Extract media info (EXIF-like data from Dropbox without downloading)
@@ -291,6 +303,16 @@ async def trigger_sync(
                     if exif:
                         print(f"[Sync] EXIF keys: {list(exif.keys())[:10]}")
 
+                    capture_timestamp = parse_exif_datetime(
+                        get_exif_value(exif, "DateTimeOriginal", "DateTime")
+                    )
+                    gps_latitude = parse_exif_float(get_exif_value(exif, "GPSLatitude"))
+                    gps_longitude = parse_exif_float(get_exif_value(exif, "GPSLongitude"))
+                    iso = parse_exif_int(get_exif_value(exif, "ISOSpeedRatings", "ISOSpeed", "ISO"))
+                    aperture = parse_exif_float(get_exif_value(exif, "FNumber", "ApertureValue"))
+                    shutter_speed = parse_exif_str(get_exif_value(exif, "ExposureTime", "ShutterSpeedValue"))
+                    focal_length = parse_exif_float(get_exif_value(exif, "FocalLength"))
+
                     # Check if already exists
                     existing = db.query(ImageMetadata).filter(
                         ImageMetadata.tenant_id == tenant.id,
@@ -326,6 +348,13 @@ async def trigger_sync(
                         camera_make=exif.get('Make'),
                         camera_model=exif.get('Model'),
                         lens_model=exif.get('LensModel'),
+                        capture_timestamp=capture_timestamp,
+                        gps_latitude=gps_latitude,
+                        gps_longitude=gps_longitude,
+                        iso=iso,
+                        aperture=aperture,
+                        shutter_speed=shutter_speed,
+                        focal_length=focal_length,
                         thumbnail_path=thumbnail_path,
                         embedding_generated=False,
                         faces_detected=False,

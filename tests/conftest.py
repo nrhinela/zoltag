@@ -13,16 +13,20 @@ from photocat.config import TenantConfig
 @pytest.fixture
 def test_db():
     """Create test database."""
+    from photocat.models.config import Base as ConfigBase
+
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
-    
+    ConfigBase.metadata.create_all(engine)
+
     SessionLocal = sessionmaker(bind=engine)
     session = SessionLocal()
-    
+
     yield session
-    
+
     session.close()
     Base.metadata.drop_all(engine)
+    ConfigBase.metadata.drop_all(engine)
 
 
 @pytest.fixture

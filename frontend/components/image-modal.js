@@ -49,12 +49,14 @@ class ImageModal extends LitElement {
     details: { type: Object },
     active: { type: Boolean, reflect: true },
     tenant: { type: String },
+    metadataOpen: { type: Boolean },
   };
 
   constructor() {
     super();
     this.active = false;
     this.details = null;
+    this.metadataOpen = false;
     this._handlePermatagEvent = (event) => {
       if (this.active && event?.detail?.imageId === this.image?.id) {
         this.fetchDetails();
@@ -77,6 +79,18 @@ class ImageModal extends LitElement {
     window.removeEventListener('permatags-changed', this._handlePermatagEvent);
     window.removeEventListener('image-retagged', this._handleRetagEvent);
     super.disconnectedCallback();
+  }
+
+  updated(changedProperties) {
+    if (changedProperties.has('image')) {
+      const previousImage = changedProperties.get('image');
+      if (previousImage?.id !== this.image?.id) {
+        this.metadataOpen = false;
+      }
+    }
+    if (changedProperties.has('active') && !this.active) {
+      this.metadataOpen = false;
+    }
   }
 
   willUpdate(changedProperties) {
@@ -132,6 +146,7 @@ class ImageModal extends LitElement {
                 </div>
                 <div><strong>Last Review:</strong> ${this.details.reviewed_at ? new Date(this.details.reviewed_at).toLocaleString() : 'Unreviewed'}</div>
             </div>
+            ${this._renderMetadataAccordion()}
         </div>
         <div class="mt-4">
             <h3 class="font-semibold text-gray-700 mb-2">Active Tags</h3>
@@ -141,6 +156,62 @@ class ImageModal extends LitElement {
                   .map(tag => html`<span class="inline-block bg-blue-100 text-blue-800 px-2 py-1 rounded-full text-xs">${tag.keyword}</span>`)}
             </div>
         </div>
+    `;
+  }
+
+  _formatDateTime(value) {
+    if (!value) return 'Unknown';
+    const date = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(date.getTime())) return 'Unknown';
+    return date.toLocaleString();
+  }
+
+  _handleMetadataToggle(event) {
+    this.metadataOpen = event.target.open;
+  }
+
+  _renderMetadataAccordion() {
+    const camera = [this.details.camera_make, this.details.camera_model].filter(Boolean).join(' ');
+    const gpsLat = this.details.gps_latitude;
+    const gpsLon = this.details.gps_longitude;
+    const metadataRows = [
+      { label: 'Photo taken', value: this._formatDateTime(this.details.capture_timestamp) },
+      { label: 'Dropbox modified', value: this._formatDateTime(this.details.modified_time) },
+      { label: 'Ingested', value: this._formatDateTime(this.details.created_at) },
+      { label: 'Camera', value: camera || null },
+      { label: 'Lens', value: this.details.lens_model },
+      { label: 'ISO', value: this.details.iso },
+      { label: 'Aperture', value: this.details.aperture ? `f/${this.details.aperture}` : null },
+      { label: 'Shutter', value: this.details.shutter_speed },
+      { label: 'Focal length', value: this.details.focal_length ? `${this.details.focal_length}mm` : null },
+      { label: 'GPS', value: (gpsLat !== null && gpsLat !== undefined && gpsLon !== null && gpsLon !== undefined)
+        ? `${gpsLat}, ${gpsLon}`
+        : null },
+    ];
+
+    const rows = metadataRows.filter((row, index) => {
+      if (index < 3) {
+        return true;
+      }
+      return row.value !== null && row.value !== undefined && row.value !== '';
+    });
+
+    return html`
+      <details
+        class="mt-3 text-sm text-gray-600"
+        ?open=${this.metadataOpen}
+        @toggle=${this._handleMetadataToggle}
+      >
+        <summary class="cursor-pointer font-semibold text-gray-700">Metadata</summary>
+        <div class="mt-2 space-y-1">
+          ${rows.map((row) => html`
+            <div class="flex justify-between gap-3">
+              <span class="font-medium text-gray-600">${row.label}:</span>
+              <span class="text-right text-gray-700">${row.value}</span>
+            </div>
+          `)}
+        </div>
+      </details>
     `;
   }
 

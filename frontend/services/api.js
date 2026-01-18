@@ -63,6 +63,10 @@ export async function getImages(tenantId, filters = {}) {
       }
   }
 
+  if (filters.sortOrder) {
+    params.append('date_order', filters.sortOrder);
+  }
+
 
   const response = await fetch(`${API_BASE_URL}/images?${params.toString()}`, {
     headers: {

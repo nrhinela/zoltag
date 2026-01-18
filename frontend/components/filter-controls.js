@@ -44,6 +44,7 @@ class FilterControls extends LitElement {
     ratingOperator: { type: String },
     hideZeroRating: { type: Boolean },
     reviewedFilter: { type: String },
+    dateSortOrder: { type: String },
   };
   constructor() {
     super();
@@ -58,6 +59,7 @@ class FilterControls extends LitElement {
     this.ratingOperator = 'gte';
     this.hideZeroRating = true;
     this.reviewedFilter = '';
+    this.dateSortOrder = 'desc';
   }
 
   firstUpdated() {
@@ -149,6 +151,13 @@ class FilterControls extends LitElement {
               <option value="gte">>=</option>
               <option value="gt">></option>
               <option value="eq">==</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-gray-600 mb-1">Sort by Date</label>
+            <select class="w-full px-4 py-2 border rounded-lg" .value=${this.dateSortOrder} @change=${this._handleDateSortChange}>
+              <option value="desc">Newest first</option>
+              <option value="asc">Oldest first</option>
             </select>
           </div>
         </div>
@@ -271,6 +280,7 @@ class FilterControls extends LitElement {
           ratingOperator: this.ratingOperator,
           hideZeroRating: this.hideZeroRating,
           reviewed: this.reviewedFilter,
+          sortOrder: this.dateSortOrder,
       };
       this.dispatchEvent(new CustomEvent('filter-change', { detail: filters }));
   }
@@ -306,6 +316,11 @@ class FilterControls extends LitElement {
     this._emitFilterChangeEvent();
   }
 
+  _handleDateSortChange(e) {
+    this.dateSortOrder = e.target.value;
+    this._emitFilterChangeEvent();
+  }
+
   _clearFilters() {
     Object.keys(this.keywords).forEach(category => {
         this.selectedKeywords[category].clear();
@@ -315,6 +330,7 @@ class FilterControls extends LitElement {
     this.ratingFilter = '';
     this.ratingOperator = 'gte';
     this.hideZeroRating = true;
+    this.dateSortOrder = 'desc';
     this.requestUpdate();
     this._emitFilterChangeEvent();
   }

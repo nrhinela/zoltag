@@ -77,6 +77,7 @@ class ImageMetadata(Base):
     
     id = Column(Integer, primary_key=True)
     tenant_id = Column(String(255), nullable=False, index=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     
     # File information
     dropbox_path = Column(String(1024), nullable=False)
