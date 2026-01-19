@@ -6,6 +6,7 @@ class ImageCard extends LitElement {
   static styles = [tailwind, css`
     .image-card {
       transition: transform 0.2s;
+      overflow: visible;
     }
     .image-card:hover {
       transform: scale(1.02);
@@ -15,6 +16,48 @@ class ImageCard extends LitElement {
     }
     .image-link {
       cursor: pointer;
+    }
+    .image-hover {
+      position: relative;
+    }
+    .image-hover img {
+      border-radius: 12px 12px 0 0;
+    }
+    .image-hover-info {
+      position: absolute;
+      left: 8px;
+      right: auto;
+      bottom: 8px;
+      background: rgba(17, 24, 39, 0.85);
+      color: #f9fafb;
+      font-size: 12px;
+      line-height: 1.35;
+      padding: 8px 10px;
+      border-radius: 8px;
+      min-width: 220px;
+      max-width: min(70vw, 320px);
+      width: max-content;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.15s ease;
+      transition-delay: 0s;
+      z-index: 10;
+      box-shadow: 0 8px 20px rgba(0, 0, 0, 0.25);
+    }
+    .image-hover:hover .image-hover-info {
+      opacity: 1;
+      transition-delay: 0.5s;
+    }
+    .hover-label {
+      color: #d1d5db;
+      font-weight: 600;
+      margin-right: 4px;
+    }
+    .hover-line {
+      display: block;
+      white-space: normal;
+      overflow: visible;
+      word-break: break-word;
     }
   `];
 
@@ -214,6 +257,28 @@ class ImageCard extends LitElement {
     return date.toLocaleString();
   }
 
+  _formatRating(value) {
+    if (value === null || value === undefined || value === '') {
+      return 'Unrated';
+    }
+    return String(value);
+  }
+
+  _renderHoverInfo() {
+    const photoTaken = this._formatDateTime(this.image.capture_timestamp);
+    const dropboxPath = this.image.dropbox_path
+      ? this._formatDropboxPath(this.image.dropbox_path)
+      : 'Unknown';
+    const rating = this._formatRating(this.image.rating);
+    return html`
+      <div class="image-hover-info">
+        <span class="hover-line"><span class="hover-label">Photo taken:</span>${photoTaken}</span>
+        <span class="hover-line"><span class="hover-label">Path:</span>${dropboxPath}</span>
+        <span class="hover-line"><span class="hover-label">Rating:</span>${rating}</span>
+      </div>
+    `;
+  }
+
   _handleMetadataToggle(event) {
     this.metadataOpen = event.target.open;
   }
@@ -290,7 +355,7 @@ class ImageCard extends LitElement {
 
     return html`
       <div class="image-card bg-white rounded-lg shadow overflow-hidden">
-        <div class="aspect-square bg-gray-200 relative image-link flex items-center justify-center" @click=${this._handleCardClick}>
+        <div class="aspect-square bg-gray-200 image-link image-hover flex items-center justify-center" @click=${this._handleCardClick}>
           <img
             src="${this.image.thumbnail_url || `/api/v1/images/${this.image.id}/thumbnail`}"
             alt="${this.image.filename}"
@@ -299,6 +364,7 @@ class ImageCard extends LitElement {
             onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 400 400%22%3E%3Crect fill=%22%23ddd%22 width=%22400%22 height=%22400%22/%3E%3Ctext fill=%22%23999%22 x=%2250%25%22 y=%2250%25%22 dominant-baseline=%22middle%22 text-anchor=%22middle%22%3ENo Image%3C/text%3E%3C/svg%3E';"
           />
           ${this.image.tags_applied ? html`<div class="absolute top-2 right-2 bg-green-500 text-white px-2 py-1 rounded text-xs"><i class="fas fa-tag"></i></div>` : ''}
+          ${this._renderHoverInfo()}
         </div>
         <div class="p-3 text-sm text-gray-700 space-y-2">
           ${photoCreatedAt ? html`
@@ -420,7 +486,7 @@ class ImageCard extends LitElement {
 
     return html`
       <div class="flex items-center gap-4 py-4">
-        <div class="w-20 h-20 flex-shrink-0">
+        <div class="w-20 h-20 flex-shrink-0 image-hover">
           <img
             src="${this.image.thumbnail_url || `/api/v1/images/${this.image.id}/thumbnail`}"
             alt="${this.image.filename}"
@@ -428,6 +494,7 @@ class ImageCard extends LitElement {
             loading="lazy"
             @click=${this._handleCardClick}
           />
+          ${this._renderHoverInfo()}
         </div>
         <div class="flex-1 min-w-0">
           <div class="text-sm font-semibold text-gray-800 truncate">${this.image.filename}</div>

@@ -5,6 +5,7 @@ import {
   getPermatags,
   deletePermatag,
   addToList,
+  bulkPermatags,
 } from './api.js';
 
 const STORAGE_KEY = 'photocat_command_queue_v1';
@@ -134,6 +135,8 @@ async function executeCommand(command) {
         1
       );
     }
+    case 'bulk-permatags':
+      return bulkPermatags(command.tenantId, command.operations || []);
     default:
       throw new Error(`Unknown command type: ${command.type}`);
   }

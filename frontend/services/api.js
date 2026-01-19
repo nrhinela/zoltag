@@ -574,6 +574,24 @@ export async function addPermatag(tenantId, imageId, keyword, category, signum) 
     return response.json();
 };
 
+export async function bulkPermatags(tenantId, operations) {
+    const response = await fetch(`${API_BASE_URL}/images/permatags/bulk`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-Tenant-ID': tenantId,
+        },
+        body: JSON.stringify({ operations }),
+    });
+
+    if (!response.ok) {
+        const message = await response.text();
+        throw new Error(message || 'Failed to update permatags');
+    }
+
+    return response.json();
+}
+
 export async function deletePermatag(tenantId, imageId, permatagId) {
     const response = await fetch(`${API_BASE_URL}/images/${imageId}/permatags/${permatagId}`, {
         method: 'DELETE',

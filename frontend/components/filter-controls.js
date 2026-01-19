@@ -45,6 +45,8 @@ class FilterControls extends LitElement {
     hideZeroRating: { type: Boolean },
     reviewedFilter: { type: String },
     dateSortOrder: { type: String },
+    showLimit: { type: Boolean },
+    limit: { type: Number },
   };
   constructor() {
     super();
@@ -60,6 +62,8 @@ class FilterControls extends LitElement {
     this.hideZeroRating = true;
     this.reviewedFilter = '';
     this.dateSortOrder = 'desc';
+    this.showLimit = false;
+    this.limit = 200;
   }
 
   firstUpdated() {
@@ -160,6 +164,18 @@ class FilterControls extends LitElement {
               <option value="asc">Oldest first</option>
             </select>
           </div>
+          ${this.showLimit ? html`
+            <div>
+              <label class="block text-xs font-semibold text-gray-600 mb-1">Limit</label>
+              <input
+                type="number"
+                min="1"
+                class="w-full px-4 py-2 border rounded-lg"
+                .value=${String(this.limit)}
+                @input=${this._handleLimitChange}
+              >
+            </div>
+          ` : html``}
         </div>
 
         <!-- Faceted Search -->
@@ -282,6 +298,9 @@ class FilterControls extends LitElement {
           reviewed: this.reviewedFilter,
           sortOrder: this.dateSortOrder,
       };
+      if (this.showLimit) {
+        filters.limit = this.limit;
+      }
       this.dispatchEvent(new CustomEvent('filter-change', { detail: filters }));
   }
 
@@ -321,6 +340,16 @@ class FilterControls extends LitElement {
     this._emitFilterChangeEvent();
   }
 
+  _handleLimitChange(e) {
+    const parsed = Number.parseInt(e.target.value, 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      this.limit = 200;
+    } else {
+      this.limit = parsed;
+    }
+    this._emitFilterChangeEvent();
+  }
+
   _clearFilters() {
     Object.keys(this.keywords).forEach(category => {
         this.selectedKeywords[category].clear();
@@ -331,6 +360,9 @@ class FilterControls extends LitElement {
     this.ratingOperator = 'gte';
     this.hideZeroRating = true;
     this.dateSortOrder = 'desc';
+    if (this.showLimit) {
+      this.limit = 200;
+    }
     this.requestUpdate();
     this._emitFilterChangeEvent();
   }

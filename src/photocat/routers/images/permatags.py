@@ -1,5 +1,6 @@
 """Permatag endpoints: get, add, delete, accept-all, freeze."""
 
+from datetime import datetime
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException, Body, Request
 from sqlalchemy import func
@@ -112,6 +113,105 @@ async def add_permatag(
         "category": permatag.category,
         "signum": permatag.signum,
         "created_at": permatag.created_at.isoformat()
+    }
+
+
+@router.post("/images/permatags/bulk", response_model=dict, operation_id="bulk_permatags")
+async def bulk_permatags(
+    payload: dict = Body(...),
+    tenant: Tenant = Depends(get_tenant),
+    db: Session = Depends(get_db)
+):
+    """Bulk add/update permatags for multiple images."""
+    operations = payload.get("operations") if isinstance(payload, dict) else None
+    if not isinstance(operations, list) or not operations:
+        raise HTTPException(status_code=400, detail="operations must be a non-empty list")
+
+    image_ids = set()
+    keywords = set()
+    normalized_ops = []
+    errors = []
+
+    for index, op in enumerate(operations):
+        if not isinstance(op, dict):
+            errors.append({"index": index, "error": "operation must be an object"})
+            continue
+        image_id = op.get("image_id")
+        keyword = op.get("keyword")
+        category = op.get("category")
+        signum = op.get("signum", 1)
+
+        if not image_id or not keyword:
+            errors.append({"index": index, "error": "image_id and keyword are required"})
+            continue
+        if signum not in (-1, 1):
+            errors.append({"index": index, "error": "signum must be -1 or 1"})
+            continue
+
+        normalized_ops.append({
+            "image_id": int(image_id),
+            "keyword": keyword,
+            "category": category,
+            "signum": signum,
+        })
+        image_ids.add(int(image_id))
+        keywords.add(keyword)
+
+    if not normalized_ops:
+        raise HTTPException(status_code=400, detail="no valid operations provided")
+
+    valid_image_ids = {
+        row[0] for row in db.query(ImageMetadata.id)
+        .filter(
+            ImageMetadata.tenant_id == tenant.id,
+            ImageMetadata.id.in_(image_ids)
+        ).all()
+    }
+
+    existing_rows = db.query(Permatag).filter(
+        Permatag.tenant_id == tenant.id,
+        Permatag.image_id.in_(image_ids),
+        Permatag.keyword.in_(keywords)
+    ).all()
+    existing_map = {(row.image_id, row.keyword): row for row in existing_rows}
+
+    created = 0
+    updated = 0
+    skipped = 0
+    now = datetime.utcnow()
+
+    for op in normalized_ops:
+        image_id = op["image_id"]
+        if image_id not in valid_image_ids:
+            errors.append({"image_id": image_id, "keyword": op["keyword"], "error": "image not found"})
+            skipped += 1
+            continue
+        key = (image_id, op["keyword"])
+        existing = existing_map.get(key)
+        if existing:
+            existing.category = op["category"]
+            existing.signum = op["signum"]
+            existing.created_at = now
+            updated += 1
+        else:
+            permatag = Permatag(
+                image_id=image_id,
+                tenant_id=tenant.id,
+                keyword=op["keyword"],
+                category=op["category"],
+                signum=op["signum"],
+                created_by=None
+            )
+            db.add(permatag)
+            created += 1
+
+    db.commit()
+
+    return {
+        "created": created,
+        "updated": updated,
+        "skipped": skipped,
+        "errors": errors
     }
 
 
@@ -275,5 +375,3 @@ async def freeze_permatags(
         "positive_permatags": positive_count,
         "negative_permatags": negative_count
     }
-
-
