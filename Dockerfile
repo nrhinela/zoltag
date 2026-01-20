@@ -1,63 +1,92 @@
 # syntax=docker/dockerfile:1.4
-# Use official Python runtime
-FROM python:3.11-slim
+FROM python:3.11-slim AS base
 
-# Set working directory
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1
+
 WORKDIR /app
 
-# Install system dependencies for image processing
-RUN apt-get update && apt-get install -y \
+# Runtime system dependencies for image processing
+RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 \
     libglib2.0-0 \
     libsm6 \
     libxext6 \
     libxrender1 \
     libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+FROM base AS deps
+
+# Build deps for compiling Python packages
+RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     cmake \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy only pyproject.toml first for dependency caching
 COPY pyproject.toml ./
-
-# Create minimal src structure for pip install (avoids copying all code)
 RUN mkdir -p src/photocat && touch src/photocat/__init__.py
 
-# Install Python dependencies (cached unless pyproject.toml changes)
-RUN pip install --no-cache-dir . && \
-    pip install --no-cache-dir sentencepiece
+# Install CPU-only PyTorch to avoid large CUDA wheels on Cloud Run.
+# Pin version since latest torch may not have CPU wheels available yet.
+ARG TORCH_CPU=1
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
+ARG TORCH_VERSION=2.4.1
+RUN if [ "$TORCH_CPU" = "1" ]; then \
+    pip install torch==${TORCH_VERSION} --index-url "$TORCH_INDEX_URL"; \
+  fi
 
-# Set HuggingFace cache location to a shared directory
-ENV HF_HOME=/app/.cache/huggingface
-ENV TRANSFORMERS_CACHE=/app/.cache/huggingface/transformers
+# Install dependencies first (cached unless pyproject.toml changes)
+RUN pip install . && \
+    pip install sentencepiece
 
-# Pre-download SigLIP model during build (cached in Docker layers)
-# CLIP model removed - only SigLIP is used
-RUN mkdir -p /app/.cache/huggingface && \
+FROM base AS model-cache
+
+COPY --from=deps /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=deps /usr/local/bin /usr/local/bin
+
+ENV HF_HOME=/app/.cache/huggingface \
+    TRANSFORMERS_CACHE=/app/.cache/huggingface/transformers
+
+RUN mkdir -p /app/.cache/huggingface
+
+ARG PRELOAD_SIGLIP=0
+RUN if [ "$PRELOAD_SIGLIP" = "1" ]; then \
     python3 -c "from transformers import SiglipModel, SiglipProcessor; \
     print('Downloading SigLIP model...'); \
     SiglipModel.from_pretrained('google/siglip-so400m-patch14-384'); \
     SiglipProcessor.from_pretrained('google/siglip-so400m-patch14-384'); \
-    print('Model cached successfully')"
+    print('Model cached successfully')"; \
+  fi
 
-# Copy actual source code (after dependencies are installed)
+FROM deps AS builder
+
+# Copy actual source and metadata
 COPY src/ ./src/
-
-# Copy remaining files (config/, alembic/, etc.)
 COPY alembic/ ./alembic/
 COPY alembic.ini ./
 
-# Reinstall package with actual source code (ensures photocat module is importable)
-RUN pip install --no-cache-dir -e .
+# Install app code without re-downloading deps
+RUN pip install -e . --no-deps
 
-# Note: frontend dist is already in src/photocat/static/dist from npm build in cloudbuild
+FROM base AS runtime
+
+COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
+COPY src/ ./src/
+COPY alembic/ ./alembic/
+COPY alembic.ini ./
+COPY --from=model-cache /app/.cache/huggingface /app/.cache/huggingface
+
+ENV HF_HOME=/app/.cache/huggingface \
+    TRANSFORMERS_CACHE=/app/.cache/huggingface/transformers
 
 # Create non-root user and preserve cache ownership
 RUN useradd -m -u 1000 photocat && chown -R photocat:photocat /app
 USER photocat
 
-# Expose port
 EXPOSE 8080
 
-# Run application
 CMD uvicorn photocat.api:app --host 0.0.0.0 --port ${PORT:-8080}

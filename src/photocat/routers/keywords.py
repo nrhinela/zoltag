@@ -9,7 +9,7 @@ from photocat.dependencies import get_db, get_tenant, get_tenant_setting
 from photocat.config.db_config import ConfigManager
 from photocat.tenant import Tenant
 from photocat.metadata import ImageMetadata, Permatag, KeywordModel, MachineTag
-from photocat.models.config import PhotoList, PhotoListItem
+from photocat.models.config import PhotoList, PhotoListItem, Keyword, KeywordCategory
 
 router = APIRouter(
     prefix="/api/v1",
@@ -77,8 +77,10 @@ async def get_available_keywords(
             filter_ids = filter_ids - zero_ids
 
     if reviewed is not None:
-        reviewed_rows = db.query(Permatag.image_id).filter(
-            Permatag.tenant_id == tenant.id
+        reviewed_rows = db.query(Permatag.image_id).join(
+            ImageMetadata, ImageMetadata.id == Permatag.image_id
+        ).filter(
+            ImageMetadata.tenant_id == tenant.id
         ).distinct().all()
         reviewed_ids = {row[0] for row in reviewed_rows}
         if filter_ids is None:
@@ -112,16 +114,37 @@ async def get_available_keywords(
 
     # Get all permatags for filtered images
     all_permatags = db.query(Permatag).filter(
-        Permatag.tenant_id == tenant.id,
         Permatag.image_id.in_(effective_images)
     ).all() if effective_images else []
 
-    # Build permatag map by image_id and keyword
+    # Load keyword info for all tags and permatags
+    all_keyword_ids = set()
+    for tag in all_tags:
+        all_keyword_ids.add(tag.keyword_id)
+    for p in all_permatags:
+        all_keyword_ids.add(p.keyword_id)
+
+    # Build keyword lookup map
+    keywords_map = {}
+    if all_keyword_ids:
+        keywords_data = db.query(
+            Keyword.id,
+            Keyword.keyword,
+            KeywordCategory.name
+        ).join(
+            KeywordCategory, Keyword.category_id == KeywordCategory.id
+        ).filter(
+            Keyword.id.in_(all_keyword_ids)
+        ).all()
+        for kw_id, kw_name, cat_name in keywords_data:
+            keywords_map[kw_id] = {"keyword": kw_name, "category": cat_name}
+
+    # Build permatag map by image_id and keyword_id
     permatag_map = {}
     for p in all_permatags:
         if p.image_id not in permatag_map:
             permatag_map[p.image_id] = {}
-        permatag_map[p.image_id][p.keyword] = p.signum
+        permatag_map[p.image_id][p.keyword_id] = p.signum
 
     # Compute "current tags" for each image (with permatag overrides)
     current_tags_by_image = {}
@@ -130,17 +153,19 @@ async def get_available_keywords(
 
     for tag in all_tags:
         # Include machine tag only if not negatively permatagged
-        if tag.image_id in permatag_map and permatag_map[tag.image_id].get(tag.keyword) == -1:
+        if tag.image_id in permatag_map and permatag_map[tag.image_id].get(tag.keyword_id) == -1:
             continue  # Skip negatively permatagged machine tags
-        current_tags_by_image[tag.image_id].append(tag.keyword)
+        keyword_name = keywords_map.get(tag.keyword_id, {}).get("keyword", "unknown")
+        current_tags_by_image[tag.image_id].append(keyword_name)
 
     # Add positive permatags
     for p in all_permatags:
         if p.signum == 1:
-            if p.keyword not in current_tags_by_image.get(p.image_id, []):
+            keyword_name = keywords_map.get(p.keyword_id, {}).get("keyword", "unknown")
+            if keyword_name not in current_tags_by_image.get(p.image_id, []):
                 if p.image_id not in current_tags_by_image:
                     current_tags_by_image[p.image_id] = []
-                current_tags_by_image[p.image_id].append(p.keyword)
+                current_tags_by_image[p.image_id].append(keyword_name)
 
     # Count images by keyword (using current/effective tags)
     keyword_image_counts = {}
@@ -175,17 +200,23 @@ async def get_tag_stats(
     db: Session = Depends(get_db)
 ):
     """Get tag counts by category for different tag sources."""
+    config_mgr = ConfigManager(db, tenant.id)
+    all_keywords = config_mgr.get_all_keywords()
+    keyword_id_to_info = {kw['id']: kw for kw in all_keywords}
+    keyword_to_category = {
+        kw["keyword"]: kw["category"]
+        for kw in all_keywords
+    }
+
     # Get zero-shot (SigLIP) tags from machine_tags
     zero_shot_rows = db.query(
-        MachineTag.category,
-        MachineTag.keyword,
+        MachineTag.keyword_id,
         func.count(distinct(MachineTag.image_id)).label("count")
     ).filter(
         MachineTag.tenant_id == tenant.id,
         MachineTag.tag_type == 'siglip'
     ).group_by(
-        MachineTag.category,
-        MachineTag.keyword
+        MachineTag.keyword_id
     ).all()
 
     # Get latest keyword model name
@@ -199,37 +230,36 @@ async def get_tag_stats(
     keyword_model_rows = []
     if model_row:
         keyword_model_rows = db.query(
-            MachineTag.category,
-            MachineTag.keyword,
+            MachineTag.keyword_id,
             func.count(distinct(MachineTag.image_id)).label("count")
         ).filter(
             MachineTag.tenant_id == tenant.id,
             MachineTag.tag_type == 'trained',
             MachineTag.model_name == model_row.model_name
         ).group_by(
-            MachineTag.category,
-            MachineTag.keyword
+            MachineTag.keyword_id
         ).all()
 
     permatag_rows = db.query(
-        Permatag.keyword,
+        Permatag.keyword_id,
         func.count(distinct(Permatag.image_id)).label("count")
+    ).join(
+        ImageMetadata, ImageMetadata.id == Permatag.image_id
     ).filter(
-        Permatag.tenant_id == tenant.id,
+        ImageMetadata.tenant_id == tenant.id,
         Permatag.signum == 1
     ).group_by(
-        Permatag.keyword
+        Permatag.keyword_id
     ).all()
-
-    config_mgr = ConfigManager(db, tenant.id)
-    keyword_to_category = {
-        kw["keyword"]: kw["category"]
-        for kw in config_mgr.get_all_keywords()
-    }
 
     def to_by_category(rows):
         by_category = {}
-        for category, keyword, count in rows:
+        for keyword_id, count in rows:
+            kw_info = keyword_id_to_info.get(keyword_id)
+            if not kw_info:
+                continue
+            category = kw_info.get("category", "uncategorized")
+            keyword = kw_info.get("keyword", "unknown")
             label = category or "uncategorized"
             by_category.setdefault(label, []).append({
                 "keyword": keyword,
@@ -239,8 +269,13 @@ async def get_tag_stats(
 
     def permatags_to_by_category(rows):
         by_category = {}
-        for keyword, count in rows:
-            label = keyword_to_category.get(keyword, "uncategorized")
+        for keyword_id, count in rows:
+            kw_info = keyword_id_to_info.get(keyword_id)
+            if not kw_info:
+                continue
+            category = kw_info.get("category", "uncategorized")
+            keyword = kw_info.get("keyword", "unknown")
+            label = category or "uncategorized"
             by_category.setdefault(label, []).append({
                 "keyword": keyword,
                 "count": int(count or 0)

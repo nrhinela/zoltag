@@ -9,6 +9,7 @@ import numpy as np
 from sqlalchemy.orm import Session
 
 from photocat.metadata import ImageEmbedding, ImageMetadata, KeywordModel, Permatag, MachineTag
+from photocat.models.config import Keyword
 from photocat.settings import settings
 from photocat.tagging import get_image_embedding, get_tagger
 
@@ -59,7 +60,13 @@ def load_keyword_models(
         KeywordModel.tenant_id == tenant_id,
         KeywordModel.model_name == model_name
     ).all()
-    return {row.keyword: row for row in rows}
+    # Map keyword name to KeywordModel using the FK relationship
+    keyword_models = {}
+    for row in rows:
+        keyword = db.query(Keyword).filter(Keyword.id == row.keyword_id).first()
+        if keyword:
+            keyword_models[keyword.keyword] = row
+    return keyword_models
 
 
 def score_image_with_models(
@@ -152,11 +159,19 @@ def recompute_trained_tags_for_image(
     ).delete()
 
     for tag in trained_tags:
+        # Look up keyword_id for this keyword
+        keyword_obj = db.query(Keyword).filter(
+            Keyword.keyword == tag["keyword"],
+            Keyword.tenant_id == tenant_id
+        ).first()
+        if not keyword_obj:
+            print(f"Warning: Keyword '{tag['keyword']}' not found for tenant {tenant_id}")
+            continue
+
         db.add(MachineTag(
             tenant_id=tenant_id,
             image_id=image_id,
-            keyword=tag["keyword"],
-            category=tag["category"],
+            keyword_id=keyword_obj.id,
             confidence=tag["confidence"],
             tag_type='trained',
             model_name=model_name,
@@ -199,14 +214,26 @@ def build_keyword_models(
 ) -> Dict[str, int]:
     """Create or update keyword models using permatag labels."""
     permatags = db.query(Permatag).filter(
-        Permatag.tenant_id == tenant_id
+        Permatag.image_id.in_(
+            db.query(ImageMetadata.id).filter(ImageMetadata.tenant_id == tenant_id)
+        )
     ).all()
+
+    # Map keyword_id to keyword name and organize by name
+    keyword_ids = {pt.keyword_id for pt in permatags}
+    keyword_map = {}
+    if keyword_ids:
+        keywords = db.query(Keyword).filter(Keyword.id.in_(keyword_ids)).all()
+        keyword_map = {kw.id: kw.keyword for kw in keywords}
 
     positive_ids: Dict[str, List[int]] = {}
     negative_ids: Dict[str, List[int]] = {}
     for tag in permatags:
+        keyword_name = keyword_map.get(tag.keyword_id)
+        if not keyword_name:
+            continue
         bucket = positive_ids if tag.signum == 1 else negative_ids
-        bucket.setdefault(tag.keyword, []).append(tag.image_id)
+        bucket.setdefault(keyword_name, []).append(tag.image_id)
 
     trained = 0
     skipped = 0
@@ -227,9 +254,18 @@ def build_keyword_models(
         pos_centroid = np.mean(np.array(pos_embeddings), axis=0).tolist()
         neg_centroid = np.mean(np.array(neg_embeddings), axis=0).tolist()
 
+        # Look up keyword_id for this keyword name
+        keyword_obj = db.query(Keyword).filter(
+            Keyword.keyword == keyword,
+            Keyword.tenant_id == tenant_id
+        ).first()
+        if not keyword_obj:
+            skipped += 1
+            continue
+
         existing = db.query(KeywordModel).filter(
             KeywordModel.tenant_id == tenant_id,
-            KeywordModel.keyword == keyword,
+            KeywordModel.keyword_id == keyword_obj.id,
             KeywordModel.model_name == model_name
         ).first()
 
@@ -241,7 +277,7 @@ def build_keyword_models(
         else:
             db.add(KeywordModel(
                 tenant_id=tenant_id,
-                keyword=keyword,
+                keyword_id=keyword_obj.id,
                 model_name=model_name,
                 model_version=model_version,
                 positive_centroid=pos_centroid,

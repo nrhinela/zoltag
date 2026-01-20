@@ -3,11 +3,12 @@
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Body
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from photocat.dependencies import get_db, get_tenant, get_tenant_setting
 from photocat.tenant import Tenant
-from photocat.models.config import PhotoList, PhotoListItem
+from photocat.models.config import PhotoList, PhotoListItem, Keyword, KeywordCategory
 from photocat.metadata import ImageMetadata, MachineTag, Permatag
 from photocat.tagging import calculate_tags
 from photocat.models.requests import AddPhotoRequest
@@ -53,6 +54,9 @@ async def get_list(
     lst = db.query(PhotoList).filter_by(id=list_id, tenant_id=tenant.id).first()
     if not lst:
         raise HTTPException(status_code=404, detail="List not found")
+    item_count = db.query(func.count(PhotoListItem.id)).filter(
+        PhotoListItem.list_id == lst.id
+    ).scalar() or 0
     return {
         "id": lst.id,
         "title": lst.title,
@@ -60,7 +64,7 @@ async def get_list(
         "is_active": lst.is_active,
         "created_at": lst.created_at,
         "updated_at": lst.updated_at,
-        "item_count": len(lst.items)
+        "item_count": item_count
     }
 
 
@@ -110,6 +114,13 @@ async def list_lists(
 ):
     """List all lists for the tenant."""
     lists = db.query(PhotoList).filter_by(tenant_id=tenant.id).order_by(PhotoList.created_at.asc()).all()
+    counts = dict(
+        db.query(PhotoListItem.list_id, func.count(PhotoListItem.id))
+        .join(PhotoList, PhotoListItem.list_id == PhotoList.id)
+        .filter(PhotoList.tenant_id == tenant.id)
+        .group_by(PhotoListItem.list_id)
+        .all()
+    )
     return [
         {
             "id": l.id,
@@ -118,7 +129,7 @@ async def list_lists(
             "is_active": l.is_active,
             "created_at": l.created_at,
             "updated_at": l.updated_at,
-            "item_count": len(l.items)
+            "item_count": counts.get(l.id, 0)
         } for l in lists
     ]
 
@@ -176,6 +187,7 @@ async def delete_list(
 @router.get("/{list_id:int}/items", response_model=list)
 async def get_list_items(
     list_id: int,
+    ids_only: bool = False,
     tenant: Tenant = Depends(get_tenant),
     db: Session = Depends(get_db)
 ):
@@ -183,6 +195,18 @@ async def get_list_items(
     lst = db.query(PhotoList).filter_by(id=list_id, tenant_id=tenant.id).first()
     if not lst:
         raise HTTPException(status_code=404, detail="List not found")
+    if ids_only:
+        items = (
+            db.query(PhotoListItem.id, PhotoListItem.photo_id, PhotoListItem.added_at)
+            .join(PhotoList, PhotoListItem.list_id == PhotoList.id)
+            .filter(PhotoListItem.list_id == list_id, PhotoList.tenant_id == tenant.id)
+            .order_by(PhotoListItem.added_at.asc())
+            .all()
+        )
+        return [
+            {"id": item_id, "photo_id": photo_id, "added_at": added_at}
+            for item_id, photo_id, added_at in items
+        ]
     items = (
         db.query(PhotoListItem, ImageMetadata)
         .join(ImageMetadata, PhotoListItem.photo_id == ImageMetadata.id)
@@ -201,22 +225,46 @@ async def get_list_items(
         MachineTag.tag_type == active_tag_type
     ).all()
     permatags = db.query(Permatag).filter(
-        Permatag.image_id.in_(image_ids),
-        Permatag.tenant_id == tenant.id
+        Permatag.image_id.in_(image_ids)
     ).all()
+
+    # Load all keywords
+    keyword_ids = set()
+    for tag in tags:
+        keyword_ids.add(tag.keyword_id)
+    for permatag in permatags:
+        keyword_ids.add(permatag.keyword_id)
+
+    # Build keyword lookup map
+    keywords_map = {}
+    if keyword_ids:
+        keywords_data = db.query(
+            Keyword.id,
+            Keyword.keyword,
+            KeywordCategory.name
+        ).join(
+            KeywordCategory, Keyword.category_id == KeywordCategory.id
+        ).filter(
+            Keyword.id.in_(keyword_ids)
+        ).all()
+        for kw_id, kw_name, cat_name in keywords_data:
+            keywords_map[kw_id] = {"keyword": kw_name, "category": cat_name}
+
     tags_by_image = {}
     for tag in tags:
+        kw_info = keywords_map.get(tag.keyword_id, {"keyword": "unknown", "category": "unknown"})
         tags_by_image.setdefault(tag.image_id, []).append({
-            "keyword": tag.keyword,
-            "category": tag.category,
+            "keyword": kw_info["keyword"],
+            "category": kw_info["category"],
             "confidence": round(tag.confidence, 2)
         })
     permatags_by_image = {}
     for permatag in permatags:
+        kw_info = keywords_map.get(permatag.keyword_id, {"keyword": "unknown", "category": "unknown"})
         permatags_by_image.setdefault(permatag.image_id, []).append({
             "id": permatag.id,
-            "keyword": permatag.keyword,
-            "category": permatag.category,
+            "keyword": kw_info["keyword"],
+            "category": kw_info["category"],
             "signum": permatag.signum
         })
     response_items = []

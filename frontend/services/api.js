@@ -66,6 +66,21 @@ export async function getImages(tenantId, filters = {}) {
   if (filters.sortOrder) {
     params.append('date_order', filters.sortOrder);
   }
+  if (filters.orderBy) {
+    params.append('order_by', filters.orderBy);
+  }
+  if (filters.permatagKeyword) {
+    params.append('permatag_keyword', filters.permatagKeyword);
+  }
+  if (filters.permatagCategory) {
+    params.append('permatag_category', filters.permatagCategory);
+  }
+  if (filters.permatagSignum !== undefined && filters.permatagSignum !== null) {
+    params.append('permatag_signum', String(filters.permatagSignum));
+  }
+  if (filters.permatagMissing) {
+    params.append('permatag_missing', 'true');
+  }
 
 
   const response = await fetch(`${API_BASE_URL}/images?${params.toString()}`, {
@@ -511,8 +526,15 @@ export async function deleteList(tenantId, listId) {
     return response.json();
 }
 
-export async function getListItems(tenantId, listId) {
-    const response = await fetch(`${API_BASE_URL}/lists/${listId}/items`, {
+export async function getListItems(tenantId, listId, { idsOnly = false } = {}) {
+    const params = new URLSearchParams();
+    if (idsOnly) {
+        params.append('ids_only', 'true');
+    }
+    const url = params.toString()
+        ? `${API_BASE_URL}/lists/${listId}/items?${params.toString()}`
+        : `${API_BASE_URL}/lists/${listId}/items`;
+    const response = await fetch(url, {
         headers: {
             'X-Tenant-ID': tenantId,
         },

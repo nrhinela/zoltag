@@ -17,7 +17,7 @@ from sqlalchemy import func
 
 from photocat.tenant import Tenant
 from photocat.metadata import ImageMetadata, MachineTag, Permatag
-from photocat.models.config import PhotoList, PhotoListItem
+from photocat.models.config import PhotoList, PhotoListItem, Keyword, KeywordCategory
 from photocat.dependencies import get_tenant_setting
 
 
@@ -150,6 +150,85 @@ def apply_reviewed_filter(
         return existing_filter.intersection(reviewed_ids) if reviewed else (existing_filter - reviewed_ids)
 
 
+def apply_permatag_filter(
+    db: Session,
+    tenant: Tenant,
+    keyword: str,
+    signum: Optional[int] = None,
+    missing: bool = False,
+    category: Optional[str] = None,
+    existing_filter: Optional[Set[int]] = None
+) -> Set[int]:
+    """Filter images by permatag keyword (and optional category/signum).
+
+    Args:
+        db: Database session
+        tenant: Current tenant
+        keyword: Permatag keyword to match
+        signum: Optional permatag signum to match (1 or -1)
+        missing: When true, exclude matching permatags from the result set
+        category: Optional permatag category to match
+        existing_filter: Existing filter set to intersect with
+
+    Returns:
+        Set of image IDs matching permatag criteria
+    """
+    normalized_keyword = (keyword or "").strip()
+    if not normalized_keyword:
+        return existing_filter if existing_filter is not None else set()
+
+    # Look up keyword by name (case-insensitive)
+    keyword_query = db.query(Keyword).filter(
+        Keyword.tenant_id == tenant.id,
+        func.lower(Keyword.keyword) == func.lower(normalized_keyword)
+    )
+
+    # Join with category if provided
+    if category:
+        keyword_query = keyword_query.join(
+            KeywordCategory, Keyword.category_id == KeywordCategory.id
+        ).filter(
+            KeywordCategory.name == category
+        )
+
+    keyword_obj = keyword_query.first()
+
+    if not keyword_obj:
+        # Keyword not found
+        if missing:
+            # Return all images (since the keyword doesn't exist, nothing is missing)
+            if existing_filter is None:
+                all_image_ids = db.query(ImageMetadata.id).filter(
+                    ImageMetadata.tenant_id == tenant.id
+                ).all()
+                return {row[0] for row in all_image_ids}
+            return existing_filter
+        else:
+            # Return empty set (keyword not found)
+            return set()
+
+    # Query permatags by keyword_id
+    permatag_query = db.query(Permatag.image_id).filter(
+        Permatag.keyword_id == keyword_obj.id
+    )
+    if signum is not None:
+        permatag_query = permatag_query.filter(Permatag.signum == signum)
+    permatag_rows = permatag_query.all()
+    permatag_ids = {row[0] for row in permatag_rows}
+
+    if missing:
+        if existing_filter is None:
+            all_image_ids = db.query(ImageMetadata.id).filter(
+                ImageMetadata.tenant_id == tenant.id
+            ).all()
+            return {row[0] for row in all_image_ids} - permatag_ids
+        return existing_filter - permatag_ids
+
+    if existing_filter is None:
+        return permatag_ids
+    return existing_filter.intersection(permatag_ids)
+
+
 def compute_current_tags_for_images(
     db: Session,
     tenant: Tenant,
@@ -176,16 +255,27 @@ def compute_current_tags_for_images(
 
     # Get all permatags for these images
     all_permatags = db.query(Permatag).filter(
-        Permatag.tenant_id == tenant.id,
         Permatag.image_id.in_(image_ids)
     ).all()
 
-    # Build permatag map by image_id and keyword
+    # Load all keywords to get names
+    keyword_ids = set()
+    for tag in all_tags:
+        keyword_ids.add(tag.keyword_id)
+    for p in all_permatags:
+        keyword_ids.add(p.keyword_id)
+
+    keywords_map = {}
+    if keyword_ids:
+        keywords = db.query(Keyword).filter(Keyword.id.in_(keyword_ids)).all()
+        keywords_map = {kw.id: kw.keyword for kw in keywords}
+
+    # Build permatag map by image_id and keyword_id
     permatag_map = {}
     for p in all_permatags:
         if p.image_id not in permatag_map:
             permatag_map[p.image_id] = {}
-        permatag_map[p.image_id][p.keyword] = p.signum
+        permatag_map[p.image_id][p.keyword_id] = p.signum
 
     # Initialize current tags for ALL images (not just ones with tags)
     current_tags_by_image = {img_id: [] for img_id in image_ids}
@@ -193,16 +283,18 @@ def compute_current_tags_for_images(
     # Add machine tags for each image
     for tag in all_tags:
         # Include machine tag only if not negatively permatagged
-        if tag.image_id in permatag_map and permatag_map[tag.image_id].get(tag.keyword) == -1:
+        if tag.image_id in permatag_map and permatag_map[tag.image_id].get(tag.keyword_id) == -1:
             continue  # Skip negatively permatagged machine tags
-        current_tags_by_image[tag.image_id].append(tag.keyword)
+        keyword_name = keywords_map.get(tag.keyword_id, "unknown")
+        current_tags_by_image[tag.image_id].append(keyword_name)
 
     # Add positive permatags
     for p in all_permatags:
         if p.signum == 1:
+            keyword_name = keywords_map.get(p.keyword_id, "unknown")
             # Only add if not already in machine tags
-            if p.keyword not in current_tags_by_image[p.image_id]:
-                current_tags_by_image[p.image_id].append(p.keyword)
+            if keyword_name not in current_tags_by_image[p.image_id]:
+                current_tags_by_image[p.image_id].append(keyword_name)
 
     return current_tags_by_image
 
@@ -298,12 +390,22 @@ def calculate_relevance_scores(
     Returns:
         Dict mapping image_id to relevance score
     """
+    # Look up keyword IDs for the given keyword names
+    keyword_ids = db.query(Keyword.id).filter(
+        Keyword.keyword.in_(keywords),
+        Keyword.tenant_id == tenant.id
+    ).all()
+    keyword_id_list = [kw[0] for kw in keyword_ids]
+
+    if not keyword_id_list:
+        return {}
+
     image_tags = db.query(
         MachineTag.image_id,
         func.sum(MachineTag.confidence).label('relevance_score')
     ).filter(
         MachineTag.image_id.in_(image_ids),
-        MachineTag.keyword.in_(keywords),
+        MachineTag.keyword_id.in_(keyword_id_list),
         MachineTag.tenant_id == tenant.id,
         MachineTag.tag_type == active_tag_type
     ).group_by(

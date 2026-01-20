@@ -2,7 +2,7 @@
 
 ## Executive Summary
 
-This document proposes an authentication system for PhotoCat that supports:
+This document defines the authentication system for PhotoCat using **Firebase Auth** as the identity provider. The architecture supports:
 - OAuth2 providers (Google, with extensibility for others)
 - Direct email/password signup
 - Multi-tenant user membership
@@ -20,50 +20,70 @@ This document proposes an authentication system for PhotoCat that supports:
 - `Tenant`: Organization/workspace with settings, Dropbox integration
 - `TenantContext`: Thread-local context for request isolation
 
-## Proposed Architecture
+## Architecture Overview
+
+### Why Firebase Auth
+
+Firebase Auth is the chosen identity provider because PhotoCat already uses GCP services:
+- Cloud Run (compute)
+- Cloud SQL (PostgreSQL)
+- Cloud Storage
+- Secret Manager
+
+Firebase Auth provides:
+- Battle-tested security (Google manages password hashing, OAuth flows, etc.)
+- Native GCP integration
+- Generous free tier (50k MAU)
+- Built-in support for Google OAuth and email/password
+- SDK for both frontend (JavaScript) and backend (Admin SDK)
+
+### Hybrid Architecture
+
+Firebase handles identity (authentication), while PostgreSQL handles authorization (roles, tenant membership):
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        Firebase Auth                             │
+│  - User credentials (email/password)                            │
+│  - OAuth tokens (Google, etc.)                                  │
+│  - Email verification                                           │
+│  - Password reset                                               │
+│  - ID tokens (JWT)                                              │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              │ Firebase UID
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                     PostgreSQL (PhotoCat DB)                     │
+│  - user_profiles (synced from Firebase)                         │
+│  - user_tenants (roles, membership)                             │
+│  - invitations                                                  │
+│  - All existing tenant/image data                               │
+└─────────────────────────────────────────────────────────────────┘
+```
 
 ### Technology Stack
 
 | Component | Technology | Rationale |
 |-----------|------------|-----------|
-| OAuth2 Client | **Authlib** | Battle-tested, supports OIDC, clean FastAPI integration |
-| Password Hashing | **passlib[bcrypt]** | Industry standard, bcrypt algorithm |
-| Session/Token | **JWT (python-jose)** | Stateless, scalable, standard |
-| Session Storage | **Redis** (optional) | Token revocation, refresh token storage |
-
-// COMMENT (Codex): Consider whether you need Redis for MVP. JWT alone
-// with short expiry + refresh tokens stored in DB could simplify initial deployment.
-
-### Alternative Stack Options
-
-**Option A: Authlib + JWT (Recommended)**
-- Pros: Full control, lightweight, no external dependencies
-- Cons: More code to write
-
-**Option B: FastAPI-Users**
-- Pros: Pre-built auth system, less code
-- Cons: Opinionated, may conflict with existing patterns
-
-**Option C: Auth0/Clerk/Supabase Auth (Managed)**
-- Pros: Zero auth code, enterprise features
-- Cons: Vendor lock-in, cost, external dependency
-
-// COMMENT (Codex): What's your preference? Option A gives most flexibility,
-// Option C is fastest to production. Option B is middle ground.
+| Identity Provider | **Firebase Auth** | Managed auth, GCP native, handles OAuth/passwords |
+| Backend Verification | **firebase-admin** | Verify ID tokens server-side |
+| Frontend Auth | **Firebase JS SDK** | Handle login UI, token refresh |
+| Local User Data | **PostgreSQL** | Tenant roles, approval status, profile sync |
 
 ## Data Model
 
 ### New Tables
 
 ```sql
--- Users table
-CREATE TABLE users (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    email VARCHAR(255) UNIQUE NOT NULL,
+-- User profiles (synced from Firebase)
+CREATE TABLE user_profiles (
+    firebase_uid VARCHAR(128) PRIMARY KEY,
+    email VARCHAR(255) NOT NULL,
+    -- REVIEW (Codex): Consider a UNIQUE constraint on email (or confirm Firebase enforces one-account-per-email).
     email_verified BOOLEAN DEFAULT FALSE,
-    password_hash VARCHAR(255),  -- NULL for OAuth-only users
-    full_name VARCHAR(255),
-    avatar_url TEXT,
+    display_name VARCHAR(255),
+    photo_url TEXT,
     is_active BOOLEAN DEFAULT FALSE,  -- Requires admin approval
     is_super_admin BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
@@ -71,32 +91,26 @@ CREATE TABLE users (
     last_login_at TIMESTAMP WITH TIME ZONE
 );
 
--- OAuth accounts linked to users
-CREATE TABLE oauth_accounts (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    provider VARCHAR(50) NOT NULL,  -- 'google', 'github', etc.
-    provider_user_id VARCHAR(255) NOT NULL,
-    provider_email VARCHAR(255),
-    access_token TEXT,
-    refresh_token TEXT,
-    expires_at TIMESTAMP WITH TIME ZONE,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    UNIQUE(provider, provider_user_id)
-);
+CREATE INDEX idx_user_profiles_email ON user_profiles(email);
+-- REVIEW (Codex): If you need strong uniqueness, make this a UNIQUE index instead.
 
 -- User-Tenant membership (many-to-many)
 CREATE TABLE user_tenants (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    firebase_uid VARCHAR(128) NOT NULL REFERENCES user_profiles(firebase_uid) ON DELETE CASCADE,
     tenant_id VARCHAR(255) NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     role VARCHAR(50) NOT NULL DEFAULT 'user',  -- 'admin', 'user'
-    invited_by UUID REFERENCES users(id),
+    -- REVIEW (Codex): Add a CHECK constraint or enum to prevent unexpected role values.
+    invited_by VARCHAR(128) REFERENCES user_profiles(firebase_uid),
     invited_at TIMESTAMP WITH TIME ZONE,
     accepted_at TIMESTAMP WITH TIME ZONE,
+    -- REVIEW (Codex): Ensure access checks require accepted_at IS NOT NULL.
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    UNIQUE(user_id, tenant_id)
+    UNIQUE(firebase_uid, tenant_id)
 );
+
+CREATE INDEX idx_user_tenants_firebase_uid ON user_tenants(firebase_uid);
+CREATE INDEX idx_user_tenants_tenant_id ON user_tenants(tenant_id);
 
 -- Invitations for new users
 CREATE TABLE invitations (
@@ -104,22 +118,16 @@ CREATE TABLE invitations (
     email VARCHAR(255) NOT NULL,
     tenant_id VARCHAR(255) NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     role VARCHAR(50) NOT NULL DEFAULT 'user',
-    invited_by UUID NOT NULL REFERENCES users(id),
+    invited_by VARCHAR(128) NOT NULL REFERENCES user_profiles(firebase_uid),
     token VARCHAR(255) UNIQUE NOT NULL,
+    -- REVIEW (Codex): Store a hash of the token (not plaintext) to reduce blast radius if DB leaks.
     expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
     accepted_at TIMESTAMP WITH TIME ZONE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- Refresh tokens (for token revocation)
-CREATE TABLE refresh_tokens (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    token_hash VARCHAR(255) UNIQUE NOT NULL,
-    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
-    revoked_at TIMESTAMP WITH TIME ZONE,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
+CREATE INDEX idx_invitations_email ON invitations(email);
+CREATE INDEX idx_invitations_token ON invitations(token);
 ```
 
 ### Role Hierarchy
@@ -141,55 +149,106 @@ user (tenant-scoped)
     └── Cannot invite users or change settings
 ```
 
-// COMMENT (Codex): Should super-admin be per-tenant or truly global?
-// Current design has is_super_admin on User model (global).
-// Alternative: Add 'super-admin' as a role in user_tenants for per-tenant super admins.
-
 ## Authentication Flows
 
-### 1. OAuth2 Login (Google)
+### 1. User Registration (Email/Password)
 
 ```
-┌─────────┐     ┌─────────────┐     ┌──────────┐     ┌──────────┐
-│ Browser │────>│ PhotoCat API│────>│  Google  │────>│ Callback │
-└─────────┘     └─────────────┘     └──────────┘     └──────────┘
-     │                                                     │
-     │  1. Click "Login with Google"                       │
-     │  2. Redirect to Google OAuth                        │
-     │  3. User authenticates                              │
-     │  4. Google redirects with code                      │
-     │  5. Exchange code for tokens                        │
-     │  6. Fetch user info                                 │
-     │  7. Create/update user + oauth_account              │
-     │  8. If new user && no invitation: PENDING status    │
-     │  9. If invited or approved: issue JWT               │
-     └─────────────────────────────────────────────────────┘
+┌──────────┐      ┌──────────────┐      ┌──────────────┐      ┌──────────┐
+│ Frontend │      │ Firebase Auth│      │ PhotoCat API │      │ PostgreSQL│
+└────┬─────┘      └──────┬───────┘      └──────┬───────┘      └────┬─────┘
+     │                   │                     │                   │
+     │ 1. createUserWithEmailAndPassword()     │                   │
+     │──────────────────>│                     │                   │
+     │                   │                     │                   │
+     │ 2. Return Firebase UID + ID token       │                   │
+     │<──────────────────│                     │                   │
+     │                   │                     │                   │
+     │ 3. POST /auth/register (ID token)       │                   │
+     │─────────────────────────────────────────>                   │
+     │                   │                     │                   │
+     │                   │  4. Verify ID token │                   │
+     │                   │<────────────────────│                   │
+     │                   │                     │                   │
+     │                   │                     │ 5. Create user_profile
+     │                   │                     │   (is_active=FALSE)
+     │                   │                     │──────────────────>│
+     │                   │                     │                   │
+     │ 6. Return "pending approval"            │                   │
+     │<─────────────────────────────────────────                   │
 ```
 
-### 2. Email/Password Registration
+### 2. User Login (Existing User)
 
 ```
-1. User submits email + password
-2. Validate email format, password strength
-3. Check if email exists (return generic error if so)
-4. Hash password with bcrypt
-5. Create user with is_active=FALSE
-6. Send verification email (optional for MVP)
-7. Return "pending approval" message
-8. Admin approves user
-9. User can now login
+┌──────────┐      ┌──────────────┐      ┌──────────────┐      ┌──────────┐
+│ Frontend │      │ Firebase Auth│      │ PhotoCat API │      │ PostgreSQL│
+└────┬─────┘      └──────┬───────┘      └──────┬───────┘      └────┬─────┘
+     │                   │                     │                   │
+     │ 1. signInWithEmailAndPassword()         │                   │
+     │──────────────────>│                     │                   │
+     │                   │                     │                   │
+     │ 2. Return ID token                      │                   │
+     │<──────────────────│                     │                   │
+     │                   │                     │                   │
+     │ 3. GET /auth/me (Authorization: Bearer <ID token>)          │
+     │─────────────────────────────────────────>                   │
+     │                   │                     │                   │
+     │                   │  4. Verify ID token │                   │
+     │                   │<────────────────────│                   │
+     │                   │                     │                   │
+     │                   │                     │ 5. Fetch user_profile
+     │                   │                     │    + user_tenants
+     │                   │                     │──────────────────>│
+     │                   │                     │                   │
+     │                   │                     │ 6. Check is_active│
+     │                   │                     │<──────────────────│
+     │                   │                     │                   │
+     │ 7. Return user info + tenants (or 403 if not active)        │
+     │<─────────────────────────────────────────                   │
 ```
 
-### 3. Invitation Flow
+### 3. OAuth Login (Google)
 
 ```
-1. Admin clicks "Invite User"
-2. System creates invitation with token (24h expiry)
+┌──────────┐      ┌──────────────┐      ┌──────────────┐      ┌──────────┐
+│ Frontend │      │ Firebase Auth│      │ PhotoCat API │      │ PostgreSQL│
+└────┬─────┘      └──────┬───────┘      └──────┬───────┘      └────┬─────┘
+     │                   │                     │                   │
+     │ 1. signInWithPopup(GoogleAuthProvider)  │                   │
+     │──────────────────>│                     │                   │
+     │                   │                     │                   │
+     │ 2. Google OAuth flow (handled by Firebase)                  │
+     │<─────────────────>│                     │                   │
+     │                   │                     │                   │
+     │ 3. Return Firebase UID + ID token       │                   │
+     │<──────────────────│                     │                   │
+     │                   │                     │                   │
+     │ 4. POST /auth/login (ID token)          │                   │
+     │─────────────────────────────────────────>                   │
+     │                   │                     │                   │
+     │                   │  5. Verify ID token │                   │
+     │                   │<────────────────────│                   │
+     │                   │                     │                   │
+     │                   │                     │ 6. Upsert user_profile
+     │                   │                     │──────────────────>│
+     │                   │                     │                   │
+     │ 7. Return user info + tenants           │                   │
+     │<─────────────────────────────────────────                   │
+```
+
+### 4. Invitation Flow
+
+```
+1. Admin clicks "Invite User" in tenant settings
+2. System creates invitation record with token (24h expiry)
 3. System sends email with invitation link
-4. User clicks link, lands on registration page
-5. User completes registration (OAuth or password)
-6. User automatically approved and added to tenant
-7. Invitation marked as accepted
+4. User clicks link, lands on registration page with token in URL
+5. User signs up via Firebase (Google OAuth or email/password)
+6. Frontend calls POST /auth/accept-invitation with ID token + invitation token
+7. Backend verifies both tokens, creates user_profile (is_active=TRUE)
+8. Backend creates user_tenants entry with invited role
+9. Invitation marked as accepted
 ```
 
 ## API Endpoints
@@ -198,28 +257,33 @@ user (tenant-scoped)
 
 ```python
 # POST /auth/register
-# Body: { email, password, full_name }
-# Response: { message: "Registration pending approval" }
+# Headers: Authorization: Bearer <firebase_id_token>
+# Body: { display_name }
+# Creates user_profile with is_active=FALSE
+# Response: { message: "Registration pending approval", user_id }
 
 # POST /auth/login
-# Body: { email, password }
-# Response: { access_token, refresh_token, token_type, expires_in }
-
-# GET /auth/google/authorize
-# Redirects to Google OAuth
-
-# GET /auth/google/callback
-# Handles OAuth callback, returns JWT or redirect
-
-# POST /auth/refresh
-# Body: { refresh_token }
-# Response: { access_token, expires_in }
-
-# POST /auth/logout
-# Revokes refresh token
+# Headers: Authorization: Bearer <firebase_id_token>
+# Upserts user_profile, returns user info if active
+# Response: { user, tenants } or 403 if not active
 
 # GET /auth/me
+# Headers: Authorization: Bearer <firebase_id_token>
 # Returns current user info with tenant memberships
+# Response: { user, tenants }
+
+# POST /auth/accept-invitation
+# Headers: Authorization: Bearer <firebase_id_token>
+# Body: { invitation_token }
+# Accepts invitation, creates user with is_active=TRUE
+# Response: { user, tenant }
+
+# POST /auth/select-tenant
+# Headers: Authorization: Bearer <firebase_id_token>
+# Body: { tenant_id }
+# Sets active tenant for session (stored in response cookie or returned for client storage)
+# Response: { tenant }
+# REVIEW (Codex): Use a signed, httpOnly cookie or server-side session; never trust client-stored tenant_id without re-validating membership.
 ```
 
 ### User Management Routes (Admin)
@@ -227,19 +291,27 @@ user (tenant-scoped)
 ```python
 # GET /admin/users
 # List users (super-admin: all, admin: own tenant)
+# Query params: ?tenant_id=xxx&status=pending|active|all
 
 # GET /admin/users/pending
 # List users pending approval
 
-# POST /admin/users/{user_id}/approve
-# Approve pending user
+# POST /admin/users/{firebase_uid}/approve
+# Approve pending user, optionally assign to tenant
+# Body: { tenant_id, role }
 
-# POST /admin/users/{user_id}/reject
-# Reject and delete pending user
+# POST /admin/users/{firebase_uid}/reject
+# Reject pending user (deletes user_profile)
+
+# PATCH /admin/users/{firebase_uid}
+# Update user (is_super_admin, is_active)
 
 # POST /admin/invitations
 # Body: { email, tenant_id, role }
 # Create and send invitation
+
+# GET /admin/invitations
+# List invitations for tenant
 
 # DELETE /admin/invitations/{invitation_id}
 # Cancel invitation
@@ -247,117 +319,199 @@ user (tenant-scoped)
 
 ## Security Considerations
 
-### JWT Configuration
+### Token Verification
+
+All API requests must include Firebase ID token in Authorization header:
 
 ```python
-JWT_CONFIG = {
-    "algorithm": "HS256",  # Or RS256 for asymmetric
-    "access_token_expire_minutes": 15,
-    "refresh_token_expire_days": 7,
-    "issuer": "photocat",
-    "audience": "photocat-api",
-}
+from firebase_admin import auth
+
+async def get_current_user(
+    authorization: str = Header(...),
+    db: Session = Depends(get_db)
+) -> UserProfile:
+    """Verify Firebase ID token and return user profile."""
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(401, "Invalid authorization header")
+
+    id_token = authorization[7:]
+
+    try:
+        decoded_token = auth.verify_id_token(id_token)
+        # REVIEW (Codex): Consider check_revoked=True and handle disabled accounts to force logout promptly.
+    except Exception:
+        raise HTTPException(401, "Invalid or expired token")
+
+    firebase_uid = decoded_token["uid"]
+
+    user = db.query(UserProfile).filter_by(firebase_uid=firebase_uid).first()
+    if not user:
+        raise HTTPException(404, "User not found")
+    if not user.is_active:
+        raise HTTPException(403, "Account pending approval")
+
+    return user
 ```
 
-### Token Payload
+### Role-Based Access Control
 
-```json
-{
-  "sub": "user-uuid",
-  "email": "user@example.com",
-  "tenants": [
-    {"id": "tenant1", "role": "admin"},
-    {"id": "tenant2", "role": "user"}
-  ],
-  "is_super_admin": false,
-  "iat": 1234567890,
-  "exp": 1234568790,
-  "iss": "photocat",
-  "aud": "photocat-api"
-}
+```python
+def require_role(allowed_roles: list[str], tenant_id: str = None):
+    """Dependency to check user has required role."""
+    async def check_role(
+        user: UserProfile = Depends(get_current_user),
+        db: Session = Depends(get_db)
+    ):
+        if user.is_super_admin:
+            return user  # Super admins can do anything
+
+        if tenant_id:
+            membership = db.query(UserTenant).filter_by(
+                firebase_uid=user.firebase_uid,
+                tenant_id=tenant_id
+            ).first()
+
+            if not membership or membership.role not in allowed_roles:
+                raise HTTPException(403, "Insufficient permissions")
+
+        return user
+
+    return check_role
+    # REVIEW (Codex): Ensure tenant_id comes from a trusted source (path/DB), not client input.
 ```
-
-// COMMENT (Codex): Including tenants in JWT means role changes require
-// re-login or token refresh. Consider fetching tenant roles from DB
-// on each request for real-time permission changes (slight performance cost).
-
-### Password Requirements
-
-- Minimum 8 characters
-- At least one uppercase, one lowercase, one digit
-- Check against common password list (optional)
 
 ### Rate Limiting
 
-- Login: 5 attempts per minute per IP
-- Registration: 3 attempts per minute per IP
-- Password reset: 3 attempts per hour per email
+Firebase Auth handles rate limiting for authentication attempts. For API endpoints:
+- Use Cloud Run's built-in request limiting
+- Consider adding application-level rate limiting for sensitive endpoints
+<!-- REVIEW (Codex): Cloud Run concurrency is not per-IP/user rate limiting; use API Gateway/Cloud Armor for enforcement. -->
 
 ## Migration Path
 
-### Phase 1: Core Authentication (MVP)
-1. Create User, OAuthAccount, UserTenant models
-2. Implement JWT token generation/validation
-3. Implement Google OAuth flow
-4. Add password registration with bcrypt
-5. Create new `get_current_user` dependency
-6. Keep X-Tenant-ID header for backward compatibility
+### Phase 1: Firebase Setup & Core Auth
+1. Create Firebase project (or add to existing GCP project)
+2. Enable Email/Password and Google sign-in providers
+3. Add firebase-admin to backend dependencies
+4. Create user_profiles and user_tenants tables (Alembic migration)
+5. Implement token verification dependency
+6. Create /auth/register, /auth/login, /auth/me endpoints
+7. Keep X-Tenant-ID header working for backward compatibility
 
-### Phase 2: Authorization
-1. Add role-based permission checks
-2. Update existing endpoints with auth requirements
-3. Implement admin approval workflow
-4. Create admin UI for user management
+### Phase 2: Frontend Integration
+1. Add Firebase JS SDK to frontend
+2. Create login page component (email/password + Google button)
+3. Create registration page component
+4. Add auth state management (store user + token)
+5. Update API service to include Authorization header
+6. Add tenant selector for multi-tenant users
 
-### Phase 3: Invitations
-1. Implement invitation system
-2. Email integration for invitations
-3. Self-service tenant switching in UI
+### Phase 3: Authorization & Admin
+1. Add role-based permission checks to existing endpoints
+2. Create admin user management UI
+3. Implement invitation system
+4. Add email sending for invitations (SendGrid, Mailgun, or Firebase Extensions)
 
-### Phase 4: Hardening
-1. Add rate limiting
-2. Add refresh token rotation
-3. Add session management (view/revoke sessions)
-4. Security audit
+### Phase 4: Deprecate X-Tenant-ID
+1. Require authentication on all endpoints
+2. Derive tenant from user's membership or explicit selection
+3. Remove X-Tenant-ID header support
 
-## Frontend Changes
+## Frontend Integration
 
-### New Pages/Components
-- Login page (email/password + OAuth buttons)
-- Registration page
-- Tenant selector (for users with multiple tenants)
-- Admin: User management panel
-- Admin: Invitation management
+### Firebase SDK Setup
+
+```javascript
+// services/firebase.js
+import { initializeApp } from 'firebase/app';
+import { getAuth } from 'firebase/auth';
+
+const firebaseConfig = {
+  apiKey: "...",
+  authDomain: "photocat-483622.firebaseapp.com",
+  projectId: "photocat-483622",
+};
+
+const app = initializeApp(firebaseConfig);
+export const auth = getAuth(app);
+```
 
 ### Auth State Management
-- Store JWT in memory (not localStorage for security)
-- Use refresh token in httpOnly cookie
-- Add auth context/provider for React state
+
+```javascript
+// services/auth.js
+import { auth } from './firebase.js';
+import {
+  signInWithEmailAndPassword,
+  signInWithPopup,
+  GoogleAuthProvider,
+  onAuthStateChanged
+} from 'firebase/auth';
+
+export async function loginWithEmail(email, password) {
+  const credential = await signInWithEmailAndPassword(auth, email, password);
+  return credential.user;
+}
+
+export async function loginWithGoogle() {
+  const provider = new GoogleAuthProvider();
+  const credential = await signInWithPopup(auth, provider);
+  return credential.user;
+}
+
+export async function getIdToken() {
+  const user = auth.currentUser;
+  if (!user) return null;
+  return user.getIdToken();
+}
+
+export function onAuthChange(callback) {
+  return onAuthStateChanged(auth, callback);
+}
+```
+
+### API Service Updates
+
+```javascript
+// services/api.js
+import { getIdToken } from './auth.js';
+
+async function fetchWithAuth(url, options = {}) {
+  const token = await getIdToken();
+
+  return fetch(url, {
+    ...options,
+    headers: {
+      ...options.headers,
+      'Authorization': token ? `Bearer ${token}` : undefined,
+      'X-Tenant-ID': getCurrentTenantId(), // Keep for backward compat
+      // REVIEW (Codex): Once auth is enabled, avoid trusting X-Tenant-ID without membership checks.
+    },
+  });
+}
+```
 
 ## Environment Variables
 
+### Backend
+
 ```bash
-# JWT
-JWT_SECRET_KEY=<secure-random-string>
-JWT_ALGORITHM=HS256
+# Firebase Admin SDK (uses Application Default Credentials on GCP)
+# For local development, set path to service account key:
+GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json
 
-# Google OAuth
-GOOGLE_CLIENT_ID=<from-google-console>
-GOOGLE_CLIENT_SECRET=<from-google-console>
-GOOGLE_REDIRECT_URI=https://app.photocat.com/auth/google/callback
-
-# Optional: Redis for token blacklist
-REDIS_URL=redis://localhost:6379/0
+# Or store Firebase service account in Secret Manager:
+FIREBASE_SERVICE_ACCOUNT_SECRET=firebase-admin-key
 ```
 
-## Open Questions
+### Frontend
 
-1. **Email verification**: Required before approval, or optional?
-2. **Password reset**: Email-based flow needed for MVP?
-3. **Remember me**: Extend refresh token lifetime option?
-4. **Session management**: Allow users to view/revoke sessions?
-5. **API keys**: Needed for programmatic access?
-6. **MFA**: Required for MVP or future phase?
+```bash
+# Firebase client config (public, safe to expose)
+VITE_FIREBASE_API_KEY=AIza...
+VITE_FIREBASE_AUTH_DOMAIN=photocat-483622.firebaseapp.com
+VITE_FIREBASE_PROJECT_ID=photocat-483622
+```
 
 ## File Structure
 
@@ -365,32 +519,35 @@ REDIS_URL=redis://localhost:6379/0
 src/photocat/
 ├── auth/
 │   ├── __init__.py
-│   ├── config.py          # JWT settings, OAuth config
-│   ├── dependencies.py    # get_current_user, require_role
-│   ├── models.py          # User, OAuthAccount, UserTenant, etc.
-│   ├── oauth.py           # OAuth provider integrations
-│   ├── passwords.py       # Password hashing utilities
-│   ├── tokens.py          # JWT creation/validation
-│   └── schemas.py         # Pydantic models for auth
+│   ├── config.py          # Firebase Admin SDK initialization
+│   ├── dependencies.py    # get_current_user, require_role, require_tenant
+│   ├── models.py          # UserProfile, UserTenant, Invitation
+│   └── schemas.py         # Pydantic models for auth requests/responses
 ├── routers/
-│   ├── auth.py            # Auth endpoints
-│   └── admin_users.py     # User management endpoints
+│   ├── auth.py            # Auth endpoints (/auth/*)
+│   └── admin_users.py     # User management endpoints (/admin/*)
+
+frontend/
+├── services/
+│   ├── firebase.js        # Firebase SDK initialization
+│   ├── auth.js            # Auth functions (login, logout, etc.)
+│   └── api.js             # Updated with auth headers
+├── components/
+│   ├── login-page.js      # Login form + OAuth buttons
+│   ├── register-page.js   # Registration form
+│   └── tenant-selector.js # Multi-tenant switcher
 ```
 
-## Estimated Implementation Effort
+## Open Questions
 
-| Phase | Tasks | Effort |
-|-------|-------|--------|
-| Phase 1: Core Auth | Models, JWT, OAuth, Password | 2-3 days |
-| Phase 2: Authorization | Role checks, admin workflow | 1-2 days |
-| Phase 3: Invitations | Email, invitation flow | 1 day |
-| Phase 4: Hardening | Rate limiting, security | 1 day |
-| Frontend Integration | Login UI, auth state | 2-3 days |
-| **Total** | | **7-10 days** |
+1. **Email verification**: Should Firebase email verification be required before admin approval?
+2. **Password reset**: Firebase handles this - should we customize the email template?
+3. **Session duration**: Firebase tokens expire in 1 hour by default, auto-refresh is handled by SDK
+4. **First super-admin**: How to bootstrap the first super-admin user?
 
 ## References
 
-- [Authlib Documentation](https://docs.authlib.org/)
+- [Firebase Auth Documentation](https://firebase.google.com/docs/auth)
+- [Firebase Admin SDK (Python)](https://firebase.google.com/docs/admin/setup)
+- [Firebase Auth REST API](https://firebase.google.com/docs/reference/rest/auth)
 - [FastAPI Security](https://fastapi.tiangolo.com/tutorial/security/)
-- [OWASP Authentication Cheatsheet](https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html)
-- [JWT Best Practices](https://auth0.com/blog/a-look-at-the-latest-draft-for-jwt-bcp/)

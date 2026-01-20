@@ -1,0 +1,65 @@
+# Reduce Cloud Build upload size by ignoring local/dev artifacts.
+.git
+.gitignore
+.gcloudignore
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.eggs/
+*.egg-info/
+.venv/
+.venv-git/
+venv/
+.mypy_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+.npm/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Docs and tests (not required for container build)
+docs/
+tests/
+*.md
+!README.md
+
+# Local config
+.env
+.env.*
+*.local
+.cache/
+.local/
+.DS_Store
+
+# Build artifacts
+dist/
+build/
+tmp/
+logs/
+
+# Large data/model artifacts
+data/
+datasets/
+models/
+checkpoints/
+outputs/
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.onnx
+*.npy
+*.npz

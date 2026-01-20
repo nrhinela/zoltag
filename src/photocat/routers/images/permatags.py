@@ -9,11 +9,27 @@ from sqlalchemy.orm import Session
 from photocat.dependencies import get_db, get_tenant, get_tenant_setting
 from photocat.tenant import Tenant
 from photocat.metadata import ImageMetadata, MachineTag, Permatag
+from photocat.models.config import Keyword, KeywordCategory
 from photocat.tagging import calculate_tags
 from photocat.config.db_config import ConfigManager
 
 # Sub-router with no prefix/tags (inherits from parent)
 router = APIRouter()
+
+
+def get_keyword_info(db: Session, keyword_id: int) -> dict:
+    """Get keyword name and category by keyword_id."""
+    result = db.query(
+        Keyword.keyword,
+        KeywordCategory.name
+    ).join(
+        KeywordCategory, Keyword.category_id == KeywordCategory.id
+    ).filter(
+        Keyword.id == keyword_id
+    ).first()
+    if result:
+        return {"keyword": result[0], "category": result[1]}
+    return {"keyword": "unknown", "category": "unknown"}
 
 
 @router.get("/images/{image_id}/permatags", response_model=dict, operation_id="get_permatags")
@@ -32,17 +48,32 @@ async def get_permatags(
         raise HTTPException(status_code=404, detail="Image not found")
 
     permatags = db.query(Permatag).filter(
-        Permatag.image_id == image_id,
-        Permatag.tenant_id == tenant.id
+        Permatag.image_id == image_id
     ).all()
+
+    # Load keyword info in bulk
+    keyword_ids = {p.keyword_id for p in permatags}
+    keywords_map = {}
+    if keyword_ids:
+        keywords_data = db.query(
+            Keyword.id,
+            Keyword.keyword,
+            KeywordCategory.name
+        ).join(
+            KeywordCategory, Keyword.category_id == KeywordCategory.id
+        ).filter(
+            Keyword.id.in_(keyword_ids)
+        ).all()
+        for kw_id, kw_name, cat_name in keywords_data:
+            keywords_map[kw_id] = {"keyword": kw_name, "category": cat_name}
 
     return {
         "image_id": image_id,
         "permatags": [
             {
                 "id": p.id,
-                "keyword": p.keyword,
-                "category": p.category,
+                "keyword": keywords_map.get(p.keyword_id, {}).get("keyword", "unknown"),
+                "category": keywords_map.get(p.keyword_id, {}).get("category", "unknown"),
                 "signum": p.signum,
                 "created_at": p.created_at.isoformat(),
                 "created_by": p.created_by
@@ -61,11 +92,10 @@ async def add_permatag(
 ):
     """Add or update a permatag for an image."""
     body = await request.json()
-    keyword = body.get("keyword")
-    category = body.get("category")
+    keyword_name = body.get("keyword")
     signum = body.get("signum", 1)
 
-    if not keyword:
+    if not keyword_name:
         raise HTTPException(status_code=400, detail="keyword is required")
 
     if signum not in [-1, 1]:
@@ -79,16 +109,23 @@ async def add_permatag(
     if not image:
         raise HTTPException(status_code=404, detail="Image not found")
 
+    # Look up keyword by name
+    keyword = db.query(Keyword).filter(
+        Keyword.keyword == keyword_name,
+        Keyword.tenant_id == tenant.id
+    ).first()
+
+    if not keyword:
+        raise HTTPException(status_code=404, detail=f"Keyword '{keyword_name}' not found in tenant config")
+
     # Check if permatag already exists (update or insert)
     existing = db.query(Permatag).filter(
         Permatag.image_id == image_id,
-        Permatag.tenant_id == tenant.id,
-        Permatag.keyword == keyword
+        Permatag.keyword_id == keyword.id
     ).first()
 
     if existing:
         # Update existing permatag
-        existing.category = category
         existing.signum = signum
         existing.created_at = datetime.utcnow()
         permatag = existing
@@ -96,9 +133,7 @@ async def add_permatag(
         # Create new permatag
         permatag = Permatag(
             image_id=image_id,
-            tenant_id=tenant.id,
-            keyword=keyword,
-            category=category,
+            keyword_id=keyword.id,
             signum=signum,
             created_by=None  # Could be set from auth header if available
         )
@@ -107,10 +142,13 @@ async def add_permatag(
     db.commit()
     db.refresh(permatag)
 
+    # Get keyword info for response
+    kw_info = get_keyword_info(db, permatag.keyword_id)
+
     return {
         "id": permatag.id,
-        "keyword": permatag.keyword,
-        "category": permatag.category,
+        "keyword": kw_info["keyword"],
+        "category": kw_info["category"],
         "signum": permatag.signum,
         "created_at": permatag.created_at.isoformat()
     }
@@ -128,7 +166,7 @@ async def bulk_permatags(
         raise HTTPException(status_code=400, detail="operations must be a non-empty list")
 
     image_ids = set()
-    keywords = set()
+    keyword_names = set()
     normalized_ops = []
     errors = []
 
@@ -137,11 +175,10 @@ async def bulk_permatags(
             errors.append({"index": index, "error": "operation must be an object"})
             continue
         image_id = op.get("image_id")
-        keyword = op.get("keyword")
-        category = op.get("category")
+        keyword_name = op.get("keyword")
         signum = op.get("signum", 1)
 
-        if not image_id or not keyword:
+        if not image_id or not keyword_name:
             errors.append({"index": index, "error": "image_id and keyword are required"})
             continue
         if signum not in (-1, 1):
@@ -150,12 +187,11 @@ async def bulk_permatags(
 
         normalized_ops.append({
             "image_id": int(image_id),
-            "keyword": keyword,
-            "category": category,
+            "keyword_name": keyword_name,
             "signum": signum,
         })
         image_ids.add(int(image_id))
-        keywords.add(keyword)
+        keyword_names.add(keyword_name)
 
     if not normalized_ops:
         raise HTTPException(status_code=400, detail="no valid operations provided")
@@ -168,12 +204,20 @@ async def bulk_permatags(
         ).all()
     }
 
-    existing_rows = db.query(Permatag).filter(
-        Permatag.tenant_id == tenant.id,
-        Permatag.image_id.in_(image_ids),
-        Permatag.keyword.in_(keywords)
+    # Look up keyword IDs
+    keywords = db.query(Keyword).filter(
+        Keyword.keyword.in_(keyword_names),
+        Keyword.tenant_id == tenant.id
     ).all()
-    existing_map = {(row.image_id, row.keyword): row for row in existing_rows}
+    keyword_name_to_id = {kw.keyword: kw.id for kw in keywords}
+
+    # Get existing permatags
+    keyword_ids = list(keyword_name_to_id.values())
+    existing_rows = db.query(Permatag).filter(
+        Permatag.image_id.in_(image_ids),
+        Permatag.keyword_id.in_(keyword_ids)
+    ).all()
+    existing_map = {(row.image_id, row.keyword_id): row for row in existing_rows}
 
     created = 0
     updated = 0
@@ -182,23 +226,29 @@ async def bulk_permatags(
 
     for op in normalized_ops:
         image_id = op["image_id"]
+        keyword_name = op["keyword_name"]
+
         if image_id not in valid_image_ids:
-            errors.append({"image_id": image_id, "keyword": op["keyword"], "error": "image not found"})
+            errors.append({"image_id": image_id, "keyword": keyword_name, "error": "image not found"})
             skipped += 1
             continue
-        key = (image_id, op["keyword"])
+
+        keyword_id = keyword_name_to_id.get(keyword_name)
+        if not keyword_id:
+            errors.append({"image_id": image_id, "keyword": keyword_name, "error": "keyword not found in tenant config"})
+            skipped += 1
+            continue
+
+        key = (image_id, keyword_id)
         existing = existing_map.get(key)
         if existing:
-            existing.category = op["category"]
             existing.signum = op["signum"]
             existing.created_at = now
             updated += 1
         else:
             permatag = Permatag(
                 image_id=image_id,
-                tenant_id=tenant.id,
-                keyword=op["keyword"],
-                category=op["category"],
+                keyword_id=keyword_id,
                 signum=op["signum"],
                 created_by=None
             )
@@ -223,10 +273,18 @@ async def delete_permatag(
     db: Session = Depends(get_db)
 ):
     """Delete a permatag."""
+    # Verify image belongs to tenant
+    image = db.query(ImageMetadata).filter_by(
+        id=image_id,
+        tenant_id=tenant.id
+    ).first()
+
+    if not image:
+        raise HTTPException(status_code=404, detail="Image not found")
+
     permatag = db.query(Permatag).filter(
         Permatag.id == permatag_id,
-        Permatag.image_id == image_id,
-        Permatag.tenant_id == tenant.id
+        Permatag.image_id == image_id
     ).first()
 
     if not permatag:
@@ -265,38 +323,34 @@ async def accept_all_tags(
     config_manager = ConfigManager(db, tenant.id)
     all_keywords = config_manager.get_all_keywords()
 
-    # Build set of current tag keywords
-    current_keywords = {tag.keyword for tag in current_tags}
-    all_keyword_names = {kw['keyword'] for kw in all_keywords}
+    # Build set of current tag keyword IDs
+    current_keyword_ids = {tag.keyword_id for tag in current_tags}
+
+    # Create map of keyword_id to keyword info
+    all_keyword_ids = {kw['id']: kw for kw in all_keywords}
 
     # Delete existing permatags ONLY for keywords in the controlled vocabulary
     # This preserves manually added permatags for keywords not in the vocabulary
     db.query(Permatag).filter(
         Permatag.image_id == image_id,
-        Permatag.tenant_id == tenant.id,
-        Permatag.keyword.in_(all_keyword_names)
+        Permatag.keyword_id.in_(list(all_keyword_ids.keys()))
     ).delete(synchronize_session=False)
 
     # Create positive permatags for all current tags
     for tag in current_tags:
         permatag = Permatag(
             image_id=image_id,
-            tenant_id=tenant.id,
-            keyword=tag.keyword,
-            category=tag.category,
+            keyword_id=tag.keyword_id,
             signum=1
         )
         db.add(permatag)
 
     # Create negative permatags for all keywords NOT in current tags
-    for kw_info in all_keywords:
-        keyword = kw_info['keyword']
-        if keyword not in current_keywords:
+    for keyword_id in all_keyword_ids.keys():
+        if keyword_id not in current_keyword_ids:
             permatag = Permatag(
                 image_id=image_id,
-                tenant_id=tenant.id,
-                keyword=keyword,
-                category=kw_info['category'],
+                keyword_id=keyword_id,
                 signum=-1
             )
             db.add(permatag)
@@ -304,8 +358,8 @@ async def accept_all_tags(
     db.commit()
 
     # Return counts
-    positive_count = len(current_keywords)
-    negative_count = len(all_keyword_names - current_keywords)
+    positive_count = len(current_keyword_ids)
+    negative_count = len(all_keyword_ids) - positive_count
 
     return {
         "success": True,
@@ -330,8 +384,7 @@ async def freeze_permatags(
 
     config_manager = ConfigManager(db, tenant.id)
     all_keywords = config_manager.get_all_keywords()
-    keyword_to_category = {kw['keyword']: kw['category'] for kw in all_keywords}
-    all_keyword_names = set(keyword_to_category.keys())
+    all_keyword_ids = {kw['id']: kw for kw in all_keywords}
 
     active_tag_type = get_tenant_setting(db, tenant.id, 'active_machine_tag_type', default='siglip')
     machine_tags = db.query(MachineTag).filter(
@@ -339,26 +392,23 @@ async def freeze_permatags(
         MachineTag.tenant_id == tenant.id,
         MachineTag.tag_type == active_tag_type
     ).all()
-    machine_tag_names = {tag.keyword for tag in machine_tags}
+    machine_tag_ids = {tag.keyword_id for tag in machine_tags}
 
     existing_permatags = db.query(Permatag).filter(
         Permatag.image_id == image_id,
-        Permatag.tenant_id == tenant.id,
-        Permatag.keyword.in_(all_keyword_names)
+        Permatag.keyword_id.in_(list(all_keyword_ids.keys()))
     ).all()
-    existing_keywords = {p.keyword for p in existing_permatags}
+    existing_keyword_ids = {p.keyword_id for p in existing_permatags}
 
     positive_count = 0
     negative_count = 0
-    for keyword in all_keyword_names:
-        if keyword in existing_keywords:
+    for keyword_id in all_keyword_ids.keys():
+        if keyword_id in existing_keyword_ids:
             continue
-        signum = 1 if keyword in machine_tag_names else -1
+        signum = 1 if keyword_id in machine_tag_ids else -1
         permatag = Permatag(
             image_id=image_id,
-            tenant_id=tenant.id,
-            keyword=keyword,
-            category=keyword_to_category.get(keyword),
+            keyword_id=keyword_id,
             signum=signum,
             created_by=None
         )
