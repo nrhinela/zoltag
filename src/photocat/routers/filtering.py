@@ -135,8 +135,11 @@ def apply_reviewed_filter(
     Returns:
         Set of image IDs matching review status
     """
-    reviewed_rows = db.query(Permatag.image_id).filter(
-        Permatag.tenant_id == tenant.id
+    # Get reviewed images by joining with ImageMetadata for tenant isolation
+    reviewed_rows = db.query(Permatag.image_id).join(
+        ImageMetadata, ImageMetadata.id == Permatag.image_id
+    ).filter(
+        ImageMetadata.tenant_id == tenant.id
     ).distinct().all()
     reviewed_ids = {row[0] for row in reviewed_rows}
 
@@ -299,11 +302,50 @@ def compute_current_tags_for_images(
     return current_tags_by_image
 
 
+def compute_permatag_tags_for_images(
+    db: Session,
+    tenant: Tenant,
+    image_ids: List[int]
+) -> Dict[int, List[str]]:
+    """Compute positive permatags for images.
+
+    Args:
+        db: Database session
+        tenant: Current tenant
+        image_ids: List of image IDs to compute tags for
+
+    Returns:
+        Dict mapping image_id to list of permatag keywords
+    """
+    # Get positive permatags for these images
+    # Note: Tenant isolation is via the image_ids passed in (which are already filtered by tenant)
+    all_permatags = db.query(Permatag).filter(
+        Permatag.image_id.in_(image_ids),
+        Permatag.signum == 1
+    ).all()
+
+    # Load keyword names
+    keyword_ids = {p.keyword_id for p in all_permatags}
+    keywords_map = {}
+    if keyword_ids:
+        keywords = db.query(Keyword).filter(Keyword.id.in_(keyword_ids)).all()
+        keywords_map = {kw.id: kw.keyword for kw in keywords}
+
+    permatag_keywords_by_image = {img_id: [] for img_id in image_ids}
+    for p in all_permatags:
+        keyword_name = keywords_map.get(p.keyword_id, "unknown")
+        if keyword_name not in permatag_keywords_by_image[p.image_id]:
+            permatag_keywords_by_image[p.image_id].append(keyword_name)
+
+    return permatag_keywords_by_image
+
+
 def apply_category_filters(
     db: Session,
     tenant: Tenant,
     category_filters_json: str,
-    existing_filter: Optional[Set[int]] = None
+    existing_filter: Optional[Set[int]] = None,
+    source: str = "current"
 ) -> Optional[Set[int]]:
     """Apply per-category keyword filters.
 
@@ -321,9 +363,6 @@ def apply_category_filters(
     except json.JSONDecodeError:
         return existing_filter
 
-    # Get active tag type from tenant config for filtering
-    active_tag_type = get_tenant_setting(db, tenant.id, 'active_machine_tag_type', default='siglip')
-
     # Determine base image set
     if existing_filter is not None:
         all_image_ids = list(existing_filter)
@@ -331,10 +370,16 @@ def apply_category_filters(
         all_images = db.query(ImageMetadata.id).filter_by(tenant_id=tenant.id).all()
         all_image_ids = [img[0] for img in all_images]
 
-    # Compute current tags for all images
-    current_tags_by_image = compute_current_tags_for_images(
-        db, tenant, all_image_ids, active_tag_type
-    )
+    source_mode = (source or "current").lower()
+    if source_mode == "permatags":
+        current_tags_by_image = compute_permatag_tags_for_images(db, tenant, all_image_ids)
+    else:
+        # Get active tag type from tenant config for filtering
+        active_tag_type = get_tenant_setting(db, tenant.id, 'active_machine_tag_type', default='siglip')
+        # Compute current tags for all images
+        current_tags_by_image = compute_current_tags_for_images(
+            db, tenant, all_image_ids, active_tag_type
+        )
 
     # Collect image IDs matching any category filter
     category_image_ids = []
