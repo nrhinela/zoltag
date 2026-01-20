@@ -200,12 +200,24 @@ async def get_tag_stats(
     db: Session = Depends(get_db)
 ):
     """Get tag counts by category for different tag sources."""
-    config_mgr = ConfigManager(db, tenant.id)
-    all_keywords = config_mgr.get_all_keywords()
-    keyword_id_to_info = {kw['id']: kw for kw in all_keywords}
-    keyword_to_category = {
-        kw["keyword"]: kw["category"]
-        for kw in all_keywords
+    # Fetch keywords from database with IDs for FK mapping
+    keywords_data = db.query(
+        Keyword.id,
+        Keyword.keyword,
+        KeywordCategory.name.label("category")
+    ).join(
+        KeywordCategory, Keyword.category_id == KeywordCategory.id
+    ).filter(
+        Keyword.tenant_id == tenant.id
+    ).all()
+
+    # Build mapping from keyword_id to keyword info
+    keyword_id_to_info = {
+        row.id: {
+            "keyword": row.keyword,
+            "category": row.category
+        }
+        for row in keywords_data
     }
 
     # Get zero-shot (SigLIP) tags from machine_tags
