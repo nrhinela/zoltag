@@ -319,21 +319,22 @@ async def accept_all_tags(
         MachineTag.tag_type == active_tag_type
     ).all()
 
-    # Get all keywords from config
-    config_manager = ConfigManager(db, tenant.id)
-    all_keywords = config_manager.get_all_keywords()
+    # Get all keyword IDs from database
+    db_keywords = db.query(Keyword).filter(
+        Keyword.tenant_id == tenant.id
+    ).all()
 
     # Build set of current tag keyword IDs
     current_keyword_ids = {tag.keyword_id for tag in current_tags}
 
-    # Create map of keyword_id to keyword info
-    all_keyword_ids = {kw['id']: kw for kw in all_keywords}
+    # Create set of all keyword IDs from database
+    all_keyword_ids = {kw.id for kw in db_keywords}
 
     # Delete existing permatags ONLY for keywords in the controlled vocabulary
     # This preserves manually added permatags for keywords not in the vocabulary
     db.query(Permatag).filter(
         Permatag.image_id == image_id,
-        Permatag.keyword_id.in_(list(all_keyword_ids.keys()))
+        Permatag.keyword_id.in_(list(all_keyword_ids))
     ).delete(synchronize_session=False)
 
     # Create positive permatags for all current tags
@@ -382,9 +383,11 @@ async def freeze_permatags(
     if not image:
         raise HTTPException(status_code=404, detail="Image not found")
 
-    config_manager = ConfigManager(db, tenant.id)
-    all_keywords = config_manager.get_all_keywords()
-    all_keyword_ids = {kw['id']: kw for kw in all_keywords}
+    # Get all keyword IDs from database
+    db_keywords = db.query(Keyword).filter(
+        Keyword.tenant_id == tenant.id
+    ).all()
+    all_keyword_ids = {kw.id for kw in db_keywords}
 
     active_tag_type = get_tenant_setting(db, tenant.id, 'active_machine_tag_type', default='siglip')
     machine_tags = db.query(MachineTag).filter(
@@ -396,7 +399,7 @@ async def freeze_permatags(
 
     existing_permatags = db.query(Permatag).filter(
         Permatag.image_id == image_id,
-        Permatag.keyword_id.in_(list(all_keyword_ids.keys()))
+        Permatag.keyword_id.in_(list(all_keyword_ids))
     ).all()
     existing_keyword_ids = {p.keyword_id for p in existing_permatags}
 

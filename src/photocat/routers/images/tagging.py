@@ -262,8 +262,11 @@ async def retag_single_image(
             model_weight=settings.keyword_model_weight
         )
 
-        # Create new tags - need to look up keyword_ids
-        keyword_to_id = {kw['keyword']: kw['id'] for kw in all_keywords}
+        # Create new tags - look up keyword_ids from database
+        db_keywords = db.query(Keyword).filter(
+            Keyword.tenant_id == tenant.id
+        ).all()
+        keyword_to_id = {kw.keyword: kw.id for kw in db_keywords}
 
         for keyword, confidence in all_tags:
             keyword_id = keyword_to_id.get(keyword)
@@ -335,6 +338,12 @@ async def retag_all_images(
     storage_client = storage.Client(project=settings.gcp_project_id)
     thumbnail_bucket = storage_client.bucket(tenant.get_thumbnail_bucket(settings))
 
+    # Build keyword name to ID mapping once, before processing images
+    db_keywords = db.query(Keyword).filter(
+        Keyword.tenant_id == tenant.id
+    ).all()
+    keyword_to_id = {kw.keyword: kw.id for kw in db_keywords}
+
     processed = 0
     failed = 0
 
@@ -375,9 +384,6 @@ async def retag_all_images(
                 model_scores=model_scores,
                 model_weight=settings.keyword_model_weight
             )
-
-            # Create new tags - need to look up keyword_ids
-            keyword_to_id = {kw['keyword']: kw['id'] for kw in all_keywords}
 
             for keyword, confidence in all_tags:
                 keyword_id = keyword_to_id.get(keyword)
