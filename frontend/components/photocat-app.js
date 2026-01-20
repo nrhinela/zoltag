@@ -552,6 +552,8 @@ class PhotoCatApp extends LitElement {
       curateAuditLoading: { type: Boolean },
       curateAuditLoadAll: { type: Boolean },
       curateAuditPageOffset: { type: Number },
+      activeCurateTagSource: { type: String },
+      curateCategoryCards: { type: Array },
   }
 
   constructor() {
@@ -616,6 +618,8 @@ class PhotoCatApp extends LitElement {
       this.curateAuditLoading = false;
       this.curateAuditLoadAll = false;
       this.curateAuditPageOffset = 0;
+      this.activeCurateTagSource = 'permatags';
+      this.curateCategoryCards = [];
       this._listsLoaded = false;
       this._queueRefreshTimer = null;
       this._statsRefreshTimer = null;
@@ -741,6 +745,7 @@ class PhotoCatApp extends LitElement {
           if (hasSelections) {
               filters.keywords = this.curateKeywordFilters;
               filters.operators = this.curateKeywordOperators || {};
+              filters.categoryFilterSource = 'permatags';
           }
       }
       return filters;
@@ -784,6 +789,30 @@ class PhotoCatApp extends LitElement {
       this.curateKeywordFilters = nextKeywords;
       this.curateKeywordOperators = { ...(detail.operators || {}) };
       this._applyCurateFilters();
+  }
+
+  _handleCurateTagSourceChange(e) {
+      this.activeCurateTagSource = e.detail?.source || 'permatags';
+      this._updateCurateCategoryCards();
+  }
+
+  _updateCurateCategoryCards() {
+      const sourceStats = this.tagStatsBySource?.[this.activeCurateTagSource] || {};
+      const categoryCards = Object.entries(sourceStats)
+        .map(([category, keywords]) => {
+          const keywordRows = (keywords || [])
+            .filter((kw) => (kw.count || 0) > 0)
+            .sort((a, b) => (b.count || 0) - (a.count || 0));
+          if (!keywordRows.length) {
+            return null;
+          }
+          const maxCount = keywordRows.reduce((max, kw) => Math.max(max, kw.count || 0), 0);
+          const totalCount = keywordRows.reduce((sum, kw) => sum + (kw.count || 0), 0);
+          return { category, keywordRows, maxCount, totalCount };
+        })
+        .filter(Boolean)
+        .sort((a, b) => b.totalCount - a.totalCount);
+      this.curateCategoryCards = categoryCards;
   }
 
   _handleCurateHideDeletedChange(e) {
@@ -1088,6 +1117,13 @@ class PhotoCatApp extends LitElement {
 
   async _fetchCurateAuditImages({ append = false, loadAll = false, offset = null } = {}) {
       if (!this.tenant || !this.curateAuditKeyword) return;
+      if (this.curateMinRating === 0 && this.curateHideDeleted) {
+          this.curateAuditImages = [];
+          this.curateAuditOffset = 0;
+          this.curateAuditTotal = 0;
+          this.curateAuditPageOffset = 0;
+          return;
+      }
       this.curateAuditLoading = true;
       try {
           const useLoadAll = loadAll || this.curateAuditLoadAll;
@@ -1103,6 +1139,13 @@ class PhotoCatApp extends LitElement {
               permatagSignum: 1,
               permatagMissing: this.curateAuditMode === 'missing',
           };
+          if (this.curateHideDeleted) {
+              filters.hideZeroRating = true;
+          }
+          if (this.curateMinRating !== null && this.curateMinRating !== undefined) {
+              filters.rating = this.curateMinRating;
+              filters.ratingOperator = this.curateMinRating === 0 ? 'eq' : 'gte';
+          }
           if (!useLoadAll) {
               filters.limit = this.curateAuditLimit;
               filters.offset = resolvedOffset;
@@ -1437,19 +1480,23 @@ class PhotoCatApp extends LitElement {
               </div>
             </div>
           </div>
-          <div class="min-w-0">
-            <div class="w-1/2">
-              <filter-controls
-                .tenant=${this.tenant}
-                .keywordsOnly=${true}
-                .embedded=${true}
-                .singleSelect=${isTagAudit}
-                .ratingFilter=${this.curateMinRating !== null && this.curateMinRating !== undefined ? String(this.curateMinRating) : ''}
-                .ratingOperator=${this.curateMinRating === 0 ? 'eq' : 'gte'}
-                .hideZeroRating=${this.curateHideDeleted}
-                @filter-change=${isTagAudit ? this._handleCurateAuditKeywordChange : this._handleCurateKeywordFilterChange}
-              ></filter-controls>
-            </div>
+          <div class="min-w-0 flex-1">
+            <filter-controls
+              .tenant=${this.tenant}
+              .keywordsOnly=${true}
+              .embedded=${true}
+              .singleSelect=${isTagAudit}
+              .keywordSource=${'permatags'}
+              .ratingFilter=${this.curateMinRating !== null && this.curateMinRating !== undefined ? String(this.curateMinRating) : ''}
+              .ratingOperator=${this.curateMinRating === 0 ? 'eq' : 'gte'}
+              .hideZeroRating=${this.curateHideDeleted}
+              .showHistogram=${true}
+              .tagStatsBySource=${this.tagStatsBySource}
+              .activeTagSource=${this.activeCurateTagSource || 'permatags'}
+              .categoryCards=${this.curateCategoryCards || []}
+              @filter-change=${isTagAudit ? this._handleCurateAuditKeywordChange : this._handleCurateKeywordFilterChange}
+              @tag-source-change=${this._handleCurateTagSourceChange}
+            ></filter-controls>
           </div>
         </div>
       </div>
@@ -2296,6 +2343,7 @@ class PhotoCatApp extends LitElement {
       }
       if (tagResult.status === 'fulfilled') {
           this.tagStatsBySource = tagResult.value?.sources || {};
+          this._updateCurateCategoryCards();
       } else {
           console.error('Error fetching tag stats:', tagResult.reason);
           this.tagStatsBySource = {};

@@ -1,11 +1,29 @@
 import { LitElement, html, css } from 'lit';
-import { getKeywords } from '../services/api.js';
+import { getKeywords, getTagStats } from '../services/api.js';
 import { tailwind } from './tailwind-lit.js';
+import './tag-histogram.js';
 
 class FilterControls extends LitElement {
   static styles = [tailwind, css`
     :host {
       display: block;
+    }
+    .filter-container {
+      display: flex;
+      gap: 1rem;
+      height: 100%;
+    }
+    .filter-column {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+    .histogram-column {
+      width: 280px;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
     }
     .dropdown {
         position: absolute;
@@ -50,6 +68,11 @@ class FilterControls extends LitElement {
     keywordsOnly: { type: Boolean },
     embedded: { type: Boolean },
     singleSelect: { type: Boolean },
+    keywordSource: { type: String },
+    showHistogram: { type: Boolean },
+    tagStatsBySource: { type: Object },
+    activeTagSource: { type: String },
+    categoryCards: { type: Array },
   };
   constructor() {
     super();
@@ -70,6 +93,11 @@ class FilterControls extends LitElement {
     this.keywordsOnly = false;
     this.embedded = false;
     this.singleSelect = false;
+    this.keywordSource = '';
+    this.showHistogram = false;
+    this.tagStatsBySource = {};
+    this.activeTagSource = 'permatags';
+    this.categoryCards = [];
   }
 
   firstUpdated() {
@@ -88,6 +116,29 @@ class FilterControls extends LitElement {
           changedProperties.has('reviewedFilter')) {
           this.fetchKeywords();
       }
+      // Recalculate categoryCards when activeTagSource or tagStatsBySource changes
+      if (changedProperties.has('activeTagSource') || changedProperties.has('tagStatsBySource')) {
+          this._updateCategoryCards();
+      }
+  }
+
+  _updateCategoryCards() {
+      const sourceStats = this.tagStatsBySource?.[this.activeTagSource] || {};
+      const categoryCards = Object.entries(sourceStats)
+        .map(([category, keywords]) => {
+          const keywordRows = (keywords || [])
+            .filter((kw) => (kw.count || 0) > 0)
+            .sort((a, b) => (b.count || 0) - (a.count || 0));
+          if (!keywordRows.length) {
+            return null;
+          }
+          const maxCount = keywordRows.reduce((max, kw) => Math.max(max, kw.count || 0), 0);
+          const totalCount = keywordRows.reduce((sum, kw) => sum + (kw.count || 0), 0);
+          return { category, keywordRows, maxCount, totalCount };
+        })
+        .filter(Boolean)
+        .sort((a, b) => b.totalCount - a.totalCount);
+      this.categoryCards = categoryCards;
   }
 
   async fetchKeywords() {
@@ -99,6 +150,7 @@ class FilterControls extends LitElement {
         hideZeroRating: this.hideZeroRating,
         listId: this.listFilterId,
         reviewed: this.reviewedFilter,
+        source: this.keywordSource,
       };
       this.keywords = await getKeywords(this.tenant, filters);
       Object.keys(this.keywords).forEach(category => {
@@ -114,6 +166,114 @@ class FilterControls extends LitElement {
   render() {
     const containerClass = this.embedded ? '' : 'bg-white rounded-lg shadow p-6 mb-6';
     const keywordSectionClass = this.keywordsOnly ? '' : 'border-t pt-4';
+
+    if (this.showHistogram && !this.keywordsOnly) {
+      return html`
+        <div class=${containerClass}>
+          <div class="filter-container">
+            <div class="filter-column">
+              ${this.keywordsOnly ? html`` : html`
+                <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
+                  <div class="flex items-end">
+                    <label class="inline-flex items-center gap-2 text-xs font-semibold text-gray-600">
+                      <input
+                        type="checkbox"
+                        class="h-4 w-4"
+                        .checked=${this.hideZeroRating}
+                        @change=${this._handleHideZeroChange}
+                      >
+                      🗑 hide deleted
+                    </label>
+                  </div>
+                  <div>
+                    <label class="block text-xs font-semibold text-gray-600 mb-1">Reviewed?</label>
+                    <select class="w-full px-4 py-2 border rounded-lg" .value=${this.reviewedFilter} @change=${this._handleReviewedChange}>
+                      <option value="">All</option>
+                      <option value="true">Reviewed</option>
+                      <option value="false">Unreviewed</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
+                  <div>
+                    <label class="block text-xs font-semibold text-gray-600 mb-1">Filter by List</label>
+                    <select class="w-full px-4 py-2 border rounded-lg" .value=${this.listFilterId} @change=${this._handleListFilterChange}>
+                      <option value="">All lists</option>
+                      ${this.lists.map((list) => html`
+                        <option value=${String(list.id)}>${list.title}</option>
+                      `)}
+                    </select>
+                  </div>
+                  <div>
+                    <label class="block text-xs font-semibold text-gray-600 mb-1">Filter by Rating</label>
+                    <select class="w-full px-4 py-2 border rounded-lg" .value=${this.ratingFilter} @change=${this._handleRatingFilterChange}>
+                      <option value="">All ratings</option>
+                      <option value="0">0</option>
+                      <option value="1">1</option>
+                      <option value="2">2</option>
+                      <option value="3">3</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label class="block text-xs font-semibold text-gray-600 mb-1">Rating Operator</label>
+                    <select class="w-full px-4 py-2 border rounded-lg" .value=${this.ratingOperator} @change=${this._handleRatingOperatorChange}>
+                      <option value="gte">>=</option>
+                      <option value="gt">></option>
+                      <option value="eq">==</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label class="block text-xs font-semibold text-gray-600 mb-1">Sort by Date</label>
+                    <select class="w-full px-4 py-2 border rounded-lg" .value=${this.dateSortOrder} @change=${this._handleDateSortChange}>
+                      <option value="desc">Newest first</option>
+                      <option value="asc">Oldest first</option>
+                    </select>
+                  </div>
+                  ${this.showLimit ? html`
+                    <div>
+                      <label class="block text-xs font-semibold text-gray-600 mb-1">Limit</label>
+                      <input
+                        type="number"
+                        min="1"
+                        class="w-full px-4 py-2 border rounded-lg"
+                        .value=${String(this.limit)}
+                        @input=${this._handleLimitChange}
+                      >
+                    </div>
+                  ` : html``}
+                </div>
+              `}
+
+              <div class=${keywordSectionClass}>
+                <div class="flex items-center gap-4 mb-3">
+                  <div class="flex items-center gap-2">
+                    <label class="text-sm text-gray-600 font-semibold">Filter by Keywords:</label>
+                    <span id="activeFiltersCount" class="bg-blue-600 text-white text-xs px-2 py-1 rounded-full hidden">0</span>
+                  </div>
+                  <button @click=${this._clearFilters} class="text-sm text-red-600 hover:text-red-700 ml-auto">
+                    <i class="fas fa-times mr-1"></i>Clear All
+                  </button>
+                </div>
+
+                <!-- Tag Input with Autocomplete - One per category -->
+                <div id="categoryInputsContainer" class="space-y-3">
+                  ${Object.entries(this.keywords).map(([category, keywords]) => this._renderCategoryFilter(category, keywords))}
+                </div>
+              </div>
+            </div>
+            <div class="histogram-column">
+              <tag-histogram
+                .categoryCards=${this.categoryCards}
+                .activeTagSource=${this.activeTagSource}
+                .tagStatsBySource=${this.tagStatsBySource}
+                @tag-source-change=${this._handleTagSourceChange}
+              ></tag-histogram>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
     return html`
       <div class=${containerClass}>
         ${this.keywordsOnly ? html`` : html`
@@ -388,6 +548,11 @@ class FilterControls extends LitElement {
     }
     this.requestUpdate();
     this._emitFilterChangeEvent();
+  }
+
+  _handleTagSourceChange(e) {
+    this.activeTagSource = e.detail.source;
+    this._updateCategoryCards();
   }
 }
 
