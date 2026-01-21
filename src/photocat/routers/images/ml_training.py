@@ -8,6 +8,7 @@ from google.cloud import storage
 from photocat.dependencies import get_db, get_tenant, get_tenant_setting
 from photocat.tenant import Tenant
 from photocat.metadata import ImageMetadata, MachineTag, Permatag, KeywordModel, ImageEmbedding
+from photocat.models.config import Keyword, KeywordCategory
 from photocat.settings import settings
 from photocat.config.db_config import ConfigManager
 from photocat.tagging import calculate_tags, get_tagger
@@ -47,7 +48,6 @@ async def list_ml_training_images(
     ).all()
 
     permatags = db.query(Permatag).filter(
-        Permatag.tenant_id == tenant.id,
         Permatag.image_id.in_(image_ids)
     ).all()
 
@@ -67,11 +67,36 @@ async def list_ml_training_images(
             MachineTag.model_name == model_row.model_name
         ).all()
 
+    # Load all keywords for serialization
+    all_keyword_ids = set()
+    for tag in tags:
+        all_keyword_ids.add(tag.keyword_id)
+    for permatag in permatags:
+        all_keyword_ids.add(permatag.keyword_id)
+    for tag in cached_trained:
+        all_keyword_ids.add(tag.keyword_id)
+
+    # Build keyword lookup map
+    keywords_map = {}
+    if all_keyword_ids:
+        keywords_data = db.query(
+            Keyword.id,
+            Keyword.keyword,
+            KeywordCategory.name
+        ).join(
+            KeywordCategory, Keyword.category_id == KeywordCategory.id
+        ).filter(
+            Keyword.id.in_(all_keyword_ids)
+        ).all()
+        for kw_id, kw_name, cat_name in keywords_data:
+            keywords_map[kw_id] = {"keyword": kw_name, "category": cat_name}
+
     tags_by_image = {}
     for tag in tags:
+        kw_info = keywords_map.get(tag.keyword_id, {"keyword": "unknown", "category": "unknown"})
         tags_by_image.setdefault(tag.image_id, []).append({
-            "keyword": tag.keyword,
-            "category": tag.category,
+            "keyword": kw_info["keyword"],
+            "category": kw_info["category"],
             "confidence": round(tag.confidence, 2)
         })
 
@@ -81,9 +106,10 @@ async def list_ml_training_images(
 
     trained_by_image = {}
     for tag in cached_trained:
+        kw_info = keywords_map.get(tag.keyword_id, {"keyword": "unknown", "category": "unknown"})
         trained_by_image.setdefault(tag.image_id, []).append({
-            "keyword": tag.keyword,
-            "category": tag.category,
+            "keyword": kw_info["keyword"],
+            "category": kw_info["category"],
             "confidence": round(tag.confidence or 0, 2)
         })
 
@@ -110,7 +136,8 @@ async def list_ml_training_images(
     images_list = []
     for image in images:
         positive_permatags = sorted(
-            [tag.keyword for tag in permatags_by_image.get(image.id, []) if tag.signum == 1]
+            [keywords_map.get(tag.keyword_id, {}).get("keyword", "unknown")
+             for tag in permatags_by_image.get(image.id, []) if tag.signum == 1]
         )
         machine_tags = sorted(
             tags_by_image.get(image.id, []),

@@ -1,6 +1,6 @@
 # Makefile for PhotoCat development and deployment
 
-.PHONY: help install test lint format clean deploy migrate dev worker
+.PHONY: help install test lint format clean deploy migrate dev worker dev-backend dev-frontend dev-css
 .PHONY: db-dev db-prod db-reset-dev db-reset-prod db-proxy db-migrate-prod db-migrate-dev
 .PHONY: deploy-api deploy-worker deploy-all status logs-api logs-worker check-proxy env-check
 
@@ -15,7 +15,10 @@ help:
 	@echo ""
 	@echo "Development:"
 	@echo "  install            Install dependencies"
-	@echo "  dev                Run development server"
+	@echo "  dev                Run development server (backend + frontend + Tailwind CSS watch)"
+	@echo "  dev-backend        Run backend development server only"
+	@echo "  dev-frontend       Run frontend development server only"
+	@echo "  dev-css            Run Tailwind CSS watch only"
 	@echo "  worker             Run background worker"
 	@echo "  test               Run tests"
 	@echo "  lint               Run linters"
@@ -74,7 +77,7 @@ clean:
 	find . -type f -name "*.pyo" -delete
 
 dev:
-	make dev-backend & make dev-frontend
+	make dev-backend & make dev-frontend & make dev-css
 
 dev-backend:
 	@echo "Starting backend development server..."
@@ -84,6 +87,10 @@ dev-backend:
 dev-frontend:
 	@echo "Starting frontend development server..."
 	npm run dev
+
+dev-css:
+	@echo "Starting Tailwind CSS watch..."
+	npm run build:css -- --watch
 
 
 worker:

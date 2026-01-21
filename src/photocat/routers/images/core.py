@@ -10,13 +10,28 @@ from google.cloud import storage
 
 from photocat.dependencies import get_db, get_tenant, get_tenant_setting
 from photocat.tenant import Tenant
-from photocat.metadata import ImageMetadata, MachineTag, Permatag, Tenant as TenantModel
-from photocat.models.config import PhotoList, PhotoListItem
+from photocat.metadata import ImageMetadata, MachineTag, Permatag, Tenant as TenantModel, KeywordModel
+from photocat.models.config import PhotoList, PhotoListItem, Keyword
 from photocat.settings import settings
 from photocat.tagging import calculate_tags
 
 # Sub-router with no prefix/tags (inherits from parent)
 router = APIRouter()
+
+
+def get_keyword_name(db: Session, keyword_id: int) -> Optional[str]:
+    """Get keyword name from keyword_id."""
+    keyword = db.query(Keyword.keyword).filter(Keyword.id == keyword_id).first()
+    return keyword[0] if keyword else None
+
+
+def get_keyword_category_name(db: Session, keyword_id: int) -> Optional[str]:
+    """Get category name from keyword_id via the keyword's category_id."""
+    from photocat.models.config import KeywordCategory
+    result = db.query(KeywordCategory.name).join(
+        Keyword, Keyword.category_id == KeywordCategory.id
+    ).filter(Keyword.id == keyword_id).first()
+    return result[0] if result else None
 
 
 @router.get("/images", response_model=dict, operation_id="list_images")
@@ -32,7 +47,15 @@ async def list_images(
     rating_operator: str = "eq",
     hide_zero_rating: bool = False,
     reviewed: Optional[bool] = None,
+    permatag_keyword: Optional[str] = None,
+    permatag_category: Optional[str] = None,
+    permatag_signum: Optional[int] = None,
+    permatag_missing: bool = False,
+    category_filter_source: Optional[str] = None,
     date_order: str = "desc",
+    order_by: Optional[str] = None,
+    ml_keyword: Optional[str] = None,
+    ml_tag_type: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
     """List images for tenant with optional faceted search by keywords."""
@@ -41,6 +64,7 @@ async def list_images(
         apply_rating_filter,
         apply_hide_zero_rating_filter,
         apply_reviewed_filter,
+        apply_permatag_filter,
         apply_category_filters,
         calculate_relevance_scores
     )
@@ -58,6 +82,17 @@ async def list_images(
     if reviewed is not None:
         filter_ids = apply_reviewed_filter(db, tenant, reviewed, filter_ids)
 
+    if permatag_keyword:
+        filter_ids = apply_permatag_filter(
+            db,
+            tenant,
+            permatag_keyword,
+            signum=permatag_signum,
+            missing=permatag_missing,
+            category=permatag_category,
+            existing_filter=filter_ids
+        )
+
     if filter_ids is not None and not filter_ids:
         return {
             "tenant_id": tenant.id,
@@ -68,19 +103,42 @@ async def list_images(
         }
 
     # Handle per-category filters if provided
+    ml_keyword_id = None
+    if ml_keyword:
+        normalized_keyword = ml_keyword.strip().lower()
+        if normalized_keyword:
+            keyword_row = db.query(Keyword.id).filter(
+                func.lower(Keyword.keyword) == normalized_keyword,
+                Keyword.tenant_id == tenant.id
+            ).first()
+            if keyword_row:
+                ml_keyword_id = keyword_row[0]
+
     date_order = (date_order or "desc").lower()
     if date_order not in ("asc", "desc"):
         date_order = "desc"
+    order_by_value = (order_by or "").lower()
+    if order_by_value not in ("photo_creation", "image_id", "ml_score"):
+        order_by_value = None
+    if order_by_value == "ml_score" and not ml_keyword_id:
+        order_by_value = None
     order_by_date = func.coalesce(ImageMetadata.capture_timestamp, ImageMetadata.modified_time)
     order_by_date = order_by_date.desc() if date_order == "desc" else order_by_date.asc()
     id_order = ImageMetadata.id.desc() if date_order == "desc" else ImageMetadata.id.asc()
+    order_by_clauses = (id_order,) if order_by_value == "image_id" else (order_by_date, id_order)
 
     if category_filters:
         try:
             filters = json.loads(category_filters)
 
             # Apply category filters using helper
-            unique_image_ids_set = apply_category_filters(db, tenant, category_filters, filter_ids)
+            unique_image_ids_set = apply_category_filters(
+                db,
+                tenant,
+                category_filters,
+                filter_ids,
+                source=category_filter_source or "current"
+            )
 
             if unique_image_ids_set:
                 unique_image_ids = list(unique_image_ids_set)
@@ -97,9 +155,6 @@ async def list_images(
                     # Get active tag type for scoring
                     active_tag_type = get_tenant_setting(db, tenant.id, 'active_machine_tag_type', default='siglip')
 
-                    # Calculate relevance scores using helper
-                    score_map = calculate_relevance_scores(db, tenant, unique_image_ids, all_keywords, active_tag_type)
-
                     date_rows = db.query(
                         ImageMetadata.id,
                         ImageMetadata.capture_timestamp,
@@ -109,20 +164,42 @@ async def list_images(
                         row[0]: row[1] or row[2]
                         for row in date_rows
                     }
-
-                    # Sort unique_image_ids by relevance score (descending), then by date (order), then by ID (order)
-                    sorted_ids = sorted(
-                        unique_image_ids,
-                        key=lambda img_id: (
-                            -(score_map.get(img_id) or 0),
-                            (
-                                -(date_map.get(img_id).timestamp())
-                                if date_map.get(img_id) and date_order == "desc"
-                                else (date_map.get(img_id).timestamp() if date_map.get(img_id) else float('inf'))
-                            ),
-                            -img_id if date_order == "desc" else img_id
+                    if order_by_value == "image_id":
+                        sorted_ids = sorted(
+                            unique_image_ids,
+                            key=lambda img_id: -img_id if date_order == "desc" else img_id
                         )
-                    )
+                    elif order_by_value == "photo_creation":
+                        def date_key(img_id: int) -> float:
+                            date_value = date_map.get(img_id)
+                            if not date_value:
+                                return float('inf')
+                            ts = date_value.timestamp()
+                            return -ts if date_order == "desc" else ts
+
+                        sorted_ids = sorted(
+                            unique_image_ids,
+                            key=lambda img_id: (
+                                date_key(img_id),
+                                -img_id if date_order == "desc" else img_id
+                            )
+                        )
+                    else:
+                        # Calculate relevance scores using helper
+                        score_map = calculate_relevance_scores(db, tenant, unique_image_ids, all_keywords, active_tag_type)
+                        # Sort unique_image_ids by relevance score (descending), then by date (order), then by ID (order)
+                        sorted_ids = sorted(
+                            unique_image_ids,
+                            key=lambda img_id: (
+                                -(score_map.get(img_id) or 0),
+                                (
+                                    -(date_map.get(img_id).timestamp())
+                                    if date_map.get(img_id) and date_order == "desc"
+                                    else (date_map.get(img_id).timestamp() if date_map.get(img_id) else float('inf'))
+                                ),
+                                -img_id if date_order == "desc" else img_id
+                            )
+                        )
 
                     # Apply offset and limit
                     paginated_ids = sorted_ids[offset:offset + limit] if limit else sorted_ids[offset:]
@@ -150,7 +227,7 @@ async def list_images(
             # Fall back to returning all images
             query = db.query(ImageMetadata).filter_by(tenant_id=tenant.id)
             total = query.count()
-            images = query.order_by(order_by_date, id_order).limit(limit).offset(offset).all() if limit else query.order_by(order_by_date, id_order).offset(offset).all()
+            images = query.order_by(*order_by_clauses).limit(limit).offset(offset).all() if limit else query.order_by(*order_by_clauses).offset(offset).all()
 
     # Apply keyword filtering if provided (legacy support)
     elif keywords:
@@ -161,108 +238,132 @@ async def list_images(
             # Get active tag type for filtering
             active_tag_type = get_tenant_setting(db, tenant.id, 'active_machine_tag_type', default='siglip')
 
-            # Use subquery to get image IDs that match keywords
-            matching_image_ids = db.query(MachineTag.image_id).filter(
-                MachineTag.keyword.in_(keyword_list),
-                MachineTag.tenant_id == tenant.id,
-                MachineTag.tag_type == active_tag_type
-            ).distinct().subquery()
+            # Find keyword IDs for the given keyword names
+            keyword_ids = db.query(Keyword.id).filter(
+                Keyword.keyword.in_(keyword_list),
+                Keyword.tenant_id == tenant.id
+            ).all()
+            keyword_id_list = [kw[0] for kw in keyword_ids]
 
-            # Main query with relevance ordering (by sum of confidence scores)
-            order_by_date = func.coalesce(ImageMetadata.capture_timestamp, ImageMetadata.modified_time).desc()
-            query = db.query(
-                ImageMetadata,
-                func.sum(MachineTag.confidence).label('relevance_score')
-            ).join(
-                MachineTag,
-                and_(
-                    MachineTag.image_id == ImageMetadata.id,
-                    MachineTag.keyword.in_(keyword_list),
+            if not keyword_id_list:
+                # No matching keywords, return empty result
+                images = []
+                total = 0
+            else:
+                # Use subquery to get image IDs that match keywords
+                matching_image_ids = db.query(MachineTag.image_id).filter(
+                    MachineTag.keyword_id.in_(keyword_id_list),
                     MachineTag.tenant_id == tenant.id,
                     MachineTag.tag_type == active_tag_type
-                )
-            ).filter(
-                ImageMetadata.tenant_id == tenant.id,
-                ImageMetadata.id.in_(matching_image_ids)
-            ).group_by(
-                ImageMetadata.id
-            ).order_by(
-                func.sum(MachineTag.confidence).desc(),
-                order_by_date,
-                id_order
-            )
+                ).distinct().subquery()
 
-            if filter_ids is not None:
-                query = query.filter(ImageMetadata.id.in_(filter_ids))
-                total = db.query(ImageMetadata).filter(
-                    ImageMetadata.tenant_id == tenant.id,
-                    ImageMetadata.id.in_(matching_image_ids),
-                    ImageMetadata.id.in_(filter_ids)
-                ).count()
-            else:
-                total = db.query(ImageMetadata).filter(
+                # Main query with relevance ordering (by sum of confidence scores)
+                order_by_date = func.coalesce(ImageMetadata.capture_timestamp, ImageMetadata.modified_time).desc()
+                query = db.query(
+                    ImageMetadata,
+                    func.sum(MachineTag.confidence).label('relevance_score')
+                ).join(
+                    MachineTag,
+                    and_(
+                        MachineTag.image_id == ImageMetadata.id,
+                        MachineTag.keyword_id.in_(keyword_id_list),
+                        MachineTag.tenant_id == tenant.id,
+                        MachineTag.tag_type == active_tag_type
+                    )
+                ).filter(
                     ImageMetadata.tenant_id == tenant.id,
                     ImageMetadata.id.in_(matching_image_ids)
-                ).count()
+                ).group_by(
+                    ImageMetadata.id
+                ).order_by(
+                    func.sum(MachineTag.confidence).desc(),
+                    order_by_date,
+                    id_order
+                )
 
-            results = query.limit(limit).offset(offset).all() if limit else query.offset(offset).all()
-            images = [img for img, _ in results]
+                if filter_ids is not None:
+                    query = query.filter(ImageMetadata.id.in_(filter_ids))
+                    total = db.query(ImageMetadata).filter(
+                        ImageMetadata.tenant_id == tenant.id,
+                        ImageMetadata.id.in_(matching_image_ids),
+                        ImageMetadata.id.in_(filter_ids)
+                    ).count()
+                else:
+                    total = db.query(ImageMetadata).filter(
+                        ImageMetadata.tenant_id == tenant.id,
+                        ImageMetadata.id.in_(matching_image_ids)
+                    ).count()
+
+                results = query.limit(limit).offset(offset).all() if limit else query.offset(offset).all()
+                images = [img for img, _ in results]
 
         elif keyword_list and operator.upper() == "AND":
             # AND: Image must have ALL selected keywords
             # Get active tag type for filtering
             active_tag_type = get_tenant_setting(db, tenant.id, 'active_machine_tag_type', default='siglip')
 
-            # Start with images that have tenant_id
-            base_query = db.query(ImageMetadata.id).filter_by(tenant_id=tenant.id)
+            # Find keyword IDs for the given keyword names
+            keyword_ids = db.query(Keyword.id).filter(
+                Keyword.keyword.in_(keyword_list),
+                Keyword.tenant_id == tenant.id
+            ).all()
+            keyword_id_list = [kw[0] for kw in keyword_ids]
 
-            # For each keyword, filter images that have that keyword
-            for keyword in keyword_list:
-                subquery = db.query(MachineTag.image_id).filter(
-                    MachineTag.keyword == keyword,
-                    MachineTag.tenant_id == tenant.id,
-                    MachineTag.tag_type == active_tag_type
-                ).subquery()
+            if not keyword_id_list or len(keyword_id_list) < len(keyword_list):
+                # Not all keywords exist, return empty result
+                images = []
+                total = 0
+            else:
+                # Start with images that have tenant_id
+                base_query = db.query(ImageMetadata.id).filter_by(tenant_id=tenant.id)
 
-                base_query = base_query.filter(ImageMetadata.id.in_(subquery))
+                # For each keyword, filter images that have that keyword
+                for keyword_id in keyword_id_list:
+                    subquery = db.query(MachineTag.image_id).filter(
+                        MachineTag.keyword_id == keyword_id,
+                        MachineTag.tenant_id == tenant.id,
+                        MachineTag.tag_type == active_tag_type
+                    ).subquery()
 
-            if filter_ids is not None:
-                base_query = base_query.filter(ImageMetadata.id.in_(filter_ids))
+                    base_query = base_query.filter(ImageMetadata.id.in_(subquery))
 
-            # Get matching image IDs
-            matching_image_ids = base_query.subquery()
+                if filter_ids is not None:
+                    base_query = base_query.filter(ImageMetadata.id.in_(filter_ids))
 
-            # Query with relevance ordering (by sum of confidence scores)
-            order_by_date = func.coalesce(ImageMetadata.capture_timestamp, ImageMetadata.modified_time).desc()
-            query = db.query(
-                ImageMetadata,
-                func.sum(MachineTag.confidence).label('relevance_score')
-            ).join(
-                MachineTag,
-                and_(
-                    MachineTag.image_id == ImageMetadata.id,
-                    MachineTag.keyword.in_(keyword_list),
-                    MachineTag.tenant_id == tenant.id,
-                    MachineTag.tag_type == active_tag_type
+                # Get matching image IDs
+                matching_image_ids = base_query.subquery()
+
+                # Query with relevance ordering (by sum of confidence scores)
+                order_by_date = func.coalesce(ImageMetadata.capture_timestamp, ImageMetadata.modified_time).desc()
+                query = db.query(
+                    ImageMetadata,
+                    func.sum(MachineTag.confidence).label('relevance_score')
+                ).join(
+                    MachineTag,
+                    and_(
+                        MachineTag.image_id == ImageMetadata.id,
+                        MachineTag.keyword_id.in_(keyword_id_list),
+                        MachineTag.tenant_id == tenant.id,
+                        MachineTag.tag_type == active_tag_type
+                    )
+                ).filter(
+                    ImageMetadata.tenant_id == tenant.id,
+                    ImageMetadata.id.in_(matching_image_ids)
+                ).group_by(
+                    ImageMetadata.id
+                ).order_by(
+                    func.sum(MachineTag.confidence).desc(),
+                    order_by_date,
+                    id_order
                 )
-            ).filter(
-                ImageMetadata.tenant_id == tenant.id,
-                ImageMetadata.id.in_(matching_image_ids)
-            ).group_by(
-                ImageMetadata.id
-            ).order_by(
-                func.sum(MachineTag.confidence).desc(),
-                order_by_date,
-                id_order
-            )
 
-            total = db.query(ImageMetadata).filter(
-                ImageMetadata.tenant_id == tenant.id,
-                ImageMetadata.id.in_(matching_image_ids)
-            ).count()
+                total = db.query(ImageMetadata).filter(
+                    ImageMetadata.tenant_id == tenant.id,
+                    ImageMetadata.id.in_(matching_image_ids)
+                ).count()
 
-            results = query.limit(limit).offset(offset).all() if limit else query.offset(offset).all()
-            images = [img for img, _ in results]
+                results = query.limit(limit).offset(offset).all() if limit else query.offset(offset).all()
+                images = [img for img, _ in results]
         else:
             # No valid keywords, return all
             query = db.query(ImageMetadata).filter_by(tenant_id=tenant.id)
@@ -270,15 +371,45 @@ async def list_images(
                 query = query.filter(ImageMetadata.id.in_(filter_ids))
             total = query.count()
             order_by_date = func.coalesce(ImageMetadata.capture_timestamp, ImageMetadata.modified_time).desc()
-            images = query.order_by(order_by_date, id_order).limit(limit).offset(offset).all() if limit else query.order_by(order_by_date, id_order).offset(offset).all()
+            images = query.order_by(*order_by_clauses).limit(limit).offset(offset).all() if limit else query.order_by(*order_by_clauses).offset(offset).all()
     else:
         # No keywords filter, return all
         query = db.query(ImageMetadata).filter_by(tenant_id=tenant.id)
         if filter_ids is not None:
             query = query.filter(ImageMetadata.id.in_(filter_ids))
         total = query.count()
-        order_by_date = func.coalesce(ImageMetadata.capture_timestamp, ImageMetadata.modified_time).desc()
-        images = query.order_by(order_by_date, id_order).limit(limit).offset(offset).all() if limit else query.order_by(order_by_date, id_order).offset(offset).all()
+        if order_by_value == "ml_score" and ml_keyword_id:
+            active_tag_type = get_tenant_setting(db, tenant.id, 'active_machine_tag_type', default='siglip')
+            selected_tag_type = (ml_tag_type or active_tag_type).strip().lower()
+            model_name = None
+            if selected_tag_type == 'trained':
+                model_row = db.query(KeywordModel.model_name).filter(
+                    KeywordModel.tenant_id == tenant.id
+                ).order_by(
+                    func.coalesce(KeywordModel.updated_at, KeywordModel.created_at).desc()
+                ).first()
+                if model_row:
+                    model_name = model_row[0]
+            ml_scores = db.query(
+                MachineTag.image_id.label('image_id'),
+                func.max(MachineTag.confidence).label('ml_score')
+            ).filter(
+                MachineTag.keyword_id == ml_keyword_id,
+                MachineTag.tenant_id == tenant.id,
+                MachineTag.tag_type == selected_tag_type,
+                *([MachineTag.model_name == model_name] if model_name else [])
+            ).group_by(
+                MachineTag.image_id
+            ).subquery()
+            scored_query = query.outerjoin(ml_scores, ml_scores.c.image_id == ImageMetadata.id)
+            order_clauses = (
+                ml_scores.c.ml_score.desc().nullslast(),
+                order_by_date,
+                id_order
+            )
+            images = scored_query.order_by(*order_clauses).limit(limit).offset(offset).all() if limit else scored_query.order_by(*order_clauses).offset(offset).all()
+        else:
+            images = query.order_by(*order_by_clauses).limit(limit).offset(offset).all() if limit else query.order_by(*order_by_clauses).offset(offset).all()
 
     # Get tags for all images
     image_ids = [img.id for img in images]
@@ -291,18 +422,41 @@ async def list_images(
 
     # Get permatags for all images
     permatags = db.query(Permatag).filter(
-        Permatag.image_id.in_(image_ids),
-        Permatag.tenant_id == tenant.id
+        Permatag.image_id.in_(image_ids)
     ).all() if image_ids else []
+
+    # Load all keywords to avoid N+1 queries
+    keyword_ids = set()
+    for tag in tags:
+        keyword_ids.add(tag.keyword_id)
+    for permatag in permatags:
+        keyword_ids.add(permatag.keyword_id)
+
+    # Build keyword lookup map
+    keywords_map = {}
+    if keyword_ids:
+        from photocat.models.config import KeywordCategory
+        keywords_data = db.query(
+            Keyword.id,
+            Keyword.keyword,
+            KeywordCategory.name
+        ).join(
+            KeywordCategory, Keyword.category_id == KeywordCategory.id
+        ).filter(
+            Keyword.id.in_(keyword_ids)
+        ).all()
+        for kw_id, kw_name, cat_name in keywords_data:
+            keywords_map[kw_id] = {"keyword": kw_name, "category": cat_name}
 
     # Group tags by image_id
     tags_by_image = {}
     for tag in tags:
         if tag.image_id not in tags_by_image:
             tags_by_image[tag.image_id] = []
+        kw_info = keywords_map.get(tag.keyword_id, {"keyword": "unknown", "category": "unknown"})
         tags_by_image[tag.image_id].append({
-            "keyword": tag.keyword,
-            "category": tag.category,
+            "keyword": kw_info["keyword"],
+            "category": kw_info["category"],
             "confidence": round(tag.confidence, 2)
         })
 
@@ -312,10 +466,11 @@ async def list_images(
     for permatag in permatags:
         if permatag.image_id not in permatags_by_image:
             permatags_by_image[permatag.image_id] = []
+        kw_info = keywords_map.get(permatag.keyword_id, {"keyword": "unknown", "category": "unknown"})
         permatags_by_image[permatag.image_id].append({
             "id": permatag.id,
-            "keyword": permatag.keyword,
-            "category": permatag.category,
+            "keyword": kw_info["keyword"],
+            "category": kw_info["category"],
             "signum": permatag.signum
         })
         if permatag.created_at:
@@ -378,8 +533,10 @@ async def get_image_stats(
         ImageMetadata.tenant_id == tenant.id
     ).scalar() or 0
 
-    reviewed_image_count = db.query(func.count(distinct(Permatag.image_id))).filter(
-        Permatag.tenant_id == tenant.id
+    reviewed_image_count = db.query(func.count(distinct(Permatag.image_id))).join(
+        ImageMetadata, ImageMetadata.id == Permatag.image_id
+    ).filter(
+        ImageMetadata.tenant_id == tenant.id
     ).scalar() or 0
 
     # Get active tag type from tenant settings
@@ -417,22 +574,60 @@ async def get_image(
     active_tag_type = get_tenant_setting(db, tenant.id, 'active_machine_tag_type', default='siglip')
     tags = db.query(MachineTag).filter(
         MachineTag.image_id == image_id,
-        MachineTag.tenant_id == tenant.id,
-        MachineTag.tag_type == active_tag_type
+        MachineTag.tenant_id == tenant.id
     ).all()
 
     # Get permatags
     permatags = db.query(Permatag).filter(
-        Permatag.image_id == image_id,
-        Permatag.tenant_id == tenant.id
+        Permatag.image_id == image_id
     ).all()
 
-    machine_tags_list = [{"keyword": t.keyword, "category": t.category, "confidence": round(t.confidence, 2), "created_at": t.created_at.isoformat() if t.created_at else None} for t in tags]
-    permatags_list = [{"id": p.id, "keyword": p.keyword, "category": p.category, "signum": p.signum, "created_at": p.created_at.isoformat() if p.created_at else None} for p in permatags]
+    # Load keyword info for all tags
+    keyword_ids = set()
+    for tag in tags:
+        keyword_ids.add(tag.keyword_id)
+    for permatag in permatags:
+        keyword_ids.add(permatag.keyword_id)
+
+    # Build keyword lookup map
+    keywords_map = {}
+    if keyword_ids:
+        from photocat.models.config import KeywordCategory
+        keywords_data = db.query(
+            Keyword.id,
+            Keyword.keyword,
+            KeywordCategory.name
+        ).join(
+            KeywordCategory, Keyword.category_id == KeywordCategory.id
+        ).filter(
+            Keyword.id.in_(keyword_ids)
+        ).all()
+        for kw_id, kw_name, cat_name in keywords_data:
+            keywords_map[kw_id] = {"keyword": kw_name, "category": cat_name}
+
+    tags_by_type = {}
+    for tag in tags:
+        kw_info = keywords_map.get(tag.keyword_id, {"keyword": "unknown", "category": "unknown"})
+        tags_by_type.setdefault(tag.tag_type, []).append({
+            "keyword": kw_info["keyword"],
+            "category": kw_info["category"],
+            "confidence": round(tag.confidence, 2),
+            "created_at": tag.created_at.isoformat() if tag.created_at else None
+        })
+    machine_tags_list = tags_by_type.get(active_tag_type, [])
+    permatags_list = []
+    for p in permatags:
+        kw_info = keywords_map.get(p.keyword_id, {"keyword": "unknown", "category": "unknown"})
+        permatags_list.append({
+            "id": p.id,
+            "keyword": kw_info["keyword"],
+            "category": kw_info["category"],
+            "signum": p.signum,
+            "created_at": p.created_at.isoformat() if p.created_at else None
+        })
 
     calculated_tags = calculate_tags(machine_tags_list, permatags_list)
     reviewed_at = db.query(func.max(Permatag.created_at)).filter(
-        Permatag.tenant_id == tenant.id,
         Permatag.image_id == image_id
     ).scalar()
 
@@ -464,6 +659,7 @@ async def get_image(
         "rating": image.rating,
         "reviewed_at": reviewed_at.isoformat() if reviewed_at else None,
         "tags": machine_tags_list,
+        "machine_tags_by_type": tags_by_type,
         "permatags": permatags_list,
         "calculated_tags": calculated_tags,
         "exif_data": image.exif_data,

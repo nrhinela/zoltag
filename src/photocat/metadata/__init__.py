@@ -53,21 +53,22 @@ class Tenant(Base):
 
 class Person(Base):
     """Known people for facial recognition."""
-    
+
     __tablename__ = "people"
-    
+
     id = Column(Integer, primary_key=True)
     tenant_id = Column(String(255), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
-    
+
     name = Column(String(255), nullable=False, index=True)
     aliases = Column(JSONB, default=list)  # List of alternative names
     face_embedding_ref = Column(String(255))  # Cloud Storage reference to face encodings
-    
+
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
-    # Relationship
+
+    # Relationships
     tenant = relationship("Tenant", back_populates="people")
+    detected_faces = relationship("DetectedFace", back_populates="person")
 
 
 class ImageMetadata(Base):
@@ -126,6 +127,7 @@ class ImageMetadata(Base):
     # Relationships
     tags = relationship("ImageTag", back_populates="image", cascade="all, delete-orphan")
     machine_tags = relationship("MachineTag", back_populates="image", cascade="all, delete-orphan")
+    trained_tags = relationship("TrainedImageTag", back_populates="image", cascade="all, delete-orphan")
     permatags = relationship("Permatag", back_populates="image", cascade="all, delete-orphan")
     faces = relationship("DetectedFace", back_populates="image", cascade="all, delete-orphan")
     
@@ -139,80 +141,87 @@ class ImageMetadata(Base):
 
 class ImageTag(Base):
     """Tags applied to images from controlled vocabulary."""
-    
+
     __tablename__ = "image_tags"
-    
+
     id = Column(Integer, primary_key=True)
     image_id = Column(Integer, ForeignKey("image_metadata.id"), nullable=False)
-    tenant_id = Column(String(255), nullable=False, index=True)
-    
-    keyword = Column(String(255), nullable=False, index=True)
-    category = Column(String(255))  # Parent category from hierarchy
+    # Note: keyword_id FK not declared here (keywords table is in different declarative base)
+    keyword_id = Column(Integer, nullable=False, index=True)
+
     confidence = Column(Float)  # If auto-tagged
     manual = Column(Boolean, default=False)  # User-applied vs AI
-    
+
     created_at = Column(DateTime, default=datetime.utcnow)
-    
-    # Relationship
+
+    # Relationships
     image = relationship("ImageMetadata", back_populates="tags")
-    
+    # Note: keyword relationship not defined to avoid cross-module coupling
+    # Use: db.query(Keyword).filter(Keyword.id == image_tag.keyword_id)
+
     __table_args__ = (
-        Index("idx_tenant_keyword", "tenant_id", "keyword"),
+        Index("idx_image_tags_keyword_id", "keyword_id"),
     )
 
 
 class Permatag(Base):
     """Permanent human-verified tags with positive/negative polarity."""
-    
+
     __tablename__ = "permatags"
-    
+
     id = Column(Integer, primary_key=True)
     image_id = Column(Integer, ForeignKey("image_metadata.id", ondelete="CASCADE"), nullable=False)
     tenant_id = Column(String(255), nullable=False, index=True)
-    
-    keyword = Column(String(255), nullable=False, index=True)
-    category = Column(String(255))  # Parent category from hierarchy
+    # Note: keyword_id FK not declared here (keywords table is in different declarative base)
+    # Database enforces FK constraint; use db.query(Keyword).filter(Keyword.id == permatag.keyword_id)
+    keyword_id = Column(Integer, nullable=False, index=True)
+
     signum = Column(Integer, nullable=False)  # -1 = rejected, 1 = approved
-    
+
     created_at = Column(DateTime, default=datetime.utcnow)
     created_by = Column(String(255))  # Optional: track who approved/rejected
-    
-    # Relationship
+
+    # Relationships
     image = relationship("ImageMetadata", back_populates="permatags")
-    
+    # Note: keyword relationship not defined to avoid cross-module coupling
+    # Use: db.query(Keyword).filter(Keyword.id == permatag.keyword_id)
+
     __table_args__ = (
-        Index("idx_permatag_tenant_image", "tenant_id", "image_id"),
-        Index("idx_permatag_keyword", "keyword"),
+        Index("idx_permatag_image_id", "image_id"),
+        Index("idx_permatag_keyword_id", "keyword_id"),
     )
 
 
 class DetectedFace(Base):
     """Faces detected and recognized in images."""
-    
+
     __tablename__ = "detected_faces"
-    
+
     id = Column(Integer, primary_key=True)
     image_id = Column(Integer, ForeignKey("image_metadata.id"), nullable=False)
     tenant_id = Column(String(255), nullable=False, index=True)
-    
-    person_name = Column(String(255), index=True)  # From people.yaml
+
+    person_id = Column(Integer, ForeignKey("people.id", ondelete="SET NULL"), nullable=True)
+    person_name = Column(String(255), index=True)  # Fallback for unmatched faces
     confidence = Column(Float)
-    
+
     # Bounding box
     bbox_top = Column(Integer)
     bbox_right = Column(Integer)
     bbox_bottom = Column(Integer)
     bbox_left = Column(Integer)
-    
+
     # Face encoding (for matching)
     face_encoding = Column(ARRAY(Float))
-    
+
     created_at = Column(DateTime, default=datetime.utcnow)
-    
-    # Relationship
+
+    # Relationships
     image = relationship("ImageMetadata", back_populates="faces")
-    
+    person = relationship("Person", back_populates="detected_faces")
+
     __table_args__ = (
+        Index("idx_detected_faces_person_id", "person_id"),
         Index("idx_tenant_person", "tenant_id", "person_name"),
     )
 
@@ -250,7 +259,9 @@ class KeywordModel(Base):
 
     id = Column(Integer, primary_key=True)
     tenant_id = Column(String(255), nullable=False, index=True)
-    keyword = Column(String(255), nullable=False)
+    # Note: keyword_id FK not declared here (keywords table is in different declarative base)
+    # Database enforces FK constraint; use db.query(Keyword).filter(Keyword.id == model.keyword_id)
+    keyword_id = Column(Integer, nullable=False, index=True)
     model_name = Column(String(100), nullable=False)
     model_version = Column(String(50))
 
@@ -260,9 +271,18 @@ class KeywordModel(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+    # Note: keyword relationship not defined to avoid cross-module coupling
+    # Use: db.query(Keyword).filter(Keyword.id == keyword_model.keyword_id)
+
     __table_args__ = (
-        Index("idx_keyword_models_tenant_keyword", "tenant_id", "keyword", "model_name", unique=True),
+        Index("idx_keyword_models_tenant_model", "tenant_id", "model_name", unique=False),
     )
+
+
+# Note: Keyword and KeywordCategory are defined in models/config.py but are used here
+# for relationships. The models/config.py definitions should inherit from Base
+# defined in this module. This is a forward reference that gets resolved at runtime.
+# The foreign key relationship is automatically created via the migration layer.
 
 
 class TrainedImageTag(Base):
@@ -272,19 +292,22 @@ class TrainedImageTag(Base):
 
     id = Column(Integer, primary_key=True)
     image_id = Column(Integer, ForeignKey("image_metadata.id", ondelete="CASCADE"), nullable=False)
-    tenant_id = Column(String(255), nullable=False, index=True)
+    # Note: keyword_id FK not declared here (keywords table is in different declarative base)
+    keyword_id = Column(Integer, nullable=False, index=True)
 
-    keyword = Column(String(255), nullable=False)
-    category = Column(String(255))
     confidence = Column(Float)
     model_name = Column(String(100))
     model_version = Column(String(50))
 
     created_at = Column(DateTime, default=datetime.utcnow)
 
+    # Relationships
+    image = relationship("ImageMetadata", back_populates="trained_tags")
+    # Note: keyword relationship not defined to avoid cross-module coupling
+    # Use: db.query(Keyword).filter(Keyword.id == trained_tag.keyword_id)
+
     __table_args__ = (
-        Index("idx_trained_tags_tenant_image", "tenant_id", "image_id"),
-        Index("idx_trained_tags_unique", "tenant_id", "image_id", "keyword", "model_name", unique=True),
+        Index("idx_trained_tags_image_keyword_model", "image_id", "keyword_id", "model_name", unique=True),
     )
 
 
@@ -292,7 +315,7 @@ class MachineTag(Base):
     """Consolidated machine-generated tags supporting multiple algorithms.
 
     Stores output from all tagging algorithms (SigLIP, CLIP, trained models, etc.)
-    in a single table, identified by tag_type. Replaces ImageTag and TrainedImageTag.
+    in a single table, identified by tag_type.
 
     Design:
     - tag_type: Algorithm identifier ('siglip', 'clip', 'trained', etc.)
@@ -310,9 +333,10 @@ class MachineTag(Base):
     image_id = Column(Integer, ForeignKey("image_metadata.id", ondelete="CASCADE"), nullable=False)
     tenant_id = Column(String(255), nullable=False, index=True)
 
-    # Tag content
-    keyword = Column(String(255), nullable=False, index=True)
-    category = Column(String(255))  # Parent category from hierarchy
+    # Tag content (normalized via keyword_id)
+    # Note: keyword_id FK not declared here (keywords table is in different declarative base)
+    # Database enforces FK constraint; use db.query(Keyword).filter(Keyword.id == tag.keyword_id)
+    keyword_id = Column(Integer, nullable=False, index=True)
 
     # Algorithm output
     confidence = Column(Float, nullable=False)  # Confidence/relevance score [0-1]
@@ -335,20 +359,17 @@ class MachineTag(Base):
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
     # updated_at tracks when tags are refreshed (used with ON CONFLICT upsert)
 
-    # Relationship
+    # Relationships
     image = relationship("ImageMetadata", back_populates="machine_tags")
+    # Note: keyword relationship not defined to avoid cross-module coupling
+    # Use: db.query(Keyword).filter(Keyword.id == machine_tag.keyword_id)
 
     __table_args__ = (
         # Per-image lookup with algorithm filter
         Index("idx_machine_tags_per_image", "tenant_id", "image_id", "tag_type"),
 
-        # Faceted search: count images by keyword per algorithm
-        Index("idx_machine_tags_facets", "tenant_id", "tag_type", "keyword"),
-
         # Prevent duplicate outputs from same algorithm for same image/keyword/model
-        # Includes tenant_id to isolate multi-tenant uniqueness
-        # model_name is non-null, so this constraint is never bypassed
         Index("idx_machine_tags_unique",
-              "tenant_id", "image_id", "keyword", "tag_type", "model_name",
+              "image_id", "keyword_id", "tag_type", "model_name",
               unique=True),
     )

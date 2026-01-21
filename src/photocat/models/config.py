@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import List
 
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, JSON
+from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, JSON, Index
 from sqlalchemy.orm import relationship, DeclarativeBase
 
 import sqlalchemy as sa
@@ -35,19 +35,29 @@ class KeywordCategory(Base):
 
 class Keyword(Base):
     """Individual keyword within a category."""
-    
+
     __tablename__ = "keywords"
-    
+
     id = Column(Integer, primary_key=True)
+    tenant_id = Column(String(50), nullable=False, index=True)  # NEW: For tenant isolation and direct queries
     category_id = Column(Integer, ForeignKey('keyword_categories.id', ondelete='CASCADE'), nullable=False, index=True)
     keyword = Column(String(100), nullable=False)
     prompt = Column(Text, nullable=True)  # Optional custom prompt for tagging
     sort_order = Column(Integer, nullable=False, default=0)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
     updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
-    
+
     # Relationships
     category = relationship("KeywordCategory", back_populates="keywords")
+
+    # Note: Tag relationships (ImageTag, MachineTag, etc.) are defined in metadata/__init__.py
+    # since those models use a different declarative base. Relationships are handled through
+    # the database foreign keys; use db.query(ImageTag).filter(ImageTag.keyword_id == keyword.id)
+    # to retrieve related tags at query time.
+
+    __table_args__ = (
+        Index("idx_keywords_tenant_keyword_category", "tenant_id", "keyword", "category_id", unique=True),
+    )
 
 
 

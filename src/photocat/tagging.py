@@ -148,7 +148,7 @@ class SigLIPTagger:
         keywords = []
         for kw in candidate_keywords:
             keyword = kw['keyword']
-            prompt = kw.get('prompt', f"a photo of {keyword}")
+            prompt = kw.get('prompt') or f"a photo of {keyword}"
             text_prompts.append(prompt)
             keywords.append(keyword)
 

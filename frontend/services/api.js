@@ -61,10 +61,34 @@ export async function getImages(tenantId, filters = {}) {
       if (Object.keys(categoryFilters).length > 0) {
         params.append('category_filters', JSON.stringify(categoryFilters));
       }
+      if (filters.categoryFilterSource) {
+        params.append('category_filter_source', filters.categoryFilterSource);
+      }
   }
 
   if (filters.sortOrder) {
     params.append('date_order', filters.sortOrder);
+  }
+  if (filters.orderBy) {
+    params.append('order_by', filters.orderBy);
+  }
+  if (filters.permatagKeyword) {
+    params.append('permatag_keyword', filters.permatagKeyword);
+  }
+  if (filters.permatagCategory) {
+    params.append('permatag_category', filters.permatagCategory);
+  }
+  if (filters.permatagSignum !== undefined && filters.permatagSignum !== null) {
+    params.append('permatag_signum', String(filters.permatagSignum));
+  }
+  if (filters.permatagMissing) {
+    params.append('permatag_missing', 'true');
+  }
+  if (filters.mlKeyword) {
+    params.append('ml_keyword', filters.mlKeyword);
+  }
+  if (filters.mlTagType) {
+    params.append('ml_tag_type', filters.mlTagType);
   }
 
 
@@ -173,6 +197,9 @@ export async function getKeywords(tenantId, filters = {}) {
 
     if (filters.reviewed !== undefined && filters.reviewed !== '') {
         params.append('reviewed', filters.reviewed);
+    }
+    if (filters.source) {
+        params.append('source', filters.source);
     }
 
     const url = params.toString() ? `${API_BASE_URL}/keywords?${params.toString()}` : `${API_BASE_URL}/keywords`;
@@ -511,8 +538,15 @@ export async function deleteList(tenantId, listId) {
     return response.json();
 }
 
-export async function getListItems(tenantId, listId) {
-    const response = await fetch(`${API_BASE_URL}/lists/${listId}/items`, {
+export async function getListItems(tenantId, listId, { idsOnly = false } = {}) {
+    const params = new URLSearchParams();
+    if (idsOnly) {
+        params.append('ids_only', 'true');
+    }
+    const url = params.toString()
+        ? `${API_BASE_URL}/lists/${listId}/items?${params.toString()}`
+        : `${API_BASE_URL}/lists/${listId}/items`;
+    const response = await fetch(url, {
         headers: {
             'X-Tenant-ID': tenantId,
         },
@@ -573,6 +607,24 @@ export async function addPermatag(tenantId, imageId, keyword, category, signum) 
 
     return response.json();
 };
+
+export async function bulkPermatags(tenantId, operations) {
+    const response = await fetch(`${API_BASE_URL}/images/permatags/bulk`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-Tenant-ID': tenantId,
+        },
+        body: JSON.stringify({ operations }),
+    });
+
+    if (!response.ok) {
+        const message = await response.text();
+        throw new Error(message || 'Failed to update permatags');
+    }
+
+    return response.json();
+}
 
 export async function deletePermatag(tenantId, imageId, permatagId) {
     const response = await fetch(`${API_BASE_URL}/images/${imageId}/permatags/${permatagId}`, {

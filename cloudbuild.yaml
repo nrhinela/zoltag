@@ -16,6 +16,8 @@ steps:
   - name: 'gcr.io/cloud-builders/docker'
     args: [
       'build',
+      '--build-arg', 'PRELOAD_SIGLIP=1',
+      '--build-arg', 'BUILDKIT_INLINE_CACHE=1',
       '--cache-from', 'gcr.io/$PROJECT_ID/photocat:latest',
       '-t', 'gcr.io/$PROJECT_ID/photocat:$_COMMIT_SHA',
       '-t', 'gcr.io/$PROJECT_ID/photocat:latest',
@@ -32,7 +34,7 @@ steps:
     args: ['push', 'gcr.io/$PROJECT_ID/photocat:latest']
   
   # Deploy to Cloud Run (API service)
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  - name: 'gcr.io/cloud-builders/gcloud'
     entrypoint: gcloud
     args:
       - 'run'
@@ -58,7 +60,7 @@ steps:
       - '${_CLOUDSQL_INSTANCE}'
   
   # Deploy worker service
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  - name: 'gcr.io/cloud-builders/gcloud'
     entrypoint: gcloud
     args:
       - 'run'

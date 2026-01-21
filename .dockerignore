@@ -11,6 +11,7 @@ __pycache__
 .eggs
 *.egg-info
 .venv
+.venv-git
 venv
 .mypy_cache
 .pytest_cache
@@ -37,6 +38,8 @@ tests
 .env
 .env.*
 *.local
+.cache
+.local
 
 # macOS
 .DS_Store
@@ -44,6 +47,22 @@ tests
 # Build artifacts
 dist
 build
+tmp
+logs
+
+# Large data/model artifacts
+data
+datasets
+models
+checkpoints
+outputs
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.onnx
+*.npy
+*.npz
 
 # Claude
 CLAUDE.md

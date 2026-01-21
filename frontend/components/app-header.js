@@ -19,12 +19,13 @@ class AppHeader extends LitElement {
         syncStatus: { type: String },
         lastSyncAt: { type: String },
         lastSyncCount: { type: Number },
+        queueCount: { type: Number },
     }
 
     constructor() {
         super();
         this.tenants = [];
-        this.activeTab = 'search'; // Default
+        this.activeTab = 'home'; // Default
         this.isSyncing = false;
         this.syncCount = 0;
         this._stopRequested = false;
@@ -32,6 +33,7 @@ class AppHeader extends LitElement {
         this.syncStatus = 'idle';
         this.lastSyncAt = '';
         this.lastSyncCount = 0;
+        this.queueCount = 0;
     }
 
   connectedCallback() {
@@ -110,6 +112,18 @@ class AppHeader extends LitElement {
             <div class="bg-gray-100 border-b border-gray-200">
                 <div class="max-w-7xl mx-auto px-4">
                     <button
+                        @click=${() => this._handleTabChange('home')}
+                        class="py-3 px-6 text-base font-semibold ${this.activeTab === 'home' ? 'border-b-4 border-blue-600 text-blue-800 bg-blue-50' : 'text-gray-600 hover:text-gray-800 hover:bg-gray-100'} transition-all duration-200"
+                    >
+                        <i class="fas fa-home mr-2"></i>Home
+                    </button>
+                    <button
+                        @click=${() => this._handleTabChange('curate')}
+                        class="py-3 px-6 text-base font-semibold ${this.activeTab === 'curate' ? 'border-b-4 border-blue-600 text-blue-800 bg-blue-50' : 'text-gray-600 hover:text-gray-800 hover:bg-gray-100'} transition-all duration-200"
+                    >
+                        <i class="fas fa-star mr-2"></i>Curate
+                    </button>
+                    <button
                         @click=${() => this._handleTabChange('search')}
                         class="py-3 px-6 text-base font-semibold ${this.activeTab === 'search' ? 'border-b-4 border-blue-600 text-blue-800 bg-blue-50' : 'text-gray-600 hover:text-gray-800 hover:bg-gray-100'} transition-all duration-200"
                     >
@@ -132,6 +146,15 @@ class AppHeader extends LitElement {
                         class="py-3 px-6 text-base font-semibold ${this.activeTab === 'ml-training' ? 'border-b-4 border-blue-600 text-blue-800 bg-blue-50' : 'text-gray-600 hover:text-gray-800 hover:bg-gray-100'} transition-all duration-200"
                     >
                         <i class="fas fa-brain mr-2"></i>ML Training
+                    </button>
+                    <button
+                        @click=${() => this._handleTabChange('queue')}
+                        class="py-3 px-6 text-base font-semibold ${this.activeTab === 'queue' ? 'border-b-4 border-blue-600 text-blue-800 bg-blue-50' : 'text-gray-600 hover:text-gray-800 hover:bg-gray-100'} transition-all duration-200"
+                    >
+                        <i class="fas fa-stream mr-2"></i>Queue
+                        <span class="ml-2 text-xs font-semibold px-2 py-0.5 rounded-full ${this.queueCount > 0 ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-600'}">
+                            ${this.queueCount}
+                        </span>
                     </button>
                 </div>
             </div>

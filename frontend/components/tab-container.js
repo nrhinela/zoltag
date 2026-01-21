@@ -14,16 +14,19 @@ class TabContainer extends LitElement {
 
   constructor() {
     super();
-    this.activeTab = 'search'; // Default active tab
+    this.activeTab = 'home'; // Default active tab
   }
 
   render() {
     return html`
       <div class="p-4">
+        ${this.activeTab === 'home' ? html`<slot name="home"></slot>` : ''}
+        ${this.activeTab === 'curate' ? html`<slot name="curate"></slot>` : ''}
         ${this.activeTab === 'search' ? html`<slot name="search"></slot>` : ''}
         ${this.activeTab === 'lists' ? html`<slot name="lists"></slot>` : ''}
         ${this.activeTab === 'tagging' ? html`<slot name="tagging"></slot>` : ''}
         ${this.activeTab === 'ml-training' ? html`<slot name="ml-training"></slot>` : ''}
+        ${this.activeTab === 'queue' ? html`<slot name="queue"></slot>` : ''}
       </div>
     `;
   }

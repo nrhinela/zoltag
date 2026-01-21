@@ -1,12 +1,14 @@
 """CLI tool for local image ingestion and testing."""
 
 import sys
+import io
 from pathlib import Path
 from typing import Optional
 import click
 from sqlalchemy import create_engine, func, or_
 from sqlalchemy.orm import sessionmaker
 from google.cloud import storage
+from PIL import Image
 
 from photocat.settings import settings
 from photocat.tenant import Tenant, TenantContext
@@ -20,15 +22,19 @@ from photocat.exif import (
     parse_exif_str,
 )
 from photocat.metadata import ImageMetadata, KeywordModel, MachineTag, Tenant as TenantModel
+from photocat.models.config import Keyword
 from photocat.learning import (
     build_keyword_models,
     ensure_image_embedding,
     recompute_trained_tags_for_image,
-    load_keyword_models
+    load_keyword_models,
+    score_keywords_for_categories,
+    score_image_with_models
 )
 from photocat.tagging import get_tagger
 from photocat.config.db_config import ConfigManager
 from photocat.dependencies import get_secret
+from photocat.dropbox import DropboxClient
 
 
 @click.group()
@@ -809,6 +815,227 @@ def retag(tenant_id: str):
     
     db.close()
     click.echo(f"\n✓ Retagging complete!")
+
+
+@cli.command(name='sync-dropbox')
+@click.option('--tenant-id', default='demo', help='Tenant ID to sync')
+@click.option('--count', default=1, help='Number of images to sync (default: 1)')
+@click.option('--model', default='siglip', type=click.Choice(['siglip', 'clip']), help='Tagging model to use')
+def sync_dropbox(tenant_id: str, count: int, model: str):
+    """Sync images from Dropbox (same as pressing sync button on web)."""
+
+    # Setup database
+    engine = create_engine(settings.database_url)
+    Session = sessionmaker(bind=engine)
+    db = Session()
+
+    try:
+        # Load tenant
+        tenant = db.query(TenantModel).filter(TenantModel.id == tenant_id).first()
+        if not tenant:
+            click.echo(f"Error: Tenant {tenant_id} not found", err=True)
+            return
+
+        TenantContext.set(Tenant(
+            id=tenant.id,
+            name=tenant.name,
+            storage_bucket=tenant.storage_bucket,
+            thumbnail_bucket=tenant.thumbnail_bucket
+        ))
+
+        click.echo(f"Syncing from Dropbox for tenant: {tenant.name}")
+
+        # Get Dropbox credentials
+        dropbox_token = get_secret(f"{tenant_id}/dropbox_refresh_token")
+        if not dropbox_token:
+            click.echo("Error: No Dropbox refresh token configured", err=True)
+            return
+
+        # Initialize Dropbox client
+        dropbox_client = DropboxClient(dropbox_token)
+
+        # Get sync folders from tenant config or use root
+        config_mgr = ConfigManager(db, tenant_id)
+        tenant_config = db.query(TenantModel).filter(TenantModel.id == tenant_id).first()
+        sync_folders = []
+        if tenant_config.config_data and 'sync_folders' in tenant_config.config_data:
+            sync_folders = tenant_config.config_data['sync_folders']
+
+        if not sync_folders:
+            sync_folders = ['']  # Root if no folders configured
+
+        click.echo(f"Sync folders: {sync_folders}")
+
+        # Get all keywords
+        all_keywords = config_mgr.get_all_keywords()
+        if not all_keywords:
+            click.echo("Error: No keywords configured", err=True)
+            return
+
+        # Group keywords by category
+        by_category = {}
+        for kw in all_keywords:
+            cat = kw['category']
+            if cat not in by_category:
+                by_category[cat] = []
+            by_category[cat].append(kw)
+
+        click.echo(f"Keywords: {len(all_keywords)} in {len(by_category)} categories")
+
+        # Get tagger
+        tagger = get_tagger(model_type=model)
+        model_name = getattr(tagger, "model_name", model)
+        model_version = getattr(tagger, "model_version", model_name)
+
+        # Process images
+        processed = 0
+        for folder in sync_folders:
+            if processed >= count:
+                break
+
+            click.echo(f"\nListing folder: {folder or '(root)'}")
+
+            # Get list of files in folder
+            result = dropbox_client.list_folder(folder)
+            entries = result.get('entries', [])
+
+            click.echo(f"Found {len(entries)} entries")
+
+            # Filter to image files
+            processor = ImageProcessor()
+            unprocessed = []
+
+            for entry in entries:
+                if entry.get('tag') == 'file' and processor.is_supported(entry.get('name', '')):
+                    # Check if already processed
+                    dropbox_id = entry.get('id')
+                    existing = db.query(ImageMetadata).filter(
+                        ImageMetadata.tenant_id == tenant_id,
+                        ImageMetadata.dropbox_id == dropbox_id
+                    ).first()
+
+                    if not existing:
+                        unprocessed.append(entry)
+
+            click.echo(f"Found {len(unprocessed)} unprocessed images")
+
+            # Process images one by one
+            for entry in unprocessed:
+                if processed >= count:
+                    break
+
+                try:
+                    dropbox_path = entry['path_display']
+                    click.echo(f"\nProcessing: {dropbox_path}")
+
+                    # Download thumbnail
+                    thumbnail_data = dropbox_client.get_thumbnail(entry['id'], size='w640h480')
+                    if not thumbnail_data:
+                        click.echo(f"  ✗ Failed to download thumbnail", err=True)
+                        continue
+
+                    # Extract features
+                    processor = ImageProcessor()
+                    image = Image.open(io.BytesIO(thumbnail_data))
+                    if image.mode != "RGB":
+                        image = image.convert("RGB")
+
+                    features = processor.extract_visual_features(image)
+
+                    # Get metadata from Dropbox
+                    dropbox_meta = dropbox_client.get_metadata(entry['id'])
+                    media_info = dropbox_meta.get('media_info', {})
+
+                    click.echo(f"  Dimensions: {features['width']}x{features['height']}")
+
+                    # Extract EXIF and other metadata
+                    exif = {}
+                    try:
+                        img_pil = Image.open(io.BytesIO(thumbnail_data))
+                        exif_data = img_pil._getexif() if hasattr(img_pil, '_getexif') else None
+                        if exif_data:
+                            from PIL.ExifTags import TAGS
+                            exif = {TAGS.get(k, k): v for k, v in exif_data.items()}
+                    except Exception:
+                        pass
+
+                    # Create metadata record
+                    metadata = ImageMetadata(
+                        tenant_id=tenant_id,
+                        filename=entry.get('name', ''),
+                        dropbox_id=entry.get('id'),
+                        dropbox_path=dropbox_path,
+                        width=features['width'],
+                        height=features['height'],
+                        format=features['format'],
+                        perceptual_hash=features['perceptual_hash'],
+                        color_histogram=features['color_histogram'],
+                        exif_data=exif,
+                        thumbnail_path='',
+                        embedding_generated=False,
+                        faces_detected=False,
+                        tags_applied=False,
+                    )
+                    db.add(metadata)
+                    db.commit()
+                    db.refresh(metadata)
+
+                    click.echo(f"  ✓ Metadata recorded (ID: {metadata.id})")
+
+                    # Tag with model
+                    click.echo(f"  Running {model} inference...")
+
+                    # Delete existing tags
+                    db.query(MachineTag).filter(
+                        MachineTag.image_id == metadata.id,
+                        MachineTag.tag_type == 'siglip'
+                    ).delete()
+
+                    # Score keywords
+                    all_tags = score_keywords_for_categories(
+                        image_data=thumbnail_data,
+                        keywords_by_category=by_category,
+                        model_type=model,
+                        threshold=0.15
+                    )
+
+                    click.echo(f"  Found {len(all_tags)} tags")
+
+                    # Create tag records
+                    for keyword_str, confidence in all_tags:
+                        keyword_record = db.query(Keyword).filter(
+                            Keyword.tenant_id == tenant_id,
+                            Keyword.keyword == keyword_str
+                        ).first()
+
+                        if not keyword_record:
+                            continue
+
+                        tag = MachineTag(
+                            image_id=metadata.id,
+                            tenant_id=tenant_id,
+                            keyword_id=keyword_record.id,
+                            confidence=confidence,
+                            tag_type='siglip',
+                            model_name=model_name,
+                            model_version=model_version
+                        )
+                        db.add(tag)
+
+                    metadata.tags_applied = len(all_tags) > 0
+                    db.commit()
+
+                    click.echo(f"  ✓ Complete: {len(all_tags)} tags applied")
+                    processed += 1
+
+                except Exception as e:
+                    click.echo(f"  ✗ Error: {e}", err=True)
+                    db.rollback()
+
+        click.echo(f"\n✓ Synced {processed} images from Dropbox")
+
+    finally:
+        db.close()
 
 
 if __name__ == '__main__':

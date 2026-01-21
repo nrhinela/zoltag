@@ -10,6 +10,7 @@ from google.cloud import storage
 from photocat.dependencies import get_db, get_tenant, get_tenant_setting
 from photocat.tenant import Tenant
 from photocat.metadata import ImageMetadata, MachineTag, Permatag, ImageEmbedding
+from photocat.models.config import Keyword
 from photocat.settings import settings
 from photocat.image import ImageProcessor
 from photocat.config.db_config import ConfigManager
@@ -261,15 +262,22 @@ async def retag_single_image(
             model_weight=settings.keyword_model_weight
         )
 
-        # Create new tags
-        keyword_to_category = {kw['keyword']: kw['category'] for kw in all_keywords}
+        # Create new tags - look up keyword_ids from database
+        db_keywords = db.query(Keyword).filter(
+            Keyword.tenant_id == tenant.id
+        ).all()
+        keyword_to_id = {kw.keyword: kw.id for kw in db_keywords}
 
         for keyword, confidence in all_tags:
+            keyword_id = keyword_to_id.get(keyword)
+            if not keyword_id:
+                print(f"Warning: Keyword '{keyword}' not found in keyword config")
+                continue
+
             tag = MachineTag(
                 image_id=image.id,
                 tenant_id=tenant.id,
-                keyword=keyword,
-                category=keyword_to_category[keyword],
+                keyword_id=keyword_id,
                 confidence=confidence,
                 tag_type='siglip',
                 model_name=model_name,
@@ -330,6 +338,12 @@ async def retag_all_images(
     storage_client = storage.Client(project=settings.gcp_project_id)
     thumbnail_bucket = storage_client.bucket(tenant.get_thumbnail_bucket(settings))
 
+    # Build keyword name to ID mapping once, before processing images
+    db_keywords = db.query(Keyword).filter(
+        Keyword.tenant_id == tenant.id
+    ).all()
+    keyword_to_id = {kw.keyword: kw.id for kw in db_keywords}
+
     processed = 0
     failed = 0
 
@@ -371,15 +385,16 @@ async def retag_all_images(
                 model_weight=settings.keyword_model_weight
             )
 
-            # Create new tags
-            keyword_to_category = {kw['keyword']: kw['category'] for kw in all_keywords}
-
             for keyword, confidence in all_tags:
+                keyword_id = keyword_to_id.get(keyword)
+                if not keyword_id:
+                    print(f"Warning: Keyword '{keyword}' not found in keyword config")
+                    continue
+
                 tag = MachineTag(
                     image_id=image.id,
                     tenant_id=tenant.id,
-                    keyword=keyword,
-                    category=keyword_to_category[keyword],
+                    keyword_id=keyword_id,
                     confidence=confidence,
                     tag_type='siglip',
                     model_name=model_name,

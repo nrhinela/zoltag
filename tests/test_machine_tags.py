@@ -5,8 +5,9 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, distinct
 
 from photocat.metadata import (
-    ImageMetadata, ImageTag, TrainedImageTag, MachineTag, Permatag
+    ImageMetadata, MachineTag, Permatag
 )
+from photocat.models.config import Keyword, KeywordCategory
 from photocat.dependencies import get_tenant_setting
 
 
@@ -27,43 +28,39 @@ def sample_tags_data(test_db: Session):
     test_db.add(image)
     test_db.commit()
 
-    # Create ImageTag entries (for SigLIP)
-    tag1 = ImageTag(
-        image_id=1,
+    # Create keywords for use in tags
+    category = KeywordCategory(
+        id=1,
         tenant_id=tenant_id,
+        name="animals",
+        sort_order=0
+    )
+    test_db.add(category)
+    test_db.commit()
+
+    keyword1 = Keyword(
+        id=1,
+        tenant_id=tenant_id,
+        category_id=1,
         keyword="dog",
-        category="animals",
-        confidence=0.95
+        sort_order=0
     )
-    tag2 = ImageTag(
-        image_id=1,
+    keyword2 = Keyword(
+        id=2,
         tenant_id=tenant_id,
+        category_id=1,
         keyword="outdoor",
-        category="setting",
-        confidence=0.87
+        sort_order=1
     )
-    test_db.add(tag1)
-    test_db.add(tag2)
-
-    # Create TrainedImageTag entries
-    trained_tag = TrainedImageTag(
-        image_id=1,
-        tenant_id=tenant_id,
-        keyword="happy",
-        category="emotion",
-        confidence=0.72,
-        model_name="emotion_v1",
-        model_version="1.0"
-    )
-    test_db.add(trained_tag)
-
+    test_db.add(keyword1)
+    test_db.add(keyword2)
     test_db.commit()
 
     return {
         "image_id": 1,
         "tenant_id": tenant_id,
-        "image_tags_count": 2,
-        "trained_tags_count": 1
+        "keyword_ids": [1, 2],
+        "category_id": 1
     }
 
 
@@ -71,7 +68,7 @@ class TestMachineTagModel:
     """Test MachineTag ORM model."""
 
     def test_machine_tag_creation(self, test_db: Session):
-        """Test creating a MachineTag entry."""
+        """Test creating a MachineTag entry with FK relationship."""
         tenant_id = "test_tenant"
 
         # Create image first
@@ -86,12 +83,32 @@ class TestMachineTagModel:
         test_db.add(image)
         test_db.commit()
 
-        # Create MachineTag
+        # Create keyword category
+        category = KeywordCategory(
+            id=1,
+            tenant_id=tenant_id,
+            name="animals",
+            sort_order=0
+        )
+        test_db.add(category)
+        test_db.commit()
+
+        # Create keyword
+        keyword = Keyword(
+            id=1,
+            tenant_id=tenant_id,
+            category_id=1,
+            keyword="dog",
+            sort_order=0
+        )
+        test_db.add(keyword)
+        test_db.commit()
+
+        # Create MachineTag with FK
         machine_tag = MachineTag(
             image_id=1,
             tenant_id=tenant_id,
-            keyword="dog",
-            category="animals",
+            keyword_id=1,  # FK instead of keyword string
             confidence=0.95,
             tag_type="siglip",
             model_name="google/siglip-so400m-patch14-384",
@@ -103,7 +120,7 @@ class TestMachineTagModel:
         # Verify
         retrieved = test_db.query(MachineTag).filter_by(
             image_id=1,
-            keyword="dog"
+            keyword_id=1  # Query by FK instead of keyword string
         ).first()
 
         assert retrieved is not None
@@ -127,12 +144,31 @@ class TestMachineTagModel:
         test_db.add(image)
         test_db.commit()
 
-        # Create first tag
+        # Create keyword
+        category = KeywordCategory(
+            id=1,
+            tenant_id=tenant_id,
+            name="animals",
+            sort_order=0
+        )
+        test_db.add(category)
+        test_db.commit()
+
+        keyword = Keyword(
+            id=1,
+            tenant_id=tenant_id,
+            category_id=1,
+            keyword="dog",
+            sort_order=0
+        )
+        test_db.add(keyword)
+        test_db.commit()
+
+        # Create first tag with FK
         tag1 = MachineTag(
             image_id=1,
             tenant_id=tenant_id,
-            keyword="dog",
-            category="animals",
+            keyword_id=1,
             confidence=0.95,
             tag_type="siglip",
             model_name="google/siglip-so400m-patch14-384"
@@ -140,12 +176,11 @@ class TestMachineTagModel:
         test_db.add(tag1)
         test_db.commit()
 
-        # Try to create duplicate - should raise
+        # Try to create duplicate - should raise (violates unique constraint)
         tag2 = MachineTag(
             image_id=1,
             tenant_id=tenant_id,
-            keyword="dog",
-            category="animals",
+            keyword_id=1,
             confidence=0.96,  # Different confidence
             tag_type="siglip",
             model_name="google/siglip-so400m-patch14-384"
@@ -161,12 +196,11 @@ class TestMachineTagQueries:
 
     def test_query_tags_by_image_and_type(self, test_db: Session, sample_tags_data):
         """Test querying tags for an image with specific tag_type."""
-        # First manually insert MachineTag entries (simulating migration)
+        # Create MachineTag with FK to keyword
         tag = MachineTag(
             image_id=sample_tags_data["image_id"],
             tenant_id=sample_tags_data["tenant_id"],
-            keyword="dog",
-            category="animals",
+            keyword_id=sample_tags_data["keyword_ids"][0],  # Use FK
             confidence=0.95,
             tag_type="siglip",
             model_name="google/siglip-so400m-patch14-384"
@@ -181,11 +215,11 @@ class TestMachineTagQueries:
         ).all()
 
         assert len(results) == 1
-        assert results[0].keyword == "dog"
+        assert results[0].keyword_id == sample_tags_data["keyword_ids"][0]
         assert results[0].confidence == 0.95
 
-    def test_query_tags_by_type_and_keyword(self, test_db: Session):
-        """Test querying tags by type and keyword for faceting."""
+    def test_query_tags_by_type_and_keyword_id(self, test_db: Session):
+        """Test querying tags by type and keyword_id for faceting."""
         tenant_id = "test_tenant"
 
         # Create images
@@ -201,13 +235,32 @@ class TestMachineTagQueries:
             test_db.add(image)
         test_db.commit()
 
-        # Create tags - all same keyword/type/model but different images
+        # Create keyword
+        category = KeywordCategory(
+            id=1,
+            tenant_id=tenant_id,
+            name="animals",
+            sort_order=0
+        )
+        test_db.add(category)
+        test_db.commit()
+
+        keyword = Keyword(
+            id=1,
+            tenant_id=tenant_id,
+            category_id=1,
+            keyword="dog",
+            sort_order=0
+        )
+        test_db.add(keyword)
+        test_db.commit()
+
+        # Create tags - all same keyword_id/type/model but different images
         for i in range(1, 4):
             tag = MachineTag(
                 image_id=i,
                 tenant_id=tenant_id,
-                keyword="dog",
-                category="animals",
+                keyword_id=1,  # Use FK instead of keyword string
                 confidence=0.90 + (i * 0.01),
                 tag_type="siglip",
                 model_name="google/siglip-so400m-patch14-384"
@@ -215,11 +268,11 @@ class TestMachineTagQueries:
             test_db.add(tag)
         test_db.commit()
 
-        # Query count by keyword
+        # Query count by keyword_id
         count = test_db.query(func.count(distinct(MachineTag.image_id))).filter(
             MachineTag.tenant_id == tenant_id,
             MachineTag.tag_type == "siglip",
-            MachineTag.keyword == "dog"
+            MachineTag.keyword_id == 1  # Query by FK instead of keyword string
         ).scalar()
 
         assert count == 3
@@ -288,13 +341,33 @@ class TestMachineTagIndexes:
         test_db.add(image)
         test_db.commit()
 
-        # Create multiple tags
+        # Create keyword category and keywords
+        category = KeywordCategory(
+            id=1,
+            tenant_id=tenant_id,
+            name="test",
+            sort_order=0
+        )
+        test_db.add(category)
+        test_db.commit()
+
+        # Create multiple keywords and tags
+        for i in range(10):
+            keyword = Keyword(
+                id=i+1,
+                tenant_id=tenant_id,
+                category_id=1,
+                keyword=f"keyword{i}",
+                sort_order=i
+            )
+            test_db.add(keyword)
+        test_db.commit()
+
         for i in range(10):
             tag = MachineTag(
                 image_id=1,
                 tenant_id=tenant_id,
-                keyword=f"keyword{i}",
-                category="test",
+                keyword_id=i+1,  # FK instead of keyword string
                 confidence=0.5 + (i * 0.01),
                 tag_type="siglip",
                 model_name=f"model{i}"
@@ -312,7 +385,7 @@ class TestMachineTagIndexes:
         assert len(results) == 10
 
     def test_facets_index_for_counts(self, test_db: Session):
-        """Verify facet index works for keyword counting."""
+        """Verify facet index works for keyword_id counting."""
         tenant_id = "test_tenant"
 
         # Create multiple images with same tag
@@ -328,13 +401,32 @@ class TestMachineTagIndexes:
             test_db.add(image)
         test_db.commit()
 
-        # Add tags
+        # Create keyword
+        category = KeywordCategory(
+            id=1,
+            tenant_id=tenant_id,
+            name="animals",
+            sort_order=0
+        )
+        test_db.add(category)
+        test_db.commit()
+
+        keyword = Keyword(
+            id=1,
+            tenant_id=tenant_id,
+            category_id=1,
+            keyword="dog",
+            sort_order=0
+        )
+        test_db.add(keyword)
+        test_db.commit()
+
+        # Add tags with FK
         for i in range(1, 6):
             tag = MachineTag(
                 image_id=i,
                 tenant_id=tenant_id,
-                keyword="dog",
-                category="animals",
+                keyword_id=1,  # FK instead of keyword string
                 confidence=0.90,
                 tag_type="siglip",
                 model_name="google/siglip-so400m-patch14-384"
@@ -342,11 +434,11 @@ class TestMachineTagIndexes:
             test_db.add(tag)
         test_db.commit()
 
-        # Count images by keyword (simulating facet counts)
+        # Count images by keyword_id (simulating facet counts)
         count = test_db.query(func.count(distinct(MachineTag.image_id))).filter(
             MachineTag.tenant_id == tenant_id,
             MachineTag.tag_type == "siglip",
-            MachineTag.keyword == "dog"
+            MachineTag.keyword_id == 1  # Query by FK instead of keyword string
         ).scalar()
 
         assert count == 5

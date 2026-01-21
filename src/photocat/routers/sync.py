@@ -18,6 +18,7 @@ from photocat.exif import (
     parse_exif_str,
 )
 from photocat.metadata import Tenant as TenantModel, ImageMetadata, MachineTag
+from photocat.models.config import Keyword
 from photocat.settings import settings
 from photocat.image import ImageProcessor
 from photocat.config.db_config import ConfigManager
@@ -397,14 +398,24 @@ async def trigger_sync(
                         model_weight=settings.keyword_model_weight
                     )
 
-                    keyword_to_category = {kw['keyword']: kw['category'] for kw in all_keywords}
+                    # Build keyword lookup by string
+                    keyword_lookup = {kw['keyword']: kw for kw in all_keywords}
 
-                    for keyword, confidence in all_tags:
+                    for keyword_str, confidence in all_tags:
+                        # Look up keyword_id from database
+                        keyword_record = db.query(Keyword).filter(
+                            Keyword.tenant_id == tenant.id,
+                            Keyword.keyword == keyword_str
+                        ).first()
+
+                        if not keyword_record:
+                            # Skip if keyword not found (shouldn't happen if config is consistent)
+                            continue
+
                         tag = MachineTag(
                             image_id=metadata.id,
                             tenant_id=tenant.id,
-                            keyword=keyword,
-                            category=keyword_to_category[keyword],
+                            keyword_id=keyword_record.id,
                             confidence=confidence,
                             tag_type='siglip',
                             model_name=model_name,
