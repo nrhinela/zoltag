@@ -213,6 +213,20 @@ if has_empty_filter:
 - ✅ All filter paths updated (OR, AND, none, category)
 - ✅ Git commit: `8d32123` - "feat: update list_images endpoint to use non-materialized subqueries"
 
+#### Bug Fix: Subquery Column Normalization
+
+**Issue Found**: Initial implementation had inconsistent subquery column names
+- `apply_list_filter_subquery` returned `PhotoListItem.photo_id`
+- Other subqueries returned `ImageMetadata.id`
+- This caused 500 errors when applying multiple filters
+
+**Fix Applied**: Normalized all subqueries to return `ImageMetadata.id`
+- Modified `apply_list_filter_subquery` to wrap PhotoListItem query
+- Updated filter application in core.py to use consistent column names
+- Git commit: `2df014a` - "fix: normalize subquery column names to ImageMetadata.id"
+
+**Result**: ✅ All endpoints now working correctly
+
 #### Next: Step 3 - Equivalence Testing
 
 Create tests to verify:
