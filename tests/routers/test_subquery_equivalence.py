@@ -63,8 +63,8 @@ def sample_photo_list(test_db: Session, test_tenant: Tenant, sample_images):
     photo_list = PhotoList(
         id=1,
         tenant_id=tenant_id,
-        name="test-list",
-        description="Test list"
+        title="test-list",
+        notebox="Test list"
     )
     test_db.add(photo_list)
     test_db.flush()

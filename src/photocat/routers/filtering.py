@@ -568,11 +568,16 @@ def apply_reviewed_filter_subquery(
     """
     if reviewed:
         # Images with at least one permatag (reviewed)
-        return db.query(Permatag.image_id).join(
+        permatag_images = db.query(Permatag.image_id).join(
             ImageMetadata, ImageMetadata.id == Permatag.image_id
         ).filter(
             ImageMetadata.tenant_id == tenant.id
         ).distinct().subquery()
+
+        return db.query(ImageMetadata.id).filter(
+            ImageMetadata.tenant_id == tenant.id,
+            ImageMetadata.id.in_(permatag_images)
+        ).subquery()
     else:
         # Images without any permatag (unreviewed) - use NOT IN subquery
         reviewed_images = db.query(Permatag.image_id).join(
@@ -583,7 +588,7 @@ def apply_reviewed_filter_subquery(
 
         return db.query(ImageMetadata.id).filter(
             ImageMetadata.tenant_id == tenant.id,
-            ~ImageMetadata.id.in_(db.query(reviewed_images.c.image_id))
+            ~ImageMetadata.id.in_(reviewed_images)
         ).subquery()
 
 
@@ -654,13 +659,13 @@ def apply_permatag_filter_subquery(
         # Exclude images with this permatag
         return db.query(ImageMetadata.id).filter(
             ImageMetadata.tenant_id == tenant.id,
-            ~ImageMetadata.id.in_(db.query(permatag_subquery.c.image_id))
+            ~ImageMetadata.id.in_(permatag_subquery)
         ).subquery()
     else:
         # Include images with this permatag
         return db.query(ImageMetadata.id).filter(
             ImageMetadata.tenant_id == tenant.id,
-            ImageMetadata.id.in_(db.query(permatag_subquery.c.image_id))
+            ImageMetadata.id.in_(permatag_subquery)
         ).subquery()
 
 
@@ -747,6 +752,6 @@ def build_image_query_with_subqueries(
     
     # Combine all subqueries with intersection logic
     for subquery in subqueries_list:
-        base_query = base_query.filter(ImageMetadata.id.in_(db.query(subquery.c.id)))
-    
+        base_query = base_query.filter(ImageMetadata.id.in_(subquery))
+
     return base_query, subqueries_list, False
