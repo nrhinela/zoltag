@@ -658,3 +658,91 @@ def apply_permatag_filter_subquery(
             ImageMetadata.tenant_id == tenant.id,
             ImageMetadata.id.in_(db.query(permatag_subquery.c.image_id))
         ).subquery()
+
+
+def build_image_query_with_subqueries(
+    db: Session,
+    tenant: Tenant,
+    list_id: Optional[int] = None,
+    rating: Optional[int] = None,
+    rating_operator: str = "eq",
+    hide_zero_rating: bool = False,
+    reviewed: Optional[bool] = None,
+    permatag_keyword: Optional[str] = None,
+    permatag_category: Optional[str] = None,
+    permatag_signum: Optional[int] = None,
+    permatag_missing: bool = False,
+) -> tuple:
+    """Build a query with combined subquery filters (non-materialized).
+    
+    This function replaces the materialized set intersection approach with
+    SQLAlchemy subqueries, enabling database-native filtering without
+    loading ID sets into Python memory.
+    
+    Args:
+        db: Database session
+        tenant: Current tenant
+        list_id: Optional PhotoList ID to filter by
+        rating: Optional rating value to filter by
+        rating_operator: Comparison operator for rating ("eq", "gte", "gt")
+        hide_zero_rating: Whether to exclude zero-rated images
+        reviewed: Optional review status filter (True/False/None)
+        permatag_keyword: Optional permatag keyword to filter by
+        permatag_category: Optional permatag category
+        permatag_signum: Optional permatag signum (1 or -1)
+        permatag_missing: Whether to exclude permatag matches
+    
+    Returns:
+        Tuple of (base_query, subqueries_list, is_empty)
+        - base_query: SQLAlchemy query starting with ImageMetadata
+        - subqueries_list: List of subquery filters to apply
+        - is_empty: Boolean indicating if result set is empty
+    """
+    # Start with base query for tenant
+    base_query = db.query(ImageMetadata).filter(
+        ImageMetadata.tenant_id == tenant.id
+    )
+    
+    subqueries_list = []
+    
+    # Apply list filter if provided
+    if list_id is not None:
+        try:
+            list_subquery = apply_list_filter_subquery(db, tenant, list_id)
+            subqueries_list.append(list_subquery)
+        except HTTPException:
+            # List not found - return empty result
+            return base_query, subqueries_list, True
+    
+    # Apply rating filter if provided
+    if rating is not None:
+        rating_subquery = apply_rating_filter_subquery(db, tenant, rating, rating_operator)
+        subqueries_list.append(rating_subquery)
+    
+    # Apply hide zero rating filter if requested
+    if hide_zero_rating:
+        zero_rating_subquery = apply_hide_zero_rating_filter_subquery(db, tenant)
+        subqueries_list.append(zero_rating_subquery)
+    
+    # Apply reviewed filter if provided
+    if reviewed is not None:
+        reviewed_subquery = apply_reviewed_filter_subquery(db, tenant, reviewed)
+        subqueries_list.append(reviewed_subquery)
+    
+    # Apply permatag filter if provided
+    if permatag_keyword:
+        permatag_subquery = apply_permatag_filter_subquery(
+            db,
+            tenant,
+            permatag_keyword,
+            signum=permatag_signum,
+            missing=permatag_missing,
+            category=permatag_category
+        )
+        subqueries_list.append(permatag_subquery)
+    
+    # Combine all subqueries with intersection logic
+    for subquery in subqueries_list:
+        base_query = base_query.filter(ImageMetadata.id.in_(db.query(subquery.c.id)))
+    
+    return base_query, subqueries_list, False
