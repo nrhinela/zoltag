@@ -61,40 +61,27 @@ async def list_images(
 ):
     """List images for tenant with optional faceted search by keywords."""
     from ..filtering import (
-        apply_list_filter,
-        apply_rating_filter,
-        apply_hide_zero_rating_filter,
-        apply_reviewed_filter,
-        apply_permatag_filter,
         apply_category_filters,
-        calculate_relevance_scores
+        calculate_relevance_scores,
+        build_image_query_with_subqueries
     )
 
-    filter_ids = None
-    if list_id is not None:
-        filter_ids = apply_list_filter(db, tenant, list_id)
+    base_query, subqueries_list, has_empty_filter = build_image_query_with_subqueries(
+        db,
+        tenant,
+        list_id=list_id,
+        rating=rating,
+        rating_operator=rating_operator,
+        hide_zero_rating=hide_zero_rating,
+        reviewed=reviewed,
+        permatag_keyword=permatag_keyword,
+        permatag_category=permatag_category,
+        permatag_signum=permatag_signum,
+        permatag_missing=permatag_missing
+    )
 
-    if rating is not None:
-        filter_ids = apply_rating_filter(db, tenant, rating, rating_operator, filter_ids)
-
-    if hide_zero_rating:
-        filter_ids = apply_hide_zero_rating_filter(db, tenant, filter_ids)
-
-    if reviewed is not None:
-        filter_ids = apply_reviewed_filter(db, tenant, reviewed, filter_ids)
-
-    if permatag_keyword:
-        filter_ids = apply_permatag_filter(
-            db,
-            tenant,
-            permatag_keyword,
-            signum=permatag_signum,
-            missing=permatag_missing,
-            category=permatag_category,
-            existing_filter=filter_ids
-        )
-
-    if filter_ids is not None and not filter_ids:
+    # If any filter resulted in empty set, return empty response
+    if has_empty_filter:
         return {
             "tenant_id": tenant.id,
             "images": [],
@@ -137,7 +124,7 @@ async def list_images(
                 db,
                 tenant,
                 category_filters,
-                filter_ids,
+                None,  # category_filters handles its own filtering now
                 source=category_filter_source or "current"
             )
 
@@ -282,18 +269,11 @@ async def list_images(
                     id_order
                 )
 
-                if filter_ids is not None:
-                    query = query.filter(ImageMetadata.id.in_(filter_ids))
-                    total = db.query(ImageMetadata).filter(
-                        ImageMetadata.tenant_id == tenant.id,
-                        ImageMetadata.id.in_(matching_image_ids),
-                        ImageMetadata.id.in_(filter_ids)
-                    ).count()
-                else:
-                    total = db.query(ImageMetadata).filter(
-                        ImageMetadata.tenant_id == tenant.id,
-                        ImageMetadata.id.in_(matching_image_ids)
-                    ).count()
+                # Apply base_query subquery filters (list, rating, etc.) to the keyword query
+                for subquery in subqueries_list:
+                    query = query.filter(ImageMetadata.id.in_(db.query(subquery.c.id)))
+
+                total = query.count()
 
                 results = query.limit(limit).offset(offset).all() if limit else query.offset(offset).all()
                 images = [img for img, _ in results]
@@ -316,23 +296,24 @@ async def list_images(
                 total = 0
             else:
                 # Start with images that have tenant_id
-                base_query = db.query(ImageMetadata.id).filter_by(tenant_id=tenant.id)
+                and_query = db.query(ImageMetadata.id).filter_by(tenant_id=tenant.id)
 
                 # For each keyword, filter images that have that keyword
                 for keyword_id in keyword_id_list:
-                    subquery = db.query(MachineTag.image_id).filter(
+                    keyword_subquery = db.query(MachineTag.image_id).filter(
                         MachineTag.keyword_id == keyword_id,
                         MachineTag.tenant_id == tenant.id,
                         MachineTag.tag_type == active_tag_type
                     ).subquery()
 
-                    base_query = base_query.filter(ImageMetadata.id.in_(subquery))
+                    and_query = and_query.filter(ImageMetadata.id.in_(keyword_subquery))
 
-                if filter_ids is not None:
-                    base_query = base_query.filter(ImageMetadata.id.in_(filter_ids))
+                # Apply base_query subquery filters (list, rating, etc.)
+                for subquery in subqueries_list:
+                    and_query = and_query.filter(ImageMetadata.id.in_(db.query(subquery.c.id)))
 
                 # Get matching image IDs
-                matching_image_ids = base_query.subquery()
+                matching_image_ids = and_query.subquery()
 
                 # Query with relevance ordering (by sum of confidence scores)
                 order_by_date = func.coalesce(ImageMetadata.capture_timestamp, ImageMetadata.modified_time).desc()
@@ -366,18 +347,14 @@ async def list_images(
                 results = query.limit(limit).offset(offset).all() if limit else query.offset(offset).all()
                 images = [img for img, _ in results]
         else:
-            # No valid keywords, return all
-            query = db.query(ImageMetadata).filter_by(tenant_id=tenant.id)
-            if filter_ids is not None:
-                query = query.filter(ImageMetadata.id.in_(filter_ids))
+            # No valid keywords, use base_query with subquery filters
+            query = base_query
             total = query.count()
             order_by_date = func.coalesce(ImageMetadata.capture_timestamp, ImageMetadata.modified_time).desc()
             images = query.order_by(*order_by_clauses).limit(limit).offset(offset).all() if limit else query.order_by(*order_by_clauses).offset(offset).all()
     else:
-        # No keywords filter, return all
-        query = db.query(ImageMetadata).filter_by(tenant_id=tenant.id)
-        if filter_ids is not None:
-            query = query.filter(ImageMetadata.id.in_(filter_ids))
+        # No keywords filter, use base_query with subquery filters
+        query = base_query
         total = query.count()
         if order_by_value == "ml_score" and ml_keyword_id:
             active_tag_type = get_tenant_setting(db, tenant.id, 'active_machine_tag_type', default='siglip')
