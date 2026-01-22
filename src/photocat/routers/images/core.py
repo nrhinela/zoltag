@@ -1,14 +1,16 @@
 """Core image endpoints: list, get, stats, rating, thumbnail."""
 
 import json
+import mimetypes
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Body
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, distinct, and_
 from sqlalchemy.orm import Session
 from google.cloud import storage
+from dropbox import Dropbox
 
-from photocat.dependencies import get_db, get_tenant, get_tenant_setting
+from photocat.dependencies import get_db, get_tenant, get_tenant_setting, get_secret
 from photocat.tenant import Tenant
 from photocat.metadata import ImageMetadata, MachineTag, Permatag, Tenant as TenantModel, KeywordModel
 from photocat.models.config import PhotoList, PhotoListItem, Keyword
@@ -52,6 +54,7 @@ async def list_images(
     permatag_category: Optional[str] = None,
     permatag_signum: Optional[int] = None,
     permatag_missing: bool = False,
+    permatag_positive_missing: bool = False,
     category_filter_source: Optional[str] = None,
     date_order: str = "desc",
     order_by: Optional[str] = None,
@@ -77,7 +80,8 @@ async def list_images(
         permatag_keyword=permatag_keyword,
         permatag_category=permatag_category,
         permatag_signum=permatag_signum,
-        permatag_missing=permatag_missing
+        permatag_missing=permatag_missing,
+        permatag_positive_missing=permatag_positive_missing
     )
 
     # If any filter resulted in empty set, return empty response
@@ -506,6 +510,13 @@ async def get_image_stats(
         ImageMetadata.tenant_id == tenant.id
     ).scalar() or 0
 
+    positive_permatag_image_count = db.query(func.count(distinct(Permatag.image_id))).join(
+        ImageMetadata, ImageMetadata.id == Permatag.image_id
+    ).filter(
+        ImageMetadata.tenant_id == tenant.id,
+        Permatag.signum == 1
+    ).scalar() or 0
+
     # Get active tag type from tenant settings
     active_tag_type = get_tenant_setting(db, tenant.id, 'active_machine_tag_type', default='siglip')
 
@@ -518,6 +529,8 @@ async def get_image_stats(
         "tenant_id": tenant.id,
         "image_count": int(image_count),
         "reviewed_image_count": int(reviewed_image_count),
+        "positive_permatag_image_count": int(positive_permatag_image_count),
+        "untagged_positive_count": int(max(image_count - positive_permatag_image_count, 0)),
         "ml_tag_count": int(ml_tag_count)
     }
 
@@ -701,3 +714,60 @@ async def get_thumbnail(
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching thumbnail: {str(e)}")
+
+
+@router.get("/images/{image_id}/full", operation_id="get_full_image")
+async def get_full_image(
+    image_id: int,
+    tenant: Tenant = Depends(get_tenant),
+    db: Session = Depends(get_db)
+):
+    """Stream full-size image from Dropbox without persisting it."""
+    image = db.query(ImageMetadata).filter_by(
+        id=image_id,
+        tenant_id=tenant.id
+    ).first()
+
+    if not image:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    dropbox_ref = image.dropbox_path
+    if not dropbox_ref and image.dropbox_id:
+        dropbox_ref = image.dropbox_id if image.dropbox_id.startswith("id:") else f"id:{image.dropbox_id}"
+
+    if not dropbox_ref or dropbox_ref.startswith("/local/") or (image.dropbox_id and image.dropbox_id.startswith("local_")):
+        raise HTTPException(status_code=404, detail="Image not available in Dropbox")
+
+    if not tenant.dropbox_app_key:
+        raise HTTPException(status_code=400, detail="Dropbox app key not configured for tenant")
+    if not tenant.dropbox_token_secret or not tenant.dropbox_app_secret:
+        raise HTTPException(status_code=400, detail="Dropbox secrets not configured for tenant")
+
+    try:
+        refresh_token = get_secret(tenant.dropbox_token_secret)
+        app_secret = get_secret(tenant.dropbox_app_secret)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Dropbox secrets missing: {exc}")
+
+    try:
+        dbx = Dropbox(
+            oauth2_refresh_token=refresh_token,
+            app_key=tenant.dropbox_app_key,
+            app_secret=app_secret
+        )
+        metadata, response = dbx.files_download(dropbox_ref)
+        content_type = response.headers.get("Content-Type") or response.headers.get("content-type")
+        if not content_type:
+            content_type, _ = mimetypes.guess_type(image.filename or dropbox_ref)
+            content_type = content_type or "application/octet-stream"
+        filename = getattr(metadata, "name", None) or image.filename or "image"
+        return StreamingResponse(
+            response.iter_content(chunk_size=1024 * 1024),
+            media_type=content_type,
+            headers={
+                "Cache-Control": "no-store",
+                "Content-Disposition": f'inline; filename="{filename}"'
+            }
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error fetching Dropbox image: {exc}")

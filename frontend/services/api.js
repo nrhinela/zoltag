@@ -84,6 +84,9 @@ export async function getImages(tenantId, filters = {}) {
   if (filters.permatagMissing) {
     params.append('permatag_missing', 'true');
   }
+  if (filters.permatagPositiveMissing) {
+    params.append('permatag_positive_missing', 'true');
+  }
   if (filters.mlKeyword) {
     params.append('ml_keyword', filters.mlKeyword);
   }
@@ -118,6 +121,20 @@ export async function getImageStats(tenantId) {
   }
 
   return await response.json();
+}
+
+export async function getFullImage(tenantId, imageId) {
+  const response = await fetch(`${API_BASE_URL}/images/${imageId}/full`, {
+    headers: {
+      'X-Tenant-ID': tenantId,
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error('Failed to fetch full image');
+  }
+
+  return await response.blob();
 }
 
 export async function getTagStats(tenantId) {

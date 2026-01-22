@@ -820,8 +820,7 @@ def retag(tenant_id: str):
 @cli.command(name='sync-dropbox')
 @click.option('--tenant-id', default='demo', help='Tenant ID to sync')
 @click.option('--count', default=1, help='Number of images to sync (default: 1)')
-@click.option('--model', default='siglip', type=click.Choice(['siglip', 'clip']), help='Tagging model to use')
-def sync_dropbox(tenant_id: str, count: int, model: str):
+def sync_dropbox(tenant_id: str, count: int):
     """Sync images from Dropbox (same as pressing sync button on web)."""
 
     # Setup database
@@ -846,13 +845,27 @@ def sync_dropbox(tenant_id: str, count: int, model: str):
         click.echo(f"Syncing from Dropbox for tenant: {tenant.name}")
 
         # Get Dropbox credentials
-        dropbox_token = get_secret(f"{tenant_id}/dropbox_refresh_token")
-        if not dropbox_token:
-            click.echo("Error: No Dropbox refresh token configured", err=True)
+        try:
+            dropbox_token = get_secret(f"dropbox-token-{tenant_id}")
+        except Exception as exc:
+            click.echo(f"Error: No Dropbox refresh token configured ({exc})", err=True)
+            return
+
+        if not tenant.dropbox_app_key:
+            click.echo("Error: Dropbox app key not configured", err=True)
+            return
+        try:
+            dropbox_app_secret = get_secret(f"dropbox-app-secret-{tenant_id}")
+        except Exception as exc:
+            click.echo(f"Error: Dropbox app secret not configured ({exc})", err=True)
             return
 
         # Initialize Dropbox client
-        dropbox_client = DropboxClient(dropbox_token)
+        dropbox_client = DropboxClient(
+            refresh_token=dropbox_token,
+            app_key=tenant.dropbox_app_key,
+            app_secret=dropbox_app_secret,
+        )
 
         # Get sync folders from tenant config or use root
         config_mgr = ConfigManager(db, tenant_id)
@@ -883,8 +896,8 @@ def sync_dropbox(tenant_id: str, count: int, model: str):
         click.echo(f"Keywords: {len(all_keywords)} in {len(by_category)} categories")
 
         # Get tagger
-        tagger = get_tagger(model_type=model)
-        model_name = getattr(tagger, "model_name", model)
+        tagger = get_tagger(model_type=settings.tagging_model)
+        model_name = getattr(tagger, "model_name", settings.tagging_model)
         model_version = getattr(tagger, "model_version", model_name)
 
         # Process images
@@ -896,7 +909,7 @@ def sync_dropbox(tenant_id: str, count: int, model: str):
             click.echo(f"\nListing folder: {folder or '(root)'}")
 
             # Get list of files in folder
-            result = dropbox_client.list_folder(folder)
+            result = dropbox_client.list_folder(folder, recursive=True)
             entries = result.get('entries', [])
 
             click.echo(f"Found {len(entries)} entries")
@@ -982,8 +995,21 @@ def sync_dropbox(tenant_id: str, count: int, model: str):
 
                     click.echo(f"  ✓ Metadata recorded (ID: {metadata.id})")
 
+                    try:
+                        ensure_image_embedding(
+                            db,
+                            tenant_id,
+                            metadata.id,
+                            thumbnail_data,
+                            model_name,
+                            model_version
+                        )
+                        db.commit()
+                    except Exception as embed_error:
+                        click.echo(f"  ✗ Embedding error: {embed_error}", err=True)
+
                     # Tag with model
-                    click.echo(f"  Running {model} inference...")
+                    click.echo(f"  Running {settings.tagging_model} inference...")
 
                     # Delete existing tags
                     db.query(MachineTag).filter(
@@ -995,7 +1021,7 @@ def sync_dropbox(tenant_id: str, count: int, model: str):
                     all_tags = score_keywords_for_categories(
                         image_data=thumbnail_data,
                         keywords_by_category=by_category,
-                        model_type=model,
+                        model_type=settings.tagging_model,
                         threshold=0.15
                     )
 

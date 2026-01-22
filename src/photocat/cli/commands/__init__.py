@@ -8,6 +8,7 @@ from . import (
     tagging,
     sync,
     inspect,
+    thumbnails,
 )
 
 __all__ = [
@@ -18,4 +19,5 @@ __all__ = [
     'tagging',
     'sync',
     'inspect',
+    'thumbnails',
 ]

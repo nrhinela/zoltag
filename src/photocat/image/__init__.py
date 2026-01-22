@@ -145,6 +145,19 @@ class ImageProcessor:
             "format": image.format,
         }
 
+    def extract_visual_features(self, image: Image.Image) -> dict:
+        """Extract visual features from a PIL image."""
+        if image.mode != "RGB":
+            image = image.convert("RGB")
+
+        return {
+            "width": image.width,
+            "height": image.height,
+            "format": image.format or "JPEG",
+            "perceptual_hash": self.compute_perceptual_hash(image),
+            "color_histogram": self.compute_color_histogram(image).tolist(),
+        }
+
 
 class FaceDetector:
     """Detect and recognize faces in images."""

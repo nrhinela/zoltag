@@ -377,15 +377,15 @@ async def trigger_sync(
                     model_version = getattr(tagger, "model_version", model_name)
                     model_scores = None
 
+                    embedding_record = ensure_image_embedding(
+                        db,
+                        tenant.id,
+                        metadata.id,
+                        image_data,
+                        model_name,
+                        model_version
+                    )
                     if settings.use_keyword_models:
-                        embedding_record = ensure_image_embedding(
-                            db,
-                            tenant.id,
-                            metadata.id,
-                            image_data,
-                            model_name,
-                            model_version
-                        )
                         keyword_models = load_keyword_models(db, tenant.id, model_name)
                         model_scores = score_image_with_models(embedding_record.embedding, keyword_models)
 

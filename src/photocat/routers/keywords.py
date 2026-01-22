@@ -290,18 +290,15 @@ async def get_tag_stats(
             })
         return by_category
 
-    def permatags_to_by_category(rows):
+    permatag_counts = {keyword_id: int(count or 0) for keyword_id, count in permatag_rows}
+
+    def permatags_to_by_category_all():
         by_category = {}
-        for keyword_id, count in rows:
-            kw_info = keyword_id_to_info.get(keyword_id)
-            if not kw_info:
-                continue
-            category = kw_info.get("category", "uncategorized")
-            keyword = kw_info.get("keyword", "unknown")
+        for keyword_id, keyword, category in keywords_data:
             label = category or "uncategorized"
             by_category.setdefault(label, []).append({
                 "keyword": keyword,
-                "count": int(count or 0)
+                "count": permatag_counts.get(keyword_id, 0)
             })
         return by_category
 
@@ -310,6 +307,6 @@ async def get_tag_stats(
         "sources": {
             "zero_shot": to_by_category(zero_shot_rows),
             "keyword_model": to_by_category(keyword_model_rows),
-            "permatags": permatags_to_by_category(permatag_rows)
+            "permatags": permatags_to_by_category_all()
         }
     }

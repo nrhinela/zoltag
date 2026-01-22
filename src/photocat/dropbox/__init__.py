@@ -6,18 +6,35 @@ from typing import Any, Dict, Iterator, Optional
 
 from dropbox import Dropbox
 from dropbox.exceptions import AuthError, RateLimitError
-from dropbox.files import FileMetadata, FolderMetadata
+from dropbox.files import FileMetadata, FolderMetadata, PathOrLink, ThumbnailSize
 
 
 class DropboxClient:
     """Wrapper for Dropbox API with token management."""
     
-    def __init__(self, access_token: str, refresh_token: Optional[str] = None):
+    def __init__(
+        self,
+        access_token: Optional[str] = None,
+        refresh_token: Optional[str] = None,
+        app_key: Optional[str] = None,
+        app_secret: Optional[str] = None,
+    ):
         """Initialize Dropbox client."""
+        if not access_token and not refresh_token:
+            raise ValueError("DropboxClient requires access_token or refresh_token")
         self.access_token = access_token
         self.refresh_token = refresh_token
         self.token_expires_at: Optional[datetime] = None
-        self._client = Dropbox(access_token)
+        if refresh_token and app_key and app_secret:
+            self._client = Dropbox(
+                oauth2_refresh_token=refresh_token,
+                app_key=app_key,
+                app_secret=app_secret,
+            )
+        elif access_token:
+            self._client = Dropbox(access_token)
+        else:
+            raise ValueError("DropboxClient requires access_token or refresh_token with app credentials")
     
     def _ensure_fresh_token(self) -> None:
         """Refresh access token if expired or expiring soon."""
@@ -74,17 +91,31 @@ class DropboxClient:
         metadata, response = self._client.files_download(path)
         return response.content
     
+    def _coerce_path_or_link(self, path: str | PathOrLink) -> PathOrLink:
+        if isinstance(path, PathOrLink):
+            return path
+        return PathOrLink.path(path)
+
+    def _coerce_thumbnail_size(self, size: str | ThumbnailSize) -> ThumbnailSize:
+        if isinstance(size, ThumbnailSize):
+            return size
+        if isinstance(size, str) and hasattr(ThumbnailSize, size):
+            return getattr(ThumbnailSize, size)
+        raise ValueError(f"Unsupported thumbnail size: {size}")
+
     def get_thumbnail(self, path: str, size: str = "w256h256") -> bytes:
         """Get thumbnail for an image file."""
         self._ensure_fresh_token()
-        
-        metadata, response = self._client.files_get_thumbnail_v2(path, size=size)
+
+        target = self._coerce_path_or_link(path)
+        resolved_size = self._coerce_thumbnail_size(size)
+        metadata, response = self._client.files_get_thumbnail_v2(target, size=resolved_size)
         return response.content
     
     def get_metadata(self, path: str) -> FileMetadata:
         """Get file metadata."""
         self._ensure_fresh_token()
-        
+
         metadata = self._client.files_get_metadata(path)
         if not isinstance(metadata, FileMetadata):
             raise ValueError(f"Path is not a file: {path}")

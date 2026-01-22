@@ -1,5 +1,5 @@
 import { LitElement, html, css } from 'lit';
-import { getImageDetails, getKeywords, addPermatag } from '../services/api.js';
+import { getImageDetails, getKeywords, addPermatag, getFullImage, setRating } from '../services/api.js';
 import { tailwind } from './tailwind-lit.js';
 
 class ImageEditor extends LitElement {
@@ -57,7 +57,7 @@ class ImageEditor extends LitElement {
     }
     .panel-body {
       display: grid;
-      grid-template-columns: 3fr 7fr;
+      grid-template-columns: 1fr 1fr;
       gap: 18px;
       padding: 18px;
       flex: 1;
@@ -90,6 +90,13 @@ class ImageEditor extends LitElement {
       border-radius: 12px;
       border: 1px solid #e5e7eb;
       background: #f3f4f6;
+    }
+    .image-wrap.image-full img {
+      width: 100%;
+      height: 100%;
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
     }
     .skeleton-block {
       background: linear-gradient(90deg, #f3f4f6 25%, #e5e7eb 37%, #f3f4f6 63%);
@@ -274,6 +281,11 @@ class ImageEditor extends LitElement {
     tagCategory: { type: String },
     loading: { type: Boolean },
     error: { type: String },
+    fullImageUrl: { type: String },
+    fullImageLoading: { type: Boolean },
+    fullImageError: { type: String },
+    ratingSaving: { type: Boolean },
+    ratingError: { type: String },
   };
 
   constructor() {
@@ -290,6 +302,11 @@ class ImageEditor extends LitElement {
     this.tagCategory = '';
     this.loading = false;
     this.error = '';
+    this.fullImageUrl = '';
+    this.fullImageLoading = false;
+    this.fullImageError = '';
+    this.ratingSaving = false;
+    this.ratingError = '';
     this._handlePermatagEvent = (event) => {
       if ((this.open || this.embedded) && event?.detail?.imageId === this.image?.id) {
         this.fetchDetails();
@@ -304,17 +321,25 @@ class ImageEditor extends LitElement {
 
   disconnectedCallback() {
     window.removeEventListener('permatags-changed', this._handlePermatagEvent);
+    this._resetFullImage();
     super.disconnectedCallback();
   }
 
   willUpdate(changedProperties) {
     const shouldLoad = this.embedded || this.open;
     if (shouldLoad && (changedProperties.has('image') || changedProperties.has('tenant'))) {
+      this._resetFullImage();
       this.fetchDetails();
       this.fetchKeywords();
     }
     if (changedProperties.has('details')) {
       this._syncTagSubTab();
+      if (this.activeTab === 'image') {
+        this._loadFullImage();
+      }
+    }
+    if (changedProperties.has('open') && !this.open && !this.embedded) {
+      this._resetFullImage();
     }
   }
 
@@ -348,10 +373,58 @@ class ImageEditor extends LitElement {
 
   _setTab(tab) {
     this.activeTab = tab;
+    if (tab === 'image') {
+      this._loadFullImage();
+    }
   }
 
   _setTagSubTab(tab) {
     this.tagSubTab = tab;
+  }
+
+  async _handleRatingClick(value) {
+    if (!this.details || !this.tenant || this.ratingSaving) return;
+    this.ratingSaving = true;
+    this.ratingError = '';
+    try {
+      await setRating(this.tenant, this.details.id, value);
+      this.details = { ...this.details, rating: value };
+      this.dispatchEvent(new CustomEvent('image-rating-updated', {
+        detail: { imageId: this.details.id, rating: value },
+        bubbles: true,
+        composed: true,
+      }));
+    } catch (error) {
+      this.ratingError = 'Failed to update rating.';
+      console.error('ImageEditor: rating update failed', error);
+    } finally {
+      this.ratingSaving = false;
+    }
+  }
+
+  _resetFullImage() {
+    if (this.fullImageUrl) {
+      URL.revokeObjectURL(this.fullImageUrl);
+    }
+    this.fullImageUrl = '';
+    this.fullImageLoading = false;
+    this.fullImageError = '';
+  }
+
+  async _loadFullImage() {
+    if (!this.details || !this.tenant) return;
+    if (this.fullImageUrl || this.fullImageLoading) return;
+    this.fullImageLoading = true;
+    this.fullImageError = '';
+    try {
+      const blob = await getFullImage(this.tenant, this.details.id);
+      this.fullImageUrl = URL.createObjectURL(blob);
+    } catch (error) {
+      this.fullImageError = 'Failed to load full-size image.';
+      console.error('ImageEditor: full image load failed', error);
+    } finally {
+      this.fullImageLoading = false;
+    }
   }
 
   _syncTagSubTab() {
@@ -432,6 +505,7 @@ class ImageEditor extends LitElement {
     });
     return html`
       <div class="tag-section">
+        ${this._renderRatingControl()}
         <div class="right-pane">
           <div class="text-xs font-semibold text-gray-600 uppercase mb-2">Active Tags</div>
           ${permatags.length ? html`
@@ -615,6 +689,77 @@ class ImageEditor extends LitElement {
     `;
   }
 
+  _renderRatingControl() {
+    if (!this.details) return html``;
+    const currentRating = this.details.rating;
+    return html`
+      <div class="space-y-2">
+        <div class="text-xs font-semibold text-gray-600 uppercase">Rating</div>
+        <div class="flex flex-wrap items-center gap-2">
+          ${[0, 1, 2, 3].map((value) => {
+            const isActive = currentRating === value;
+            return html`
+              <button
+                class="inline-flex items-center gap-1 px-2 py-1 rounded-lg border text-xs ${isActive ? 'bg-yellow-100 text-yellow-800 border-yellow-200' : 'bg-gray-100 text-gray-500 border-gray-200'}"
+                title=${`Rating ${value}`}
+                ?disabled=${this.ratingSaving}
+                @click=${() => this._handleRatingClick(value)}
+              >
+                <i class="fas fa-star"></i>
+                <span>${value}</span>
+              </button>
+            `;
+          })}
+          ${this.ratingSaving ? html`<span class="text-xs text-gray-500">Saving...</span>` : ''}
+        </div>
+        ${this.ratingError ? html`<div class="text-xs text-red-600">${this.ratingError}</div>` : ''}
+      </div>
+    `;
+  }
+
+  _renderImageTab() {
+    const ratingControl = this._renderRatingControl();
+    if (this.fullImageLoading) {
+      return html`
+        <div class="space-y-3">
+          ${ratingControl}
+          <div class="loading-indicator">
+            <span class="loading-dot"></span>
+            <span>Loading full-size image from Dropbox...</span>
+          </div>
+        </div>
+      `;
+    }
+    if (this.fullImageError) {
+      return html`
+        <div class="space-y-3 text-sm text-gray-600">
+          ${ratingControl}
+          <div class="text-red-600">${this.fullImageError}</div>
+          <button class="tag-add" @click=${() => this._loadFullImage()}>Retry</button>
+        </div>
+      `;
+    }
+    if (this.fullImageUrl) {
+      const dropboxPath = this.details?.dropbox_path;
+      const dropboxHref = dropboxPath
+        ? `https://www.dropbox.com/home${encodeURIComponent(dropboxPath)}`
+        : this.fullImageUrl;
+      return html`
+        <div class="space-y-3 text-sm text-gray-600">
+          ${ratingControl}
+          <div>Full-size image loaded from Dropbox.</div>
+          <a class="text-blue-600" href=${dropboxHref} target="dropbox" rel="noopener noreferrer">Open in new tab</a>
+        </div>
+      `;
+    }
+    return html`
+      <div class="space-y-3 text-sm text-gray-600">
+        ${ratingControl}
+        <div class="empty-text">Select the Image tab to load the full-size file.</div>
+      </div>
+    `;
+  }
+
   _renderContent() {
     if (this.loading) {
       return html`
@@ -642,25 +787,34 @@ class ImageEditor extends LitElement {
     if (!this.details) {
       return html`<div class="empty-text">Select an image.</div>`;
     }
+    const showFullImage = this.activeTab === 'image' && this.fullImageUrl;
+    const imageSrc = showFullImage
+      ? this.fullImageUrl
+      : (this.details.thumbnail_url || `/api/v1/images/${this.details.id}/thumbnail`);
     return html`
       <div class="panel-body">
-        <div class="image-wrap">
-          <img src="${this.details.thumbnail_url || `/api/v1/images/${this.details.id}/thumbnail`}" alt="${this.details.filename}">
+        <div class="image-wrap ${this.activeTab === 'image' ? 'image-full' : ''}">
+          <img src="${imageSrc}" alt="${this.details.filename}">
         </div>
         <div>
           <div class="tab-row">
             <button class="tab-button ${this.activeTab === 'edit' ? 'active' : ''}" @click=${() => this._setTab('edit')}>
               Edit
             </button>
-            <button class="tab-button ${this.activeTab === 'tags' ? 'active' : ''}" @click=${() => this._setTab('tags')}>
-              Tags
+            <button class="tab-button ${this.activeTab === 'image' ? 'active' : ''}" @click=${() => this._setTab('image')}>
+              Image
             </button>
             <button class="tab-button ${this.activeTab === 'metadata' ? 'active' : ''}" @click=${() => this._setTab('metadata')}>
               Metadata
             </button>
+            <button class="tab-button ${this.activeTab === 'tags' ? 'active' : ''}" @click=${() => this._setTab('tags')}>
+              Tags
+            </button>
           </div>
           <div class="mt-3">
-            ${this.activeTab === 'metadata'
+            ${this.activeTab === 'image'
+              ? this._renderImageTab()
+              : this.activeTab === 'metadata'
               ? this._renderMetadataTab()
               : this.activeTab === 'tags'
                 ? this._renderTagsReadOnly()

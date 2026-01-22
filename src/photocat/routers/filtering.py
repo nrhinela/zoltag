@@ -670,6 +670,18 @@ def apply_permatag_filter_subquery(
         ).subquery()
 
 
+def apply_no_positive_permatag_filter_subquery(db: Session, tenant: Tenant):
+    """Return subquery of images with no positive permatags."""
+    permatag_subquery = db.query(Permatag.image_id).filter(
+        Permatag.tenant_id == tenant.id,
+        Permatag.signum == 1
+    ).subquery()
+    return db.query(ImageMetadata.id).filter(
+        ImageMetadata.tenant_id == tenant.id,
+        ~ImageMetadata.id.in_(permatag_subquery)
+    ).subquery()
+
+
 def build_image_query_with_subqueries(
     db: Session,
     tenant: Tenant,
@@ -682,6 +694,7 @@ def build_image_query_with_subqueries(
     permatag_category: Optional[str] = None,
     permatag_signum: Optional[int] = None,
     permatag_missing: bool = False,
+    permatag_positive_missing: bool = False,
 ) -> tuple:
     """Build a query with combined subquery filters (non-materialized).
     
@@ -701,6 +714,7 @@ def build_image_query_with_subqueries(
         permatag_category: Optional permatag category
         permatag_signum: Optional permatag signum (1 or -1)
         permatag_missing: Whether to exclude permatag matches
+        permatag_positive_missing: Whether to exclude images with positive permatags
     
     Returns:
         Tuple of (base_query, subqueries_list, is_empty)
@@ -750,6 +764,9 @@ def build_image_query_with_subqueries(
             category=permatag_category
         )
         subqueries_list.append(permatag_subquery)
+
+    if permatag_positive_missing:
+        subqueries_list.append(apply_no_positive_permatag_filter_subquery(db, tenant))
     
     # Combine all subqueries with intersection logic
     for subquery in subqueries_list:

@@ -9,6 +9,7 @@ from .commands import (
     tagging,
     sync,
     inspect,
+    thumbnails,
 )
 
 
@@ -28,6 +29,7 @@ cli.add_command(tagging.retag_command, name='retag')
 cli.add_command(sync.sync_dropbox_command, name='sync-dropbox')
 cli.add_command(inspect.list_images_command, name='list-images')
 cli.add_command(inspect.show_config_command, name='show-config')
+cli.add_command(thumbnails.backfill_thumbnails_command, name='backfill-thumbnails')
 
 
 if __name__ == '__main__':
