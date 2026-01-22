@@ -182,7 +182,7 @@ if 'datetime' in exif_data:
 Added explicit backward compatibility section:
 - Command names remain identical (`photocat sync-dropbox` still works)
 - Update `pyproject.toml` console_scripts to point to `cli:cli`
-- Verification test: `python -m photocat.cli sync-dropbox --help`
+- Verification test: `photocat sync-dropbox --help`
 
 **Implementation**:
 ```python

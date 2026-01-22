@@ -840,7 +840,8 @@ class PhotoCatApp extends LitElement {
 
   _handleCurateLimitChange(e) {
       const parsed = Number.parseInt(e.target.value, 10);
-      if (!Number.isFinite(parsed) || parsed <= 0) {
+      const allowedSizes = new Set([50, 100, 200]);
+      if (!Number.isFinite(parsed) || !allowedSizes.has(parsed)) {
           this.curateLimit = 50;
       } else {
           this.curateLimit = parsed;
@@ -1374,7 +1375,8 @@ class PhotoCatApp extends LitElement {
 
   _handleCurateAuditLimitChange(e) {
       const parsed = Number.parseInt(e.target.value, 10);
-      if (!Number.isFinite(parsed) || parsed <= 0) {
+      const allowedSizes = new Set([50, 100, 200]);
+      if (!Number.isFinite(parsed) || !allowedSizes.has(parsed)) {
           this.curateAuditLimit = 50;
       } else {
           this.curateAuditLimit = parsed;
@@ -1454,6 +1456,7 @@ class PhotoCatApp extends LitElement {
               sortOrder: this.curateOrderDirection,
               orderBy: useAiSort ? 'ml_score' : this.curateOrderBy,
               permatagKeyword: this.curateAuditKeyword,
+              permatagCategory: this.curateAuditCategory,
               permatagSignum: 1,
               permatagMissing: this.curateAuditMode === 'missing',
           };
@@ -1778,16 +1781,6 @@ class PhotoCatApp extends LitElement {
                 `)}
               </select>
             </div>
-            <div class="flex-[0.7] min-w-[100px]">
-              <label class="block text-xs font-semibold text-gray-600 mb-2">Page Size</label>
-              <input
-                type="number"
-                min="1"
-                class="w-full px-3 py-2 border rounded-lg text-sm"
-                .value=${String(this.curateLimit)}
-                @input=${this._handleCurateLimitChange}
-              >
-            </div>
             <div class="flex-1 min-w-[160px]">
               <label class="block text-xs font-semibold text-gray-600 mb-2">Thumbnail Size</label>
               <div class="flex items-center gap-3 text-xs text-gray-600">
@@ -1925,7 +1918,7 @@ class PhotoCatApp extends LitElement {
       { key: 'curate', label: 'Curate', subtitle: 'Build selections and stories', icon: 'fa-star' },
       { key: 'lists', label: 'Lists', subtitle: 'Organize saved sets', icon: 'fa-list' },
       { key: 'tagging', label: 'Tagging', subtitle: 'Manage keywords and labels', icon: 'fa-tags' },
-      { key: 'ml-training', label: 'ML Training', subtitle: 'Inspect training data', icon: 'fa-brain' },
+      { key: 'ml-training', label: 'Pipeline', subtitle: 'Inspect training data', icon: 'fa-brain' },
     ];
     const curatedIds = new Set(this.curateSelection.map((img) => img.id));
     const leftImages = this.curateTagMode
@@ -2024,6 +2017,53 @@ class PhotoCatApp extends LitElement {
     const auditHasMore = !auditLoadAll && auditTotalCount !== null
       && auditPageEnd < auditTotalCount;
     const auditHasPrev = !auditLoadAll && (this.curateAuditPageOffset || 0) > 0;
+
+    const renderPageSizeSelect = (value, onChange) => html`
+      <label class="inline-flex items-center gap-2 text-xs text-gray-500">
+        <span>Rows per page:</span>
+        <select
+          class="px-2 py-1 border rounded-md text-xs bg-white"
+          .value=${String(value)}
+          @change=${onChange}
+        >
+          ${[50, 100, 200].map((size) => html`<option value=${String(size)}>${size}</option>`)}
+        </select>
+      </label>
+    `;
+    const renderPaginationControls = ({
+      countLabel,
+      hasPrev,
+      hasNext,
+      onPrev,
+      onNext,
+      pageSize,
+      onPageSizeChange,
+      disabled = false,
+      showPageSize = true,
+    }) => html`
+      <div class="flex flex-wrap items-center justify-between gap-2 text-xs text-gray-500">
+        ${showPageSize ? renderPageSizeSelect(pageSize, onPageSizeChange) : html``}
+        <div class="flex items-center gap-3">
+          <span>${countLabel}</span>
+          <button
+            class="curate-pane-action secondary"
+            ?disabled=${disabled || !hasPrev}
+            @click=${onPrev}
+            aria-label="Previous page"
+          >
+            &lt;
+          </button>
+          <button
+            class="curate-pane-action secondary"
+            ?disabled=${disabled || !hasNext}
+            @click=${onNext}
+            aria-label="Next page"
+          >
+            &gt;
+          </button>
+        </div>
+      </div>
+    `;
 
     return html`
         <app-header
@@ -2169,21 +2209,16 @@ class PhotoCatApp extends LitElement {
                                 <span>${leftPaneLabel}</span>
                                 ${!this.curateTagMode ? html`
                                   <div class="curate-pane-header-actions">
-                                    <span class="text-xs text-gray-400">${curateCountLabel}</span>
-                                    <button
-                                      class="curate-pane-action secondary"
-                                      ?disabled=${!curateHasPrev || this.curateLoading}
-                                      @click=${this._handleCuratePagePrev}
-                                    >
-                                      Prev
-                                    </button>
-                                    <button
-                                      class="curate-pane-action secondary"
-                                      ?disabled=${!curateHasMore || this.curateLoading}
-                                      @click=${this._handleCuratePageNext}
-                                    >
-                                      Next
-                                    </button>
+                                    ${renderPaginationControls({
+                                      countLabel: curateCountLabel,
+                                      hasPrev: curateHasPrev,
+                                      hasNext: curateHasMore,
+                                      onPrev: this._handleCuratePagePrev,
+                                      onNext: this._handleCuratePageNext,
+                                      pageSize: this.curateLimit,
+                                      onPageSizeChange: this._handleCurateLimitChange,
+                                      disabled: this.curateLoading,
+                                    })}
                                   </div>
                                 ` : html``}
                             </div>
@@ -2267,24 +2302,18 @@ class PhotoCatApp extends LitElement {
                               </div>
                             `}
                             ${!this.curateTagMode ? html`
-                              <div class="flex items-center justify-between text-xs text-gray-500 mt-3">
-                                <span>${curateCountLabel}</span>
-                                <div class="flex items-center gap-2">
-                                  <button
-                                    class="curate-pane-action secondary"
-                                    ?disabled=${!curateHasPrev || this.curateLoading}
-                                    @click=${this._handleCuratePagePrev}
-                                  >
-                                    Prev
-                                  </button>
-                                  <button
-                                    class="curate-pane-action secondary"
-                                    ?disabled=${!curateHasMore || this.curateLoading}
-                                    @click=${this._handleCuratePageNext}
-                                  >
-                                    Next
-                                  </button>
-                                </div>
+                              <div class="mt-3">
+                                ${renderPaginationControls({
+                                  countLabel: curateCountLabel,
+                                  hasPrev: curateHasPrev,
+                                  hasNext: curateHasMore,
+                                  onPrev: this._handleCuratePagePrev,
+                                  onNext: this._handleCuratePageNext,
+                                  pageSize: this.curateLimit,
+                                  onPageSizeChange: this._handleCurateLimitChange,
+                                  disabled: this.curateLoading,
+                                  showPageSize: false,
+                                })}
                               </div>
                             ` : html``}
                         </div>
@@ -2496,24 +2525,17 @@ class PhotoCatApp extends LitElement {
                                 <div class="curate-pane-header-row">
                                     <span>${auditLeftLabel}</span>
                                     <div class="curate-pane-header-actions">
-                                        ${this.curateAuditKeyword ? html`
-                                          <span class="text-xs text-gray-400">${auditCountLabel}</span>
-                                        ` : html``}
-                                        ${!auditLoadAll ? html`
-                                          <button
-                                            class="curate-pane-action secondary"
-                                            ?disabled=${!auditHasPrev || this.curateAuditLoading}
-                                            @click=${this._handleCurateAuditPagePrev}
-                                          >
-                                            Prev
-                                          </button>
-                                          <button
-                                            class="curate-pane-action secondary"
-                                            ?disabled=${!auditHasMore || this.curateAuditLoading}
-                                            @click=${this._handleCurateAuditPageNext}
-                                          >
-                                            Next
-                                          </button>
+                                        ${this.curateAuditKeyword && !auditLoadAll ? html`
+                                          ${renderPaginationControls({
+                                            countLabel: auditCountLabel,
+                                            hasPrev: auditHasPrev,
+                                            hasNext: auditHasMore,
+                                            onPrev: this._handleCurateAuditPagePrev,
+                                            onNext: this._handleCurateAuditPageNext,
+                                            pageSize: this.curateAuditLimit,
+                                            onPageSizeChange: this._handleCurateAuditLimitChange,
+                                            disabled: this.curateAuditLoading,
+                                          })}
                                         ` : html``}
                                     </div>
                                 </div>
@@ -2555,27 +2577,21 @@ class PhotoCatApp extends LitElement {
                                   </div>
                                 `}
                                 ${this.curateAuditKeyword ? html`
-                                  <div class="flex items-center justify-between text-xs text-gray-500 mt-3">
-                                    <span>${auditCountLabel}</span>
-                                    ${auditLoadAll ? html`` : html`
-                                      <div class="flex items-center gap-2">
-                                        <button
-                                          class="curate-pane-action secondary"
-                                          ?disabled=${!auditHasPrev || this.curateAuditLoading}
-                                          @click=${this._handleCurateAuditPagePrev}
-                                        >
-                                          Prev
-                                        </button>
-                                        <button
-                                          class="curate-pane-action secondary"
-                                          ?disabled=${!auditHasMore || this.curateAuditLoading}
-                                          @click=${this._handleCurateAuditPageNext}
-                                        >
-                                          Next
-                                        </button>
-                                      </div>
-                                    `}
-                                  </div>
+                                  ${auditLoadAll ? html`` : html`
+                                    <div class="mt-3">
+                                      ${renderPaginationControls({
+                                        countLabel: auditCountLabel,
+                                        hasPrev: auditHasPrev,
+                                        hasNext: auditHasMore,
+                                        onPrev: this._handleCurateAuditPagePrev,
+                                        onNext: this._handleCurateAuditPageNext,
+                                        pageSize: this.curateAuditLimit,
+                                        onPageSizeChange: this._handleCurateAuditLimitChange,
+                                        disabled: this.curateAuditLoading,
+                                        showPageSize: false,
+                                      })}
+                                    </div>
+                                  `}
                                 ` : html``}
                             </div>
                         </div>

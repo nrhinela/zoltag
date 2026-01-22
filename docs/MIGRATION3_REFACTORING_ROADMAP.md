@@ -422,7 +422,7 @@ cli.add_command(metadata.refresh_metadata_command, name='refresh-metadata')
 **Backward Compatibility**:
 - Keep command names identical (`photocat sync-dropbox` still works)
 - Update `pyproject.toml` console_scripts entrypoint to point to `cli:cli`
-- Test: `python -m photocat.cli sync-dropbox --help` should work pre/post-refactor
+- Test: `photocat sync-dropbox --help` should work pre/post-refactor
 
 #### Files to Modify/Create
 | File | Action | Impact |

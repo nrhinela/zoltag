@@ -20,13 +20,13 @@ from photocat.cli.base import CliCommand
 
 
 @click.command(name='refresh-metadata')
-@click.option('--tenant-id', required=True, help='Tenant ID')
-@click.option('--limit', default=None, type=int, help='Limit number of images to process')
-@click.option('--offset', default=0, type=int, help='Offset into the image list')
-@click.option('--batch-size', default=50, type=int, help='Commit every N updates')
-@click.option('--download-exif/--no-download-exif', default=False, help='Download full image to read EXIF')
-@click.option('--update-exif/--no-update-exif', default=True, help='Write merged EXIF to exif_data')
-@click.option('--dry-run', is_flag=True, help='Report updates without writing')
+@click.option('--tenant-id', required=True, help='Tenant ID for which to refresh metadata')
+@click.option('--limit', default=None, type=int, help='Maximum number of images to process (unlimited if not specified)')
+@click.option('--offset', default=0, type=int, help='Skip first N images in the list (useful for resuming).')
+@click.option('--batch-size', default=50, type=int, help='Number of images to batch before committing to database')
+@click.option('--download-exif/--no-download-exif', default=False, help='Download full image files from Dropbox to extract embedded EXIF data (slow but thorough)')
+@click.option('--update-exif/--no-update-exif', default=True, help='Store merged EXIF data in database exif_data column (not stored in GCP buckets)')
+@click.option('--dry-run', is_flag=True, help='Preview changes without writing to database')
 def refresh_metadata_command(
     tenant_id: str,
     limit: Optional[int],
@@ -36,7 +36,17 @@ def refresh_metadata_command(
     update_exif: bool,
     dry_run: bool
 ):
-    """Refresh missing EXIF-derived metadata from Dropbox."""
+    """Refresh missing EXIF and camera metadata for images by querying Dropbox.
+
+    Fills in missing metadata fields (capture time, GPS coordinates, ISO, aperture, shutter speed,
+    focal length, camera/lens model, image dimensions, etc.) by:
+
+    1. Using Dropbox's built-in media_info API (no download needed) - fastest method
+    2. Optionally downloading full images to extract embedded EXIF data (--download-exif)
+    3. Merging all sources and storing in database exif_data column
+
+    Storage: Metadata is stored in PostgreSQL database, not in GCP buckets.
+    Use --dry-run to preview changes first."""
     cmd = RefreshMetadataCommand(
         tenant_id, limit, offset, batch_size,
         download_exif, update_exif, dry_run

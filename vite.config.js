@@ -1,11 +1,15 @@
 const { defineConfig } = require('vite');
+const path = require('path');
 
 module.exports = defineConfig({
   root: 'frontend',
   build: {
     outDir: '../src/photocat/static/dist',
     rollupOptions: {
-      input: 'frontend/index.html',
+      input: {
+        main: path.resolve(__dirname, 'frontend/index.html'),
+        admin: path.resolve(__dirname, 'frontend/admin.html'),
+      },
     },
   },
   server: {
@@ -15,11 +19,7 @@ module.exports = defineConfig({
         target: 'http://localhost:8000',
         changeOrigin: true,
       },
-      // Proxy admin pages to the backend
-      '/admin': {
-        target: 'http://localhost:8000',
-        changeOrigin: true,
-      },
+      // Note: /admin is NOT proxied - Vite serves admin.html directly for dev
       '/tagging-admin': {
         target: 'http://localhost:8000',
         changeOrigin: true,
@@ -30,6 +30,11 @@ module.exports = defineConfig({
         changeOrigin: true,
       },
       '/webhooks': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+      },
+      // Proxy static assets
+      '/static': {
         target: 'http://localhost:8000',
         changeOrigin: true,
       },

@@ -121,7 +121,10 @@ async def list_images(
 
     if category_filters:
         try:
+            from .query_builder import QueryBuilder
+
             filters = json.loads(category_filters)
+            builder = QueryBuilder(db, tenant, date_order, order_by_value)
 
             # Apply category filters using helper
             unique_image_ids_set = apply_category_filters(
@@ -135,13 +138,16 @@ async def list_images(
             if unique_image_ids_set:
                 unique_image_ids = list(unique_image_ids_set)
 
+                if subqueries_list:
+                    unique_image_ids = builder.apply_filters_to_id_set(unique_image_ids, subqueries_list)
+
                 # Get all keywords for relevance counting
                 all_keywords = []
                 for filter_data in filters.values():
                     all_keywords.extend(filter_data.get('keywords', []))
 
                 # Total count of matching images
-                total = len(unique_image_ids)
+                total = builder.get_total_count(unique_image_ids)
 
                 if total:
                     # Get active tag type for scoring
@@ -194,7 +200,7 @@ async def list_images(
                         )
 
                     # Apply offset and limit
-                    paginated_ids = sorted_ids[offset:offset + limit] if limit else sorted_ids[offset:]
+                    paginated_ids = builder.paginate_id_list(sorted_ids, offset, limit)
 
                     # Now fetch full ImageMetadata objects in order
                     if paginated_ids:
@@ -223,7 +229,10 @@ async def list_images(
 
     # Apply keyword filtering if provided (legacy support)
     elif keywords:
+        from .query_builder import QueryBuilder
+
         keyword_list = [k.strip() for k in keywords.split(',') if k.strip()]
+        builder = QueryBuilder(db, tenant, date_order, order_by_value)
 
         if keyword_list and operator.upper() == "OR":
             # OR: Image must have ANY of the selected keywords
@@ -274,13 +283,10 @@ async def list_images(
                 )
 
                 # Apply base_query subquery filters (list, rating, etc.) to the keyword query
-                for subquery in subqueries_list:
-                    # All subqueries return ImageMetadata.id as the id column
-                    query = query.filter(ImageMetadata.id.in_(subquery))
+                query = builder.apply_subqueries(query, subqueries_list)
 
-                total = query.count()
-
-                results = query.limit(limit).offset(offset).all() if limit else query.offset(offset).all()
+                total = builder.get_total_count(query)
+                results = builder.apply_pagination(query, offset, limit)
                 images = [img for img, _ in results]
 
         elif keyword_list and operator.upper() == "AND":
@@ -314,9 +320,7 @@ async def list_images(
                     and_query = and_query.filter(ImageMetadata.id.in_(keyword_subquery))
 
                 # Apply base_query subquery filters (list, rating, etc.)
-                for subquery in subqueries_list:
-                    # All subqueries return ImageMetadata.id as the id column
-                    and_query = and_query.filter(ImageMetadata.id.in_(subquery))
+                and_query = builder.apply_subqueries(and_query, subqueries_list)
 
                 # Get matching image IDs
                 matching_image_ids = and_query.subquery()
@@ -345,55 +349,41 @@ async def list_images(
                     id_order
                 )
 
-                total = db.query(ImageMetadata).filter(
-                    ImageMetadata.tenant_id == tenant.id,
-                    ImageMetadata.id.in_(matching_image_ids)
-                ).count()
-
-                results = query.limit(limit).offset(offset).all() if limit else query.offset(offset).all()
+                total = builder.get_total_count(query)
+                results = builder.apply_pagination(query, offset, limit)
                 images = [img for img, _ in results]
         else:
             # No valid keywords, use base_query with subquery filters
             query = base_query
-            total = query.count()
-            order_by_date = func.coalesce(ImageMetadata.capture_timestamp, ImageMetadata.modified_time).desc()
-            images = query.order_by(*order_by_clauses).limit(limit).offset(offset).all() if limit else query.order_by(*order_by_clauses).offset(offset).all()
+            query = builder.apply_subqueries(query, subqueries_list)
+            total = builder.get_total_count(query)
+            order_by_clauses = builder.build_order_clauses()
+            images = builder.apply_pagination(query.order_by(*order_by_clauses), offset, limit)
     else:
         # No keywords filter, use base_query with subquery filters
+        from .query_builder import QueryBuilder
+
         query = base_query
-        total = query.count()
+        builder = QueryBuilder(db, tenant, date_order, order_by_value)
+
         if order_by_value == "ml_score" and ml_keyword_id:
-            active_tag_type = get_tenant_setting(db, tenant.id, 'active_machine_tag_type', default='siglip')
-            selected_tag_type = (ml_tag_type or active_tag_type).strip().lower()
-            model_name = None
-            if selected_tag_type == 'trained':
-                model_row = db.query(KeywordModel.model_name).filter(
-                    KeywordModel.tenant_id == tenant.id
-                ).order_by(
-                    func.coalesce(KeywordModel.updated_at, KeywordModel.created_at).desc()
-                ).first()
-                if model_row:
-                    model_name = model_row[0]
-            ml_scores = db.query(
-                MachineTag.image_id.label('image_id'),
-                func.max(MachineTag.confidence).label('ml_score')
-            ).filter(
-                MachineTag.keyword_id == ml_keyword_id,
-                MachineTag.tenant_id == tenant.id,
-                MachineTag.tag_type == selected_tag_type,
-                *([MachineTag.model_name == model_name] if model_name else [])
-            ).group_by(
-                MachineTag.image_id
-            ).subquery()
-            scored_query = query.outerjoin(ml_scores, ml_scores.c.image_id == ImageMetadata.id)
+            # Apply ML score ordering via outer join
+            query, ml_scores = builder.apply_ml_score_ordering(query, ml_keyword_id, ml_tag_type)
+            # Build order clauses with ML score priority
+            order_by_date_clause = func.coalesce(ImageMetadata.capture_timestamp, ImageMetadata.modified_time)
+            order_by_date_clause = order_by_date_clause.desc() if date_order == "desc" else order_by_date_clause.asc()
+            id_order_clause = ImageMetadata.id.desc() if date_order == "desc" else ImageMetadata.id.asc()
             order_clauses = (
                 ml_scores.c.ml_score.desc().nullslast(),
-                order_by_date,
-                id_order
+                order_by_date_clause,
+                id_order_clause
             )
-            images = scored_query.order_by(*order_clauses).limit(limit).offset(offset).all() if limit else scored_query.order_by(*order_clauses).offset(offset).all()
+            images = query.order_by(*order_clauses).limit(limit).offset(offset).all() if limit else query.order_by(*order_clauses).offset(offset).all()
         else:
+            order_by_clauses = builder.build_order_clauses()
             images = query.order_by(*order_by_clauses).limit(limit).offset(offset).all() if limit else query.order_by(*order_by_clauses).offset(offset).all()
+
+        total = query.count()
 
     # Get tags for all images
     image_ids = [img.id for img in images]

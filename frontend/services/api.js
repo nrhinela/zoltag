@@ -235,10 +235,17 @@ export async function getKeywords(tenantId, filters = {}) {
 }
 
 export async function getTenants() {
-    const response = await fetch(`${API_BASE_URL}/tenants`);
+    // Use admin endpoint for complete tenant data (includes settings, dropbox config, etc)
+    const response = await fetch(`${API_BASE_URL}/admin/tenants`);
 
     if (!response.ok) {
-        throw new Error('Failed to fetch tenants');
+        // Fallback to non-admin endpoint if admin endpoint not available
+        const fallbackResponse = await fetch(`${API_BASE_URL}/tenants`);
+        if (!fallbackResponse.ok) {
+            throw new Error('Failed to fetch tenants');
+        }
+        const data = await fallbackResponse.json();
+        return data || [];
     }
 
     const data = await response.json();
@@ -689,4 +696,126 @@ export async function updateList(tenantId, list) {
 
     const data = await response.json();
     return data;
+}
+
+// Admin endpoints
+
+/**
+ * Create a new tenant
+ * @param {Object} data - Tenant data (id, name, active)
+ * @returns {Promise<Object>} Created tenant
+ */
+export async function createTenant(data) {
+    const response = await fetch(`${API_BASE_URL}/admin/tenants`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+    });
+
+    if (!response.ok) {
+        const error = await response.json();
+        const err = new Error(error.detail || 'Failed to create tenant');
+        err.response = error;
+        throw err;
+    }
+
+    return await response.json();
+}
+
+/**
+ * Update an existing tenant
+ * @param {string} tenantId - Tenant ID
+ * @param {Object} data - Tenant data to update
+ * @returns {Promise<Object>} Updated tenant
+ */
+export async function updateTenant(tenantId, data) {
+    const response = await fetch(`${API_BASE_URL}/admin/tenants/${tenantId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+    });
+
+    if (!response.ok) {
+        const error = await response.json();
+        const err = new Error(error.detail || 'Failed to update tenant');
+        err.response = error;
+        throw err;
+    }
+
+    return await response.json();
+}
+
+/**
+ * Delete a tenant
+ * @param {string} tenantId - Tenant ID
+ * @returns {Promise<void>}
+ */
+export async function deleteTenant(tenantId) {
+    const response = await fetch(`${API_BASE_URL}/admin/tenants/${tenantId}`, {
+        method: 'DELETE'
+    });
+
+    if (!response.ok) {
+        const error = await response.json();
+        const err = new Error(error.detail || 'Failed to delete tenant');
+        err.response = error;
+        throw err;
+    }
+}
+
+/**
+ * Get system settings
+ * @returns {Promise<Object>} System configuration
+ */
+export async function getSystemSettings() {
+    const response = await fetch(`${API_BASE_URL}/config/system`);
+
+    if (!response.ok) {
+        throw new Error('Failed to fetch system settings');
+    }
+
+    return await response.json();
+}
+
+/**
+ * Update tenant settings
+ * @param {string} tenantId - Tenant ID
+ * @param {Object} settings - Settings to update
+ * @returns {Promise<Object>} Updated settings
+ */
+export async function updateTenantSettings(tenantId, settings) {
+    const response = await fetch(`${API_BASE_URL}/admin/tenants/${tenantId}/settings`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(settings)
+    });
+
+    if (!response.ok) {
+        const error = await response.json();
+        const err = new Error(error.detail || 'Failed to update tenant settings');
+        err.response = error;
+        throw err;
+    }
+
+    return await response.json();
+}
+
+/**
+ * Get tenant photo count (for deletion validation)
+ * @param {string} tenantId - Tenant ID
+ * @returns {Promise<number>} Number of photos owned by tenant
+ */
+export async function getTenantPhotoCount(tenantId) {
+    try {
+        const response = await fetch(`${API_BASE_URL}/admin/tenants/${tenantId}/photo_count`);
+        if (!response.ok) {
+            console.warn(`Could not fetch photo count for tenant ${tenantId}:`, response.status);
+            return 0;
+        }
+        const data = await response.json();
+        return data.count || 0;
+    } catch (error) {
+        console.warn(`Error fetching photo count for tenant ${tenantId}:`, error);
+        return 0;
+    }
 }

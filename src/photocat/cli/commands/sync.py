@@ -20,10 +20,23 @@ from PIL import Image
 
 
 @click.command(name='sync-dropbox')
-@click.option('--tenant-id', default='demo', help='Tenant ID to sync')
-@click.option('--count', default=1, type=int, help='Number of sync iterations')
+@click.option('--tenant-id', default='demo', help='Tenant ID to sync from Dropbox')
+@click.option('--count', default=1, type=int, help='Number of sync iterations to perform (useful for incremental syncs)')
 def sync_dropbox_command(tenant_id: str, count: int):
-    """Sync images from Dropbox (same as pressing sync button on web)."""
+    """Sync images from Dropbox to GCP Cloud Storage with full processing pipeline.
+
+    Equivalent to clicking the sync button in the web UI. This command:
+
+    1. Connects to tenant's Dropbox account using OAuth credentials
+    2. Lists new/changed files from configured sync folders
+    3. Downloads images and creates thumbnails (stored in GCP Cloud Storage)
+    4. Extracts image metadata (dimensions, format, embedded EXIF)
+    5. Computes image embeddings using ML models for visual search
+    6. Applies configured keywords to images based on ML tagging models
+    7. Stores all metadata and tags in PostgreSQL database
+
+    Artifacts stored: Image files and thumbnails → GCP Cloud Storage (tenant bucket)
+    Metadata stored: Database records → PostgreSQL"""
     cmd = SyncDropboxCommand(tenant_id, count)
     cmd.run()
 

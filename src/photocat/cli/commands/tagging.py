@@ -12,9 +12,21 @@ from photocat.cli.base import CliCommand
 
 
 @click.command(name='retag')
-@click.option('--tenant-id', required=True, help='Tenant ID')
+@click.option('--tenant-id', required=True, help='Tenant ID for which to recompute tags')
 def retag_command(tenant_id: str):
-    """Retag all images with ML models."""
+    """Recompute ML-based keyword tags for all images in a tenant.
+
+    This command reprocesses all images using the tenant's configured keyword models to:
+
+    1. Load all images from database for the tenant
+    2. Retrieve each image thumbnail from GCP Cloud Storage
+    3. Score the image against all configured keywords using ML models
+    4. Update MachineTag records in database with new keyword assignments
+
+    Use this when: Keywords configuration changes, ML models are updated, or you want
+    to recalculate keyword assignments with different model weights.
+
+    Storage: Tag data is stored in PostgreSQL database, not GCP buckets."""
     cmd = RetagCommand(tenant_id)
     cmd.run()
 

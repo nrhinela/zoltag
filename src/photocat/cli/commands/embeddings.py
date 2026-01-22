@@ -13,11 +13,26 @@ from photocat.cli.base import CliCommand
 
 
 @click.command(name='build-embeddings')
-@click.option('--tenant-id', required=True, help='Tenant ID')
-@click.option('--limit', default=None, type=int, help='Limit number of images to process')
-@click.option('--force/--no-force', default=False, help='Recompute embeddings even if present')
+@click.option('--tenant-id', required=True, help='Tenant ID for which to compute embeddings')
+@click.option('--limit', default=None, type=int, help='Maximum number of images to process (unlimited if not specified)')
+@click.option('--force/--no-force', default=False, help='Recompute embeddings even if already generated (--force flag)')
 def build_embeddings_command(tenant_id: str, limit: Optional[int], force: bool):
-    """Compute and store image embeddings for a tenant."""
+    """Generate image embeddings using ML models for visual similarity search.
+
+    This command computes embeddings (vector representations) for images to enable:
+    - Visual similarity search (find visually similar images)
+    - Image clustering
+    - Content-based recommendations
+
+    Process:
+    1. Query database for images needing embeddings (or all if --force)
+    2. Skip images with rating = 0 (assumed to be unimportant)
+    3. Retrieve image thumbnail from GCP Cloud Storage
+    4. Pass through configured ML model (default: clip or siglip)
+    5. Store embedding vector in database (embedding_generated flag set to true)
+
+    Storage: Embedding vectors stored in PostgreSQL database, not GCP buckets.
+    Use --force to recompute embeddings with a different model or different model weights."""
     cmd = BuildEmbeddingsCommand(tenant_id, limit, force)
     cmd.run()
 

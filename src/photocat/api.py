@@ -81,6 +81,19 @@ if dist_dir.exists():
 elif static_dir.exists():
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
+# Admin page route
+@app.get("/admin")
+async def admin_page():
+    """Serve the admin application."""
+    admin_file = dist_dir / "admin.html"
+    if admin_file.exists():
+        return HTMLResponse(content=admin_file.read_text())
+    # Fallback to static admin if no dist
+    admin_file = static_dir / "admin.html"
+    if admin_file.exists():
+        return HTMLResponse(content=admin_file.read_text())
+    return HTMLResponse(content="<h1>Admin Interface</h1><p>Admin page not built</p>", status_code=200)
+
 # SPA catch-all route - must be LAST route defined
 # This serves index.html for any unmatched GET requests (client-side routing)
 @app.get("/{full_path:path}")

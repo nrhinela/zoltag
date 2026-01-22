@@ -45,10 +45,23 @@ def cli():
 
 @cli.command()
 @click.argument('directory', type=click.Path(exists=True))
-@click.option('--tenant-id', default='demo', help='Tenant ID to use')
-@click.option('--recursive/--no-recursive', default=True, help='Process subdirectories')
+@click.option('--tenant-id', default='demo', help='Tenant ID to associate with ingested images')
+@click.option('--recursive/--no-recursive', default=True, help='Process subdirectories recursively')
 def ingest(directory: str, tenant_id: str, recursive: bool):
-    """Ingest images from a local directory."""
+    """Ingest local images into database with full processing pipeline.
+
+    This command imports images from a local directory (e.g., camera exports, downloads) and:
+
+    1. Discovers image files in the directory (optionally recursive)
+    2. Creates image records in database with local file references
+    3. Extracts metadata (dimensions, format, embedded EXIF data)
+    4. Generates thumbnails (stored in GCP Cloud Storage)
+    5. Computes image embeddings using ML models for visual search
+    6. Applies configured keywords to images based on ML tagging models
+
+    Storage: Images remain local, thumbnails uploaded to GCP Cloud Storage.
+    Metadata and tags stored in PostgreSQL database.
+    Use for testing locally before syncing with Dropbox."""
 
     # Setup database
     engine = create_engine(settings.database_url)
@@ -148,13 +161,13 @@ def _load_tenant(session, tenant_id: str) -> Tenant:
 
 
 @cli.command()
-@click.option('--tenant-id', required=True, help='Tenant ID')
-@click.option('--limit', default=None, type=int, help='Limit number of images to process')
-@click.option('--offset', default=0, type=int, help='Offset into the image list')
-@click.option('--batch-size', default=50, type=int, help='Commit every N updates')
-@click.option('--download-exif/--no-download-exif', default=False, help='Download full image to read EXIF')
-@click.option('--update-exif/--no-update-exif', default=True, help='Write merged EXIF to exif_data')
-@click.option('--dry-run', is_flag=True, help='Report updates without writing')
+@click.option('--tenant-id', required=True, help='Tenant ID for which to refresh metadata')
+@click.option('--limit', default=None, type=int, help='Maximum number of images to process (unlimited if not specified)')
+@click.option('--offset', default=0, type=int, help='Skip first N images in the list (useful for resuming)')
+@click.option('--batch-size', default=50, type=int, help='Number of images to batch before committing to database')
+@click.option('--download-exif/--no-download-exif', default=False, help='Download full image files to extract embedded EXIF (slow but thorough)')
+@click.option('--update-exif/--no-update-exif', default=True, help='Store merged EXIF data in database (not stored in GCP buckets)')
+@click.option('--dry-run', is_flag=True, help='Preview changes without writing to database')
 def refresh_metadata(
     tenant_id: str,
     limit: Optional[int],
@@ -164,7 +177,17 @@ def refresh_metadata(
     update_exif: bool,
     dry_run: bool
 ):
-    """Refresh missing EXIF-derived metadata from Dropbox."""
+    """Refresh missing EXIF and camera metadata for images by querying Dropbox.
+
+    Fills in missing metadata fields (capture time, GPS, ISO, aperture, shutter speed,
+    focal length, camera/lens model, image dimensions, etc.) by:
+
+    1. Using Dropbox's built-in media_info API (no download needed) - fastest method
+    2. Optionally downloading full images to extract embedded EXIF data (--download-exif)
+    3. Merging all sources and storing in database exif_data column
+
+    Storage: Metadata is stored in PostgreSQL database, not in GCP buckets.
+    Use --dry-run to preview changes first."""
     engine = create_engine(settings.database_url)
     Session = sessionmaker(bind=engine)
     session = Session()
@@ -464,11 +487,26 @@ def process_image(
 
 
 @cli.command()
-@click.option('--tenant-id', required=True, help='Tenant ID')
-@click.option('--limit', default=None, type=int, help='Limit number of images to process')
-@click.option('--force/--no-force', default=False, help='Recompute embeddings even if present')
+@click.option('--tenant-id', required=True, help='Tenant ID for which to compute embeddings')
+@click.option('--limit', default=None, type=int, help='Maximum number of images to process (unlimited if not specified)')
+@click.option('--force/--no-force', default=False, help='Recompute embeddings even if already generated (--force flag)')
 def build_embeddings(tenant_id: str, limit: Optional[int], force: bool):
-    """Compute and store image embeddings for a tenant."""
+    """Generate image embeddings using ML models for visual similarity search.
+
+    This command computes embeddings (vector representations) for images to enable:
+    - Visual similarity search (find visually similar images)
+    - Image clustering
+    - Content-based recommendations
+
+    Process:
+    1. Query database for images needing embeddings (or all if --force)
+    2. Skip images with rating = 0 (assumed to be unimportant)
+    3. Retrieve image thumbnail from GCP Cloud Storage
+    4. Pass through configured ML model (default: clip or siglip)
+    5. Store embedding vector in database (embedding_generated flag set to true)
+
+    Storage: Embedding vectors stored in PostgreSQL database, not GCP buckets.
+    Use --force to recompute embeddings with different model or model weights."""
     engine = create_engine(settings.database_url)
     Session = sessionmaker(bind=engine)
     session = Session()
@@ -511,11 +549,24 @@ def build_embeddings(tenant_id: str, limit: Optional[int], force: bool):
 
 
 @cli.command()
-@click.option('--tenant-id', required=True, help='Tenant ID')
-@click.option('--min-positive', default=None, type=int, help='Minimum positive examples')
-@click.option('--min-negative', default=None, type=int, help='Minimum negative examples')
+@click.option('--tenant-id', required=True, help='Tenant ID for which to train models')
+@click.option('--min-positive', default=None, type=int, help='Minimum positive examples required for a keyword to be trained')
+@click.option('--min-negative', default=None, type=int, help='Minimum negative examples required for a keyword to be trained')
 def train_keyword_models(tenant_id: str, min_positive: Optional[int], min_negative: Optional[int]):
-    """Train keyword centroid models from verified tags."""
+    """Train custom ML keyword models from user-verified image tags.
+
+    This command builds tenant-specific keyword classifier models by:
+
+    1. Querying database for images tagged with each keyword (user-verified tags)
+    2. Filtering out images without enough positive/negative examples
+    3. Computing centroid embeddings for each keyword class
+    4. Storing trained models for use in image classification
+
+    Use this to improve keyword assignment accuracy based on your specific image library
+    and tagging patterns. Requires user-verified tags to learn from.
+
+    Storage: Trained models stored in database, embedding vectors in PostgreSQL.
+    Run this after manually tagging/rating a good sample of images."""
     engine = create_engine(settings.database_url)
     Session = sessionmaker(bind=engine)
     session = Session()
@@ -538,13 +589,29 @@ def train_keyword_models(tenant_id: str, min_positive: Optional[int], min_negati
 
 
 @cli.command()
-@click.option('--tenant-id', required=True, help='Tenant ID')
-@click.option('--batch-size', default=50, type=int, help='Batch size for processing')
-@click.option('--limit', default=None, type=int, help='Limit number of images')
-@click.option('--offset', default=0, type=int, help='Offset into image list')
-@click.option('--replace', is_flag=True, default=False, help='Replace existing keyword-model tags instead of backfilling missing ones.')
+@click.option('--tenant-id', required=True, help='Tenant ID for which to recompute tags')
+@click.option('--batch-size', default=50, type=int, help='Number of images to batch before committing to database')
+@click.option('--limit', default=None, type=int, help='Maximum number of images to process (unlimited if not specified)')
+@click.option('--offset', default=0, type=int, help='Skip first N images in the list (useful for resuming)')
+@click.option('--replace', is_flag=True, default=False, help='Replace all existing tags (--replace flag), otherwise only backfill missing ones')
 def recompute_trained_tags(tenant_id: str, batch_size: int, limit: Optional[int], offset: int, replace: bool):
-    """Recompute trained-ML tags for all images in batches."""
+    """Recompute ML keyword tags using tenant-trained models.
+
+    This command applies trained keyword models to all images to:
+
+    1. Load tenant-specific trained keyword models from database
+    2. Retrieve each image embedding from database
+    3. Score image against all keyword models
+    4. Update MachineTag records with new keyword assignments
+
+    Modes:
+    - Default: Only fill in missing tags (skip images that already have tags)
+    - --replace: Recalculate all tags (overwrites existing ones)
+
+    Use this after training keyword models to apply them, or to refresh tags
+    when model weights or keyword definitions change.
+
+    Storage: Tag data is stored in PostgreSQL database, not GCP buckets."""
     engine = create_engine(settings.database_url)
     Session = sessionmaker(bind=engine)
     session = Session()
@@ -646,10 +713,20 @@ def recompute_trained_tags(tenant_id: str, batch_size: int, limit: Optional[int]
 
 
 @cli.command()
-@click.option('--tenant-id', default='demo', help='Tenant ID')
-@click.option('--limit', default=10, help='Number of images to show')
+@click.option('--tenant-id', default='demo', help='Tenant ID for which to list images')
+@click.option('--limit', default=10, help='Maximum number of images to display')
 def list_images(tenant_id: str, limit: int):
-    """List processed images."""
+    """Display recently processed images for a tenant with metadata.
+
+    This command shows:
+    - Image ID and file path
+    - Upload/capture date
+    - Image dimensions and file size
+    - Keywords assigned to each image
+    - Rating and other metadata
+
+    Useful for verifying that images were processed correctly and for debugging
+    metadata extraction or keyword assignment issues."""
     
     engine = create_engine(settings.database_url)
     Session = sessionmaker(bind=engine)
@@ -677,7 +754,16 @@ def list_images(tenant_id: str, limit: int):
 @cli.command()
 @click.argument('tenant-id')
 def show_config(tenant_id: str):
-    """Show tenant configuration."""
+    """Display tenant configuration including keywords and people.
+
+    This command displays:
+    - All keyword categories configured for the tenant
+    - Keywords within each category (first 5 listed, total count shown)
+    - All people (face recognition) entries configured for tenant
+    - Number of face embeddings per person
+
+    Useful for reviewing what keywords and people are available for tagging,
+    and for verifying configuration was loaded correctly."""
     
     try:
         config = TenantConfig.load(tenant_id)
@@ -702,9 +788,21 @@ def show_config(tenant_id: str):
 
 
 @cli.command()
-@click.option('--tenant-id', required=True, help='Tenant ID')
+@click.option('--tenant-id', required=True, help='Tenant ID for which to retag images')
 def retag(tenant_id: str):
-    """Reprocess all images to regenerate tags with current keywords."""
+    """Recompute ML-based keyword tags for all images in a tenant.
+
+    This command reprocesses all images using the tenant's configured keyword models to:
+
+    1. Load all images from database for the tenant
+    2. Retrieve each image thumbnail from GCP Cloud Storage
+    3. Score the image against all configured keywords using ML models
+    4. Update MachineTag records in database with new keyword assignments
+
+    Use this when: Keywords configuration changes, ML models are updated, or you want
+    to recalculate keyword assignments with different model weights.
+
+    Storage: Tag data is stored in PostgreSQL database, not GCP buckets."""
     from photocat.tenant import Tenant, TenantContext
     from photocat.metadata import ImageMetadata, MachineTag
     from photocat.config import TenantConfig

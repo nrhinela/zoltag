@@ -53,7 +53,8 @@ logs
 # Large data/model artifacts
 data
 datasets
-models
+/models
+/models/**
 checkpoints
 outputs
 *.pt

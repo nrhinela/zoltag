@@ -1,6 +1,6 @@
 import { LitElement, html, css } from 'lit';
 import { tailwind } from './tailwind-lit.js';
-import { getMlTrainingImages, getMlTrainingStats } from '../services/api.js';
+import { getMlTrainingImages, getMlTrainingStats, sync, retagAll } from '../services/api.js';
 
 class MlTraining extends LitElement {
   static styles = [tailwind, css`
@@ -46,6 +46,11 @@ class MlTraining extends LitElement {
     useKeywordModels: { type: Boolean },
     keywordModelWeight: { type: Number },
     stats: { type: Object },
+    isSyncing: { type: Boolean },
+    syncCount: { type: Number },
+    syncStatus: { type: String },
+    lastSyncAt: { type: String },
+    lastSyncCount: { type: Number },
   };
 
   constructor() {
@@ -61,6 +66,12 @@ class MlTraining extends LitElement {
     this.useKeywordModels = null;
     this.keywordModelWeight = null;
     this.stats = null;
+    this.isSyncing = false;
+    this.syncCount = 0;
+    this._stopRequested = false;
+    this.syncStatus = 'idle';
+    this.lastSyncAt = '';
+    this.lastSyncCount = 0;
   }
 
   connectedCallback() {
@@ -72,6 +83,7 @@ class MlTraining extends LitElement {
     if (changedProperties.has('tenant')) {
       this.fetchImages();
       this.fetchStats();
+      this._loadSyncStatus();
     }
   }
 
@@ -125,6 +137,106 @@ class MlTraining extends LitElement {
     }
   }
 
+  _persistSyncStatus() {
+    if (!this.tenant) return;
+    const payload = {
+      lastSyncAt: this.lastSyncAt,
+      lastSyncCount: this.lastSyncCount,
+      syncStatus: this.syncStatus,
+    };
+    localStorage.setItem(`photocat-sync-status-${this.tenant}`, JSON.stringify(payload));
+  }
+
+  _loadSyncStatus() {
+    if (!this.tenant) return;
+    const raw = localStorage.getItem(`photocat-sync-status-${this.tenant}`);
+    if (!raw) {
+      this.lastSyncAt = '';
+      this.lastSyncCount = 0;
+      this.syncStatus = 'idle';
+      return;
+    }
+    try {
+      const parsed = JSON.parse(raw);
+      this.lastSyncAt = parsed.lastSyncAt || '';
+      this.lastSyncCount = parsed.lastSyncCount || 0;
+      this.syncStatus = parsed.syncStatus || 'idle';
+    } catch (error) {
+      console.warn('Failed to parse sync status cache', error);
+      this.lastSyncAt = '';
+      this.lastSyncCount = 0;
+      this.syncStatus = 'idle';
+    }
+  }
+
+  _getSyncLabel() {
+    if (this.isSyncing || this.syncStatus === 'running') {
+      return `Syncing: ${this.syncCount}`;
+    }
+    if (this.syncStatus === 'stopped' && this.lastSyncCount) {
+      return `Sync stopped (${this.lastSyncCount})`;
+    }
+    if (this.syncStatus === 'complete' && this.lastSyncAt) {
+      const date = new Date(this.lastSyncAt).toLocaleString();
+      return `Last sync: ${date} (${this.lastSyncCount})`;
+    }
+    if (this.syncStatus === 'error') {
+      return 'Sync error';
+    }
+    return 'Sync idle';
+  }
+
+  async _sync() {
+    if (this.isSyncing || !this.tenant) return;
+    this.isSyncing = true;
+    this.syncCount = 0;
+    this._stopRequested = false;
+    this.syncStatus = 'running';
+    this.lastSyncAt = '';
+    this.lastSyncCount = 0;
+    this._persistSyncStatus();
+
+    try {
+      let hasMore = true;
+      while (hasMore && !this._stopRequested) {
+        const result = await sync(this.tenant);
+        if (result.processed > 0) {
+          this.syncCount += result.processed;
+          this.lastSyncCount = this.syncCount;
+          this._persistSyncStatus();
+        }
+        hasMore = result.has_more;
+      }
+
+      this.syncStatus = this._stopRequested ? 'stopped' : 'complete';
+      if (!this._stopRequested) {
+        this.lastSyncAt = new Date().toISOString();
+        this.lastSyncCount = this.syncCount;
+      }
+    } catch (error) {
+      console.error('Sync error:', error);
+      this.syncStatus = 'error';
+    } finally {
+      this._persistSyncStatus();
+      this.isSyncing = false;
+      this._stopRequested = false;
+    }
+  }
+
+  _stopSync() {
+    this._stopRequested = true;
+  }
+
+  async _retagAll() {
+    if (!this.tenant) return;
+    try {
+      await retagAll(this.tenant);
+    } catch (error) {
+      console.error('Retag error:', error);
+      this.error = 'Failed to start retag job.';
+    }
+  }
+
   _handleLimitChange(e) {
     const value = e.target.value;
     if (value === 'all') {
@@ -137,6 +249,22 @@ class MlTraining extends LitElement {
       this.limit = Number(value);
     }
     this.offset = 0;
+    this.fetchImages();
+  }
+
+  _handlePagePrev() {
+    if (this.isLoading || this.limitAll) return;
+    const nextOffset = Math.max(0, this.offset - this.limit);
+    if (nextOffset === this.offset) return;
+    this.offset = nextOffset;
+    this.fetchImages();
+  }
+
+  _handlePageNext() {
+    if (this.isLoading || this.limitAll) return;
+    const nextOffset = this.offset + this.limit;
+    if (this.total && nextOffset >= this.total) return;
+    this.offset = nextOffset;
     this.fetchImages();
   }
 
@@ -222,6 +350,45 @@ class MlTraining extends LitElement {
     const lastModelUpdate = this._formatStatDate(this.stats?.keyword_model_last_trained);
     const zeroShotCount = this._formatStatNumber(this.stats?.zero_shot_image_count);
     const trainedImageCount = this._formatStatNumber(this.stats?.trained_image_count);
+    const pageStart = this.images.length ? this.offset + 1 : 0;
+    const pageEnd = this.images.length ? this.offset + this.images.length : 0;
+    const hasPrev = !this.limitAll && this.offset > 0;
+    const hasNext = !this.limitAll && this.total && pageEnd < this.total;
+
+    const totalLabel = this.total || this.images.length;
+    const pagerControls = html`
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <div class="text-xs text-gray-500">Showing ${pageStart}-${pageEnd} of ${totalLabel} images</div>
+        <div class="flex flex-wrap items-center gap-3">
+          <label class="text-xs font-semibold text-gray-600">
+            Limit
+            <select
+              class="ml-2 px-2 py-1 border rounded"
+              .value=${this.limitAll ? 'all' : String(this.limit)}
+              @change=${this._handleLimitChange}
+            >
+              ${[25, 50, 100, 200].map((value) => html`
+                <option value=${value}>${value}</option>
+              `)}
+              ${(this.total > 0 || this.limitAll) ? html`
+                <option value="all">All (${this.total || this.limit})</option>
+              ` : ''}
+            </select>
+          </label>
+          <div class="flex items-center gap-2 text-xs text-gray-500">
+            <button class="px-2 py-1 border rounded disabled:opacity-40" ?disabled=${!hasPrev} @click=${this._handlePagePrev}>
+              Prev
+            </button>
+            <button class="px-2 py-1 border rounded disabled:opacity-40" ?disabled=${!hasNext} @click=${this._handlePageNext}>
+              Next
+            </button>
+          </div>
+          <button class="text-sm text-blue-600 hover:text-blue-700" @click=${() => this.fetchImages({ refresh: true })}>
+            Recompute
+          </button>
+        </div>
+      </div>
+    `;
 
     return html`
       <div class="max-w-6xl mx-auto">
@@ -248,50 +415,59 @@ class MlTraining extends LitElement {
           </div>
         </div>
 
-        <div class="flex items-center justify-between mb-4">
+        <div class="flex flex-wrap items-start justify-between gap-4 mb-4">
           <div>
-            <h2 class="text-xl font-semibold text-gray-800">ML Training</h2>
+            <h2 class="text-xl font-semibold text-gray-800">Pipeline</h2>
             <p class="text-sm text-gray-500">Compare verified tags with zero-shot and keyword-model output.</p>
             <div class="text-xs text-gray-500 mt-1 space-y-1">
               <div>USE_KEYWORD_MODELS: ${keywordModelsLabel} · KEYWORD_MODEL_WEIGHT: ${keywordWeightLabel}</div>
               <div class="text-gray-400">Rebuild model:</div>
               <pre class="bg-gray-50 border border-gray-200 rounded px-2 py-1 text-[11px] text-gray-700 whitespace-pre-wrap">
-python -m photocat.cli build-embeddings --tenant-id &lt;tenant&gt; --force
-python -m photocat.cli train-keyword-models --tenant-id &lt;tenant&gt; --min-positive 3 --min-negative 3
+photocat build-embeddings --tenant-id &lt;tenant&gt; --force
+photocat train-keyword-models --tenant-id &lt;tenant&gt; --min-positive 3 --min-negative 3
               </pre>
               <div class="text-gray-400">Retag keyword-model tags (batch):</div>
               <pre class="bg-gray-50 border border-gray-200 rounded px-2 py-1 text-[11px] text-gray-700 whitespace-pre-wrap">
-python -m photocat.cli recompute-trained-tags --tenant-id &lt;tenant&gt; --batch-size 50 --limit 500 --offset 0
+photocat recompute-trained-tags --tenant-id &lt;tenant&gt; --batch-size 50 --limit 500 --offset 0
 # Backfill only (default). Use --replace to overwrite existing keyword-model tags.
-python -m photocat.cli recompute-trained-tags --tenant-id &lt;tenant&gt; --batch-size 50 --limit 500 --offset 0 --replace
+photocat recompute-trained-tags --tenant-id &lt;tenant&gt; --batch-size 50 --limit 500 --offset 0 --replace
               </pre>
             </div>
           </div>
-          <div class="flex items-center gap-3">
-            <label class="text-xs font-semibold text-gray-600">
-              Limit
-              <select
-                class="ml-2 px-2 py-1 border rounded"
-                .value=${this.limitAll ? 'all' : String(this.limit)}
-                @change=${this._handleLimitChange}
+          <div class="border border-gray-200 rounded-lg p-3 bg-white shadow-sm">
+            <div class="text-xs text-gray-500 uppercase mb-2">Pipeline Actions</div>
+            <div class="flex items-center gap-2">
+              ${this.isSyncing ? html`
+                <button
+                  class="bg-red-600 text-white px-3 py-1.5 rounded-lg hover:bg-red-700 text-sm"
+                  @click=${this._stopSync}
+                >
+                  <i class="fas fa-stop mr-2"></i>Stop (${this.syncCount})
+                </button>
+              ` : html`
+                <button
+                  class="bg-teal-600 text-white px-3 py-1.5 rounded-lg hover:bg-teal-700 text-sm"
+                  @click=${this._sync}
+                >
+                  <i class="fas fa-sync mr-2"></i>Sync
+                </button>
+              `}
+              <button
+                class="bg-purple-600 text-white px-3 py-1.5 rounded-lg hover:bg-purple-700 text-sm"
+                @click=${this._retagAll}
               >
-                ${[25, 50, 100, 200].map((value) => html`
-                  <option value=${value}>${value}</option>
-                `)}
-                ${(this.total > 0 || this.limitAll) ? html`
-                  <option value="all">All (${this.total || this.limit})</option>
-                ` : ''}
-              </select>
-            </label>
-            <button class="text-sm text-blue-600 hover:text-blue-700" @click=${() => this.fetchImages({ refresh: true })}>
-              Recompute
-            </button>
+                <i class="fas fa-tags mr-2"></i>Retag All
+              </button>
+            </div>
+            <div class="text-xs text-gray-500 mt-2">${this._getSyncLabel()}</div>
           </div>
         </div>
 
         ${this.error ? html`<div class="text-sm text-red-600 mb-4">${this.error}</div>` : ''}
         ${this.isLoading ? html`<div class="text-sm text-gray-500 mb-4">Loading images...</div>` : ''}
-        <div class="text-xs text-gray-500 mb-3">Showing ${this.images.length} of ${this.total} images</div>
+        <div class="mb-3">
+          ${pagerControls}
+        </div>
 
         <div class="table-wrapper bg-white border border-gray-200 rounded-lg">
           <table class="min-w-full text-sm">
@@ -337,6 +513,9 @@ python -m photocat.cli recompute-trained-tags --tenant-id &lt;tenant&gt; --batch
               `)}
             </tbody>
           </table>
+        </div>
+        <div class="mt-3">
+          ${pagerControls}
         </div>
       </div>
     `;

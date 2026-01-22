@@ -17,11 +17,11 @@ from photocat.cli.base import CliCommand
 
 
 @click.command(name='backfill-thumbnails')
-@click.option('--tenant-id', required=True, help='Tenant ID')
-@click.option('--limit', default=None, type=int, help='Limit number of images to process')
-@click.option('--offset', default=0, type=int, help='Offset into the image list')
-@click.option('--batch-size', default=25, type=int, help='Commit every N updates')
-@click.option('--dry-run', is_flag=True, help='Report updates without writing')
+@click.option('--tenant-id', required=True, help='Tenant ID for which to backfill thumbnails')
+@click.option('--limit', default=None, type=int, help='Maximum number of images to process (unlimited if not specified)')
+@click.option('--offset', default=0, type=int, help='Skip first N images in the list (useful for resuming)')
+@click.option('--batch-size', default=25, type=int, help='Number of images to batch before committing to database')
+@click.option('--dry-run', is_flag=True, help='Preview changes without writing to database or GCP buckets')
 def backfill_thumbnails_command(
     tenant_id: str,
     limit: Optional[int],
@@ -29,7 +29,18 @@ def backfill_thumbnails_command(
     batch_size: int,
     dry_run: bool
 ):
-    """Backfill missing thumbnail paths by downloading from Dropbox."""
+    """Generate and upload missing thumbnails from Dropbox images to GCP Cloud Storage.
+
+    This command processes images for a tenant to:
+
+    1. Query database for images missing thumbnail_path or thumbnail_url
+    2. Download each image from Dropbox
+    3. Generate thumbnail file (configurable size, default 300x300px)
+    4. Upload thumbnail to GCP Cloud Storage (tenant's thumbnail bucket)
+    5. Store thumbnail_path in database for later retrieval
+
+    Storage: Thumbnails uploaded to GCP Cloud Storage (tenant bucket), paths stored in PostgreSQL.
+    Use --dry-run to preview changes first, useful for testing batch size and performance."""
     cmd = BackfillThumbnailsCommand(tenant_id, limit, offset, batch_size, dry_run)
     cmd.run()
 

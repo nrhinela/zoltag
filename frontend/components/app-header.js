@@ -81,21 +81,6 @@ class AppHeader extends LitElement {
                         <span class="text-sm px-3 py-1 rounded font-semibold text-white" style="background-color: ${this.environment === 'PROD' ? '#b91c1c' : '#16a34a'}">${this.environment}</span>
                     </div>
                     <div class="flex items-start space-x-4">
-                        <div class="flex flex-col items-start">
-                            ${this.isSyncing ? html`
-                                <button @click=${this._stopSync} class="bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700">
-                                    <i class="fas fa-stop mr-2"></i>Stop (${this.syncCount})
-                                </button>
-                            ` : html`
-                                <button @click=${this._sync} class="bg-teal-600 text-white px-4 py-2 rounded-lg hover:bg-teal-700">
-                                    <i class="fas fa-sync mr-2"></i>Sync
-                                </button>
-                            `}
-                            <div class="text-xs text-gray-500 mt-1 leading-tight">${this._getSyncLabel()}</div>
-                        </div>
-                        <button @click=${this._retagAll} class="bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700">
-                            <i class="fas fa-tags mr-2"></i>Retag All
-                        </button>
                         <div class="flex items-center space-x-2">
                             <label for="tenantSelect" class="text-gray-700 font-medium">Tenant:</label>
                             <select .value=${this.tenant} id="tenantSelect" class="px-4 py-2 border rounded-lg" @change=${this._switchTenant}>
@@ -145,7 +130,7 @@ class AppHeader extends LitElement {
                         @click=${() => this._handleTabChange('ml-training')}
                         class="py-3 px-6 text-base font-semibold ${this.activeTab === 'ml-training' ? 'border-b-4 border-blue-600 text-blue-800 bg-blue-50' : 'text-gray-600 hover:text-gray-800 hover:bg-gray-100'} transition-all duration-200"
                     >
-                        <i class="fas fa-brain mr-2"></i>ML Training
+                        <i class="fas fa-brain mr-2"></i>Pipeline
                     </button>
                     <button
                         @click=${() => this._handleTabChange('queue')}

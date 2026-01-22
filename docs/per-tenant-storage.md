@@ -87,7 +87,7 @@ psql $DATABASE_URL -c "SELECT id, name, storage_bucket, thumbnail_bucket FROM te
 Upload an image via the UI or CLI:
 
 ```bash
-python -m photocat.cli ingest --tenant-id demo ~/Pictures/test
+photocat ingest --tenant-id demo ~/Pictures/test
 ```
 
 The CLI will show which buckets it's using:

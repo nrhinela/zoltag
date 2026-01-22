@@ -54,6 +54,8 @@ logs/
 data/
 datasets/
 models/
+!src/photocat/models
+!src/photocat/models/**
 checkpoints/
 outputs/
 *.pt

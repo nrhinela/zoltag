@@ -16,9 +16,10 @@ steps:
   - name: 'gcr.io/cloud-builders/docker'
     args: [
       'build',
-      '--build-arg', 'PRELOAD_SIGLIP=1',
+      '--build-arg', 'PRELOAD_SIGLIP=0',
       '--build-arg', 'BUILDKIT_INLINE_CACHE=1',
       '--cache-from', 'gcr.io/$PROJECT_ID/photocat:latest',
+      '--cache-from', 'gcr.io/$PROJECT_ID/photocat:model-cache',
       '-t', 'gcr.io/$PROJECT_ID/photocat:$_COMMIT_SHA',
       '-t', 'gcr.io/$PROJECT_ID/photocat:latest',
       '.'
