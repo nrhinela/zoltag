@@ -121,6 +121,20 @@ class DropboxClient:
             raise ValueError(f"Path is not a file: {path}")
         return metadata
 
+    def get_metadata_with_media_info(self, path: str) -> FileMetadata:
+        """Get file metadata with media info and property groups."""
+        self._ensure_fresh_token()
+        kwargs: Dict[str, Any] = {"include_media_info": True}
+        try:
+            from dropbox.files import IncludePropertyGroups
+            kwargs["include_property_groups"] = IncludePropertyGroups.filter_some([])
+        except Exception:
+            pass
+        metadata = self._client.files_get_metadata(path, **kwargs)
+        if not isinstance(metadata, FileMetadata):
+            raise ValueError(f"Path is not a file: {path}")
+        return metadata
+
 
 class DropboxWebhookValidator:
     """Validate Dropbox webhook signatures."""

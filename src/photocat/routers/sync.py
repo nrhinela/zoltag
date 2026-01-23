@@ -1,8 +1,6 @@
 """Router for Dropbox sync and image processing endpoints."""
 
 import traceback
-from pathlib import Path
-from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
@@ -10,25 +8,15 @@ from google.cloud import storage
 
 from photocat.dependencies import get_db, get_tenant, get_secret
 from photocat.tenant import Tenant
-from photocat.exif import (
-    get_exif_value,
-    parse_exif_datetime,
-    parse_exif_float,
-    parse_exif_int,
-    parse_exif_str,
-)
-from photocat.metadata import Tenant as TenantModel, ImageMetadata, MachineTag
-from photocat.models.config import Keyword
+from photocat.metadata import Tenant as TenantModel, ImageMetadata
 from photocat.settings import settings
 from photocat.image import ImageProcessor
 from photocat.config.db_config import ConfigManager
-from photocat.tagging import get_tagger
 from photocat.learning import (
-    ensure_image_embedding,
     load_keyword_models,
-    score_image_with_models,
-    score_keywords_for_categories,
 )
+from photocat.sync_pipeline import process_dropbox_entry
+from photocat.tagging import get_tagger
 
 router = APIRouter(
     prefix="/api/v1",
@@ -179,8 +167,6 @@ async def trigger_sync(
             "has_more": True  # Assume more until we check all folders
         }
 
-        # Setup image processor
-        processor = ImageProcessor()
         storage_client = storage.Client(project=settings.gcp_project_id)
         thumbnail_bucket = storage_client.bucket(tenant.get_thumbnail_bucket(settings))
 
@@ -190,278 +176,54 @@ async def trigger_sync(
 
         # Group keywords by category
         by_category = {}
+        keyword_to_category = {}
         for kw in all_keywords:
             cat = kw['category']
+            keyword_to_category[kw['keyword']] = cat
             if cat not in by_category:
                 by_category[cat] = []
             by_category[cat].append(kw)
 
         tagger = get_tagger(model_type=model)
+        model_name = getattr(tagger, "model_name", model)
+        keyword_models = None
+        if settings.use_keyword_models:
+            keyword_models = load_keyword_models(db, tenant.id, model_name)
+
         processed = 0
         max_per_sync = 1  # Process one at a time for real-time UI updates
+        status_messages = []
 
-        # Process new/changed images (limit to 1 per sync)
         from dropbox.files import FileMetadata
         for entry in changes['entries']:
             if processed >= max_per_sync:
                 break
 
-            if isinstance(entry, FileMetadata) and processor.is_supported(entry.name):
-                try:
-                    status_messages = []
+            if not isinstance(entry, FileMetadata):
+                continue
 
-                    # Fetch Dropbox metadata with media info and custom properties
-                    # This is MUCH more efficient than downloading the full file
-                    dropbox_props = {}
-                    dropbox_exif = {}
-                    try:
-                        try:
-                            from dropbox.files import IncludePropertyGroups
-                            include_property_groups = IncludePropertyGroups.filter_some([])
-                        except ImportError:
-                            include_property_groups = None
-                        metadata_kwargs = {
-                            "include_media_info": True,
-                        }
-                        if include_property_groups is not None:
-                            metadata_kwargs["include_property_groups"] = include_property_groups
-                        metadata_result = dbx.files_get_metadata(entry.path_display, **metadata_kwargs)
-                        print(f"[Sync] Fetched Dropbox metadata for {entry.name}")
-
-                        # Extract media info (EXIF-like data from Dropbox without downloading)
-                        if hasattr(metadata_result, 'media_info') and metadata_result.media_info:
-                            media_info = metadata_result.media_info.get_metadata()
-                            print(f"[Sync] Media info type: {type(media_info).__name__}")
-
-                            # Photo metadata
-                            if hasattr(media_info, 'dimensions') and media_info.dimensions:
-                                dropbox_exif['ImageWidth'] = media_info.dimensions.width
-                                dropbox_exif['ImageLength'] = media_info.dimensions.height
-                                print(f"[Sync] Dimensions: {media_info.dimensions.width}x{media_info.dimensions.height}")
-
-                            if hasattr(media_info, 'location') and media_info.location:
-                                dropbox_exif['GPSLatitude'] = media_info.location.latitude
-                                dropbox_exif['GPSLongitude'] = media_info.location.longitude
-                                print(f"[Sync] GPS: {media_info.location.latitude}, {media_info.location.longitude}")
-
-                            if hasattr(media_info, 'time_taken') and media_info.time_taken:
-                                dropbox_exif['DateTimeOriginal'] = media_info.time_taken.isoformat()
-                                dropbox_exif['DateTime'] = media_info.time_taken.isoformat()
-                                print(f"[Sync] Time taken: {media_info.time_taken}")
-
-                        # Extract custom properties
-                        if hasattr(metadata_result, 'property_groups') and metadata_result.property_groups:
-                            print(f"[Sync] Found {len(metadata_result.property_groups)} property groups")
-                            for prop_group in metadata_result.property_groups:
-                                template_name = prop_group.template_id
-                                for field in prop_group.fields:
-                                    key = f"{template_name}.{field.name}"
-                                    dropbox_props[key] = field.value
-                        else:
-                            print(f"[Sync] No custom property groups")
-
-                    except Exception as metadata_error:
-                        print(f"Could not fetch Dropbox metadata for {entry.name}: {metadata_error}")
-                        traceback.print_exc()
-
-                    # Download thumbnail for fast processing (~50-100KB vs 3MB)
-                    # Get metadata from Dropbox API (dimensions, GPS, date)
-                    # Don't download full image - not worth the bandwidth/time
-                    from dropbox.files import ThumbnailFormat, ThumbnailSize
-                    image_data = None
-
-                    # Try to get thumbnail
-                    if not entry.name.lower().endswith(('.heic', '.heif')):
-                        try:
-                            status_messages.append(f"Downloading thumbnail: {entry.name}")
-                            _, thumbnail_response = dbx.files_get_thumbnail(
-                                path=entry.path_display,
-                                format=ThumbnailFormat.jpeg,
-                                size=ThumbnailSize.w640h480
-                            )
-                            image_data = thumbnail_response.content
-                            print(f"[Sync] Downloaded thumbnail ({len(image_data)} bytes)")
-                        except Exception as thumb_error:
-                            print(f"Thumbnail download failed for {entry.name}: {thumb_error}")
-
-                    # Fallback to full download only if thumbnail completely fails
-                    # (e.g., for HEIC files or unsupported formats)
-                    if image_data is None:
-                        status_messages.append(f"Downloading image: {entry.name}")
-                        _, response = dbx.files_download(entry.path_display)
-                        image_data = response.content
-                        print(f"[Sync] Downloaded full image ({len(image_data)} bytes)")
-
-                    # Extract features
-                    status_messages.append(f"Extracting visual features")
-                    features = processor.extract_features(image_data)
-
-                    # Merge EXIF: Dropbox API data (no download needed) + any data from image
-                    # Dropbox API data takes precedence as it's more reliable
-                    exif = features.get('exif', {})
-                    exif.update(dropbox_exif)  # Dropbox media_info overwrites
-                    print(f"[Sync] Combined EXIF data: {len(exif)} fields")
-                    if exif:
-                        print(f"[Sync] EXIF keys: {list(exif.keys())[:10]}")
-
-                    capture_timestamp = parse_exif_datetime(
-                        get_exif_value(exif, "DateTimeOriginal", "DateTime")
-                    )
-                    gps_latitude = parse_exif_float(get_exif_value(exif, "GPSLatitude"))
-                    gps_longitude = parse_exif_float(get_exif_value(exif, "GPSLongitude"))
-                    iso = parse_exif_int(get_exif_value(exif, "ISOSpeedRatings", "ISOSpeed", "ISO"))
-                    aperture = parse_exif_float(get_exif_value(exif, "FNumber", "ApertureValue"))
-                    shutter_speed = parse_exif_str(get_exif_value(exif, "ExposureTime", "ShutterSpeedValue"))
-                    focal_length = parse_exif_float(get_exif_value(exif, "FocalLength"))
-
-                    # Check if already exists
-                    existing = db.query(ImageMetadata).filter(
-                        ImageMetadata.tenant_id == tenant.id,
-                        ImageMetadata.dropbox_id == entry.id
-                    ).first()
-
-                    if existing:
-                        # Skip already processed, don't count toward limit
-                        continue
-
-                    # Upload thumbnail with cache headers
-                    status_messages.append(f"Saving thumbnail and metadata")
-                    thumbnail_filename = f"{Path(entry.name).stem}_thumb.jpg"
-                    thumbnail_path = tenant.get_storage_path(thumbnail_filename, "thumbnails")
-                    blob = thumbnail_bucket.blob(thumbnail_path)
-                    blob.cache_control = "public, max-age=31536000, immutable"  # 1 year cache
-                    blob.upload_from_string(features['thumbnail'], content_type='image/jpeg')
-                    metadata = ImageMetadata(
-                        tenant_id=tenant.id,
-                        dropbox_path=entry.path_display,
-                        dropbox_id=entry.id,
-                        filename=entry.name,
-                        file_size=entry.size,
-                        content_hash=entry.content_hash if hasattr(entry, 'content_hash') else None,
-                        modified_time=entry.server_modified,
-                        width=features['width'],
-                        height=features['height'],
-                        format=features['format'],
-                        perceptual_hash=features['perceptual_hash'],
-                        color_histogram=features['color_histogram'],
-                        exif_data=exif,
-                        dropbox_properties=dropbox_props if dropbox_props else None,
-                        camera_make=exif.get('Make'),
-                        camera_model=exif.get('Model'),
-                        lens_model=exif.get('LensModel'),
-                        capture_timestamp=capture_timestamp,
-                        gps_latitude=gps_latitude,
-                        gps_longitude=gps_longitude,
-                        iso=iso,
-                        aperture=aperture,
-                        shutter_speed=shutter_speed,
-                        focal_length=focal_length,
-                        thumbnail_path=thumbnail_path,
-                        embedding_generated=False,
-                        faces_detected=False,
-                        tags_applied=False,
-                    )
-                    db.add(metadata)
-                    db.commit()
-                    db.refresh(metadata)
-
-                    # Tag with model (per category)
-                    status_messages.append(f"Running {model.upper()} inference for tagging")
-                    # Delete existing tags for this image and tag type
-                    db.query(MachineTag).filter(
-                        MachineTag.image_id == metadata.id,
-                        MachineTag.tag_type == 'siglip'
-                    ).delete()
-
-                    model_name = getattr(tagger, "model_name", model)
-                    model_version = getattr(tagger, "model_version", model_name)
-                    model_scores = None
-
-                    embedding_record = ensure_image_embedding(
-                        db,
-                        tenant.id,
-                        metadata.id,
-                        image_data,
-                        model_name,
-                        model_version
-                    )
-                    if settings.use_keyword_models:
-                        keyword_models = load_keyword_models(db, tenant.id, model_name)
-                        model_scores = score_image_with_models(embedding_record.embedding, keyword_models)
-
-                    all_tags = score_keywords_for_categories(
-                        image_data=image_data,
-                        keywords_by_category=by_category,
-                        model_type=model,
-                        threshold=0.15,
-                        model_scores=model_scores,
-                        model_weight=settings.keyword_model_weight
-                    )
-
-                    # Build keyword lookup by string
-                    keyword_lookup = {kw['keyword']: kw for kw in all_keywords}
-
-                    for keyword_str, confidence in all_tags:
-                        # Look up keyword_id from database
-                        keyword_record = db.query(Keyword).filter(
-                            Keyword.tenant_id == tenant.id,
-                            Keyword.keyword == keyword_str
-                        ).first()
-
-                        if not keyword_record:
-                            # Skip if keyword not found (shouldn't happen if config is consistent)
-                            continue
-
-                        tag = MachineTag(
-                            image_id=metadata.id,
-                            tenant_id=tenant.id,
-                            keyword_id=keyword_record.id,
-                            confidence=confidence,
-                            tag_type='siglip',
-                            model_name=model_name,
-                            model_version=model_version
-                        )
-                        db.add(tag)
-
-                    metadata.tags_applied = len(all_tags) > 0
-                    status_messages.append(f"Complete: {len(all_tags)} tags applied")
-                    db.commit()
+            try:
+                result = process_dropbox_entry(
+                    db=db,
+                    tenant=tenant,
+                    entry=entry,
+                    dropbox_client=dbx,
+                    thumbnail_bucket=thumbnail_bucket,
+                    keywords_by_category=by_category,
+                    keyword_to_category=keyword_to_category,
+                    keyword_models=keyword_models,
+                    model_type=model,
+                    log=print,
+                )
+                if result.status == "processed":
                     processed += 1
-
-                except Exception as e:
-                    error_msg = f"Error processing {entry.name}: {e}"
-                    print(error_msg)
-                    traceback.print_exc()
-
-                    # Mark as processed (failed) so we don't retry it immediately
-                    # Store minimal metadata to track the failure
-                    try:
-                        existing = db.query(ImageMetadata).filter(
-                            ImageMetadata.tenant_id == tenant.id,
-                            ImageMetadata.dropbox_id == entry.id
-                        ).first()
-
-                        if not existing:
-                            metadata = ImageMetadata(
-                                tenant_id=tenant.id,
-                                dropbox_path=entry.path_display,
-                                dropbox_id=entry.id,
-                                filename=entry.name,
-                                file_size=entry.size,
-                                modified_time=entry.server_modified,
-                                tags_applied=False,
-                                embedding_generated=False,
-                                faces_detected=False,
-                            )
-                            db.add(metadata)
-                            db.commit()
-                            print(f"Marked {entry.name} as failed (will skip in future syncs)")
-                    except Exception as db_error:
-                        print(f"Failed to mark {entry.name} as failed: {db_error}")
-                        db.rollback()
-
-                    # Continue to next file instead of stopping
-                    continue
+                    status_messages.append(f"{entry.name}: {result.tags_count} tags")
+                elif result.status == "skipped":
+                    status_messages.append(f"{entry.name}: already synced")
+            except Exception as e:
+                print(f"[Sync] Error processing {entry.name}: {e}")
+                traceback.print_exc()
+                continue
 
         return {
             "tenant_id": tenant.id,

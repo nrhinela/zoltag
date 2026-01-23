@@ -182,11 +182,6 @@ class SigLIPTagger:
             # (similar to CLIP - the sigmoid is used during training, not inference)
             probs = torch.softmax(logits_per_image[0], dim=0).cpu().numpy()
 
-            # Debug logging
-            print(f"SigLIP logits shape: {logits_per_image.shape}")
-            print(f"SigLIP probs (top 10): {sorted(zip(keywords, probs), key=lambda x: x[1], reverse=True)[:10]}")
-            print(f"SigLIP threshold: {threshold}")
-
         # Filter by threshold and return with confidence scores
         results = []
         for keyword, confidence in zip(keywords, probs):

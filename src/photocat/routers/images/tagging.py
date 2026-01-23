@@ -16,9 +16,6 @@ from photocat.image import ImageProcessor
 from photocat.config.db_config import ConfigManager
 from photocat.tagging import calculate_tags, get_tagger
 from photocat.learning import (
-    ensure_image_embedding,
-    load_keyword_models,
-    score_image_with_models,
     score_keywords_for_categories,
     recompute_trained_tags_for_image,
 )
@@ -240,26 +237,11 @@ async def retag_single_image(
 
         image_data = blob.download_as_bytes()
 
-        model_scores = None
-        if settings.use_keyword_models:
-            embedding_record = ensure_image_embedding(
-                db,
-                tenant.id,
-                image.id,
-                image_data,
-                model_name,
-                model_version
-            )
-            keyword_models = load_keyword_models(db, tenant.id, model_name)
-            model_scores = score_image_with_models(embedding_record.embedding, keyword_models)
-
         all_tags = score_keywords_for_categories(
             image_data=image_data,
             keywords_by_category=by_category,
             model_type=model_type,
-            threshold=0.15,
-            model_scores=model_scores,
-            model_weight=settings.keyword_model_weight
+            threshold=0.15
         )
 
         # Create new tags - look up keyword_ids from database
@@ -363,26 +345,11 @@ async def retag_all_images(
 
             image_data = blob.download_as_bytes()
 
-            model_scores = None
-            if settings.use_keyword_models:
-                embedding_record = ensure_image_embedding(
-                    db,
-                    tenant.id,
-                    image.id,
-                    image_data,
-                    model_name,
-                    model_version
-                )
-                keyword_models = load_keyword_models(db, tenant.id, model_name)
-                model_scores = score_image_with_models(embedding_record.embedding, keyword_models)
-
             all_tags = score_keywords_for_categories(
                 image_data=image_data,
                 keywords_by_category=by_category,
                 model_type=model_type,
-                threshold=0.15,
-                model_scores=model_scores,
-                model_weight=settings.keyword_model_weight
+                threshold=0.15
             )
 
             for keyword, confidence in all_tags:

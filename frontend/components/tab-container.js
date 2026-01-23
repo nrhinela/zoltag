@@ -26,6 +26,7 @@ class TabContainer extends LitElement {
         ${this.activeTab === 'lists' ? html`<slot name="lists"></slot>` : ''}
         ${this.activeTab === 'tagging' ? html`<slot name="tagging"></slot>` : ''}
         ${this.activeTab === 'ml-training' ? html`<slot name="ml-training"></slot>` : ''}
+        ${this.activeTab === 'cli' ? html`<slot name="cli"></slot>` : ''}
         ${this.activeTab === 'queue' ? html`<slot name="queue"></slot>` : ''}
       </div>
     `;

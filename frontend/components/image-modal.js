@@ -1,5 +1,5 @@
 import { LitElement, html, css } from 'lit';
-import { getImageDetails } from '../services/api.js';
+import { getImageDetails, refreshImageMetadata } from '../services/api.js';
 import { tailwind } from './tailwind-lit.js';
 import './permatag-editor.js';
 
@@ -50,6 +50,7 @@ class ImageModal extends LitElement {
     active: { type: Boolean, reflect: true },
     tenant: { type: String },
     metadataOpen: { type: Boolean },
+    isRefreshingMetadata: { type: Boolean },
   };
 
   constructor() {
@@ -57,6 +58,7 @@ class ImageModal extends LitElement {
     this.active = false;
     this.details = null;
     this.metadataOpen = false;
+    this.isRefreshingMetadata = false;
     this._handlePermatagEvent = (event) => {
       if (this.active && event?.detail?.imageId === this.image?.id) {
         this.fetchDetails();
@@ -105,6 +107,21 @@ class ImageModal extends LitElement {
       } catch (error) {
           console.error('Failed to fetch image details:', error);
       }
+  }
+
+  async _handleMetadataRefresh(event) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!this.image || this.isRefreshingMetadata) return;
+    this.isRefreshingMetadata = true;
+    try {
+      await refreshImageMetadata(this.tenant, this.image.id);
+      await this.fetchDetails();
+    } catch (error) {
+      console.error('Failed to refresh metadata:', error);
+    } finally {
+      this.isRefreshingMetadata = false;
+    }
   }
 
   render() {
@@ -210,6 +227,16 @@ class ImageModal extends LitElement {
               <span class="text-right text-gray-700">${row.value}</span>
             </div>
           `)}
+        </div>
+        <div class="mt-3 flex items-center justify-between text-xs text-gray-500">
+          <span>Re-download the file and refresh metadata.</span>
+          <button
+            class="px-2.5 py-1 rounded border border-gray-200 text-gray-600 hover:bg-gray-50"
+            ?disabled=${this.isRefreshingMetadata}
+            @click=${this._handleMetadataRefresh}
+          >
+            ${this.isRefreshingMetadata ? 'Refreshing...' : 'Reprocess image'}
+          </button>
         </div>
       </details>
     `;

@@ -2,6 +2,8 @@
 
 import json
 import mimetypes
+from datetime import datetime
+from pathlib import Path
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Body
 from fastapi.responses import StreamingResponse
@@ -17,6 +19,14 @@ from photocat.models.config import PhotoList, PhotoListItem, Keyword
 from photocat.settings import settings
 from photocat.tagging import calculate_tags
 from photocat.config.db_utils import load_keywords_map
+from photocat.image import ImageProcessor
+from photocat.exif import (
+    get_exif_value,
+    parse_exif_datetime,
+    parse_exif_float,
+    parse_exif_int,
+    parse_exif_str,
+)
 
 # Sub-router with no prefix/tags (inherits from parent)
 router = APIRouter()
@@ -761,3 +771,114 @@ async def get_full_image(
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Error fetching Dropbox image: {exc}")
+
+
+@router.post("/images/{image_id}/refresh-metadata", response_model=dict, operation_id="refresh_image_metadata")
+async def refresh_image_metadata(
+    image_id: int,
+    tenant: Tenant = Depends(get_tenant),
+    db: Session = Depends(get_db)
+):
+    """Re-download image and refresh EXIF metadata without changing tags."""
+    image = db.query(ImageMetadata).filter_by(
+        id=image_id,
+        tenant_id=tenant.id
+    ).first()
+    if not image:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    dropbox_ref = image.dropbox_path
+    if not dropbox_ref and image.dropbox_id:
+        dropbox_ref = image.dropbox_id if image.dropbox_id.startswith("id:") else f"id:{image.dropbox_id}"
+    if not dropbox_ref or dropbox_ref.startswith("/local/") or (image.dropbox_id and image.dropbox_id.startswith("local_")):
+        raise HTTPException(status_code=404, detail="Image not available in Dropbox")
+
+    if not tenant.dropbox_app_key:
+        raise HTTPException(status_code=400, detail="Dropbox app key not configured for tenant")
+    if not tenant.dropbox_token_secret or not tenant.dropbox_app_secret:
+        raise HTTPException(status_code=400, detail="Dropbox secrets not configured for tenant")
+
+    try:
+        refresh_token = get_secret(tenant.dropbox_token_secret)
+        app_secret = get_secret(tenant.dropbox_app_secret)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Dropbox secrets missing: {exc}")
+
+    try:
+        dbx = Dropbox(
+            oauth2_refresh_token=refresh_token,
+            app_key=tenant.dropbox_app_key,
+            app_secret=app_secret
+        )
+        metadata, response = dbx.files_download(dropbox_ref)
+        image_bytes = response.content
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error downloading Dropbox image: {exc}")
+
+    try:
+        processor = ImageProcessor()
+        features = processor.extract_features(image_bytes)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error parsing image metadata: {exc}")
+
+    exif = features.get("exif", {}) or {}
+    capture_timestamp = parse_exif_datetime(
+        get_exif_value(exif, "DateTimeOriginal", "DateTime")
+    )
+    gps_latitude = parse_exif_float(get_exif_value(exif, "GPSLatitude"))
+    gps_longitude = parse_exif_float(get_exif_value(exif, "GPSLongitude"))
+    iso = parse_exif_int(get_exif_value(exif, "ISOSpeedRatings", "ISOSpeed", "ISO"))
+    aperture = parse_exif_float(get_exif_value(exif, "FNumber", "ApertureValue"))
+    shutter_speed = parse_exif_str(get_exif_value(exif, "ExposureTime", "ShutterSpeedValue"))
+    focal_length = parse_exif_float(get_exif_value(exif, "FocalLength"))
+
+    thumbnail_path = image.thumbnail_path
+    if not thumbnail_path:
+        name_source = getattr(metadata, "name", None) or image.filename or f"image_{image.id}"
+        thumbnail_filename = f"{Path(name_source).stem}_thumb.jpg"
+        thumbnail_path = tenant.get_storage_path(thumbnail_filename, "thumbnails")
+
+    try:
+        storage_client = storage.Client(project=settings.gcp_project_id)
+        bucket = storage_client.bucket(tenant.get_thumbnail_bucket(settings))
+        blob = bucket.blob(thumbnail_path)
+        blob.cache_control = "public, max-age=31536000, immutable"
+        blob.upload_from_string(features["thumbnail"], content_type="image/jpeg")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error uploading thumbnail: {exc}")
+
+    image.width = features.get("width")
+    image.height = features.get("height")
+    image.format = features.get("format")
+    image.perceptual_hash = features.get("perceptual_hash")
+    image.color_histogram = features.get("color_histogram")
+    image.exif_data = exif
+    image.camera_make = parse_exif_str(get_exif_value(exif, "Make"))
+    image.camera_model = parse_exif_str(get_exif_value(exif, "Model"))
+    image.lens_model = parse_exif_str(get_exif_value(exif, "LensModel", "Lens"))
+    image.capture_timestamp = capture_timestamp
+    image.gps_latitude = gps_latitude
+    image.gps_longitude = gps_longitude
+    image.iso = iso
+    image.aperture = aperture
+    image.shutter_speed = shutter_speed
+    image.focal_length = focal_length
+    image.thumbnail_path = thumbnail_path
+    image.last_processed = datetime.utcnow()
+
+    if metadata is not None:
+        image.file_size = getattr(metadata, "size", image.file_size)
+        image.modified_time = getattr(metadata, "server_modified", image.modified_time)
+        image.content_hash = getattr(metadata, "content_hash", image.content_hash)
+        if getattr(metadata, "path_display", None):
+            image.dropbox_path = metadata.path_display
+        if getattr(metadata, "id", None):
+            image.dropbox_id = metadata.id
+
+    db.add(image)
+    db.commit()
+
+    return {
+        "status": "ok",
+        "image_id": image.id
+    }

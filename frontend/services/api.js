@@ -351,6 +351,22 @@ export async function getImageDetails(tenantId, imageId) {
     return data;
 }
 
+export async function refreshImageMetadata(tenantId, imageId) {
+    const response = await fetch(`${API_BASE_URL}/images/${imageId}/refresh-metadata`, {
+        method: 'POST',
+        headers: {
+            'X-Tenant-ID': tenantId,
+        },
+    });
+
+    if (!response.ok) {
+        throw new Error('Failed to refresh image metadata');
+    }
+
+    const data = await response.json();
+    return data;
+}
+
 export async function uploadImages(tenantId, files) {
     const formData = new FormData();
     for (let file of files) {

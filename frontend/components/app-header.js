@@ -133,6 +133,12 @@ class AppHeader extends LitElement {
                         <i class="fas fa-brain mr-2"></i>Pipeline
                     </button>
                     <button
+                        @click=${() => this._handleTabChange('cli')}
+                        class="py-3 px-6 text-base font-semibold ${this.activeTab === 'cli' ? 'border-b-4 border-blue-600 text-blue-800 bg-blue-50' : 'text-gray-600 hover:text-gray-800 hover:bg-gray-100'} transition-all duration-200"
+                    >
+                        <i class="fas fa-terminal mr-2"></i>CLI
+                    </button>
+                    <button
                         @click=${() => this._handleTabChange('queue')}
                         class="py-3 px-6 text-base font-semibold ${this.activeTab === 'queue' ? 'border-b-4 border-blue-600 text-blue-800 bg-blue-50' : 'text-gray-600 hover:text-gray-800 hover:bg-gray-100'} transition-all duration-200"
                     >

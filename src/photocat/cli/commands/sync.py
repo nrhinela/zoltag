@@ -2,21 +2,19 @@
 
 import click
 
-import io
-from pathlib import Path
 from google.cloud import storage
+
 from photocat.settings import settings
 from photocat.dependencies import get_secret
-from photocat.metadata import Tenant as TenantModel, ImageMetadata, MachineTag
+from photocat.metadata import Tenant as TenantModel, ImageMetadata
 from photocat.tenant import Tenant, TenantContext
 from photocat.dropbox import DropboxClient
 from photocat.config.db_config import ConfigManager
 from photocat.image import ImageProcessor
-from photocat.learning import ensure_image_embedding, score_keywords_for_categories
-from photocat.models.config import Keyword
+from photocat.learning import load_keyword_models
+from photocat.sync_pipeline import process_dropbox_entry
 from photocat.tagging import get_tagger
 from photocat.cli.base import CliCommand
-from PIL import Image
 
 
 @click.command(name='sync-dropbox')
@@ -115,8 +113,10 @@ class SyncDropboxCommand(CliCommand):
 
         # Group keywords by category
         by_category = {}
+        keyword_to_category = {}
         for kw in all_keywords:
             cat = kw['category']
+            keyword_to_category[kw['keyword']] = cat
             if cat not in by_category:
                 by_category[cat] = []
             by_category[cat].append(kw)
@@ -126,7 +126,6 @@ class SyncDropboxCommand(CliCommand):
         # Get tagger
         tagger = get_tagger(model_type=self.model)
         model_name = getattr(tagger, "model_name", self.model)
-        model_version = getattr(tagger, "model_version", model_name)
 
         processed_ids = set(
             row[0]
@@ -138,6 +137,9 @@ class SyncDropboxCommand(CliCommand):
 
         storage_client = storage.Client(project=settings.gcp_project_id)
         thumbnail_bucket = storage_client.bucket(tenant_context.get_thumbnail_bucket(settings))
+        keyword_models = None
+        if settings.use_keyword_models:
+            keyword_models = load_keyword_models(self.db, self.tenant_id, model_name)
 
         # Process images
         processed = 0
@@ -152,7 +154,6 @@ class SyncDropboxCommand(CliCommand):
 
             click.echo(f"Found {len(entries)} entries")
 
-            # Filter to image files
             processor = ImageProcessor()
             unprocessed = []
             remaining = max(self.count - processed, 0)
@@ -182,119 +183,26 @@ class SyncDropboxCommand(CliCommand):
                     dropbox_path = entry.path_display
                     click.echo(f"\nProcessing: {dropbox_path}")
 
-                    # Download thumbnail
-                    thumbnail_data = dropbox_client.get_thumbnail(dropbox_path, size='w640h480')
-                    if not thumbnail_data:
-                        click.echo(f"  ✗ Failed to download thumbnail", err=True)
-                        continue
-
-                    # Extract features
-                    processor = ImageProcessor()
-                    features = processor.extract_features(thumbnail_data)
-
-                    click.echo(f"  Dimensions: {features['width']}x{features['height']}")
-
-                    # Extract EXIF and other metadata
-                    exif = {}
-                    try:
-                        img_pil = Image.open(io.BytesIO(thumbnail_data))
-                        exif_data = img_pil._getexif() if hasattr(img_pil, '_getexif') else None
-                        if exif_data:
-                            from PIL.ExifTags import TAGS
-                            exif = {TAGS.get(k, k): v for k, v in exif_data.items()}
-                    except Exception:
-                        pass
-
-                    # Create metadata record
-                    thumbnail_filename = f"{Path(entry.name).stem}_thumb.jpg"
-                    thumbnail_path = tenant_context.get_storage_path(thumbnail_filename, "thumbnails")
-                    blob = thumbnail_bucket.blob(thumbnail_path)
-                    blob.cache_control = "public, max-age=31536000, immutable"
-                    blob.upload_from_string(features['thumbnail'], content_type='image/jpeg')
-
-                    metadata = ImageMetadata(
-                        tenant_id=self.tenant_id,
-                        filename=entry.name,
-                        dropbox_id=entry.id,
-                        dropbox_path=dropbox_path,
-                        file_size=entry.size,
-                        modified_time=entry.server_modified,
-                        width=features['width'],
-                        height=features['height'],
-                        format=features['format'],
-                        perceptual_hash=features['perceptual_hash'],
-                        color_histogram=features['color_histogram'],
-                        exif_data=exif,
-                        thumbnail_path=thumbnail_path,
-                        embedding_generated=False,
-                        faces_detected=False,
-                        tags_applied=False,
-                    )
-                    self.db.add(metadata)
-                    self.db.commit()
-                    self.db.refresh(metadata)
-                    processed_ids.add(entry.id)
-
-                    click.echo(f"  ✓ Metadata recorded (ID: {metadata.id})")
-
-                    try:
-                        ensure_image_embedding(
-                            self.db,
-                            self.tenant_id,
-                            metadata.id,
-                            thumbnail_data,
-                            model_name,
-                            model_version
-                        )
-                        self.db.commit()
-                    except Exception as embed_error:
-                        click.echo(f"  ✗ Embedding error: {embed_error}", err=True)
-
-                    # Tag with model
-                    click.echo(f"  Running {self.model} inference...")
-
-                    # Delete existing tags
-                    self.db.query(MachineTag).filter(
-                        MachineTag.image_id == metadata.id,
-                        MachineTag.tag_type == 'siglip'
-                    ).delete()
-
-                    # Score keywords
-                    all_tags = score_keywords_for_categories(
-                        image_data=thumbnail_data,
+                    result = process_dropbox_entry(
+                        db=self.db,
+                        tenant=tenant_context,
+                        entry=entry,
+                        dropbox_client=dropbox_client,
+                        thumbnail_bucket=thumbnail_bucket,
                         keywords_by_category=by_category,
+                        keyword_to_category=keyword_to_category,
+                        keyword_models=keyword_models,
                         model_type=self.model,
-                        threshold=0.15
+                        log=lambda message: click.echo(f"  {message}"),
                     )
 
-                    click.echo(f"  Found {len(all_tags)} tags")
-
-                    # Create tag records
-                    for keyword_str, confidence in all_tags:
-                        keyword_record = self.db.query(Keyword).filter(
-                            Keyword.tenant_id == self.tenant_id,
-                            Keyword.keyword == keyword_str
-                        ).first()
-
-                        if not keyword_record:
-                            continue
-
-                        tag = MachineTag(
-                            image_id=metadata.id,
-                            tenant_id=self.tenant_id,
-                            keyword_id=keyword_record.id,
-                            confidence=confidence,
-                            tag_type='siglip',
-                            model_name=model_name,
-                            model_version=model_version
-                        )
-                        self.db.add(tag)
-
-                    metadata.tags_applied = len(all_tags) > 0
-                    self.db.commit()
-
-                    click.echo(f"  ✓ Complete: {len(all_tags)} tags applied")
-                    processed += 1
+                    if result.status == "processed":
+                        processed_ids.add(entry.id)
+                        click.echo(f"  ✓ Metadata recorded (ID: {result.image_id})")
+                        click.echo(f"  ✓ Complete: {result.tags_count} tags applied")
+                        processed += 1
+                    elif result.status == "skipped":
+                        click.echo("  ↪ Already synced, skipping")
 
                 except Exception as e:
                     click.echo(f"  ✗ Error: {e}", err=True)

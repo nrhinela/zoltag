@@ -37,12 +37,17 @@ async def get_cli_commands():
         ctx = click.Context(command, info_name=f"photocat {name}")
         params = []
         for param in command.params:
+            default = getattr(param, "default", None)
+            if default is object:
+                default = None
+            elif not isinstance(default, (str, int, float, bool, type(None), list, dict)):
+                default = str(default)
             entry = {
                 "name": param.name,
                 "param_type": "option" if isinstance(param, click.Option) else "argument",
                 "opts": list(getattr(param, "opts", [])),
                 "help": getattr(param, "help", "") or "",
-                "default": getattr(param, "default", None),
+                "default": default,
                 "required": bool(getattr(param, "required", False)),
                 "nargs": getattr(param, "nargs", None),
             }

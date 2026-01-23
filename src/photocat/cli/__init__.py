@@ -22,6 +22,7 @@ def cli():
 # Register commands (names must match existing CLI for backward compatibility)
 cli.add_command(ingest.ingest_command, name='ingest')
 cli.add_command(metadata.refresh_metadata_command, name='refresh-metadata')
+cli.add_command(metadata.backfill_capture_timestamp_command, name='backfill-missing-media-info')
 cli.add_command(embeddings.build_embeddings_command, name='build-embeddings')
 cli.add_command(training.train_keyword_models_command, name='train-keyword-models')
 cli.add_command(training.recompute_trained_tags_command, name='recompute-trained-tags')

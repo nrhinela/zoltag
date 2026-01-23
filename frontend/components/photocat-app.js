@@ -11,6 +11,7 @@ import './permatag-editor.js';
 import './tagging-admin.js';
 import './ml-training.js';
 import './image-editor.js';
+import './cli-commands.js';
 
 import { tailwind } from './tailwind-lit.js';
 import { getLists, getActiveList, getListItems, updateList, getKeywords, getImageStats, getMlTrainingStats, getTagStats, getImages } from '../services/api.js';
@@ -2759,6 +2760,9 @@ class PhotoCatApp extends LitElement {
             </div>
             <div slot="ml-training" class="container p-4">
                 <ml-training .tenant=${this.tenant}></ml-training>
+            </div>
+            <div slot="cli" class="container p-4">
+                <cli-commands></cli-commands>
             </div>
             <div slot="queue" class="container p-4">
                 <div class="border border-gray-200 rounded-lg p-4 bg-white text-sm text-gray-600 space-y-3">
