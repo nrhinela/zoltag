@@ -1,6 +1,7 @@
 import { LitElement, html, css } from 'lit';
 import { getImageDetails, getKeywords, addPermatag, getFullImage, setRating, refreshImageMetadata } from '../services/api.js';
 import { tailwind } from './tailwind-lit.js';
+import './people-tagger.js';
 
 class ImageEditor extends LitElement {
   static styles = [tailwind, css`
@@ -788,6 +789,18 @@ class ImageEditor extends LitElement {
     `;
   }
 
+  _renderPeopleTab() {
+    if (!this.details || !this.details.id) {
+      return html`<div class="empty-text">Load an image first.</div>`;
+    }
+    return html`
+      <people-tagger
+        .imageId="${this.details.id}"
+        .imageName="${this.details.filename}">
+      </people-tagger>
+    `;
+  }
+
   _renderContent() {
     if (this.loading) {
       return html`
@@ -838,6 +851,9 @@ class ImageEditor extends LitElement {
             <button class="tab-button ${this.activeTab === 'tags' ? 'active' : ''}" @click=${() => this._setTab('tags')}>
               Tags
             </button>
+            <button class="tab-button ${this.activeTab === 'people' ? 'active' : ''}" @click=${() => this._setTab('people')}>
+              People
+            </button>
           </div>
           <div class="mt-3">
             ${this.activeTab === 'image'
@@ -846,7 +862,9 @@ class ImageEditor extends LitElement {
               ? this._renderMetadataTab()
               : this.activeTab === 'tags'
                 ? this._renderTagsReadOnly()
-                : this._renderEditTab()}
+                : this.activeTab === 'people'
+                  ? this._renderPeopleTab()
+                  : this._renderEditTab()}
           </div>
         </div>
       </div>

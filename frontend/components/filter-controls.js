@@ -2,6 +2,7 @@ import { LitElement, html, css } from 'lit';
 import { getKeywords, getTagStats } from '../services/api.js';
 import { tailwind } from './tailwind-lit.js';
 import './tag-histogram.js';
+import './people-search.js';
 
 class FilterControls extends LitElement {
   static styles = [tailwind, css`
@@ -313,6 +314,14 @@ class FilterControls extends LitElement {
               <div id="categoryInputsContainer" class="space-y-3">
                 ${Object.entries(this.keywords).map(([category, keywords]) => this._renderCategoryFilter(category, keywords))}
               </div>
+
+              <!-- People Filter Section -->
+              <div class="mt-6 pt-6 border-t border-gray-200">
+                <p class="text-sm text-gray-600 font-semibold mb-3">Filter by People:</p>
+                <people-search
+                  @selection-changed="${(e) => this._handlePeopleSelectionChanged(e.detail.selectedPeople)}">
+                </people-search>
+              </div>
             </div>
 
             <!-- Right Column: Reserved for Help Text -->
@@ -520,6 +529,14 @@ class FilterControls extends LitElement {
 
   _toggleHistogramExpanded() {
     this.histogramExpanded = !this.histogramExpanded;
+  }
+
+  _handlePeopleSelectionChanged(selectedPeople) {
+    this.dispatchEvent(new CustomEvent('people-filter-changed', {
+      detail: { selectedPeople },
+      bubbles: true,
+      composed: true
+    }));
   }
 }
 

@@ -12,6 +12,9 @@ import './tagging-admin.js';
 import './ml-training.js';
 import './image-editor.js';
 import './cli-commands.js';
+import './person-manager.js';
+import './people-tagger.js';
+import './people-search.js';
 
 import { tailwind } from './tailwind-lit.js';
 import { getLists, getActiveList, getListItems, updateList, getKeywords, getImageStats, getMlTrainingStats, getTagStats, getImages } from '../services/api.js';
@@ -1940,6 +1943,7 @@ class PhotoCatApp extends LitElement {
       { key: 'search', label: 'Search', subtitle: 'Find and filter images', icon: 'fa-search' },
       { key: 'curate', label: 'Curate', subtitle: 'Build selections and stories', icon: 'fa-star' },
       { key: 'lists', label: 'Lists', subtitle: 'Organize saved sets', icon: 'fa-list' },
+      { key: 'people', label: 'People', subtitle: 'Manage and tag people', icon: 'fa-users' },
       { key: 'tagging', label: 'Tagging', subtitle: 'Manage keywords and labels', icon: 'fa-tags' },
       { key: 'ml-training', label: 'Pipeline', subtitle: 'Inspect training data', icon: 'fa-brain' },
     ];
@@ -2833,6 +2837,9 @@ class PhotoCatApp extends LitElement {
             </div>
             <div slot="lists" class="container p-4">
                 <list-editor .tenant=${this.tenant} @lists-updated=${this._handleListsUpdated}></list-editor>
+            </div>
+            <div slot="people" class="container p-4">
+                <person-manager></person-manager>
             </div>
             <div slot="tagging" class="container p-4">
                 <tagging-admin .tenant=${this.tenant} @open-upload-modal=${this._handleOpenUploadModal}></tagging-admin>
