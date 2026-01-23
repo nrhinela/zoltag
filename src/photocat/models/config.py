@@ -26,8 +26,7 @@ class KeywordCategory(Base):
     sort_order = Column(Integer, nullable=False, default=0)
 
     # NEW: Link to PersonCategory if this is a people category
-    person_category_id = Column(Integer, nullable=True, unique=True)
-    # Foreign key to person_categories.id (defined below)
+    person_category_id = Column(Integer, ForeignKey('person_categories.id', ondelete='CASCADE'), nullable=True, unique=True)
 
     # NEW: Mark if this is a people category
     is_people_category = Column(sa.Boolean, nullable=False, server_default=sa.text('false'))
