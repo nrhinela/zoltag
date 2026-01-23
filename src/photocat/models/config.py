@@ -88,13 +88,9 @@ class Keyword(Base):
 
     # Relationships
     category = relationship("KeywordCategory", back_populates="keywords")
-    # person relationship defined in metadata/__init__.py to avoid circular imports
-    person = relationship("Person", back_populates="keyword", foreign_keys=[person_id], uselist=False)
-
-    # Note: Tag relationships (ImageTag, MachineTag, etc.) are defined in metadata/__init__.py
-    # since those models use a different declarative base. Relationships are handled through
-    # the database foreign keys; use db.query(ImageTag).filter(ImageTag.keyword_id == keyword.id)
-    # to retrieve related tags at query time.
+    # NOTE: person relationship NOT defined here - Person is in different declarative base (metadata/__init__.py)
+    # Use db.query(Person).filter(Person.keyword) to access the relationship at query time
+    # The foreign key constraint is still enforced at the database level
 
     __table_args__ = (
         Index("idx_keywords_tenant_keyword_category", "tenant_id", "keyword", "category_id", unique=True),
