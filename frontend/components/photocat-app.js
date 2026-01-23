@@ -3137,6 +3137,21 @@ class PhotoCatApp extends LitElement {
       return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
   }
 
+  _formatCurateProcessedDate(image) {
+      const value = image?.last_processed || image?.created_at;
+      if (!value) return '';
+      const date = value instanceof Date ? value : new Date(value);
+      if (Number.isNaN(date.getTime())) return '';
+      const pad = (num) => String(num).padStart(2, '0');
+      const year = date.getFullYear();
+      const month = pad(date.getMonth() + 1);
+      const day = pad(date.getDate());
+      const hours = pad(date.getHours());
+      const minutes = pad(date.getMinutes());
+      const seconds = pad(date.getSeconds());
+      return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+  }
+
   _getCurateHoverLines(image) {
       const lines = [];
       const path = this._formatDropboxPath(image?.dropbox_path);

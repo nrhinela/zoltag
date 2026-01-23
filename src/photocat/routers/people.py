@@ -39,14 +39,14 @@ class PersonCreateRequest(BaseModel):
     """Request to create a new person."""
     name: str = Field(..., min_length=1, max_length=255)
     instagram_url: Optional[str] = Field(None, max_length=512)
-    person_category: str = Field(default="people_in_scene", regex="^[a-z_]+$")
+    person_category: str = Field(default="people_in_scene", pattern="^[a-z_]+$")
 
 
 class PersonUpdateRequest(BaseModel):
     """Request to update a person."""
     name: Optional[str] = Field(None, min_length=1, max_length=255)
     instagram_url: Optional[str] = Field(None, max_length=512)
-    person_category: Optional[str] = Field(None, regex="^[a-z_]+$")
+    person_category: Optional[str] = Field(None, pattern="^[a-z_]+$")
 
 
 class PersonCategoryResponse(BaseModel):
