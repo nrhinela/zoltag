@@ -120,11 +120,14 @@ async def list_images(
     if date_order not in ("asc", "desc"):
         date_order = "desc"
     order_by_value = (order_by or "").lower()
-    if order_by_value not in ("photo_creation", "image_id", "ml_score"):
+    if order_by_value not in ("photo_creation", "image_id", "processed", "ml_score"):
         order_by_value = None
     if order_by_value == "ml_score" and not ml_keyword_id:
         order_by_value = None
-    order_by_date = func.coalesce(ImageMetadata.capture_timestamp, ImageMetadata.modified_time)
+    if order_by_value == "processed":
+        order_by_date = func.coalesce(ImageMetadata.last_processed, ImageMetadata.created_at)
+    else:
+        order_by_date = func.coalesce(ImageMetadata.capture_timestamp, ImageMetadata.modified_time)
     order_by_date = order_by_date.desc() if date_order == "desc" else order_by_date.asc()
     id_order = ImageMetadata.id.desc() if date_order == "desc" else ImageMetadata.id.asc()
     order_by_clauses = (id_order,) if order_by_value == "image_id" else (order_by_date, id_order)
@@ -167,17 +170,25 @@ async def list_images(
                         ImageMetadata.id,
                         ImageMetadata.capture_timestamp,
                         ImageMetadata.modified_time,
+                        ImageMetadata.last_processed,
+                        ImageMetadata.created_at,
                     ).filter(ImageMetadata.id.in_(unique_image_ids)).all()
-                    date_map = {
-                        row[0]: row[1] or row[2]
-                        for row in date_rows
-                    }
+                    if order_by_value == "processed":
+                        date_map = {
+                            row[0]: row[3] or row[4]
+                            for row in date_rows
+                        }
+                    else:
+                        date_map = {
+                            row[0]: row[1] or row[2]
+                            for row in date_rows
+                        }
                     if order_by_value == "image_id":
                         sorted_ids = sorted(
                             unique_image_ids,
                             key=lambda img_id: -img_id if date_order == "desc" else img_id
                         )
-                    elif order_by_value == "photo_creation":
+                    elif order_by_value in ("photo_creation", "processed"):
                         def date_key(img_id: int) -> float:
                             date_value = date_map.get(img_id)
                             if not date_value:

@@ -19,6 +19,7 @@ from photocat.routers import (
     keywords,
     lists,
     images,
+    people,
     admin_people,
     admin_tenants,
     admin_keywords,
@@ -46,6 +47,7 @@ app.add_middleware(
 app.include_router(keywords.router)
 app.include_router(lists.router)
 app.include_router(images.router)
+app.include_router(people.router)
 app.include_router(admin_people.router)
 app.include_router(admin_tenants.router)
 app.include_router(admin_keywords.router)

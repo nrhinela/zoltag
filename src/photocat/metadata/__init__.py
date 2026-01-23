@@ -52,14 +52,19 @@ class Tenant(Base):
 
 
 class Person(Base):
-    """Known people for facial recognition."""
+    """Known people for tagging and facial recognition."""
 
     __tablename__ = "people"
 
     id = Column(Integer, primary_key=True)
     tenant_id = Column(String(255), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
 
+    # Core attributes
     name = Column(String(255), nullable=False, index=True)
+    instagram_url = Column(String(512), nullable=True)
+    person_category = Column(String(50), nullable=False, default='people_in_scene', index=True)
+
+    # Legacy face recognition (kept for backward compatibility)
     aliases = Column(JSONB, default=list)  # List of alternative names
     face_embedding_ref = Column(String(255))  # Cloud Storage reference to face encodings
 
@@ -69,6 +74,10 @@ class Person(Base):
     # Relationships
     tenant = relationship("Tenant", back_populates="people")
     detected_faces = relationship("DetectedFace", back_populates="person")
+
+    __table_args__ = (
+        Index("idx_people_tenant_category", "tenant_id", "person_category"),
+    )
 
 
 class ImageMetadata(Base):

@@ -57,7 +57,7 @@ class QueryBuilder:
 
         # Validate and normalize order_by
         self.order_by = (order_by or "").lower() if order_by else None
-        if self.order_by and self.order_by not in ("photo_creation", "image_id", "ml_score"):
+        if self.order_by and self.order_by not in ("photo_creation", "image_id", "processed", "ml_score"):
             self.order_by = None
 
     def apply_subqueries(self, query: Query, subqueries_list: List[Selectable]) -> Query:
@@ -94,11 +94,17 @@ class QueryBuilder:
         Returns:
             Tuple of SQLAlchemy order clauses to apply to query
         """
-        # Build date clause (coalesce capture_timestamp or modified_time)
-        order_by_date = func.coalesce(
-            ImageMetadata.capture_timestamp,
-            ImageMetadata.modified_time
-        )
+        if self.order_by == "processed":
+            order_by_date = func.coalesce(
+                ImageMetadata.last_processed,
+                ImageMetadata.created_at
+            )
+        else:
+            # Build date clause (coalesce capture_timestamp or modified_time)
+            order_by_date = func.coalesce(
+                ImageMetadata.capture_timestamp,
+                ImageMetadata.modified_time
+            )
 
         # Apply date sort direction
         if self.date_order == "desc":

@@ -868,6 +868,21 @@ class PhotoCatApp extends LitElement {
       this._applyCurateFilters({ resetOffset: true });
   }
 
+  _handleCurateQuickSort(orderBy) {
+      if (this.curateOrderBy === orderBy) {
+          this.curateOrderDirection = this.curateOrderDirection === 'desc' ? 'asc' : 'desc';
+      } else {
+          this.curateOrderBy = orderBy;
+          this.curateOrderDirection = 'desc';
+      }
+      this._applyCurateFilters({ resetOffset: true });
+  }
+
+  _getCurateQuickSortArrow(orderBy) {
+      const direction = this.curateOrderBy === orderBy ? this.curateOrderDirection : 'desc';
+      return direction === 'desc' ? '↓' : '↑';
+  }
+
   _cancelCuratePressState() {
       if (this._curatePressTimer) {
           clearTimeout(this._curatePressTimer);
@@ -1825,7 +1840,7 @@ class PhotoCatApp extends LitElement {
                       @change=${this._handleCurateOrderByChange}
                     >
                       <option value="photo_creation">Photo Date</option>
-                      <option value="image_id">Uploaded Date</option>
+                      <option value="processed">Process Date</option>
                     </select>
                     <select
                       class="w-full px-2 py-1 border rounded-lg text-xs"
@@ -2198,6 +2213,27 @@ class PhotoCatApp extends LitElement {
                 </div>
                 <div ?hidden=${this.curateSubTab !== 'main'}>
                   ${this._renderCurateFilters({ mode: 'main', showHistogram: false })}
+                  <div class="bg-white rounded-lg shadow p-4 mb-4">
+                      <div class="flex flex-wrap items-start gap-4">
+                          <div>
+                              <div class="text-xs font-semibold text-gray-600 mb-1">Quick sort</div>
+                              <div class="curate-audit-toggle">
+                                  <button
+                                    class=${this.curateOrderBy === 'photo_creation' ? 'active' : ''}
+                                    @click=${() => this._handleCurateQuickSort('photo_creation')}
+                                  >
+                                    Photo Date ${this._getCurateQuickSortArrow('photo_creation')}
+                                  </button>
+                                  <button
+                                    class=${this.curateOrderBy === 'processed' ? 'active' : ''}
+                                    @click=${() => this._handleCurateQuickSort('processed')}
+                                  >
+                                    Process Date ${this._getCurateQuickSortArrow('processed')}
+                                  </button>
+                              </div>
+                          </div>
+                      </div>
+                  </div>
                   <div class="curate-layout" style="--curate-thumb-size: ${this.curateThumbSize}px;">
                     <div
                       class="curate-pane"
@@ -2287,7 +2323,16 @@ class PhotoCatApp extends LitElement {
                                         ${image.rating !== null && image.rating !== undefined && image.rating !== '' ? html`
                                           <div class="curate-thumb-rating">Rating ${image.rating}</div>
                                         ` : html``}
-                                        <div class="curate-thumb-date">${this._formatCurateDate(image)}</div>
+                                        ${this._formatCurateDate(image) ? html`
+                                          <div class="curate-thumb-date">
+                                            <i class="fas fa-camera mr-1"></i>${this._formatCurateDate(image)}
+                                          </div>
+                                        ` : html``}
+                                        ${this._formatCurateProcessedDate(image) ? html`
+                                          <div class="curate-thumb-date">
+                                            <i class="fas fa-cog mr-1"></i>${this._formatCurateProcessedDate(image)}
+                                          </div>
+                                        ` : html``}
                                         <div class="curate-thumb-info">
                                           ${this._getCurateHoverLines(image).map((line) => html`
                                             <span class="curate-thumb-line">${line}</span>
@@ -2446,7 +2491,16 @@ class PhotoCatApp extends LitElement {
                                       ${image.rating !== null && image.rating !== undefined && image.rating !== '' ? html`
                                         <div class="curate-thumb-rating">Rating ${image.rating}</div>
                                       ` : html``}
-                                      <div class="curate-thumb-date">${this._formatCurateDate(image)}</div>
+                                      ${this._formatCurateDate(image) ? html`
+                                        <div class="curate-thumb-date">
+                                          <i class="fas fa-camera mr-1"></i>${this._formatCurateDate(image)}
+                                        </div>
+                                      ` : html``}
+                                      ${this._formatCurateProcessedDate(image) ? html`
+                                        <div class="curate-thumb-date">
+                                          <i class="fas fa-cog mr-1"></i>${this._formatCurateProcessedDate(image)}
+                                        </div>
+                                      ` : html``}
                                       <div class="curate-thumb-info">
                                         ${this._getCurateHoverLines(image).map((line) => html`
                                           <span class="curate-thumb-line">${line}</span>
@@ -2563,7 +2617,16 @@ class PhotoCatApp extends LitElement {
                                         ${image.rating !== null && image.rating !== undefined && image.rating !== '' ? html`
                                           <div class="curate-thumb-rating">Rating ${image.rating}</div>
                                         ` : html``}
-                                        <div class="curate-thumb-date">${this._formatCurateDate(image)}</div>
+                                        ${this._formatCurateDate(image) ? html`
+                                          <div class="curate-thumb-date">
+                                            <i class="fas fa-camera mr-1"></i>${this._formatCurateDate(image)}
+                                          </div>
+                                        ` : html``}
+                                        ${this._formatCurateProcessedDate(image) ? html`
+                                          <div class="curate-thumb-date">
+                                            <i class="fas fa-cog mr-1"></i>${this._formatCurateProcessedDate(image)}
+                                          </div>
+                                        ` : html``}
                                         <div class="curate-thumb-info">
                                           ${this._getCurateHoverLines(image).map((line) => html`
                                             <span class="curate-thumb-line">${line}</span>
@@ -2629,7 +2692,16 @@ class PhotoCatApp extends LitElement {
                                       ${image.rating !== null && image.rating !== undefined && image.rating !== '' ? html`
                                         <div class="curate-thumb-rating">Rating ${image.rating}</div>
                                       ` : html``}
-                                      <div class="curate-thumb-date">${this._formatCurateDate(image)}</div>
+                                      ${this._formatCurateDate(image) ? html`
+                                        <div class="curate-thumb-date">
+                                          <i class="fas fa-camera mr-1"></i>${this._formatCurateDate(image)}
+                                        </div>
+                                      ` : html``}
+                                      ${this._formatCurateProcessedDate(image) ? html`
+                                        <div class="curate-thumb-date">
+                                          <i class="fas fa-cog mr-1"></i>${this._formatCurateProcessedDate(image)}
+                                        </div>
+                                      ` : html``}
                                       <div class="curate-thumb-info">
                                         ${this._getCurateHoverLines(image).map((line) => html`
                                           <span class="curate-thumb-line">${line}</span>
