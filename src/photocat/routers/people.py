@@ -75,7 +75,7 @@ class PersonStatsResponse(BaseModel):
 # People CRUD Endpoints
 # ============================================================================
 
-@router.post("/", response_model=PersonResponse)
+@router.post("", response_model=PersonResponse)
 async def create_person(
     request: PersonCreateRequest,
     tenant: Tenant = Depends(get_tenant),
@@ -154,7 +154,7 @@ async def create_person(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/", response_model=List[PersonResponse])
+@router.get("", response_model=List[PersonResponse])
 async def list_people(
     tenant: Tenant = Depends(get_tenant),
     db: Session = Depends(get_db),

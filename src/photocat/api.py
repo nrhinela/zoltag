@@ -100,7 +100,12 @@ async def admin_page():
 # This serves index.html for any unmatched GET requests (client-side routing)
 @app.get("/{full_path:path}")
 async def spa_catch_all(full_path: str):
-    """Serve the SPA for any unmatched routes."""
+    """Serve the SPA for any unmatched routes.
+
+    Note: API routes are defined with higher priority via include_router()
+    and will be matched before this catch-all. This only catches routes
+    that don't match any defined API endpoint.
+    """
     # Serve index.html from dist for SPA routing
     index_file = dist_dir / "index.html"
     if index_file.exists():
