@@ -1,12 +1,11 @@
 # Makefile for PhotoCat development and deployment
 
 .PHONY: help install test lint format clean deploy migrate dev worker dev-backend dev-frontend dev-css
-.PHONY: db-dev db-prod db-reset-dev db-reset-prod db-proxy db-migrate-prod db-migrate-dev
-.PHONY: deploy-api deploy-worker deploy-all status logs-api logs-worker check-proxy env-check
+.PHONY: db-dev db-prod db-migrate-prod db-migrate-dev db-create-migration
+.PHONY: deploy-api deploy-worker deploy-all status logs-api logs-worker env-check
 
 # Default environment
 ENV ?= prod
-DB_PASSWORD = EcrZH7UymHpa6kqduFHG
 PROJECT_ID = photocat-483622
 REGION = us-central1
 
@@ -25,14 +24,11 @@ help:
 	@echo "  format             Format code"
 	@echo "  clean              Clean build artifacts"
 	@echo ""
-	@echo "Database (Local/Cloud SQL via proxy):"
-	@echo "  db-proxy           Start Cloud SQL proxy"
+	@echo "Database:"
 	@echo "  db-dev             Connect to dev database (psql)"
 	@echo "  db-prod            Connect to prod database (psql)"
 	@echo "  db-migrate-dev     Run migrations on dev database"
 	@echo "  db-migrate-prod    Run migrations on prod database"
-	@echo "  db-reset-dev       Reset dev database (DESTRUCTIVE)"
-	@echo "  db-reset-prod      Reset prod database (DESTRUCTIVE)"
 	@echo "  db-create-migration Create new migration"
 	@echo ""
 	@echo "Deployment:"
@@ -44,7 +40,6 @@ help:
 	@echo "  logs-worker        Tail worker service logs"
 	@echo ""
 	@echo "Utilities:"
-	@echo "  check-proxy        Check if Cloud SQL proxy is running"
 	@echo "  env-check          Show current environment configuration"
 	@echo ""
 	@echo "Environment variables:"
@@ -77,11 +72,23 @@ clean:
 	find . -type f -name "*.pyo" -delete
 
 dev:
+	@echo "Stopping any existing development processes..."
+	@pkill -f "uvicorn photocat.api:app" || true
+	@pkill -f "npm run dev" || true
+	@pkill -f "npm run build:css" || true
+	@pkill -f "vite" || true
+	@sleep 1
+	@echo "Starting development servers..."
 	make dev-backend & make dev-frontend & make dev-css
 
 dev-backend:
 	@echo "Starting backend development server..."
 	@echo "Environment: $(ENV)"
+	@if [ ! -f .env ]; then \
+		echo "ERROR: .env file not found. Please create one with DATABASE_URL set."; \
+		exit 1; \
+	fi
+	set -a && . ./.env && set +a && \
 	TOKENIZERS_PARALLELISM=false python3 -m uvicorn photocat.api:app --reload --host 0.0.0.0 --port 8000
 
 dev-frontend:
@@ -101,48 +108,52 @@ worker:
 # Database Management
 # ============================================================================
 
-db-proxy:
-	@echo "Starting Cloud SQL Proxy..."
-	@echo "This will allow local connections to Cloud SQL"
-	./scripts/start_cloud_sql_proxy.sh
-
 db-dev:
-	@echo "Connecting to dev database..."
-	PGPASSWORD='$(DB_PASSWORD)' psql -h 127.0.0.1 -U photocat-user -d photocat_dev
+	@echo "Connecting to database (DATABASE_URL)..."
+	@if [ -z "$(DATABASE_URL)" ]; then \
+		echo "DATABASE_URL is not set."; \
+		exit 1; \
+	fi
+	psql "$(DATABASE_URL)"
 
 db-prod:
-	@echo "Connecting to prod database..."
-	PGPASSWORD='$(DB_PASSWORD)' psql -h 127.0.0.1 -U photocat-user -d photocat_prod
+	@echo "Connecting to database (DATABASE_URL)..."
+	@if [ -z "$(DATABASE_URL)" ]; then \
+		echo "DATABASE_URL is not set."; \
+		exit 1; \
+	fi
+	psql "$(DATABASE_URL)"
 
-db-migrate-dev: check-proxy
-	@echo "Running migrations on dev database..."
-	DATABASE_URL="postgresql://photocat-user:$(DB_PASSWORD)@127.0.0.1:5432/photocat_dev" \
-		alembic upgrade head
+db-migrate-dev:
+	@echo "Running migrations on database (DATABASE_URL)..."
+	@if [ -z "$(DATABASE_URL)" ]; then \
+		echo "DATABASE_URL is not set."; \
+		exit 1; \
+	fi
+	DATABASE_URL="$(DATABASE_URL)" alembic upgrade head
 
-db-migrate-prod: check-proxy
-	@echo "Running migrations on prod database..."
+db-migrate-prod:
+	@echo "Running migrations on database (DATABASE_URL)..."
 	@echo "⚠️  About to run migrations on PRODUCTION database"
 	@read -p "Are you sure? [y/N] " -n 1 -r; \
 	echo; \
 	if [[ $$REPLY =~ ^[Yy]$$ ]]; then \
-		DATABASE_URL="postgresql://photocat-user:$(DB_PASSWORD)@127.0.0.1:5432/photocat_prod" \
-			alembic upgrade head; \
+		if [ -z "$(DATABASE_URL)" ]; then \
+			echo "DATABASE_URL is not set."; \
+			exit 1; \
+		fi; \
+		DATABASE_URL="$(DATABASE_URL)" alembic upgrade head; \
 	else \
 		echo "Cancelled."; \
 	fi
 
-db-reset-dev: check-proxy
-	@echo "⚠️  Resetting dev database (all data will be lost)"
-	./scripts/reset_cloud_db.sh dev
-
-db-reset-prod: check-proxy
-	@echo "⚠️  Resetting PRODUCTION database (all data will be lost)"
-	./scripts/reset_cloud_db.sh prod
-
-db-create-migration: check-proxy
+db-create-migration:
 	@read -p "Migration name: " name; \
-	DATABASE_URL="postgresql://photocat-user:$(DB_PASSWORD)@127.0.0.1:5432/photocat_$(ENV)" \
-		alembic revision --autogenerate -m "$$name"
+	if [ -z "$(DATABASE_URL)" ]; then \
+		echo "DATABASE_URL is not set."; \
+		exit 1; \
+	fi; \
+	DATABASE_URL="$(DATABASE_URL)" alembic revision --autogenerate -m "$$name"
 
 # Alias for backward compatibility
 migrate: db-migrate-dev
@@ -230,15 +241,6 @@ docker-test:
 # ============================================================================
 # Utilities
 # ============================================================================
-
-check-proxy:
-	@if ! lsof -i:5432 2>/dev/null | grep -q LISTEN; then \
-		echo "❌ Cloud SQL Proxy is not running on port 5432"; \
-		echo "Run: make db-proxy"; \
-		exit 1; \
-	else \
-		echo "✓ Cloud SQL Proxy is running"; \
-	fi
 
 env-check:
 	@echo "Current environment configuration:"

@@ -13,7 +13,7 @@ import json
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, select
 from sqlalchemy.sql import Selectable
 
 from photocat.tenant import Tenant
@@ -770,6 +770,6 @@ def build_image_query_with_subqueries(
     
     # Combine all subqueries with intersection logic
     for subquery in subqueries_list:
-        base_query = base_query.filter(ImageMetadata.id.in_(subquery))
+        base_query = base_query.filter(ImageMetadata.id.in_(select(subquery.c.id)))
 
     return base_query, subqueries_list, False

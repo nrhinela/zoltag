@@ -50,7 +50,7 @@ def get_keyword_category_name(db: Session, keyword_id: int) -> Optional[str]:
 @router.get("/images", response_model=dict, operation_id="list_images")
 async def list_images(
     tenant: Tenant = Depends(get_tenant),
-    limit: int = None,
+    limit: int = 100,
     offset: int = 0,
     anchor_id: Optional[int] = None,
     keywords: Optional[str] = None,  # Comma-separated keywords (deprecated)

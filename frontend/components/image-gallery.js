@@ -30,11 +30,19 @@ class ImageGallery extends LitElement {
     this.keywords = [];
     this.totalCount = 0;
     this.displayMode = 'grid';
+    this._fetchScheduled = false;
   }
 
   willUpdate(changedProperties) {
     if (changedProperties.has('filters') || changedProperties.has('tenant')) {
-      this.fetchImages();
+      // Debounce multiple property changes in the same update cycle
+      if (!this._fetchScheduled) {
+        this._fetchScheduled = true;
+        queueMicrotask(() => {
+          this._fetchScheduled = false;
+          this.fetchImages();
+        });
+      }
     }
   }
 
