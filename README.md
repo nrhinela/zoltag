@@ -100,7 +100,7 @@ Maintainability: Small, focused components are easy to understand and modify
 ### Prerequisites
 - Python 3.11+
 - Google Cloud SDK
-- Cloud SQL PostgreSQL instance
+- PostgreSQL database (Supabase recommended)
 - Dropbox App credentials
 
 ### Development Environment
@@ -113,11 +113,11 @@ source venv/bin/activate
 # Install dependencies
 pip install -e ".[dev]"
 
-# Setup Cloud SQL proxy
-cloud-sql-proxy INSTANCE_CONNECTION_NAME
+# Set DATABASE_URL for your database
+export DATABASE_URL=postgresql://...
 
 # Run migrations
-alembic upgrade head
+DATABASE_URL="$DATABASE_URL" alembic upgrade head
 
 # Run tests
 pytest
@@ -130,6 +130,18 @@ black . && ruff check .
 ## Deployment
 
 The preferred method for deploying the application is using the provided `Makefile`, which simplifies the process and ensures all steps are followed correctly. For a comprehensive guide on deployment, database migrations, and other operational tasks, please see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+
+## Supabase Connection
+
+PhotoCat expects `DATABASE_URL` to be set for both local and production use.
+If your network is IPv4-only, use the Supabase **Session Pooler** connection
+string (IPv4-compatible) and append `?sslmode=require`.
+
+Example:
+
+```bash
+export DATABASE_URL="postgresql://postgres:YOUR_PASSWORD@YOUR_POOLER_HOST:5432/postgres?sslmode=require"
+```
 
 
 ## License

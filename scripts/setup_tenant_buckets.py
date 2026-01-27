@@ -56,10 +56,6 @@ def setup_tenant_buckets(tenant_id: str):
     db_url = settings.database_url
     env = settings.environment
 
-    # Determine database environment from URL
-    is_dev_db = "photocat-dev" in db_url
-    is_prod_db = "photocat-prod" in db_url
-
     if db_url == "postgresql://localhost/photocat":
         print("⚠️  Using LOCAL database (postgresql://localhost/photocat)")
         confirm = input("Is this correct? Type 'yes' to continue: ")
@@ -67,18 +63,8 @@ def setup_tenant_buckets(tenant_id: str):
             print("Aborted. Set DATABASE_URL environment variable to target the correct database.")
             return False
     elif "localhost:5432" in db_url or "127.0.0.1:5432" in db_url:
-        # Cloud SQL Proxy connection
-        if is_dev_db:
-            print(f"⚠️  Using DEV database via Cloud SQL Proxy")
-            print(f"   Database: photocat-dev")
-            print(f"   Environment: {env}")
-        elif is_prod_db:
-            print(f"⚠️  Using PRODUCTION database via Cloud SQL Proxy")
-            print(f"   Database: photocat-prod")
-            print(f"   Environment: {env}")
-        else:
-            print(f"⚠️  Using database via Cloud SQL Proxy: {db_url}")
-
+        print(f"⚠️  Using local database connection: {db_url}")
+        print(f"   Environment: {env}")
         confirm = input("Continue? Type 'yes' to proceed: ")
         if confirm.lower() != 'yes':
             print("Aborted.")

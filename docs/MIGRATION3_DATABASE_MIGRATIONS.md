@@ -204,7 +204,7 @@ make db-migrate-dev
 make db-migrate-prod  # Will ask for confirmation
 
 # 3. Deploy to production
-# - Cloud SQL can create indexes online (non-blocking in PostgreSQL)
+# - PostgreSQL can create indexes online (non-blocking in PostgreSQL)
 # - Monitor index creation (can take time for large tables)
 # - Verify query plans improve with EXPLAIN ANALYZE
 ```

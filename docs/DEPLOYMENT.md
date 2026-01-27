@@ -30,9 +30,6 @@ make test
 ### Database Management
 
 ```bash
-# Start Cloud SQL Proxy (required for local database access)
-make db-proxy
-
 # Connect to dev database
 make db-dev
 
@@ -73,11 +70,10 @@ make logs-worker
 
 Here's the typical workflow for deploying to production:
 
-### 1. Ensure Cloud SQL Proxy is Running
+### 1. Ensure DATABASE_URL is Set
 
 ```bash
-# Start the proxy in a separate terminal
-make db-proxy
+export DATABASE_URL=postgresql://...
 ```
 
 ### 2. Test Locally
@@ -133,6 +129,15 @@ make db-migrate-dev ENV=dev
 make db-create-migration ENV=prod
 ```
 
+### Supabase Connection
+
+All database operations use `DATABASE_URL`. For Supabase, prefer the **Session Pooler**
+connection string on IPv4-only networks and include `sslmode=require`.
+
+```bash
+export DATABASE_URL="postgresql://postgres:YOUR_PASSWORD@YOUR_POOLER_HOST:5432/postgres?sslmode=require"
+```
+
 Default values (see Makefile):
 - `ENV=dev`
 - `PROJECT_ID=photocat-483622`
@@ -140,29 +145,14 @@ Default values (see Makefile):
 
 ## Destructive Operations
 
-These commands will **permanently delete data**. Use with caution:
-
-```bash
-# Reset dev database (deletes all data)
-make db-reset-dev
-
-# Reset prod database (deletes all data, asks for confirmation)
-make db-reset-prod
-```
+Use your database provider's reset tools with extreme care.
 
 ## Troubleshooting
 
-### Cloud SQL Proxy Not Running
+### Database Connection Errors
 
-If you get errors about database connections:
-
-```bash
-# Check if proxy is running
-make check-proxy
-
-# If not, start it
-make db-proxy
-```
+If you get errors about database connections, verify that `DATABASE_URL` is set
+and points at the correct database (Supabase pooler for IPv4-only networks).
 
 ### Alembic/Python Commands Not Found
 
@@ -210,7 +200,6 @@ make install
 
 ## Additional Notes
 
-- The Makefile automatically checks if Cloud SQL Proxy is running before database operations
 - `db-migrate-prod` requires confirmation to prevent accidental production changes
 - All deployment commands use the configuration from `cloudbuild.yaml`
 - Logs are limited to the last 50 entries by default

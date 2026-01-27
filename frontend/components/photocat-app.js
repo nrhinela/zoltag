@@ -176,6 +176,45 @@ class PhotoCatApp extends LitElement {
         gap: 16px;
         min-height: 520px;
     }
+    .curate-header-grid {
+        display: grid;
+        grid-template-columns: 2fr 1fr;
+        gap: 16px;
+        width: 100%;
+        align-items: end;
+    }
+    .curate-header-right {
+        display: flex;
+        align-items: end;
+        gap: 12px;
+        justify-content: flex-start;
+        width: 100%;
+    }
+    .curate-header-layout {
+        display: grid;
+        grid-template-columns: 2fr 1fr;
+        gap: 16px;
+        width: 100%;
+    }
+    .curate-control-grid {
+        display: grid;
+        grid-template-columns: minmax(200px, 1fr) minmax(320px, 2fr);
+        gap: 16px;
+        align-items: end;
+        width: 100%;
+    }
+    .curate-control-row {
+        display: flex;
+        gap: 16px;
+        align-items: center;
+    }
+    .curate-control-row select {
+        flex: 1;
+        min-width: 0;
+    }
+    .curate-control-row > button {
+        margin-left: auto;
+    }
     @media (min-width: 1024px) {
         .curate-layout {
             grid-template-columns: 2fr 1fr;
@@ -1137,7 +1176,6 @@ class PhotoCatApp extends LitElement {
       const removeSet = new Set(ids);
       const keep = (image) => !removeSet.has(image.id);
       this.curateImages = this.curateImages.filter(keep);
-      this.curateSelection = this.curateSelection.filter(keep);
       this.curateDragSelection = this.curateDragSelection.filter((id) => !removeSet.has(id));
   }
 
@@ -1756,7 +1794,6 @@ class PhotoCatApp extends LitElement {
       this.curatePageOffset = 0;
       this.curateTotal = null;
       this._fetchCurateImages();
-      this.curateSelection = [];
       this.curateDragSelection = [];
       this.curateSubTab = 'home';
       this.curateAuditMode = 'existing';
@@ -2208,7 +2245,6 @@ class PhotoCatApp extends LitElement {
       this.curateOrderBy = 'photo_creation';
       this.curateOrderDirection = 'desc';
       this.curatePageOffset = 0;
-      this.curateSelection = [];
       this.curateDragSelection = [];
       this.curateKeywordFilters = {};
       this.curateKeywordOperators = {};
@@ -2234,14 +2270,12 @@ class PhotoCatApp extends LitElement {
       if (hideZero) {
           const keep = (image) => image.id !== imageId;
           this.curateImages = this.curateImages.filter(keep);
-          this.curateSelection = this.curateSelection.filter(keep);
           this.curateAuditImages = this.curateAuditImages.filter(keep);
           this.curateAuditSelection = this.curateAuditSelection.filter(keep);
           this.curateDragSelection = this.curateDragSelection.filter((id) => id !== imageId);
           this.curateAuditDragSelection = this.curateAuditDragSelection.filter((id) => id !== imageId);
       } else {
           this.curateImages = this.curateImages.map(update);
-          this.curateSelection = this.curateSelection.map(update);
           this.curateAuditImages = this.curateAuditImages.map(update);
           this.curateAuditSelection = this.curateAuditSelection.map(update);
       }
@@ -2383,7 +2417,7 @@ class PhotoCatApp extends LitElement {
       this._curateFlashSelectionTimers.set(imageId, timer);
   }
 
-  _renderCurateFilters({ mode = 'main', showHistogramOnly = false, showHistogram = true } = {}) {
+  _renderCurateFilters({ mode = 'main', showHistogramOnly = false, showHistogram = true, showHeader = true } = {}) {
     // If showing only histogram (for home tab), render just that
     if (showHistogramOnly) {
       return html`
@@ -2418,54 +2452,11 @@ class PhotoCatApp extends LitElement {
     })();
     const untaggedCountLabel = this._formatStatNumber(this.imageStats?.untagged_positive_count);
 
-    return html`
-      <!-- Compact Filter Section (Top) -->
-      <div class="bg-white rounded-lg shadow p-4 mb-4">
-        <div class="space-y-4">
-          <!-- Line 1: Keyword Dropdown + Page Size + Thumbnail Slider -->
-          <div class="flex gap-4 items-end">
-            <div class="w-1/2 min-w-[260px]">
-              <label class="block text-base font-semibold text-gray-700 mb-2">Keywords</label>
-              <select
-                class="w-full px-4 py-3 border rounded-lg text-lg ${selectedKeywordValue ? 'bg-yellow-100 border-yellow-200' : ''}"
-                .value=${selectedKeywordValue}
-                @change=${(event) => this._handleCurateKeywordSelect(event, mode)}
-              >
-                <option value="">Select a keyword...</option>
-                ${mode !== 'tag-audit'
-                  ? html`<option value="__untagged__">Untagged (${untaggedCountLabel})</option>`
-                  : html``}
-                ${this._getKeywordsByCategory().map(([category, keywords]) => html`
-                  <optgroup label="${category} (${this._getCategoryCount(category)})">
-                    ${keywords.map(kw => html`
-                      <option value=${`${encodeURIComponent(category)}::${encodeURIComponent(kw.keyword)}`}>
-                        ${kw.keyword} (${kw.count})
-                      </option>
-                    `)}
-                  </optgroup>
-                `)}
-              </select>
-            </div>
-            
-            <button
-              class="h-10 w-10 flex items-center justify-center border rounded-lg text-gray-600 hover:bg-gray-50"
-              title="Advanced filters"
-              aria-pressed=${this.curateAdvancedOpen ? 'true' : 'false'}
-              @click=${() => { this.curateAdvancedOpen = !this.curateAdvancedOpen; }}
-            >
-              <svg viewBox="0 0 24 24" class="h-7 w-7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <circle cx="12" cy="12" r="3"></circle>
-                <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.02.02a2 2 0 1 1-2.83 2.83l-.02-.02a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.03a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.87.34l-.02.02a2 2 0 1 1-2.83-2.83l.02-.02a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.03a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.87l-.02-.02a2 2 0 1 1 2.83-2.83l.02.02a1.7 1.7 0 0 0 1.87.34H9a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.03a1.7 1.7 0 0 0 1 1.55 1.7 1.7 0 0 0 1.87-.34l.02-.02a2 2 0 1 1 2.83 2.83l-.02.02a1.7 1.7 0 0 0-.34 1.87V9c0 .68.4 1.3 1.02 1.58.24.11.5.17.77.17H21a2 2 0 1 1 0 4h-.03a1.7 1.7 0 0 0-1.55 1z"></path>
-              </svg>
-            </button>
-          </div>
-
-          <!-- Line 2: Advanced Accordion (with existing filters inside) -->
-          ${this.curateAdvancedOpen ? html`
-            <div class="border rounded-lg">
-              <div class="px-3 py-3 bg-gray-50 space-y-4">
-              <!-- Existing filter controls moved into accordion -->
-              <div class="flex flex-wrap md:flex-nowrap items-end gap-4">
+    const advancedPanel = this.curateAdvancedOpen ? html`
+      <div class="border rounded-lg">
+        <div class="px-3 py-3 bg-gray-50 space-y-4">
+        <!-- Existing filter controls moved into accordion -->
+        <div class="flex flex-wrap md:flex-nowrap items-end gap-4">
                 <div class="flex-[2] min-w-[180px]">
                   <label class="block text-xs font-semibold text-gray-600 mb-1">Sort items by</label>
                   <div class="grid grid-cols-2 gap-2">
@@ -2533,12 +2524,56 @@ class PhotoCatApp extends LitElement {
                   </label>
                 </div>
               </div>
-              </div>
-            </div>
-          ` : html``}
         </div>
       </div>
-    `;
+    ` : html``;
+
+    return showHeader ? html`
+      <!-- Compact Filter Section (Top) -->
+      <div class="bg-white rounded-lg shadow p-4 mb-4">
+        <div class="space-y-4">
+          <!-- Line 1: Keyword Dropdown + Page Size + Thumbnail Slider -->
+          <div class="flex gap-4 items-end">
+            <div class="w-1/2 min-w-[260px]">
+              <label class="block text-base font-semibold text-gray-700 mb-2">Keywords</label>
+              <select
+                class="w-full px-4 py-3 border rounded-lg text-lg ${selectedKeywordValue ? 'bg-yellow-100 border-yellow-200' : ''}"
+                .value=${selectedKeywordValue}
+                @change=${(event) => this._handleCurateKeywordSelect(event, mode)}
+              >
+                <option value="">Select a keyword...</option>
+                ${mode !== 'tag-audit'
+                  ? html`<option value="__untagged__">Untagged (${untaggedCountLabel})</option>`
+                  : html``}
+                ${this._getKeywordsByCategory().map(([category, keywords]) => html`
+                  <optgroup label="${category} (${this._getCategoryCount(category)})">
+                    ${keywords.map(kw => html`
+                      <option value=${`${encodeURIComponent(category)}::${encodeURIComponent(kw.keyword)}`}>
+                        ${kw.keyword} (${kw.count})
+                      </option>
+                    `)}
+                  </optgroup>
+                `)}
+              </select>
+            </div>
+            
+            <button
+              class="h-10 w-10 flex items-center justify-center border rounded-lg text-gray-600 hover:bg-gray-50"
+              title="Advanced filters"
+              aria-pressed=${this.curateAdvancedOpen ? 'true' : 'false'}
+              @click=${() => { this.curateAdvancedOpen = !this.curateAdvancedOpen; }}
+            >
+              <svg viewBox="0 0 24 24" class="h-7 w-7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="3"></circle>
+                <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.02.02a2 2 0 1 1-2.83 2.83l-.02-.02a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.03a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.87.34l-.02.02a2 2 0 1 1-2.83-2.83l.02-.02a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.03a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.87l-.02-.02a2 2 0 1 1 2.83-2.83l.02.02a1.7 1.7 0 0 0 1.87.34H9a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.03a1.7 1.7 0 0 0 1 1.55 1.7 1.7 0 0 0 1.87-.34l.02-.02a2 2 0 1 1 2.83 2.83l-.02.02a1.7 1.7 0 0 0-.34 1.87V9c0 .68.4 1.3 1.02 1.58.24.11.5.17.77.17H21a2 2 0 1 1 0 4h-.03a1.7 1.7 0 0 0-1.55 1z"></path>
+              </svg>
+            </button>
+          </div>
+
+          ${advancedPanel}
+        </div>
+      </div>
+    ` : html`${advancedPanel}`;
   }
 
   render() {
@@ -2553,14 +2588,13 @@ class PhotoCatApp extends LitElement {
     const categoryCards = this._buildCategoryCards(sourceStats);
     const navCards = [
       { key: 'search', label: 'Search', subtitle: 'Find and filter images', icon: 'fa-search' },
-      { key: 'curate', label: 'Curate', subtitle: 'Build selections and stories', icon: 'fa-star' },
+      { key: 'curate', label: 'Curate', subtitle: 'Build stories and sets', icon: 'fa-star' },
       { key: 'lists', label: 'Lists', subtitle: 'Organize saved sets', icon: 'fa-list' },
       { key: 'people', label: 'People', subtitle: 'Manage and tag people', icon: 'fa-users' },
       { key: 'tagging', label: 'Tagging', subtitle: 'Manage keywords and labels', icon: 'fa-tags' },
       { key: 'ml-training', label: 'Pipeline', subtitle: 'Inspect training data', icon: 'fa-brain' },
     ];
-    const curatedIds = new Set(this.curateSelection.map((img) => img.id));
-    const leftImages = this.curateImages.filter((img) => !curatedIds.has(img.id));
+    const leftImages = this.curateImages;
     this._curateLeftOrder = leftImages.map((img) => img.id);
     this._curateRightOrder = [];
     const curatePageOffset = this.curatePageOffset || 0;
@@ -2578,6 +2612,22 @@ class PhotoCatApp extends LitElement {
     const curateHasMore = curateTotalCount !== null && curatePageEnd < curateTotalCount;
     const curateHasPrev = curatePageOffset > 0;
     const leftPaneLabel = 'Available';
+    const untaggedCountLabel = this._formatStatNumber(this.imageStats?.untagged_positive_count);
+    const selectedKeywordValueMain = (() => {
+      if (this.curateNoPositivePermatags) {
+        return '__untagged__';
+      }
+      const entries = Object.entries(this.curateKeywordFilters || {});
+      for (const [category, keywordsSet] of entries) {
+        if (keywordsSet && keywordsSet.size > 0) {
+          const [keyword] = Array.from(keywordsSet);
+          if (keyword) {
+            return `${encodeURIComponent(category)}::${encodeURIComponent(keyword)}`;
+          }
+        }
+      }
+      return '';
+    })();
     const auditActionVerb = this.curateAuditMode === 'existing' ? 'remove' : 'add';
     const auditKeywordLabel = this.curateAuditKeyword
       ? this.curateAuditKeyword.replace(/[-_]/g, ' ')
@@ -2803,7 +2853,7 @@ class PhotoCatApp extends LitElement {
                             </li>
                             <li class="flex gap-2">
                               <span>🏷️</span>
-                              <span>Use the Process button to apply tags to selected images</span>
+                              <span>Drag images into hotspots to add or remove tags</span>
                             </li>
                             <li class="flex gap-2">
                               <span>🔍</span>
@@ -2874,28 +2924,64 @@ class PhotoCatApp extends LitElement {
                   </div>
                 </div>
                 <div ?hidden=${this.curateSubTab !== 'main'}>
-                  ${this._renderCurateFilters({ mode: 'main', showHistogram: false })}
-                  <div class="bg-white rounded-lg shadow p-4 mb-4">
-                      <div class="flex flex-wrap items-start gap-4">
+                  <div class="curate-header-layout mb-4">
+                      <div class="bg-white rounded-lg shadow p-4 w-full">
+                        <div class="curate-control-grid">
                           <div>
-                              <div class="text-xs font-semibold text-gray-600 mb-1">Quick sort</div>
-                              <div class="curate-audit-toggle">
-                                  <button
-                                    class=${this.curateOrderBy === 'photo_creation' ? 'active' : ''}
-                                    @click=${() => this._handleCurateQuickSort('photo_creation')}
-                                  >
-                                    Photo Date ${this._getCurateQuickSortArrow('photo_creation')}
-                                  </button>
-                                  <button
-                                    class=${this.curateOrderBy === 'processed' ? 'active' : ''}
-                                    @click=${() => this._handleCurateQuickSort('processed')}
-                                  >
-                                    Process Date ${this._getCurateQuickSortArrow('processed')}
-                                  </button>
-                              </div>
+                            <div class="text-xs font-semibold text-gray-600 mb-1">Quick sort</div>
+                            <div class="curate-audit-toggle">
+                                <button
+                                  class=${this.curateOrderBy === 'photo_creation' ? 'active' : ''}
+                                  @click=${() => this._handleCurateQuickSort('photo_creation')}
+                                >
+                                  Photo Date ${this._getCurateQuickSortArrow('photo_creation')}
+                                </button>
+                                <button
+                                  class=${this.curateOrderBy === 'processed' ? 'active' : ''}
+                                  @click=${() => this._handleCurateQuickSort('processed')}
+                                >
+                                  Process Date ${this._getCurateQuickSortArrow('processed')}
+                                </button>
+                            </div>
                           </div>
+                          <div>
+                            <div class="text-xs font-semibold text-gray-600 mb-1">Optional filter by keyword</div>
+                            <div class="curate-control-row">
+                              <select
+                                class="w-full px-3 py-2 border rounded-lg ${selectedKeywordValueMain ? 'bg-yellow-100 border-yellow-200' : ''}"
+                                .value=${selectedKeywordValueMain}
+                                @change=${(event) => this._handleCurateKeywordSelect(event, 'main')}
+                              >
+                                <option value="">Select a keyword...</option>
+                                <option value="__untagged__">Untagged (${untaggedCountLabel})</option>
+                                ${this._getKeywordsByCategory().map(([category, keywords]) => html`
+                                  <optgroup label="${category} (${this._getCategoryCount(category)})">
+                                    ${keywords.map(kw => html`
+                                      <option value=${`${encodeURIComponent(category)}::${encodeURIComponent(kw.keyword)}`}>
+                                        ${kw.keyword} (${kw.count})
+                                      </option>
+                                    `)}
+                                  </optgroup>
+                                `)}
+                              </select>
+                              <button
+                                class="h-10 w-10 flex items-center justify-center border rounded-lg text-gray-600 hover:bg-gray-50"
+                                title="Advanced filters"
+                                aria-pressed=${this.curateAdvancedOpen ? 'true' : 'false'}
+                                @click=${() => { this.curateAdvancedOpen = !this.curateAdvancedOpen; }}
+                              >
+                                <svg viewBox="0 0 24 24" class="h-7 w-7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                  <circle cx="12" cy="12" r="3"></circle>
+                                  <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.02.02a2 2 0 0 1-2.83 2.83l-.02-.02a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.03a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.87.34l-.02.02a2 2 0 1 1-2.83-2.83l.02-.02a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.03a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.87l-.02-.02a2 2 0 1 1 2.83-2.83l.02.02a1.7 1.7 0 0 0 1.87.34H9a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.03a1.7 1.7 0 0 0 1 1.55 1.7 1.7 0 0 0 1.87-.34l.02-.02a2 2 0 0 1 2.83 2.83l-.02.02a1.7 1.7 0 0 0-.34 1.87V9c0 .68.4 1.3 1.02 1.58.24.11.5.17.77.17H21a2 2 0 1 1 0 4h-.03a1.7 1.7 0 0 0-1.55 1z"></path>
+                                </svg>
+                              </button>
+                            </div>
+                          </div>
+                        </div>
                       </div>
+                      <div></div>
                   </div>
+                  ${this._renderCurateFilters({ mode: 'main', showHistogram: false, showHeader: false })}
                   <div class="curate-layout" style="--curate-thumb-size: ${this.curateThumbSize}px;">
                     <div class="curate-pane">
                         <div class="curate-pane-header">
@@ -3843,9 +3929,6 @@ class PhotoCatApp extends LitElement {
           const next = permatags.filter((tag) => !(tag.signum === 1 && matches(tag)));
           return { ...image, permatags: next };
       };
-      this.curateSelection = this.curateSelection.map((image) => (
-          image.id === imageId ? removePositive(image) : image
-      ));
       this.curateImages = this.curateImages.map((image) => (
           image.id === imageId ? removePositive(image) : image
       ));
@@ -3880,9 +3963,6 @@ class PhotoCatApp extends LitElement {
           });
           return { ...image, permatags: next };
       };
-      this.curateSelection = this.curateSelection.map((image) => (
-          targetIds.has(image.id) ? prune(image) : image
-      ));
       this.curateImages = this.curateImages.map((image) => (
           targetIds.has(image.id) ? prune(image) : image
       ));
@@ -3891,11 +3971,6 @@ class PhotoCatApp extends LitElement {
   _updateCuratePermatags(imageIds, tags) {
       if (!imageIds?.length || !tags?.length) return;
       const targetIds = new Set(imageIds);
-      this.curateSelection = this.curateSelection.map((image) => {
-          if (!targetIds.has(image.id)) return image;
-          const permatags = this._mergePermatags(image.permatags, tags);
-          return { ...image, permatags };
-      });
       this.curateImages = this.curateImages.map((image) => {
           if (!targetIds.has(image.id)) return image;
           const permatags = this._mergePermatags(image.permatags, tags);

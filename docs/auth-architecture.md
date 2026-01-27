@@ -26,7 +26,7 @@ This document defines the authentication system for PhotoCat using **Firebase Au
 
 Firebase Auth is the chosen identity provider because PhotoCat already uses GCP services:
 - Cloud Run (compute)
-- Cloud SQL (PostgreSQL)
+- PostgreSQL database (Supabase)
 - Cloud Storage
 - Secret Manager
 
