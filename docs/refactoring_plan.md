@@ -45,7 +45,6 @@ We will refactor the application using **Lit**, a lightweight library for buildi
 1.  **Componentize the Main UI Elements:**
     *   Gradually convert major sections of the UI into Lit components:
         *   Image Gallery (`<image-gallery>`)
-        *   Search and Filtering (`<filter-controls>`)
         *   Navigation and Header (`<app-header>`)
         *   Modals (`<image-modal>`, `<upload-modal>`)
 

@@ -109,12 +109,6 @@ class AppHeader extends LitElement {
                         <i class="fas fa-star mr-2"></i>Curate
                     </button>
                     <button
-                        @click=${() => this._handleTabChange('search')}
-                        class="py-3 px-6 text-base font-semibold ${this.activeTab === 'search' ? 'border-b-4 border-blue-600 text-blue-800 bg-blue-50' : 'text-gray-600 hover:text-gray-800 hover:bg-gray-100'} transition-all duration-200"
-                    >
-                        <i class="fas fa-search mr-2"></i>Search
-                    </button>
-                    <button
                         @click=${() => this._handleTabChange('lists')}
                         class="py-3 px-6 text-base font-semibold ${this.activeTab === 'lists' ? 'border-b-4 border-blue-600 text-blue-800 bg-blue-50' : 'text-gray-600 hover:text-gray-800 hover:bg-gray-100'} transition-all duration-200"
                     >
