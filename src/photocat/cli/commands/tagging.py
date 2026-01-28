@@ -7,10 +7,11 @@ from google.cloud import storage
 from sqlalchemy import func
 
 from photocat.settings import settings
-from photocat.config import TenantConfig
+from photocat.config.db_config import ConfigManager
 from photocat.tagging import get_tagger
 from photocat.metadata import ImageMetadata, MachineTag, ImageEmbedding
 from photocat.learning import ensure_image_embedding
+from photocat.config.db_utils import load_keyword_info_by_name
 from photocat.tenant import Tenant, TenantContext
 from photocat.cli.base import CliCommand
 
@@ -82,15 +83,19 @@ class RecomputeSiglipTagsCommand(CliCommand):
         TenantContext.set(tenant)
 
         # Load config
-        config = TenantConfig.load(self.tenant_id)
-        all_keywords = config.get_all_keywords()
+        config_mgr = ConfigManager(self.db, self.tenant_id)
+        all_keywords = config_mgr.get_all_keywords()
+        if not all_keywords:
+            click.echo("No keywords configured for this tenant.")
+            return
         by_category = {}
         for kw in all_keywords:
             cat = kw['category']
             if cat not in by_category:
                 by_category[cat] = []
             by_category[cat].append(kw)
-        keyword_to_category = {kw['keyword']: kw['category'] for kw in all_keywords}
+        keyword_names = [kw['keyword'] for kw in all_keywords]
+        keyword_info_by_name = load_keyword_info_by_name(self.db, self.tenant_id, keyword_names)
 
         # Setup tagger and storage
         tagger = get_tagger()
@@ -222,11 +227,14 @@ class RecomputeSiglipTagsCommand(CliCommand):
 
                         # Create new tags
                         for keyword, confidence in tags_with_confidence:
+                            keyword_info = keyword_info_by_name.get(keyword)
+                            if not keyword_info:
+                                click.echo(f"\n  Skipping tag '{keyword}': keyword not found in DB")
+                                continue
                             tag = MachineTag(
                                 image_id=image.id,
                                 tenant_id=self.tenant_id,
-                                keyword=keyword,
-                                category=keyword_to_category[keyword],
+                                keyword_id=keyword_info["id"],
                                 confidence=confidence,
                                 tag_type='siglip',
                                 model_name=model_name,

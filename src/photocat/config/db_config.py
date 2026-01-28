@@ -1,48 +1,28 @@
-"""Database-backed configuration manager with YAML fallback."""
+"""Database-backed configuration manager."""
 
-from pathlib import Path
 from typing import List, Dict, Optional
-import yaml
 
 from sqlalchemy.orm import Session
 
 from photocat.models.config import KeywordCategory as DBKeywordCategory, Keyword as DBKeyword
 from photocat.metadata import Person as DBPerson
-from photocat.config import TenantConfig as YAMLConfig, KeywordCategory, Person
 
 
 class ConfigManager:
-    """Manage tenant configuration with database primary, YAML fallback."""
+    """Manage tenant configuration in the database."""
     
     def __init__(self, session: Session, tenant_id: str):
         """Initialize config manager."""
         self.session = session
         self.tenant_id = tenant_id
-        self._config_dir = Path("config")
     
     def get_all_keywords(self) -> List[dict]:
-        """Get all keywords from database or YAML fallback."""
-        # Try database first
-        db_keywords = self._get_keywords_from_db()
-        if db_keywords:
-            return db_keywords
-        
-        # Fallback to YAML
-        yaml_config = self._load_yaml_fallback()
-        return yaml_config.get_all_keywords() if yaml_config else []
+        """Get all keywords from database."""
+        return self._get_keywords_from_db()
     
     def get_people(self) -> List[dict]:
-        """Get all people from database or YAML fallback."""
-        # Try database first
-        db_people = self._get_people_from_db()
-        if db_people:
-            return db_people
-        
-        # Fallback to YAML
-        yaml_config = self._load_yaml_fallback()
-        if yaml_config:
-            return [{"id": None, "name": p.name, "aliases": p.aliases} for p in yaml_config.people]
-        return []
+        """Get all people from database."""
+        return self._get_people_from_db()
     
     def get_person_by_name(self, name: str) -> Optional[dict]:
         """Find person by name or alias."""
@@ -65,13 +45,6 @@ class ConfigManager:
         for person in people:
             if person.aliases and any(alias.lower() == name_lower for alias in person.aliases):
                 return person.to_dict()
-        
-        # Fallback to YAML
-        yaml_config = self._load_yaml_fallback()
-        if yaml_config:
-            person = yaml_config.get_person_by_name(name)
-            if person:
-                return {"id": None, "name": person.name, "aliases": person.aliases}
         
         return None
     
@@ -106,32 +79,6 @@ class ConfigManager:
             self.session.add(person)
         
         self.session.commit()
-    
-    def migrate_from_yaml(self) -> bool:
-        """Migrate YAML configuration to database."""
-        yaml_config = self._load_yaml_fallback()
-        if not yaml_config:
-            return False
-        
-        # Migrate keywords
-        categories_data = []
-        for category in yaml_config.keywords:
-            categories_data.append(self._category_to_dict(category))
-        
-        self.save_keywords(categories_data)
-        
-        # Migrate people
-        people_data = [
-            {
-                "name": p.name,
-                "aliases": p.aliases,
-                "face_embedding_ref": p.face_embedding_ref
-            }
-            for p in yaml_config.people
-        ]
-        self.save_people(people_data)
-        
-        return True
     
     def _get_keywords_from_db(self) -> List[dict]:
         """Fetch keywords from database."""
@@ -178,13 +125,6 @@ class ConfigManager:
         
         return [p.to_dict() for p in people]
     
-    def _load_yaml_fallback(self) -> Optional[YAMLConfig]:
-        """Load YAML configuration as fallback."""
-        try:
-            return YAMLConfig.load(self.tenant_id, self._config_dir)
-        except FileNotFoundError:
-            return None
-    
     def _create_category(self, cat_data: dict, parent_id: Optional[int]) -> DBKeywordCategory:
         """Recursively create category and keywords."""
         category = DBKeywordCategory(
@@ -219,10 +159,10 @@ class ConfigManager:
         
         return category
     
-    def _category_to_dict(self, category: KeywordCategory) -> dict:
-        """Convert YAML category to dict format."""
+    def _category_to_dict(self, category: dict) -> dict:
+        """Convert category input to dict format."""
         return {
-            'name': category.name,
-            'keywords': category.keywords,
-            'subcategories': [self._category_to_dict(sub) for sub in category.subcategories]
+            'name': category.get('name'),
+            'keywords': category.get('keywords', []),
+            'subcategories': [self._category_to_dict(sub) for sub in category.get('subcategories', [])]
         }

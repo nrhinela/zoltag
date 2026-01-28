@@ -1,6 +1,5 @@
 """API endpoints for configuration management."""
 
-import os
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -91,18 +90,11 @@ async def migrate_from_yaml(
     tenant: Tenant = Depends(get_tenant),
     db: Session = Depends(get_db)
 ):
-    """Migrate configuration from YAML files to database."""
-    from photocat.config.db_config import ConfigManager
-    manager = ConfigManager(db, tenant.id)
-    success = manager.migrate_from_yaml()
-    
-    if success:
-        return {"status": "success", "message": "Configuration migrated from YAML"}
-    else:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No YAML configuration found for tenant {tenant.id}"
-        )
+    """Legacy YAML migration removed (DB-only config)."""
+    raise HTTPException(
+        status_code=410,
+        detail="YAML config migration has been removed; configuration is stored in the database."
+    )
 
 
 @router.get("")

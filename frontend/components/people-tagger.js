@@ -1,5 +1,6 @@
 import { LitElement, html, css } from 'lit';
 import { tailwind } from './tailwind-lit.js';
+import { getPeople, getImagePeopleTags, addImagePersonTag, removeImagePersonTag } from '../services/api.js';
 
 class PeopleTagger extends LitElement {
   static properties = {
@@ -259,21 +260,12 @@ class PeopleTagger extends LitElement {
 
   async loadPeople() {
     const tenantId = this.tenant || localStorage.getItem('tenantId') || 'default';
-    const response = await fetch(`/api/v1/people?limit=500`, {
-      headers: { 'X-Tenant-ID': tenantId }
-    });
-    if (!response.ok) throw new Error('Failed to load people');
-    const data = await response.json();
-    this.people = data;
+    this.people = await getPeople(tenantId, { limit: 500 });
   }
 
   async loadImagePeopleTags() {
     const tenantId = this.tenant || localStorage.getItem('tenantId') || 'default';
-    const response = await fetch(`/api/v1/images/${this.imageId}/people`, {
-      headers: { 'X-Tenant-ID': tenantId }
-    });
-    if (!response.ok) throw new Error('Failed to load tags');
-    const data = await response.json();
+    const data = await getImagePeopleTags(tenantId, this.imageId);
     this.peopleTags = data.people_tags || [];
   }
 
@@ -287,22 +279,10 @@ class PeopleTagger extends LitElement {
     this.error = '';
     try {
       const tenantId = this.tenant || localStorage.getItem('tenantId') || 'default';
-      const response = await fetch(`/api/v1/images/${this.imageId}/people`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Tenant-ID': tenantId
-        },
-        body: JSON.stringify({
-          person_id: this.selectedPerson.id,
-          confidence: this.confidence
-        })
+      await addImagePersonTag(tenantId, this.imageId, {
+        person_id: this.selectedPerson.id,
+        confidence: this.confidence
       });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.detail || 'Failed to tag person');
-      }
 
       await this.loadImagePeopleTags();
       this.selectedPerson = null;
@@ -321,13 +301,7 @@ class PeopleTagger extends LitElement {
     this.error = '';
     try {
       const tenantId = this.tenant || localStorage.getItem('tenantId') || 'default';
-      const response = await fetch(`/api/v1/images/${this.imageId}/people/${personId}`, {
-        method: 'DELETE',
-        headers: { 'X-Tenant-ID': tenantId }
-      });
-
-      if (!response.ok) throw new Error('Failed to remove tag');
-
+      await removeImagePersonTag(tenantId, this.imageId, personId);
       await this.loadImagePeopleTags();
     } catch (err) {
       this.error = err.message;

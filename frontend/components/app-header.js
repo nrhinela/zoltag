@@ -178,6 +178,11 @@ class AppHeader extends LitElement {
       console.log('User menu toggled:', this.userMenuOpen);
   }
 
+  _isAdmin() {
+      // User is admin if they are a super admin
+      return this.currentUser?.user?.is_super_admin || false;
+  }
+
   async _handleLogout() {
       try {
           await supabase.auth.signOut();
@@ -186,6 +191,10 @@ class AppHeader extends LitElement {
       } catch (error) {
           console.error('Logout error:', error);
       }
+  }
+
+  _openAdmin() {
+      window.location.href = '/admin';
   }
 
   render() {
@@ -205,9 +214,6 @@ class AppHeader extends LitElement {
                                 ${this.tenants.map(tenant => html`<option value=${tenant.id}>${tenant.name}</option>`)}
                             </select>
                         </div>
-                        <button @click=${this._openAdmin} class="bg-gray-600 text-white px-4 py-2 rounded-lg hover:bg-gray-700" title="System Administration">
-                            <i class="fas fa-cog mr-2"></i>Admin
-                        </button>
                         <div class="user-menu-container">
                             <button class="user-menu-button" @click=${(e) => { e.stopPropagation(); this._toggleUserMenu(); }}>
                                 <i class="fas fa-user-circle text-gray-600"></i>
@@ -221,6 +227,13 @@ class AppHeader extends LitElement {
                                             <div class="user-name">${this.currentUser.user?.display_name || 'User'}</div>
                                             <div class="user-email">${this.currentUser.user?.email || ''}</div>
                                         </div>
+                                        ${this._isAdmin() ? html`
+                                            <div class="user-menu-item" @click=${this._openAdmin}>
+                                                <i class="fas fa-cog mr-2"></i>
+                                                System Administration
+                                            </div>
+                                            <div style="height: 1px; background-color: #e5e7eb; margin: 4px 0;"></div>
+                                        ` : ''}
                                         <div class="user-menu-item logout" @click=${this._handleLogout}>
                                             <i class="fas fa-sign-out-alt"></i>
                                             Sign Out

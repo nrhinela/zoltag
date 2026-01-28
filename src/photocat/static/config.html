@@ -45,7 +45,6 @@
         <div class="tabs">
             <button class="tab active" onclick="showTab('keywords')">Keywords</button>
             <button class="tab" onclick="showTab('people')">People</button>
-            <button class="tab" onclick="showTab('migrate')">Migration</button>
         </div>
 
         <div id="message"></div>
@@ -78,20 +77,7 @@
             </div>
         </div>
 
-        <!-- Migration Section -->
-        <div id="migrate-section" class="section">
-            <div class="card">
-                <h2 style="margin-bottom: 15px;">Migrate from YAML Files</h2>
-                <p style="color: #666; margin-bottom: 15px;">
-                    If you have existing YAML configuration files in <code>config/{tenant_id}/</code>,
-                    you can migrate them to the database using this tool.
-                </p>
-                <p style="color: #666; margin-bottom: 15px;">
-                    <strong>Note:</strong> This will overwrite any existing database configuration.
-                </p>
-                <button onclick="migrateFromYaml()">Migrate from YAML</button>
-            </div>
-        </div>
+        
     </div>
 
     <script>
@@ -226,30 +212,6 @@
             }
         }
 
-        async function migrateFromYaml() {
-            if (!confirm('This will overwrite existing database configuration. Continue?')) {
-                return;
-            }
-
-            try {
-                const response = await fetch('/api/v1/config/migrate-from-yaml', {
-                    method: 'POST',
-                    headers: { 'X-Tenant-ID': TENANT_ID }
-                });
-                
-                if (response.ok) {
-                    showMessage('Configuration migrated successfully!', 'success');
-                    loadKeywords();
-                    loadPeople();
-                } else {
-                    const error = await response.json();
-                    showMessage('Migration failed: ' + error.detail, 'error');
-                }
-            } catch (error) {
-                showMessage('Error during migration: ' + error.message, 'error');
-            }
-        }
-
         function keywordsToCategories(keywords) {
             // Group by category
             const categoryMap = {};
@@ -268,21 +230,6 @@
 
             // Convert to array
             return Object.values(categoryMap);
-        }
-
-        function peopleToYaml(people) {
-            let yaml = '';
-            people.forEach(person => {
-                yaml += `- name: ${person.name}\n`;
-                if (person.aliases && person.aliases.length > 0) {
-                    yaml += `  aliases:\n`;
-                    person.aliases.forEach(alias => {
-                        yaml += `    - ${alias}\n`;
-                    });
-                }
-                yaml += '\n';
-            });
-            return yaml;
         }
 
         // Load initial data with retry

@@ -1,6 +1,6 @@
 import { LitElement, html, css } from 'lit';
 import { tailwind } from './tailwind-lit.js';
-import { fetchWithAuth } from '../services/api.js';
+import { fetchWithAuth, disableUser, enableUser } from '../services/api.js';
 
 /**
  * Admin User Management Component
@@ -22,6 +22,9 @@ class AdminUsers extends LitElement {
     showAssignTenantForm: { type: Boolean },
     assignForm: { type: Object },
     assigningTenant: { type: Boolean },
+    showDisableConfirmation: { type: Boolean },
+    disablingUser: { type: Boolean },
+    userToDisable: { type: Object },
   };
 
   static styles = [
@@ -134,6 +137,15 @@ class AdminUsers extends LitElement {
 
       .btn-danger:hover {
         background: #b91c1c;
+      }
+
+      .btn-warning {
+        background: #f59e0b;
+        color: white;
+      }
+
+      .btn-warning:hover {
+        background: #d97706;
       }
 
       .btn:disabled {
@@ -363,6 +375,9 @@ class AdminUsers extends LitElement {
       role: 'user',
     };
     this.assigningTenant = false;
+    this.showDisableConfirmation = false;
+    this.disablingUser = false;
+    this.userToDisable = null;
   }
 
   connectedCallback() {
@@ -410,10 +425,7 @@ class AdminUsers extends LitElement {
 
   async loadTenants() {
     try {
-      const response = await fetch('/api/v1/tenants');
-      if (response.ok) {
-        this.tenants = await response.json();
-      }
+      this.tenants = await fetchWithAuth('/tenants');
     } catch (error) {
       console.error('Failed to load tenants:', error);
       this.tenants = [];
@@ -446,7 +458,7 @@ class AdminUsers extends LitElement {
 
     this.submitting = true;
     try {
-      const response = await fetchWithAuth(
+      await fetchWithAuth(
         `/admin/users/${this.selectedUser.supabase_uid}/approve`,
         {
           method: 'POST',
@@ -457,14 +469,9 @@ class AdminUsers extends LitElement {
         }
       );
 
-      if (!response.ok) {
-        const error = await response.json().catch(() => ({ detail: 'Approval failed' }));
-        throw new Error(error.detail);
-      }
-
       // Success - reload users and close form
       this.closeApprovalForm();
-      await this.loadPendingUsers();
+      await this.loadAllUsers();
     } catch (error) {
       console.error('Failed to approve user:', error);
       this.error = error.message;
@@ -479,15 +486,10 @@ class AdminUsers extends LitElement {
     }
 
     try {
-      const response = await fetchWithAuth(
+      await fetchWithAuth(
         `/admin/users/${user.supabase_uid}/reject`,
         { method: 'POST' }
       );
-
-      if (!response.ok) {
-        const error = await response.json().catch(() => ({ detail: 'Rejection failed' }));
-        throw new Error(error.detail);
-      }
 
       // Success - reload users
       await this.loadAllUsers();
@@ -526,7 +528,7 @@ class AdminUsers extends LitElement {
 
     this.assigningTenant = true;
     try {
-      const response = await fetchWithAuth(
+      await fetchWithAuth(
         `/admin/users/${this.selectedUser.supabase_uid}/assign-tenant`,
         {
           method: 'POST',
@@ -537,11 +539,6 @@ class AdminUsers extends LitElement {
         }
       );
 
-      if (!response.ok) {
-        const error = await response.json().catch(() => ({ detail: 'Assignment failed' }));
-        throw new Error(error.detail);
-      }
-
       // Success - reload users and close form
       this.closeAssignTenantForm();
       await this.loadAllUsers();
@@ -550,6 +547,49 @@ class AdminUsers extends LitElement {
       this.error = error.message;
     } finally {
       this.assigningTenant = false;
+    }
+  }
+
+  openDisableConfirmation(user) {
+    this.userToDisable = user;
+    this.showDisableConfirmation = true;
+  }
+
+  closeDisableConfirmation() {
+    this.showDisableConfirmation = false;
+    this.userToDisable = null;
+  }
+
+  async disableUserAccount() {
+    if (!this.userToDisable) return;
+
+    this.disablingUser = true;
+    try {
+      await disableUser(this.userToDisable.supabase_uid);
+
+      // Success - reload users and close confirmation
+      this.closeDisableConfirmation();
+      await this.loadAllUsers();
+    } catch (error) {
+      console.error('Failed to disable user:', error);
+      this.error = error.message;
+    } finally {
+      this.disablingUser = false;
+    }
+  }
+
+  async enableUserAccount(user) {
+    this.disablingUser = true;
+    try {
+      await enableUser(user.supabase_uid);
+
+      // Success - reload users
+      await this.loadAllUsers();
+    } catch (error) {
+      console.error('Failed to enable user:', error);
+      this.error = error.message;
+    } finally {
+      this.disablingUser = false;
     }
   }
 
@@ -654,28 +694,45 @@ class AdminUsers extends LitElement {
                 <td>
                   ${user.is_active
                     ? html`
-                        <button
-                          class="btn btn-primary"
-                          @click=${() => this.openAssignTenantForm(user)}
-                          ?disabled=${this.getAvailableTenants(user).length === 0}
-                          title="${this.getAvailableTenants(user).length === 0 ? 'No more tenants available' : ''}"
-                        >
-                          <i class="fas fa-plus"></i> Assign Tenant
-                        </button>
+                        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                          <button
+                            class="btn btn-primary"
+                            @click=${() => this.openAssignTenantForm(user)}
+                            ?disabled=${this.getAvailableTenants(user).length === 0}
+                            title="${this.getAvailableTenants(user).length === 0 ? 'No more tenants available' : ''}"
+                          >
+                            <i class="fas fa-plus"></i> Assign
+                          </button>
+                          <button
+                            class="btn btn-danger"
+                            @click=${() => this.openDisableConfirmation(user)}
+                          >
+                            <i class="fas fa-ban"></i> Disable
+                          </button>
+                        </div>
                       `
                     : html`
-                        <button
-                          class="btn btn-primary"
-                          @click=${() => this.openApprovalForm(user)}
-                        >
-                          <i class="fas fa-check"></i> Approve
-                        </button>
-                        <button
-                          class="btn btn-secondary"
-                          @click=${() => this.rejectUser(user)}
-                        >
-                          <i class="fas fa-times"></i> Reject
-                        </button>
+                        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                          <button
+                            class="btn btn-primary"
+                            @click=${() => this.openApprovalForm(user)}
+                          >
+                            <i class="fas fa-check"></i> Approve
+                          </button>
+                          <button
+                            class="btn btn-secondary"
+                            @click=${() => this.rejectUser(user)}
+                          >
+                            <i class="fas fa-times"></i> Reject
+                          </button>
+                          <button
+                            class="btn btn-warning"
+                            @click=${() => this.enableUserAccount(user)}
+                            ?disabled=${this.disablingUser}
+                          >
+                            <i class="fas fa-check-circle"></i> Enable
+                          </button>
+                        </div>
                       `}
                 </td>
               </tr>
@@ -914,6 +971,62 @@ class AdminUsers extends LitElement {
                       ${this.assigningTenant
                         ? html`<i class="fas fa-spinner fa-spin"></i> Assigning...`
                         : html`<i class="fas fa-plus"></i> Assign Tenant`}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          `
+        : ''}
+
+      ${this.showDisableConfirmation
+        ? html`
+            <div class="modal-overlay" @click=${this.closeDisableConfirmation}>
+              <div class="modal" @click=${(e) => e.stopPropagation()}>
+                <div class="modal-header">
+                  <h3 class="modal-title">Disable User Account</h3>
+                  <button
+                    class="modal-close"
+                    @click=${this.closeDisableConfirmation}
+                  >
+                    ×
+                  </button>
+                </div>
+
+                <div class="modal-content">
+                  <div class="user-info">
+                    <div class="user-info-item">
+                      <span class="user-info-label">User:</span>
+                      <span class="user-info-value">${this.userToDisable?.display_name || this.userToDisable?.email}</span>
+                    </div>
+                    <div class="user-info-item">
+                      <span class="user-info-label">Email:</span>
+                      <span class="user-info-value">${this.userToDisable?.email}</span>
+                    </div>
+                  </div>
+
+                  <div style="padding: 16px; background: #fef3c7; border-radius: 6px; margin: 16px 0; border-left: 4px solid #f59e0b;">
+                    <p style="margin: 0; color: #92400e; font-size: 14px;">
+                      <i class="fas fa-exclamation-circle mr-2"></i>
+                      This user will no longer be able to log in or access their assigned tenants. The account can be re-enabled later.
+                    </p>
+                  </div>
+
+                  <div class="modal-actions">
+                    <button
+                      class="btn btn-secondary"
+                      @click=${this.closeDisableConfirmation}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      class="btn btn-danger"
+                      @click=${this.disableUserAccount}
+                      ?disabled=${this.disablingUser}
+                    >
+                      ${this.disablingUser
+                        ? html`<i class="fas fa-spinner fa-spin"></i> Disabling...`
+                        : html`<i class="fas fa-ban"></i> Disable User`}
                     </button>
                   </div>
                 </div>

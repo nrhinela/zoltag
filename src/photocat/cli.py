@@ -13,7 +13,7 @@ from PIL import Image
 
 from photocat.settings import settings
 from photocat.tenant import Tenant, TenantContext
-from photocat.config import TenantConfig
+from photocat.config.db_config import ConfigManager
 from photocat.image import ImageProcessor
 from photocat.exif import (
     get_exif_value,
@@ -92,14 +92,12 @@ def ingest(directory: str, tenant_id: str, recursive: bool):
     click.echo(f"  Storage bucket: {tenant.get_storage_bucket(settings)}")
     click.echo(f"  Thumbnail bucket: {tenant.get_thumbnail_bucket(settings)}")
 
-    # Load tenant config
-    try:
-        config = TenantConfig.load(tenant_id)
-        click.echo(f"  Keywords: {len(config.get_all_keywords())} total")
-        click.echo(f"  People: {len(config.people)}")
-    except FileNotFoundError:
-        click.echo(f"Warning: No config found for tenant {tenant_id}", err=True)
-        config = None
+    # Load tenant config from DB
+    config_mgr = ConfigManager(session, tenant_id)
+    keywords = config_mgr.get_all_keywords()
+    people = config_mgr.get_people()
+    click.echo(f"  Keywords: {len(keywords)} total")
+    click.echo(f"  People: {len(people)}")
 
     # Setup storage client
     storage_client = storage.Client(project=settings.gcp_project_id)
@@ -787,26 +785,33 @@ def show_config(tenant_id: str):
     Useful for reviewing what keywords and people are available for tagging,
     and for verifying configuration was loaded correctly."""
     
+    engine = create_engine(settings.database_url)
+    Session = sessionmaker(bind=engine)
+    session = Session()
     try:
-        config = TenantConfig.load(tenant_id)
-        
+        config_mgr = ConfigManager(session, tenant_id)
+        keywords = config_mgr.get_all_keywords()
+        people = config_mgr.get_people()
+
         click.echo(f"\nConfiguration for tenant: {tenant_id}")
         click.echo("=" * 80)
-        
-        click.echo(f"\nKeywords ({len(config.keywords)} categories):")
-        for category in config.keywords:
-            click.echo(f"  • {category.name}: {', '.join(category.keywords[:5])}")
-            if len(category.keywords) > 5:
-                click.echo(f"    ... and {len(category.keywords) - 5} more")
-        
-        click.echo(f"\nPeople ({len(config.people)}):")
-        for person in config.people:
-            aliases = f" (aka {', '.join(person.aliases)})" if person.aliases else ""
-            click.echo(f"  • {person.name}{aliases}")
-    
-    except FileNotFoundError:
-        click.echo(f"No configuration found for tenant: {tenant_id}", err=True)
-        sys.exit(1)
+
+        categories = {}
+        for kw in keywords:
+            categories.setdefault(kw['category'], []).append(kw['keyword'])
+
+        click.echo(f"\nKeywords ({len(categories)} categories):")
+        for category, category_keywords in categories.items():
+            click.echo(f"  • {category}: {', '.join(category_keywords[:5])}")
+            if len(category_keywords) > 5:
+                click.echo(f"    ... and {len(category_keywords) - 5} more")
+
+        click.echo(f"\nPeople ({len(people)}):")
+        for person in people:
+            aliases = f" (aka {', '.join(person.get('aliases', []))})" if person.get('aliases') else ""
+            click.echo(f"  • {person.get('name')}{aliases}")
+    finally:
+        session.close()
 
 
 @cli.command(name='recompute-siglip-tags')

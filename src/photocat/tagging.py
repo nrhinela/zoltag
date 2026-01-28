@@ -239,6 +239,13 @@ class SigLIPTagger:
             )
             image_tensor = image_tensor / image_tensor.norm(dim=-1, keepdim=True)
             logits = torch.matmul(image_tensor, text_embeddings.t())
+            logit_scale = getattr(self.model, "logit_scale", None)
+            if logit_scale is not None:
+                if torch.is_tensor(logit_scale):
+                    scale = logit_scale.exp()
+                else:
+                    scale = torch.tensor(logit_scale, device=logits.device).exp()
+                logits = logits * scale
             probs = torch.softmax(logits, dim=0).cpu().numpy()
 
         results = []

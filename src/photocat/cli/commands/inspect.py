@@ -1,9 +1,8 @@
 """Inspection commands (list and show)."""
 
-import sys
 import click
 
-from photocat.config import TenantConfig
+from photocat.config.db_config import ConfigManager
 from photocat.metadata import ImageMetadata
 from photocat.cli.base import CliCommand
 
@@ -72,28 +71,34 @@ class ShowConfigCommand(CliCommand):
 
     def run(self):
         """Execute show config command."""
-        # Note: show-config doesn't need DB, so we don't setup_db
-        self._show_config()
+        self.setup_db()
+        try:
+            self.load_tenant(self.tenant_id)
+            self._show_config()
+        finally:
+            self.cleanup_db()
 
     def _show_config(self):
         """Show tenant configuration."""
-        try:
-            config = TenantConfig.load(self.tenant_id)
+        manager = ConfigManager(self.db, self.tenant_id)
+        keywords = manager.get_all_keywords()
+        people = manager.get_people()
 
-            click.echo(f"\nConfiguration for tenant: {self.tenant_id}")
-            click.echo("=" * 80)
+        click.echo(f"\nConfiguration for tenant: {self.tenant_id}")
+        click.echo("=" * 80)
 
-            click.echo(f"\nKeywords ({len(config.keywords)} categories):")
-            for category in config.keywords:
-                click.echo(f"  • {category.name}: {', '.join(category.keywords[:5])}")
-                if len(category.keywords) > 5:
-                    click.echo(f"    ... and {len(category.keywords) - 5} more")
+        categories = {}
+        for kw in keywords:
+            categories.setdefault(kw['category'], []).append(kw['keyword'])
 
-            click.echo(f"\nPeople ({len(config.people)}):")
-            for person in config.people:
-                aliases = f" (aka {', '.join(person.aliases)})" if person.aliases else ""
-                click.echo(f"  • {person.name}{aliases}")
+        click.echo(f"\nKeywords ({len(categories)} categories):")
+        for category, category_keywords in categories.items():
+            sample = ", ".join(category_keywords[:5])
+            click.echo(f"  • {category}: {sample}")
+            if len(category_keywords) > 5:
+                click.echo(f"    ... and {len(category_keywords) - 5} more")
 
-        except FileNotFoundError:
-            click.echo(f"No configuration found for tenant: {self.tenant_id}", err=True)
-            sys.exit(1)
+        click.echo(f"\nPeople ({len(people)}):")
+        for person in people:
+            aliases = f" (aka {', '.join(person.get('aliases', []))})" if person.get('aliases') else ""
+            click.echo(f"  • {person.get('name')}{aliases}")

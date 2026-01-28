@@ -8,7 +8,7 @@ const API_BASE_URL = '/api/v1';
  *
  * Automatically adds:
  * - Authorization: Bearer <JWT> (from Supabase session)
- * - X-Tenant-ID: <tenant_id> (if provided)
+ * - X-Tenant-ID: <tenant_id> (if provided in options.tenantId)
  * - Content-Type: application/json
  *
  * Handles common errors:
@@ -17,25 +17,36 @@ const API_BASE_URL = '/api/v1';
  * - Other errors: Shows error message
  *
  * @param {string} url - API endpoint URL (relative to /api/v1)
- * @param {Object} options - Fetch options (method, body, headers, etc.)
- * @returns {Promise<Object>} Parsed JSON response
+ * @param {Object} options - Fetch options (method, body, headers, tenantId, etc.)
+ * @returns {Promise<Object>} Parsed JSON response or blob for image downloads
  * @throws {Error} If request fails
  */
 export async function fetchWithAuth(url, options = {}) {
   const token = await getAccessToken();
 
-  const headers = {
-    'Content-Type': 'application/json',
-    ...options.headers,
-  };
+  // Don't set Content-Type for FormData - let browser set it
+  const isFormData = options.body instanceof FormData;
+  const headers = isFormData ? {} : { 'Content-Type': 'application/json' };
+
+  if (options.headers) {
+    headers = { ...headers, ...options.headers };
+  }
 
   // Add Authorization header with JWT token
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
   }
 
+  // Add X-Tenant-ID header if provided
+  if (options.tenantId) {
+    headers['X-Tenant-ID'] = options.tenantId;
+  }
+
+  // Remove tenantId and responseType from options before passing to fetch
+  const { tenantId, responseType, ...fetchOptions } = options;
+
   const response = await fetch(`${API_BASE_URL}${url}`, {
-    ...options,
+    ...fetchOptions,
     headers,
   });
 
@@ -55,6 +66,11 @@ export async function fetchWithAuth(url, options = {}) {
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: 'Request failed' }));
     throw new Error(error.detail || 'Request failed');
+  }
+
+  // Return blob for image downloads, otherwise return JSON
+  if (responseType === 'blob') {
+    return response.blob();
   }
 
   return response.json();
@@ -160,18 +176,9 @@ export async function getImages(tenantId, filters = {}) {
   }
 
 
-  const response = await fetch(`${API_BASE_URL}/images?${params.toString()}`, {
-    headers: {
-      'X-Tenant-ID': tenantId,
-    },
+  return fetchWithAuth(`/images?${params.toString()}`, {
+    tenantId,
   });
-
-  if (!response.ok) {
-    throw new Error('Failed to fetch images');
-  }
-
-  const data = await response.json();
-  return data;
 }
 
 export async function getDropboxFolders(tenantId, { query = '', limit } = {}) {
@@ -183,59 +190,24 @@ export async function getDropboxFolders(tenantId, { query = '', limit } = {}) {
     params.append('limit', String(limit));
   }
   const url = params.toString()
-    ? `${API_BASE_URL}/images/dropbox-folders?${params.toString()}`
-    : `${API_BASE_URL}/images/dropbox-folders`;
-  const response = await fetch(url, {
-    headers: {
-      'X-Tenant-ID': tenantId,
-    },
-  });
-  if (!response.ok) {
-    throw new Error('Failed to fetch Dropbox folders');
-  }
-  return await response.json();
+    ? `/images/dropbox-folders?${params.toString()}`
+    : `/images/dropbox-folders`;
+  return fetchWithAuth(url, { tenantId });
 }
 
 export async function getImageStats(tenantId) {
-  const response = await fetch(`${API_BASE_URL}/images/stats`, {
-    headers: {
-      'X-Tenant-ID': tenantId,
-    },
-  });
-
-  if (!response.ok) {
-    throw new Error('Failed to fetch image stats');
-  }
-
-  return await response.json();
+  return fetchWithAuth(`/images/stats`, { tenantId });
 }
 
 export async function getFullImage(tenantId, imageId) {
-  const response = await fetch(`${API_BASE_URL}/images/${imageId}/full`, {
-    headers: {
-      'X-Tenant-ID': tenantId,
-    },
+  return fetchWithAuth(`/images/${imageId}/full`, {
+    tenantId,
+    responseType: 'blob',
   });
-
-  if (!response.ok) {
-    throw new Error('Failed to fetch full image');
-  }
-
-  return await response.blob();
 }
 
 export async function getTagStats(tenantId) {
-  const response = await fetch(`${API_BASE_URL}/tag-stats`, {
-    headers: {
-      'X-Tenant-ID': tenantId,
-    },
-  });
-
-  if (!response.ok) {
-    throw new Error('Failed to fetch tag stats');
-  }
-
-  return await response.json();
+  return fetchWithAuth(`/tag-stats`, { tenantId });
 }
 
 export async function getMlTrainingImages(tenantId, { limit = 50, offset = 0, refresh = false } = {}) {
@@ -250,34 +222,13 @@ export async function getMlTrainingImages(tenantId, { limit = 50, offset = 0, re
     params.append('refresh', 'true');
   }
   const url = params.toString()
-    ? `${API_BASE_URL}/ml-training/images?${params.toString()}`
-    : `${API_BASE_URL}/ml-training/images`;
-
-  const response = await fetch(url, {
-    headers: {
-      'X-Tenant-ID': tenantId,
-    },
-  });
-
-  if (!response.ok) {
-    throw new Error('Failed to fetch ML training images');
-  }
-
-  return await response.json();
+    ? `/ml-training/images?${params.toString()}`
+    : `/ml-training/images`;
+  return fetchWithAuth(url, { tenantId });
 }
 
 export async function getMlTrainingStats(tenantId) {
-  const response = await fetch(`${API_BASE_URL}/ml-training/stats`, {
-    headers: {
-      'X-Tenant-ID': tenantId,
-    },
-  });
-
-  if (!response.ok) {
-    throw new Error('Failed to fetch ML training stats');
-  }
-
-  return await response.json();
+  return fetchWithAuth(`/ml-training/stats`, { tenantId });
 }
 
 export async function getKeywords(tenantId, filters = {}) {
@@ -306,152 +257,71 @@ export async function getKeywords(tenantId, filters = {}) {
         params.append('source', filters.source);
     }
 
-    const url = params.toString() ? `${API_BASE_URL}/keywords?${params.toString()}` : `${API_BASE_URL}/keywords`;
-    const response = await fetch(url, {
-        headers: {
-        'X-Tenant-ID': tenantId,
-        },
-    });
-
-    if (!response.ok) {
-        throw new Error('Failed to fetch keywords');
-    }
-
-    const data = await response.json();
+    const url = params.toString() ? `/keywords?${params.toString()}` : `/keywords`;
+    const data = await fetchWithAuth(url, { tenantId });
     return data.keywords_by_category || {};
 }
 
 export async function getTenants() {
     // Use admin endpoint for complete tenant data (includes settings, dropbox config, etc)
-    const response = await fetch(`${API_BASE_URL}/admin/tenants`);
-
-    if (!response.ok) {
+    try {
+        return await fetchWithAuth(`/admin/tenants`);
+    } catch (error) {
         // Fallback to non-admin endpoint if admin endpoint not available
-        const fallbackResponse = await fetch(`${API_BASE_URL}/tenants`);
-        if (!fallbackResponse.ok) {
+        try {
+            return await fetchWithAuth(`/tenants`);
+        } catch (fallbackError) {
             throw new Error('Failed to fetch tenants');
         }
-        const data = await fallbackResponse.json();
-        return data || [];
     }
-
-    const data = await response.json();
-    return data || [];
 }
 
 export async function setRating(tenantId, imageId, rating) {
-    const response = await fetch(`${API_BASE_URL}/images/${imageId}/rating`, {
+    return fetchWithAuth(`/images/${imageId}/rating`, {
         method: 'PATCH',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-Tenant-ID': tenantId,
-        },
+        tenantId,
         body: JSON.stringify({ rating }),
     });
-
-    if (!response.ok) {
-        throw new Error('Failed to set rating');
-    }
-
-    const data = await response.json();
-    return data;
 }
 
 export async function addToList(tenantId, photoId) {
-    const response = await fetch(`${API_BASE_URL}/lists/add-photo`, {
+    return fetchWithAuth(`/lists/add-photo`, {
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-Tenant-ID': tenantId,
-        },
+        tenantId,
         body: JSON.stringify({ photo_id: photoId }),
     });
-
-    if (!response.ok) {
-        throw new Error('Failed to add to list');
-    }
-
-    const data = await response.json();
-    return data;
 }
 
 export async function retagImage(tenantId, imageId) {
-    const response = await fetch(`${API_BASE_URL}/images/${imageId}/retag`, {
+    return fetchWithAuth(`/images/${imageId}/retag`, {
         method: 'POST',
-        headers: {
-            'X-Tenant-ID': tenantId,
-        },
+        tenantId,
     });
-
-    if (!response.ok) {
-        throw new Error('Failed to retag image');
-    }
-
-    const data = await response.json();
-    return data;
 }
 
 export async function sync(tenantId) {
-    const response = await fetch(`${API_BASE_URL}/sync`, {
+    return fetchWithAuth(`/sync`, {
         method: 'POST',
-        headers: {
-            'X-Tenant-ID': tenantId,
-        },
+        tenantId,
     });
-
-    if (!response.ok) {
-        throw new Error('Failed to sync');
-    }
-
-    const data = await response.json();
-    return data;
 }
 
 export async function retagAll(tenantId) {
-    const response = await fetch(`${API_BASE_URL}/retag`, {
+    return fetchWithAuth(`/retag`, {
         method: 'POST',
-        headers: {
-            'X-Tenant-ID': tenantId,
-        },
+        tenantId,
     });
-
-    if (!response.ok) {
-        throw new Error('Failed to retag all images');
-    }
-
-    const data = await response.json();
-    return data;
 }
 
 export async function getImageDetails(tenantId, imageId) {
-    const response = await fetch(`${API_BASE_URL}/images/${imageId}`, {
-        headers: {
-            'X-Tenant-ID': tenantId,
-        },
-    });
-
-    if (!response.ok) {
-        throw new Error('Failed to fetch image details');
-    }
-
-    const data = await response.json();
-    return data;
+    return fetchWithAuth(`/images/${imageId}`, { tenantId });
 }
 
 export async function refreshImageMetadata(tenantId, imageId) {
-    const response = await fetch(`${API_BASE_URL}/images/${imageId}/refresh-metadata`, {
+    return fetchWithAuth(`/images/${imageId}/refresh-metadata`, {
         method: 'POST',
-        headers: {
-            'X-Tenant-ID': tenantId,
-        },
+        tenantId,
     });
-
-    if (!response.ok) {
-        throw new Error('Failed to refresh image metadata');
-    }
-
-    const data = await response.json();
-    return data;
 }
 
 export async function uploadImages(tenantId, files) {
@@ -459,210 +329,95 @@ export async function uploadImages(tenantId, files) {
     for (let file of files) {
         formData.append('files', file);
     }
-    const response = await fetch(`${API_BASE_URL}/images/upload`, {
+    return fetchWithAuth(`/images/upload`, {
         method: 'POST',
-        headers: {
-            'X-Tenant-ID': tenantId,
-        },
+        tenantId,
         body: formData,
+        headers: {
+            // Don't set Content-Type - let browser set it with boundary for FormData
+        },
     });
-
-    if (!response.ok) {
-        throw new Error('Failed to upload images');
-    }
-
-    const data = await response.json();
-    return data;
 }
 
 export async function getLists(tenantId) {
-    const response = await fetch(`${API_BASE_URL}/lists`, {
-        headers: {
-            'X-Tenant-ID': tenantId,
-        },
-    });
-
-    if (!response.ok) {
-        throw new Error('Failed to fetch lists');
-    }
-
-    const data = await response.json();
-    return data || []; // Return the data directly, or an empty array if data is null/undefined
+    const data = await fetchWithAuth(`/lists`, { tenantId });
+    return data || [];
 }
 
 export async function getActiveList(tenantId) {
-    const response = await fetch(`${API_BASE_URL}/lists/active`, {
-        headers: {
-            'X-Tenant-ID': tenantId,
-        },
-    });
-
-    if (!response.ok) {
-        throw new Error('Failed to fetch active list');
-    }
-
-    const data = await response.json();
+    const data = await fetchWithAuth(`/lists/active`, { tenantId });
     return data || {};
 }
 
 export async function getKeywordCategories(tenantId) {
-    const response = await fetch(`${API_BASE_URL}/admin/keywords/categories`, {
-        headers: {
-            'X-Tenant-ID': tenantId,
-        },
-    });
-
-    if (!response.ok) {
-        throw new Error('Failed to fetch keyword categories');
-    }
-
-    const data = await response.json();
+    const data = await fetchWithAuth(`/admin/keywords/categories`, { tenantId });
     return data || [];
 }
 
 export async function createKeywordCategory(tenantId, payload) {
-    const response = await fetch(`${API_BASE_URL}/admin/keywords/categories`, {
+    return fetchWithAuth(`/admin/keywords/categories`, {
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-Tenant-ID': tenantId,
-        },
+        tenantId,
         body: JSON.stringify(payload),
     });
-
-    if (!response.ok) {
-        throw new Error('Failed to create keyword category');
-    }
-
-    return await response.json();
 }
 
 export async function updateKeywordCategory(tenantId, categoryId, payload) {
-    const response = await fetch(`${API_BASE_URL}/admin/keywords/categories/${categoryId}`, {
+    return fetchWithAuth(`/admin/keywords/categories/${categoryId}`, {
         method: 'PUT',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-Tenant-ID': tenantId,
-        },
+        tenantId,
         body: JSON.stringify(payload),
     });
-
-    if (!response.ok) {
-        throw new Error('Failed to update keyword category');
-    }
-
-    return await response.json();
 }
 
 export async function deleteKeywordCategory(tenantId, categoryId) {
-    const response = await fetch(`${API_BASE_URL}/admin/keywords/categories/${categoryId}`, {
+    return fetchWithAuth(`/admin/keywords/categories/${categoryId}`, {
         method: 'DELETE',
-        headers: {
-            'X-Tenant-ID': tenantId,
-        },
+        tenantId,
     });
-
-    if (!response.ok) {
-        throw new Error('Failed to delete keyword category');
-    }
-
-    return await response.json();
 }
 
 export async function getKeywordsInCategory(tenantId, categoryId) {
-    const response = await fetch(`${API_BASE_URL}/admin/keywords/categories/${categoryId}/keywords`, {
-        headers: {
-            'X-Tenant-ID': tenantId,
-        },
-    });
-
-    if (!response.ok) {
-        throw new Error('Failed to fetch keywords');
-    }
-
-    const data = await response.json();
+    const data = await fetchWithAuth(`/admin/keywords/categories/${categoryId}/keywords`, { tenantId });
     return data || [];
 }
 
 export async function createKeyword(tenantId, categoryId, payload) {
-    const response = await fetch(`${API_BASE_URL}/admin/keywords/categories/${categoryId}/keywords`, {
+    return fetchWithAuth(`/admin/keywords/categories/${categoryId}/keywords`, {
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-Tenant-ID': tenantId,
-        },
+        tenantId,
         body: JSON.stringify(payload),
     });
-
-    if (!response.ok) {
-        throw new Error('Failed to create keyword');
-    }
-
-    return await response.json();
 }
 
 export async function updateKeyword(tenantId, keywordId, payload) {
-    const response = await fetch(`${API_BASE_URL}/admin/keywords/${keywordId}`, {
+    return fetchWithAuth(`/admin/keywords/${keywordId}`, {
         method: 'PUT',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-Tenant-ID': tenantId,
-        },
+        tenantId,
         body: JSON.stringify(payload),
     });
-
-    if (!response.ok) {
-        throw new Error('Failed to update keyword');
-    }
-
-    return await response.json();
 }
 
 export async function deleteKeyword(tenantId, keywordId) {
-    const response = await fetch(`${API_BASE_URL}/admin/keywords/${keywordId}`, {
+    return fetchWithAuth(`/admin/keywords/${keywordId}`, {
         method: 'DELETE',
-        headers: {
-            'X-Tenant-ID': tenantId,
-        },
+        tenantId,
     });
-
-    if (!response.ok) {
-        throw new Error('Failed to delete keyword');
-    }
-
-    return await response.json();
 }
 
 export async function createList(tenantId, list) {
-    const response = await fetch(`${API_BASE_URL}/lists`, {
+    return fetchWithAuth(`/lists`, {
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-Tenant-ID': tenantId,
-        },
+        tenantId,
         body: JSON.stringify(list),
     });
-
-    if (!response.ok) {
-        throw new Error('Failed to create list');
-    }
-
-    return response.json();
 }
 
 export async function deleteList(tenantId, listId) {
-    const response = await fetch(`${API_BASE_URL}/lists/${listId}`, {
+    return fetchWithAuth(`/lists/${listId}`, {
         method: 'DELETE',
-        headers: {
-            'X-Tenant-ID': tenantId,
-        },
+        tenantId,
     });
-
-    if (!response.ok) {
-        throw new Error('Failed to delete list');
-    }
-
-    return response.json();
 }
 
 export async function getListItems(tenantId, listId, { idsOnly = false } = {}) {
@@ -671,134 +426,60 @@ export async function getListItems(tenantId, listId, { idsOnly = false } = {}) {
         params.append('ids_only', 'true');
     }
     const url = params.toString()
-        ? `${API_BASE_URL}/lists/${listId}/items?${params.toString()}`
-        : `${API_BASE_URL}/lists/${listId}/items`;
-    const response = await fetch(url, {
-        headers: {
-            'X-Tenant-ID': tenantId,
-        },
-    });
-
-    if (!response.ok) {
-        throw new Error('Failed to fetch list items');
-    }
-
-    const data = await response.json();
+        ? `/lists/${listId}/items?${params.toString()}`
+        : `/lists/${listId}/items`;
+    const data = await fetchWithAuth(url, { tenantId });
     return data || [];
 }
 
 export async function deleteListItem(tenantId, itemId) {
-    const response = await fetch(`${API_BASE_URL}/lists/items/${itemId}`, {
+    return fetchWithAuth(`/lists/items/${itemId}`, {
         method: 'DELETE',
-        headers: {
-            'X-Tenant-ID': tenantId,
-        },
+        tenantId,
     });
-
-    if (!response.ok) {
-        throw new Error('Failed to delete list item');
-    }
-
-    return response.json();
 }
 
 export async function freezePermatags(tenantId, imageId) {
-    const response = await fetch(`${API_BASE_URL}/images/${imageId}/permatags/freeze`, {
+    return fetchWithAuth(`/images/${imageId}/permatags/freeze`, {
         method: 'POST',
-        headers: {
-            'X-Tenant-ID': tenantId,
-        },
+        tenantId,
     });
-
-    if (!response.ok) {
-        throw new Error('Failed to freeze permatags');
-    }
-
-    return response.json();
 }
 
 export async function addPermatag(tenantId, imageId, keyword, category, signum) {
-    const response = await fetch(`${API_BASE_URL}/images/${imageId}/permatags`, {
+    return fetchWithAuth(`/images/${imageId}/permatags`, {
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-Tenant-ID': tenantId,
-        },
+        tenantId,
         body: JSON.stringify({ keyword, category, signum }),
     });
-
-    if (!response.ok) {
-        const message = await response.text();
-        throw new Error(message || 'Failed to add permanent tag');
-    }
-
-    return response.json();
-};
+}
 
 export async function bulkPermatags(tenantId, operations) {
-    const response = await fetch(`${API_BASE_URL}/images/permatags/bulk`, {
+    return fetchWithAuth(`/images/permatags/bulk`, {
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-Tenant-ID': tenantId,
-        },
+        tenantId,
         body: JSON.stringify({ operations }),
     });
-
-    if (!response.ok) {
-        const message = await response.text();
-        throw new Error(message || 'Failed to update permatags');
-    }
-
-    return response.json();
 }
 
 export async function deletePermatag(tenantId, imageId, permatagId) {
-    const response = await fetch(`${API_BASE_URL}/images/${imageId}/permatags/${permatagId}`, {
+    return fetchWithAuth(`/images/${imageId}/permatags/${permatagId}`, {
         method: 'DELETE',
-        headers: {
-            'X-Tenant-ID': tenantId,
-        },
+        tenantId,
     });
-
-    if (!response.ok) {
-        throw new Error('Failed to remove permanent tag');
-    }
-
-    // DELETE requests typically return a 204 No Content, so no data to parse
-    return null;
 }
+
 export async function getPermatags(tenantId, imageId) {
-    const response = await fetch(`${API_BASE_URL}/images/${imageId}/permatags`, {
-        headers: {
-            'X-Tenant-ID': tenantId,
-        },
-    });
-
-    if (!response.ok) {
-        throw new Error('Failed to fetch permanent tags');
-    }
-
-    const data = await response.json();
-    return data || []; // Return the data directly, or an empty array if data is null/undefined
+    const data = await fetchWithAuth(`/images/${imageId}/permatags`, { tenantId });
+    return data || [];
 }
 
 export async function updateList(tenantId, list) {
-    const response = await fetch(`${API_BASE_URL}/lists/${list.id}`, {
+    return fetchWithAuth(`/lists/${list.id}`, {
         method: 'PATCH',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-Tenant-ID': tenantId,
-        },
+        tenantId,
         body: JSON.stringify(list),
     });
-
-    if (!response.ok) {
-        throw new Error('Failed to update list');
-    }
-
-    const data = await response.json();
-    return data;
 }
 
 // Admin endpoints
@@ -809,20 +490,13 @@ export async function updateList(tenantId, list) {
  * @returns {Promise<Object>} Created tenant
  */
 export async function createTenant(data) {
-    const response = await fetch(`${API_BASE_URL}/admin/tenants`, {
+    return fetchWithAuth(`/admin/tenants`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data)
-    });
-
-    if (!response.ok) {
-        const error = await response.json();
-        const err = new Error(error.detail || 'Failed to create tenant');
-        err.response = error;
+    }).catch(error => {
+        const err = new Error(error.message);
         throw err;
-    }
-
-    return await response.json();
+    });
 }
 
 /**
@@ -832,20 +506,13 @@ export async function createTenant(data) {
  * @returns {Promise<Object>} Updated tenant
  */
 export async function updateTenant(tenantId, data) {
-    const response = await fetch(`${API_BASE_URL}/admin/tenants/${tenantId}`, {
+    return fetchWithAuth(`/admin/tenants/${tenantId}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data)
-    });
-
-    if (!response.ok) {
-        const error = await response.json();
-        const err = new Error(error.detail || 'Failed to update tenant');
-        err.response = error;
+    }).catch(error => {
+        const err = new Error(error.message);
         throw err;
-    }
-
-    return await response.json();
+    });
 }
 
 /**
@@ -854,16 +521,12 @@ export async function updateTenant(tenantId, data) {
  * @returns {Promise<void>}
  */
 export async function deleteTenant(tenantId) {
-    const response = await fetch(`${API_BASE_URL}/admin/tenants/${tenantId}`, {
+    return fetchWithAuth(`/admin/tenants/${tenantId}`, {
         method: 'DELETE'
-    });
-
-    if (!response.ok) {
-        const error = await response.json();
-        const err = new Error(error.detail || 'Failed to delete tenant');
-        err.response = error;
+    }).catch(error => {
+        const err = new Error(error.message);
         throw err;
-    }
+    });
 }
 
 /**
@@ -871,13 +534,7 @@ export async function deleteTenant(tenantId) {
  * @returns {Promise<Object>} System configuration
  */
 export async function getSystemSettings() {
-    const response = await fetch(`${API_BASE_URL}/config/system`);
-
-    if (!response.ok) {
-        throw new Error('Failed to fetch system settings');
-    }
-
-    return await response.json();
+    return fetchWithAuth(`/config/system`);
 }
 
 /**
@@ -887,20 +544,13 @@ export async function getSystemSettings() {
  * @returns {Promise<Object>} Updated settings
  */
 export async function updateTenantSettings(tenantId, settings) {
-    const response = await fetch(`${API_BASE_URL}/admin/tenants/${tenantId}/settings`, {
+    return fetchWithAuth(`/admin/tenants/${tenantId}/settings`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(settings)
-    });
-
-    if (!response.ok) {
-        const error = await response.json();
-        const err = new Error(error.detail || 'Failed to update tenant settings');
-        err.response = error;
+    }).catch(error => {
+        const err = new Error(error.message);
         throw err;
-    }
-
-    return await response.json();
+    });
 }
 
 /**
@@ -910,15 +560,132 @@ export async function updateTenantSettings(tenantId, settings) {
  */
 export async function getTenantPhotoCount(tenantId) {
     try {
-        const response = await fetch(`${API_BASE_URL}/admin/tenants/${tenantId}/photo_count`);
-        if (!response.ok) {
-            console.warn(`Could not fetch photo count for tenant ${tenantId}:`, response.status);
-            return 0;
-        }
-        const data = await response.json();
+        const data = await fetchWithAuth(`/admin/tenants/${tenantId}/photo_count`);
         return data.count || 0;
     } catch (error) {
         console.warn(`Error fetching photo count for tenant ${tenantId}:`, error);
         return 0;
     }
+}
+
+/**
+ * Disable a user account
+ * @param {string} supabaseUid - User UUID to disable
+ * @returns {Promise<Object>} Success message
+ */
+export async function disableUser(supabaseUid) {
+    return fetchWithAuth(`/admin/users/${supabaseUid}/disable`, {
+        method: 'POST'
+    });
+}
+
+/**
+ * Enable a disabled user account
+ * @param {string} supabaseUid - User UUID to enable
+ * @returns {Promise<Object>} Success message
+ */
+export async function enableUser(supabaseUid) {
+    return fetchWithAuth(`/admin/users/${supabaseUid}/enable`, {
+        method: 'POST'
+    });
+}
+
+// ============================================================================
+// People and Categories Management
+// ============================================================================
+
+/**
+ * Get all person categories for a tenant
+ * @param {string} tenantId - Tenant ID
+ * @returns {Promise<Array>} List of person categories
+ */
+export async function getPeopleCategories(tenantId) {
+    return fetchWithAuth('/config/people/categories', {
+        tenantId
+    });
+}
+
+/**
+ * Get all people for a tenant
+ * @param {string} tenantId - Tenant ID
+ * @param {Object} options - Query options (limit, person_category)
+ * @returns {Promise<Array>} List of people
+ */
+export async function getPeople(tenantId, options = {}) {
+    const params = new URLSearchParams();
+    if (options.limit) params.append('limit', options.limit);
+    if (options.person_category) params.append('person_category', options.person_category);
+
+    const url = `/people${params.toString() ? '?' + params.toString() : ''}`;
+    return fetchWithAuth(url, {
+        tenantId
+    });
+}
+
+/**
+ * Create a new person
+ * @param {string} tenantId - Tenant ID
+ * @param {Object} data - Person data (name, instagram_url, person_category)
+ * @returns {Promise<Object>} Created person
+ */
+export async function createPerson(tenantId, data) {
+    return fetchWithAuth('/people', {
+        method: 'POST',
+        body: JSON.stringify(data),
+        tenantId
+    });
+}
+
+/**
+ * Delete a person
+ * @param {string} tenantId - Tenant ID
+ * @param {number} personId - Person ID
+ * @returns {Promise<Object>} Success message
+ */
+export async function deletePerson(tenantId, personId) {
+    return fetchWithAuth(`/people/${personId}`, {
+        method: 'DELETE',
+        tenantId
+    });
+}
+
+/**
+ * Get all people tags for an image
+ * @param {string} tenantId - Tenant ID
+ * @param {number} imageId - Image ID
+ * @returns {Promise<Object>} People tags for the image
+ */
+export async function getImagePeopleTags(tenantId, imageId) {
+    return fetchWithAuth(`/images/${imageId}/people`, {
+        tenantId
+    });
+}
+
+/**
+ * Add a person tag to an image
+ * @param {string} tenantId - Tenant ID
+ * @param {number} imageId - Image ID
+ * @param {Object} data - Tag data (person_id, confidence)
+ * @returns {Promise<Object>} Created tag
+ */
+export async function addImagePersonTag(tenantId, imageId, data) {
+    return fetchWithAuth(`/images/${imageId}/people`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+        tenantId
+    });
+}
+
+/**
+ * Remove a person tag from an image
+ * @param {string} tenantId - Tenant ID
+ * @param {number} imageId - Image ID
+ * @param {number} personId - Person ID to remove
+ * @returns {Promise<Object>} Success message
+ */
+export async function removeImagePersonTag(tenantId, imageId, personId) {
+    return fetchWithAuth(`/images/${imageId}/people/${personId}`, {
+        method: 'DELETE',
+        tenantId
+    });
 }

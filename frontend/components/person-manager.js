@@ -1,5 +1,6 @@
 import { LitElement, html, css } from 'lit';
 import { tailwind } from './tailwind-lit.js';
+import { getPeopleCategories, getPeople, createPerson, deletePerson } from '../services/api.js';
 
 class PersonManager extends LitElement {
   static properties = {
@@ -282,24 +283,15 @@ class PersonManager extends LitElement {
 
   async loadCategories() {
     const tenantId = this.tenant || localStorage.getItem('tenantId') || 'default';
-    const response = await fetch('/api/v1/config/people/categories', {
-      headers: { 'X-Tenant-ID': tenantId }
-    });
-    if (!response.ok) throw new Error('Failed to load categories');
-    this.categories = await response.json();
+    this.categories = await getPeopleCategories(tenantId);
   }
 
   async loadPeople() {
     const tenantId = this.tenant || localStorage.getItem('tenantId') || 'default';
-    const params = new URLSearchParams();
-    if (this.filterCategory) params.append('person_category', this.filterCategory);
-    params.append('limit', '500');
-
-    const response = await fetch(`/api/v1/people?${params}`, {
-      headers: { 'X-Tenant-ID': tenantId }
+    let data = await getPeople(tenantId, {
+      limit: 500,
+      person_category: this.filterCategory || undefined
     });
-    if (!response.ok) throw new Error('Failed to load people');
-    let data = await response.json();
 
     if (this.searchQuery) {
       const query = this.searchQuery.toLowerCase();
@@ -322,19 +314,7 @@ class PersonManager extends LitElement {
     this.error = '';
     try {
       const tenantId = this.tenant || localStorage.getItem('tenantId') || 'default';
-      const response = await fetch('/api/v1/people', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Tenant-ID': tenantId
-        },
-        body: JSON.stringify(this.formData)
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.detail || 'Failed to create person');
-      }
+      await createPerson(tenantId, this.formData);
 
       this.formData = { name: '', instagram_url: '', person_category: 'people_in_scene' };
       this.view = 'list';
@@ -353,13 +333,7 @@ class PersonManager extends LitElement {
     this.error = '';
     try {
       const tenantId = this.tenant || localStorage.getItem('tenantId') || 'default';
-      const response = await fetch(`/api/v1/people/${personId}`, {
-        method: 'DELETE',
-        headers: { 'X-Tenant-ID': tenantId }
-      });
-
-      if (!response.ok) throw new Error('Failed to delete person');
-
+      await deletePerson(tenantId, personId);
       await this.loadPeople();
     } catch (err) {
       this.error = err.message;

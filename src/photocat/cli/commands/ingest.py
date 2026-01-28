@@ -5,7 +5,7 @@ from pathlib import Path
 from google.cloud import storage
 
 from photocat.settings import settings
-from photocat.config import TenantConfig
+from photocat.config.db_config import ConfigManager
 from photocat.image import ImageProcessor
 from photocat.exif import (
     get_exif_value,
@@ -62,13 +62,12 @@ class IngestCommand(CliCommand):
         click.echo(f"  Storage bucket: {self.tenant.get_storage_bucket(settings)}")
         click.echo(f"  Thumbnail bucket: {self.tenant.get_thumbnail_bucket(settings)}")
 
-        # Load tenant config
-        try:
-            config = TenantConfig.load(self.tenant_id)
-            click.echo(f"  Keywords: {len(config.get_all_keywords())} total")
-            click.echo(f"  People: {len(config.people)}")
-        except FileNotFoundError:
-            click.echo(f"Warning: No config found for tenant {self.tenant_id}", err=True)
+        # Load tenant config from DB
+        config_mgr = ConfigManager(self.db, self.tenant_id)
+        keywords = config_mgr.get_all_keywords()
+        people = config_mgr.get_people()
+        click.echo(f"  Keywords: {len(keywords)} total")
+        click.echo(f"  People: {len(people)}")
 
         # Setup storage client
         self.storage_client = storage.Client(project=settings.gcp_project_id)
