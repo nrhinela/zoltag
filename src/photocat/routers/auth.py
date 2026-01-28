@@ -1,11 +1,14 @@
 """Authentication endpoints for Supabase Auth."""
 
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Header
 from sqlalchemy.orm import Session
+from typing import Optional
+from jose import JWTError
 
 from photocat.database import get_db
 from photocat.auth.dependencies import get_current_user
+from photocat.auth.jwt import get_supabase_uid_from_token
 from photocat.auth.models import UserProfile, UserTenant, Invitation
 from photocat.auth.schemas import (
     LoginResponse,
@@ -23,8 +26,8 @@ router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 @router.post("/register", response_model=dict, status_code=201)
 async def register(
     request: RegisterRequest,
-    user: UserProfile = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    authorization: Optional[str] = Header(None)
 ):
     """Complete registration after Supabase signup.
 
@@ -35,35 +38,70 @@ async def register(
     before they can access any tenant (unless they accept an invitation, which
     auto-approves them).
 
+    This endpoint does NOT require the user profile to already exist - it handles
+    the initial registration flow after Supabase signup.
+
     Args:
         request: Registration data (display_name)
-        user: Current authenticated user (from JWT token)
         db: Database session
+        authorization: Bearer token from Authorization header
 
     Returns:
         dict: Status message and user ID
 
     Raises:
         HTTPException 401: Invalid or missing JWT token
-        HTTPException 403: User account pending approval (shouldn't happen on first call)
     """
+    if not authorization:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authorization header required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authorization header format",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    token = authorization[7:]  # Remove "Bearer " prefix
+
+    try:
+        supabase_uid = get_supabase_uid_from_token(token)
+    except JWTError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     # Check if profile already exists
     existing = db.query(UserProfile).filter(
-        UserProfile.supabase_uid == user.supabase_uid
+        UserProfile.supabase_uid == supabase_uid
     ).first()
 
     if existing:
         return {
             "message": "Profile already exists",
-            "status": "active" if existing.is_active else "pending_approval"
+            "status": "active" if existing.is_active else "pending_approval",
+            "user_id": str(supabase_uid)
         }
+
+    # For new registrations, we need to extract email from Supabase
+    # The JWT token includes the email claim
+    from photocat.auth.jwt import verify_supabase_jwt
+    decoded = verify_supabase_jwt(token)
+    email = decoded.get("email", "")
+    email_verified = decoded.get("email_confirmed_at") is not None
 
     # Create new profile (is_active=False, requires approval)
     profile = UserProfile(
-        supabase_uid=user.supabase_uid,
-        email=user.email,
-        email_verified=user.email_verified,
-        display_name=request.display_name or user.email.split("@")[0],
+        supabase_uid=supabase_uid,
+        email=email,
+        email_verified=email_verified,
+        display_name=request.display_name or email.split("@")[0] if email else "User",
         is_active=False,
         is_super_admin=False
     )
@@ -75,7 +113,7 @@ async def register(
     return {
         "message": "Registration pending admin approval",
         "status": "pending_approval",
-        "user_id": str(user.supabase_uid)
+        "user_id": str(supabase_uid)
     }
 
 
