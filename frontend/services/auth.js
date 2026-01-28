@@ -47,10 +47,15 @@ export async function signUp(email, password, displayName = null) {
       throw new Error(error.message);
     }
 
+    console.log('✅ Supabase signup successful', { user: data.user?.id, hasSession: !!data.session });
+
     // Step 2: Complete registration in PhotoCat backend
     if (data.user) {
       const token = data.session?.access_token;
+      console.log('Token available:', !!token);
+
       if (token) {
+        console.log('Calling /api/v1/auth/register with token...');
         const response = await fetch('/api/v1/auth/register', {
           method: 'POST',
           headers: {
@@ -60,15 +65,23 @@ export async function signUp(email, password, displayName = null) {
           body: JSON.stringify({ display_name: displayName }),
         });
 
+        console.log('Register response:', { status: response.status, ok: response.ok });
+
         if (!response.ok) {
           const error = await response.json().catch(() => ({ detail: 'Registration failed' }));
           throw new Error(error.detail);
         }
+
+        const result = await response.json();
+        console.log('✅ Registration complete:', result);
+      } else {
+        console.warn('⚠️ No access token in session');
       }
     }
 
     return data;
   } catch (error) {
+    console.error('❌ Signup error:', error);
     throw new Error(`Signup failed: ${error.message}`);
   }
 }
