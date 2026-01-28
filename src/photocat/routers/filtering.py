@@ -695,6 +695,7 @@ def build_image_query_with_subqueries(
     permatag_signum: Optional[int] = None,
     permatag_missing: bool = False,
     permatag_positive_missing: bool = False,
+    dropbox_path_prefix: Optional[str] = None,
 ) -> tuple:
     """Build a query with combined subquery filters (non-materialized).
     
@@ -767,6 +768,21 @@ def build_image_query_with_subqueries(
 
     if permatag_positive_missing:
         subqueries_list.append(apply_no_positive_permatag_filter_subquery(db, tenant))
+
+    if dropbox_path_prefix:
+        prefix = dropbox_path_prefix.strip()
+        if prefix == "/":
+            pass
+        else:
+            if not prefix.startswith("/"):
+                prefix = f"/{prefix}"
+            if not prefix.endswith("/"):
+                prefix = f"{prefix}/"
+            dropbox_subquery = db.query(ImageMetadata.id).filter(
+                ImageMetadata.tenant_id == tenant.id,
+                ImageMetadata.dropbox_path.ilike(f"{prefix}%")
+            ).subquery()
+            subqueries_list.append(dropbox_subquery)
     
     # Combine all subqueries with intersection logic
     for subquery in subqueries_list:
