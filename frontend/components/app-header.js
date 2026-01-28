@@ -1,11 +1,78 @@
 import { LitElement, html, css } from 'lit';
 import { getTenants, sync, retagAll } from '../services/api.js';
+import { getCurrentUser } from '../services/auth.js';
+import { supabase } from '../services/supabase.js';
 import { tailwind } from './tailwind-lit.js';
 
 class AppHeader extends LitElement {
     static styles = [tailwind, css`
         :host {
             display: block;
+        }
+        .user-menu-container {
+            position: relative;
+            display: inline-block;
+        }
+        .user-menu-button {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: white;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 8px 12px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.2s;
+        }
+        .user-menu-button:hover {
+            border-color: #d1d5db;
+            background: #f9fafb;
+        }
+        .user-menu-dropdown {
+            position: absolute;
+            right: 0;
+            top: 100%;
+            margin-top: 4px;
+            background: white;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            min-width: 240px;
+            z-index: 50;
+        }
+        .user-menu-header {
+            padding: 12px 16px;
+            border-bottom: 1px solid #e5e7eb;
+        }
+        .user-email {
+            font-size: 13px;
+            color: #6b7280;
+            margin: 4px 0 0 0;
+        }
+        .user-name {
+            font-weight: 500;
+            color: #1f2937;
+        }
+        .user-menu-item {
+            padding: 12px 16px;
+            cursor: pointer;
+            font-size: 14px;
+            color: #374151;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: background 0.2s;
+        }
+        .user-menu-item:hover {
+            background: #f3f4f6;
+        }
+        .user-menu-item.logout {
+            color: #dc2626;
+            border-top: 1px solid #e5e7eb;
+        }
+        .user-menu-item.logout:hover {
+            background: #fee2e2;
         }
     `];
 
@@ -20,6 +87,8 @@ class AppHeader extends LitElement {
         lastSyncAt: { type: String },
         lastSyncCount: { type: Number },
         queueCount: { type: Number },
+        userMenuOpen: { type: Boolean },
+        currentUser: { type: Object },
     }
 
     constructor() {
@@ -34,6 +103,8 @@ class AppHeader extends LitElement {
         this.lastSyncAt = '';
         this.lastSyncCount = 0;
         this.queueCount = 0;
+        this.userMenuOpen = false;
+        this.currentUser = null;
     }
 
   connectedCallback() {
@@ -41,6 +112,23 @@ class AppHeader extends LitElement {
       this.fetchTenants();
       this.fetchEnvironment();
       this._loadSyncStatus();
+      this.fetchCurrentUser();
+      document.addEventListener('click', this._handleDocumentClick.bind(this));
+  }
+
+  disconnectedCallback() {
+      super.disconnectedCallback();
+      document.removeEventListener('click', this._handleDocumentClick.bind(this));
+  }
+
+  async fetchCurrentUser() {
+      try {
+          const user = await getCurrentUser();
+          this.currentUser = user;
+      } catch (error) {
+          console.error('Error fetching current user:', error);
+          this.currentUser = null;
+      }
   }
 
   willUpdate(changedProperties) {
@@ -70,6 +158,27 @@ class AppHeader extends LitElement {
       }
   }
 
+  _handleDocumentClick(e) {
+      const userMenu = this.shadowRoot?.querySelector('.user-menu-container');
+      if (userMenu && !userMenu.contains(e.target) && !e.target.closest('.user-menu-container')) {
+          this.userMenuOpen = false;
+      }
+  }
+
+  _toggleUserMenu() {
+      this.userMenuOpen = !this.userMenuOpen;
+  }
+
+  async _handleLogout() {
+      try {
+          await supabase.auth.signOut();
+          localStorage.removeItem('photocat_user');
+          window.location.href = '/login';
+      } catch (error) {
+          console.error('Logout error:', error);
+      }
+  }
+
   render() {
     return html`
         <nav class="bg-white shadow-lg">
@@ -90,6 +199,35 @@ class AppHeader extends LitElement {
                         <button @click=${this._openAdmin} class="bg-gray-600 text-white px-4 py-2 rounded-lg hover:bg-gray-700" title="System Administration">
                             <i class="fas fa-cog mr-2"></i>Admin
                         </button>
+                        <div class="user-menu-container">
+                            <button class="user-menu-button" @click=${this._toggleUserMenu}>
+                                <i class="fas fa-user-circle text-gray-600"></i>
+                                <span>${this.currentUser?.user?.display_name || 'Login'}</span>
+                                <i class="fas fa-chevron-down text-gray-400" style="font-size: 12px;"></i>
+                            </button>
+                            ${this.userMenuOpen ? html`
+                                <div class="user-menu-dropdown">
+                                    ${this.currentUser ? html`
+                                        <div class="user-menu-header">
+                                            <div class="user-name">${this.currentUser.user?.display_name || 'User'}</div>
+                                            <div class="user-email">${this.currentUser.user?.email || ''}</div>
+                                        </div>
+                                        <div class="user-menu-item logout" @click=${this._handleLogout}>
+                                            <i class="fas fa-sign-out-alt"></i>
+                                            Sign Out
+                                        </div>
+                                    ` : html`
+                                        <div style="padding: 12px 16px; text-align: center; color: #6b7280;">
+                                            <p style="margin: 0; font-size: 14px;">Not logged in</p>
+                                        </div>
+                                        <div class="user-menu-item" @click=${() => window.location.href = '/login'}>
+                                            <i class="fas fa-sign-in-alt"></i>
+                                            Sign In
+                                        </div>
+                                    `}
+                                </div>
+                            ` : ''}
+                        </div>
                     </div>
                 </div>
             </div>
