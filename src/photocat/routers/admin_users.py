@@ -167,6 +167,75 @@ async def approve_user(
     return {"message": "User approved", "user_id": str(user.supabase_uid)}
 
 
+@router.post("/users/{supabase_uid}/assign-tenant", response_model=dict)
+async def assign_user_to_tenant(
+    supabase_uid: str,
+    request: ApproveUserRequest,
+    admin: UserProfile = Depends(require_super_admin),
+    db: Session = Depends(get_db)
+):
+    """Assign an approved user to a tenant with a specific role.
+
+    This endpoint allows super admins to add already-approved users to tenants.
+
+    Args:
+        supabase_uid: User UUID to assign
+        request: Assignment details (tenant_id, role)
+        admin: Current user (must be super admin)
+        db: Database session
+
+    Returns:
+        dict: Success message
+
+    Raises:
+        HTTPException 403: User is not a super admin
+        HTTPException 404: User or tenant not found
+        HTTPException 400: User already assigned to this tenant
+    """
+    user = db.query(UserProfile).filter(
+        UserProfile.supabase_uid == supabase_uid
+    ).first()
+
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    if not request.tenant_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tenant ID is required")
+
+    # Verify tenant exists
+    tenant = db.query(TenantModel).filter(
+        TenantModel.id == request.tenant_id
+    ).first()
+    if not tenant:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+
+    # Check if already assigned
+    existing = db.query(UserTenant).filter(
+        UserTenant.supabase_uid == user.supabase_uid,
+        UserTenant.tenant_id == request.tenant_id
+    ).first()
+
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User is already assigned to this tenant"
+        )
+
+    # Create membership
+    membership = UserTenant(
+        supabase_uid=user.supabase_uid,
+        tenant_id=request.tenant_id,
+        role=request.role,
+        invited_by=admin.supabase_uid,
+        invited_at=datetime.utcnow(),
+        accepted_at=datetime.utcnow()
+    )
+    db.add(membership)
+    db.commit()
+
+    return {"message": "User assigned to tenant", "user_id": str(user.supabase_uid)}
+
+
 @router.post("/users/{supabase_uid}/reject", response_model=dict)
 async def reject_user(
     supabase_uid: str,

@@ -19,6 +19,9 @@ class AdminUsers extends LitElement {
     showApprovalForm: { type: Boolean },
     approvalForm: { type: Object },
     submitting: { type: Boolean },
+    showAssignTenantForm: { type: Boolean },
+    assignForm: { type: Object },
+    assigningTenant: { type: Boolean },
   };
 
   static styles = [
@@ -354,6 +357,12 @@ class AdminUsers extends LitElement {
       role: 'user',
     };
     this.submitting = false;
+    this.showAssignTenantForm = false;
+    this.assignForm = {
+      tenantId: '',
+      role: 'user',
+    };
+    this.assigningTenant = false;
   }
 
   connectedCallback() {
@@ -481,11 +490,77 @@ class AdminUsers extends LitElement {
       }
 
       // Success - reload users
-      await this.loadPendingUsers();
+      await this.loadAllUsers();
     } catch (error) {
       console.error('Failed to reject user:', error);
       this.error = error.message;
     }
+  }
+
+  openAssignTenantForm(user) {
+    this.selectedUser = user;
+    this.showAssignTenantForm = true;
+    this.assignForm = {
+      tenantId: '',
+      role: 'user',
+    };
+  }
+
+  closeAssignTenantForm() {
+    this.showAssignTenantForm = false;
+    this.selectedUser = null;
+  }
+
+  updateAssignForm(field, value) {
+    this.assignForm = {
+      ...this.assignForm,
+      [field]: value,
+    };
+  }
+
+  async assignTenant() {
+    if (!this.selectedUser || !this.assignForm.tenantId) {
+      this.error = 'Please select a tenant';
+      return;
+    }
+
+    this.assigningTenant = true;
+    try {
+      const response = await fetchWithAuth(
+        `/admin/users/${this.selectedUser.supabase_uid}/assign-tenant`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            tenant_id: this.assignForm.tenantId,
+            role: this.assignForm.role,
+          }),
+        }
+      );
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ detail: 'Assignment failed' }));
+        throw new Error(error.detail);
+      }
+
+      // Success - reload users and close form
+      this.closeAssignTenantForm();
+      await this.loadAllUsers();
+    } catch (error) {
+      console.error('Failed to assign tenant:', error);
+      this.error = error.message;
+    } finally {
+      this.assigningTenant = false;
+    }
+  }
+
+  getTenantAssignments(user) {
+    if (!user.tenants) return [];
+    return user.tenants.map(t => t.tenant_id);
+  }
+
+  getAvailableTenants(user) {
+    const assignedTenantIds = this.getTenantAssignments(user);
+    return this.tenants.filter(tenant => !assignedTenantIds.includes(tenant.id));
   }
 
   formatDate(dateString) {
@@ -578,7 +653,16 @@ class AdminUsers extends LitElement {
                   : ''}
                 <td>
                   ${user.is_active
-                    ? html`<span style="color: #6b7280; font-size: 13px;">Approved</span>`
+                    ? html`
+                        <button
+                          class="btn btn-primary"
+                          @click=${() => this.openAssignTenantForm(user)}
+                          ?disabled=${this.getAvailableTenants(user).length === 0}
+                          title="${this.getAvailableTenants(user).length === 0 ? 'No more tenants available' : ''}"
+                        >
+                          <i class="fas fa-plus"></i> Assign Tenant
+                        </button>
+                      `
                     : html`
                         <button
                           class="btn btn-primary"
@@ -739,6 +823,97 @@ class AdminUsers extends LitElement {
                       ${this.submitting
                         ? html`<i class="fas fa-spinner fa-spin"></i> Approving...`
                         : html`<i class="fas fa-check"></i> Approve User`}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          `
+        : ''}
+
+      ${this.showAssignTenantForm
+        ? html`
+            <div class="modal-overlay" @click=${this.closeAssignTenantForm}>
+              <div class="modal" @click=${(e) => e.stopPropagation()}>
+                <div class="modal-header">
+                  <h3 class="modal-title">Assign Tenant to User</h3>
+                  <button
+                    class="modal-close"
+                    @click=${this.closeAssignTenantForm}
+                  >
+                    ×
+                  </button>
+                </div>
+
+                <div class="modal-content">
+                  <div class="user-info">
+                    <div class="user-info-item">
+                      <span class="user-info-label">User:</span>
+                      <span class="user-info-value">${this.selectedUser?.display_name || this.selectedUser?.email}</span>
+                    </div>
+                    <div class="user-info-item">
+                      <span class="user-info-label">Current Tenants:</span>
+                      <span class="user-info-value">
+                        ${this.selectedUser?.tenants && this.selectedUser.tenants.length > 0
+                          ? this.selectedUser.tenants.map(t => `${t.tenant_name} (${t.role})`).join(', ')
+                          : 'None'}
+                      </span>
+                    </div>
+                  </div>
+
+                  ${this.getAvailableTenants(this.selectedUser || {}).length > 0
+                    ? html`
+                        <div class="form-group">
+                          <label class="form-label">
+                            <i class="fas fa-building mr-2"></i>Select Tenant
+                          </label>
+                          <select
+                            class="form-control"
+                            .value=${this.assignForm.tenantId}
+                            @change=${(e) => this.updateAssignForm('tenantId', e.target.value)}
+                          >
+                            <option value="">-- Choose a tenant --</option>
+                            ${this.getAvailableTenants(this.selectedUser || {}).map(
+                              tenant => html`<option value=${tenant.id}>${tenant.name}</option>`
+                            )}
+                          </select>
+                        </div>
+
+                        <div class="form-group">
+                          <label class="form-label">
+                            <i class="fas fa-id-badge mr-2"></i>Role
+                          </label>
+                          <select
+                            class="form-control"
+                            .value=${this.assignForm.role}
+                            @change=${(e) => this.updateAssignForm('role', e.target.value)}
+                          >
+                            <option value="user">User</option>
+                            <option value="admin">Admin</option>
+                          </select>
+                        </div>
+                      `
+                    : html`
+                        <div style="padding: 20px; text-align: center; color: #6b7280;">
+                          <p style="margin: 0;">This user is already assigned to all available tenants.</p>
+                        </div>
+                      `}
+
+                  <div class="modal-actions">
+                    <button
+                      class="btn btn-secondary"
+                      @click=${this.closeAssignTenantForm}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      class="btn btn-primary"
+                      @click=${this.assignTenant}
+                      ?disabled=${this.assigningTenant || !this.assignForm.tenantId}
+                    >
+                      ${this.assigningTenant
+                        ? html`<i class="fas fa-spinner fa-spin"></i> Assigning...`
+                        : html`<i class="fas fa-plus"></i> Assign Tenant`}
                     </button>
                   </div>
                 </div>
