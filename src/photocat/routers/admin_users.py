@@ -52,6 +52,59 @@ async def list_pending_users(
     return [UserProfileResponse.from_orm(u) for u in users]
 
 
+@router.get("/users/approved", response_model=List[dict])
+async def list_approved_users(
+    admin: UserProfile = Depends(require_super_admin),
+    db: Session = Depends(get_db)
+):
+    """List approved users with their tenant memberships (super admin only).
+
+    Returns all users with is_active=TRUE, sorted by creation time (newest first).
+    Each user includes their tenant memberships with roles.
+
+    Args:
+        admin: Current user (must be super admin)
+        db: Database session
+
+    Returns:
+        List[dict]: List of approved users with tenant info
+
+    Raises:
+        HTTPException 403: User is not a super admin
+    """
+    users = db.query(UserProfile).filter(
+        UserProfile.is_active == True
+    ).order_by(UserProfile.created_at.desc()).all()
+
+    result = []
+    for user in users:
+        user_data = UserProfileResponse.from_orm(user).dict()
+
+        # Fetch tenant memberships
+        memberships = db.query(UserTenant).filter(
+            UserTenant.supabase_uid == user.supabase_uid,
+            UserTenant.accepted_at.isnot(None)
+        ).all()
+
+        tenants = []
+        for membership in memberships:
+            tenant = db.query(TenantModel).filter(
+                TenantModel.id == membership.tenant_id
+            ).first()
+            if tenant:
+                tenants.append({
+                    "tenant_id": tenant.id,
+                    "tenant_name": tenant.name,
+                    "role": membership.role,
+                    "accepted_at": membership.accepted_at.isoformat() if membership.accepted_at else None
+                })
+
+        user_data["tenants"] = tenants
+        result.append(user_data)
+
+    return result
+
+
 @router.post("/users/{supabase_uid}/approve", response_model=dict)
 async def approve_user(
     supabase_uid: str,

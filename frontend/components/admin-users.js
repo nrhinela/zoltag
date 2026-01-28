@@ -8,7 +8,10 @@ import { fetchWithAuth } from '../services/api.js';
  */
 class AdminUsers extends LitElement {
   static properties = {
+    allUsers: { type: Array },
     pendingUsers: { type: Array },
+    approvedUsers: { type: Array },
+    activeUserTab: { type: String }, // 'all', 'pending', or 'approved'
     tenants: { type: Array },
     loading: { type: Boolean },
     error: { type: String },
@@ -275,12 +278,72 @@ class AdminUsers extends LitElement {
       .modal-actions button {
         flex: 1;
       }
+
+      .user-tabs {
+        display: flex;
+        gap: 0;
+        border-bottom: 2px solid #e5e7eb;
+        margin-bottom: 16px;
+        margin-top: 0;
+      }
+
+      .user-tab-button {
+        padding: 12px 16px;
+        background: none;
+        border: none;
+        border-bottom: 3px solid transparent;
+        cursor: pointer;
+        font-size: 14px;
+        font-weight: 500;
+        color: #6b7280;
+        transition: all 0.2s;
+      }
+
+      .user-tab-button:hover {
+        color: #374151;
+      }
+
+      .user-tab-button.active {
+        color: #2563eb;
+        border-bottom-color: #2563eb;
+      }
+
+      .user-status-badge {
+        display: inline-block;
+        padding: 4px 12px;
+        border-radius: 12px;
+        font-size: 12px;
+        font-weight: 500;
+      }
+
+      .status-pending {
+        background: #fef3c7;
+        color: #92400e;
+      }
+
+      .status-approved {
+        background: #d1fae5;
+        color: #065f46;
+      }
+
+      .tenant-badge {
+        display: inline-block;
+        padding: 4px 8px;
+        background: #e0e7ff;
+        color: #3730a3;
+        border-radius: 4px;
+        font-size: 12px;
+        margin: 2px 2px;
+      }
     `
   ];
 
   constructor() {
     super();
+    this.allUsers = [];
     this.pendingUsers = [];
+    this.approvedUsers = [];
+    this.activeUserTab = 'all';
     this.tenants = [];
     this.loading = false;
     this.error = '';
@@ -295,22 +358,44 @@ class AdminUsers extends LitElement {
 
   connectedCallback() {
     super.connectedCallback();
-    this.loadPendingUsers();
+    this.loadAllUsers();
     this.loadTenants();
   }
 
-  async loadPendingUsers() {
+  async loadAllUsers() {
     this.loading = true;
     this.error = '';
+    try {
+      // Load all users from a hypothetical endpoint or combine data
+      // For now, we'll load pending users and separately load approved users
+      await this.loadPendingUsers();
+      await this.loadApprovedUsers();
+      this.allUsers = [...this.pendingUsers, ...this.approvedUsers];
+    } catch (error) {
+      console.error('Failed to load users:', error);
+      this.error = error.message;
+    } finally {
+      this.loading = false;
+    }
+  }
+
+  async loadPendingUsers() {
     try {
       const users = await fetchWithAuth('/admin/users/pending');
       this.pendingUsers = users;
     } catch (error) {
       console.error('Failed to load pending users:', error);
-      this.error = error.message;
       this.pendingUsers = [];
-    } finally {
-      this.loading = false;
+    }
+  }
+
+  async loadApprovedUsers() {
+    try {
+      const users = await fetchWithAuth('/admin/users/approved');
+      this.approvedUsers = users;
+    } catch (error) {
+      console.error('Failed to load approved users:', error);
+      this.approvedUsers = [];
     }
   }
 
@@ -408,15 +493,126 @@ class AdminUsers extends LitElement {
     return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   }
 
+  getDisplayUsers() {
+    switch (this.activeUserTab) {
+      case 'pending':
+        return this.pendingUsers;
+      case 'approved':
+        return this.approvedUsers;
+      case 'all':
+      default:
+        return this.allUsers;
+    }
+  }
+
+  renderUserTable(users) {
+    if (users.length === 0) {
+      const emptyMessage =
+        this.activeUserTab === 'pending'
+          ? 'No pending users'
+          : this.activeUserTab === 'approved'
+            ? 'No approved users'
+            : 'No users';
+      const emptySubtitle =
+        this.activeUserTab === 'pending'
+          ? 'All users have been approved or no new registrations yet.'
+          : this.activeUserTab === 'approved'
+            ? 'No users have been approved yet.'
+            : 'No users in the system.';
+
+      return html`
+        <div class="empty-state">
+          <div class="empty-state-icon"><i class="fas fa-users"></i></div>
+          <p>${emptyMessage}</p>
+          <p style="font-size: 13px;">${emptySubtitle}</p>
+        </div>
+      `;
+    }
+
+    return html`
+      <table class="users-list">
+        <thead>
+          <tr>
+            <th>User</th>
+            <th>Email</th>
+            <th>Status</th>
+            <th>Registered</th>
+            ${this.activeUserTab !== 'pending' ? html`<th>Tenants</th>` : ''}
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${users.map(
+            user => html`
+              <tr>
+                <td>
+                  <div class="user-name">
+                    ${user.display_name || 'No name'}
+                  </div>
+                </td>
+                <td>
+                  <div class="user-email">${user.email}</div>
+                </td>
+                <td>
+                  <span class="user-status-badge ${user.is_active ? 'status-approved' : 'status-pending'}">
+                    ${user.is_active ? 'Approved' : 'Pending'}
+                  </span>
+                </td>
+                <td>
+                  <div class="created-date">${this.formatDate(user.created_at)}</div>
+                </td>
+                ${this.activeUserTab !== 'pending'
+                  ? html`
+                      <td>
+                        ${user.tenants && user.tenants.length > 0
+                          ? user.tenants.map(
+                              tenant => html`
+                                <span class="tenant-badge">
+                                  ${tenant.tenant_name} (${tenant.role})
+                                </span>
+                              `
+                            )
+                          : html`<span style="color: #9ca3af; font-size: 13px;">No tenants</span>`}
+                      </td>
+                    `
+                  : ''}
+                <td>
+                  ${user.is_active
+                    ? html`<span style="color: #6b7280; font-size: 13px;">Approved</span>`
+                    : html`
+                        <button
+                          class="btn btn-primary"
+                          @click=${() => this.openApprovalForm(user)}
+                        >
+                          <i class="fas fa-check"></i> Approve
+                        </button>
+                        <button
+                          class="btn btn-secondary"
+                          @click=${() => this.rejectUser(user)}
+                        >
+                          <i class="fas fa-times"></i> Reject
+                        </button>
+                      `}
+                </td>
+              </tr>
+            `
+          )}
+        </tbody>
+      </table>
+    `;
+  }
+
   render() {
+    const displayUsers = this.getDisplayUsers();
+
     return html`
       <div class="card">
         <div class="card-header">
           <h2 class="card-title">
-            <i class="fas fa-users-cog mr-2"></i>User Approvals
+            <i class="fas fa-users-cog mr-2"></i>User Management
           </h2>
           <span style="color: #6b7280; font-size: 14px;">
-            ${this.pendingUsers.length} pending
+            ${this.pendingUsers.length} pending, ${this.approvedUsers.length} approved
           </span>
         </div>
 
@@ -425,62 +621,42 @@ class AdminUsers extends LitElement {
             ? html`<div class="error-message">${this.error}</div>`
             : ''}
 
+          <div class="user-tabs">
+            <button
+              class="user-tab-button ${this.activeUserTab === 'all' ? 'active' : ''}"
+              @click=${() => (this.activeUserTab = 'all')}
+            >
+              <i class="fas fa-users mr-2"></i>All
+              <span style="margin-left: 8px; opacity: 0.7;">
+                (${this.allUsers.length})
+              </span>
+            </button>
+            <button
+              class="user-tab-button ${this.activeUserTab === 'pending' ? 'active' : ''}"
+              @click=${() => (this.activeUserTab = 'pending')}
+            >
+              <i class="fas fa-hourglass-half mr-2"></i>Pending
+              <span style="margin-left: 8px; opacity: 0.7;">
+                (${this.pendingUsers.length})
+              </span>
+            </button>
+            <button
+              class="user-tab-button ${this.activeUserTab === 'approved' ? 'active' : ''}"
+              @click=${() => (this.activeUserTab = 'approved')}
+            >
+              <i class="fas fa-check-circle mr-2"></i>Approved
+              <span style="margin-left: 8px; opacity: 0.7;">
+                (${this.approvedUsers.length})
+              </span>
+            </button>
+          </div>
+
           ${this.loading
             ? html`<div class="loading">
                 <i class="fas fa-spinner fa-spin" style="font-size: 24px; color: #2563eb; margin-bottom: 12px;"></i>
-                <div>Loading pending users...</div>
+                <div>Loading users...</div>
               </div>`
-            : this.pendingUsers.length === 0
-              ? html`<div class="empty-state">
-                  <div class="empty-state-icon"><i class="fas fa-check-circle"></i></div>
-                  <p>No pending users</p>
-                  <p style="font-size: 13px;">All users have been approved or no new registrations yet.</p>
-                </div>`
-              : html`
-                  <table class="users-list">
-                    <thead>
-                      <tr>
-                        <th>User</th>
-                        <th>Email</th>
-                        <th>Registered</th>
-                        <th>Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      ${this.pendingUsers.map(
-                        user => html`
-                          <tr>
-                            <td>
-                              <div class="user-name">
-                                ${user.display_name || 'No name'}
-                              </div>
-                            </td>
-                            <td>
-                              <div class="user-email">${user.email}</div>
-                            </td>
-                            <td>
-                              <div class="created-date">${this.formatDate(user.created_at)}</div>
-                            </td>
-                            <td>
-                              <button
-                                class="btn btn-primary"
-                                @click=${() => this.openApprovalForm(user)}
-                              >
-                                <i class="fas fa-check"></i> Approve
-                              </button>
-                              <button
-                                class="btn btn-secondary"
-                                @click=${() => this.rejectUser(user)}
-                              >
-                                <i class="fas fa-times"></i> Reject
-                              </button>
-                            </td>
-                          </tr>
-                        `
-                      )}
-                    </tbody>
-                  </table>
-                `}
+            : this.renderUserTable(displayUsers)}
         </div>
       </div>
 
