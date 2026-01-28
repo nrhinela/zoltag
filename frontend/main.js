@@ -19,18 +19,29 @@ import './components/photocat-app.js';
  * - All other routes
  */
 
-const path = window.location.pathname;
+// Normalize path (remove trailing slash, keep single leading slash)
+let path = window.location.pathname;
+if (path.endsWith('/') && path !== '/') {
+  path = path.slice(0, -1);
+}
+
 const appContainer = document.getElementById('app');
+
+// Debug logging - remove after testing
+console.log('Routing:', { path, pathname: window.location.pathname, href: window.location.href });
 
 if (path === '/login') {
   // Show login page without auth guard
+  console.log('Route: login');
   appContainer.innerHTML = '<login-page></login-page>';
 } else if (path === '/signup') {
   // Show signup page without auth guard
+  console.log('Route: signup');
   appContainer.innerHTML = '<signup-page></signup-page>';
 } else if (path === '/auth/callback') {
   // OAuth callback - Supabase client handles it
   // Just show loading state until redirect
+  console.log('Route: auth callback');
   appContainer.innerHTML = `
     <div style="
       display: flex;
@@ -62,6 +73,7 @@ if (path === '/login') {
   }, 1000);
 } else {
   // All other routes require authentication
+  console.log('Route: protected (auth-guard)');
   appContainer.innerHTML = `
     <auth-guard>
       <photocat-app></photocat-app>
