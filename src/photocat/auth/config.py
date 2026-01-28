@@ -1,7 +1,12 @@
 """Supabase Auth configuration."""
 
 from functools import lru_cache
-from pydantic_settings import BaseSettings
+from pathlib import Path
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+BASE_DIR = Path(__file__).resolve().parents[3]
+ENV_FILE = BASE_DIR / ".env"
 
 
 class AuthSettings(BaseSettings):
@@ -22,16 +27,17 @@ class AuthSettings(BaseSettings):
     jwt_audience: str = "authenticated"
     """JWT audience claim expected by Supabase"""
 
+    model_config = SettingsConfigDict(
+        env_file=str(ENV_FILE),
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore"
+    )
+
     @property
     def jwks_url(self) -> str:
         """JWKS endpoint URL for fetching public keys."""
         return f"{self.supabase_url}/auth/v1/.well-known/jwks.json"
-
-    class Config:
-        """Pydantic configuration."""
-        env_file = ".env"
-        env_prefix = "SUPABASE_"
-        case_sensitive = False
 
 
 @lru_cache(maxsize=1)
@@ -49,4 +55,7 @@ def get_auth_settings() -> AuthSettings:
     Raises:
         ValidationError: If required environment variables are missing
     """
+    # Pydantic Settings loads from env vars and .env file
+    # The .env file is loaded by the main app (usually in FastAPI startup)
+    # Here we rely on env vars being set (either from .env or system)
     return AuthSettings()

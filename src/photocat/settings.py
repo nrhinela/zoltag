@@ -16,7 +16,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=str(ENV_FILE),
         env_file_encoding="utf-8",
-        case_sensitive=False
+        case_sensitive=False,
+        extra="ignore"
     )
 
     # Application
@@ -70,7 +71,12 @@ class Settings(BaseSettings):
     
     # Application URL (for OAuth redirects)
     app_url: str = "http://localhost:8080"  # Update for production
-    
+
+    # Supabase Authentication
+    supabase_url: Optional[str] = None
+    supabase_anon_key: Optional[str] = None
+    supabase_service_role_key: Optional[str] = None
+
     @property
     def thumbnail_bucket(self) -> str:
         """Get thumbnail bucket name (defaults to main bucket)."""
