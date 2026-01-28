@@ -167,7 +167,7 @@ async def list_images(
     if date_order not in ("asc", "desc"):
         date_order = "desc"
     order_by_value = (order_by or "").lower()
-    if order_by_value not in ("photo_creation", "image_id", "processed", "ml_score"):
+    if order_by_value not in ("photo_creation", "image_id", "processed", "ml_score", "rating"):
         order_by_value = None
     if order_by_value == "ml_score" and not ml_keyword_id:
         order_by_value = None
@@ -177,7 +177,14 @@ async def list_images(
         order_by_date = func.coalesce(ImageMetadata.capture_timestamp, ImageMetadata.modified_time)
     order_by_date = order_by_date.desc() if date_order == "desc" else order_by_date.asc()
     id_order = ImageMetadata.id.desc() if date_order == "desc" else ImageMetadata.id.asc()
-    order_by_clauses = (id_order,) if order_by_value == "image_id" else (order_by_date, id_order)
+    if order_by_value == "image_id":
+        order_by_clauses = (id_order,)
+    elif order_by_value == "rating":
+        rating_order = ImageMetadata.rating.desc() if date_order == "desc" else ImageMetadata.rating.asc()
+        rating_order = rating_order.nullslast()
+        order_by_clauses = (rating_order, order_by_date, id_order)
+    else:
+        order_by_clauses = (order_by_date, id_order)
 
     if category_filters:
         try:
@@ -219,7 +226,9 @@ async def list_images(
                         ImageMetadata.modified_time,
                         ImageMetadata.last_processed,
                         ImageMetadata.created_at,
+                        ImageMetadata.rating,
                     ).filter(ImageMetadata.id.in_(unique_image_ids)).all()
+                    rating_map = {row[0]: row[5] for row in date_rows}
                     if order_by_value == "processed":
                         date_map = {
                             row[0]: row[3] or row[4]
@@ -230,22 +239,37 @@ async def list_images(
                             row[0]: row[1] or row[2]
                             for row in date_rows
                         }
+                    def date_key(img_id: int) -> float:
+                        date_value = date_map.get(img_id)
+                        if not date_value:
+                            return float('inf')
+                        ts = date_value.timestamp()
+                        return -ts if date_order == "desc" else ts
+
+                    def rating_key(img_id: int) -> tuple:
+                        rating_value = rating_map.get(img_id)
+                        if rating_value is None:
+                            return (1, 0)
+                        score = -rating_value if date_order == "desc" else rating_value
+                        return (0, score)
                     if order_by_value == "image_id":
                         sorted_ids = sorted(
                             unique_image_ids,
                             key=lambda img_id: -img_id if date_order == "desc" else img_id
                         )
                     elif order_by_value in ("photo_creation", "processed"):
-                        def date_key(img_id: int) -> float:
-                            date_value = date_map.get(img_id)
-                            if not date_value:
-                                return float('inf')
-                            ts = date_value.timestamp()
-                            return -ts if date_order == "desc" else ts
-
                         sorted_ids = sorted(
                             unique_image_ids,
                             key=lambda img_id: (
+                                date_key(img_id),
+                                -img_id if date_order == "desc" else img_id
+                            )
+                        )
+                    elif order_by_value == "rating":
+                        sorted_ids = sorted(
+                            unique_image_ids,
+                            key=lambda img_id: (
+                                rating_key(img_id),
                                 date_key(img_id),
                                 -img_id if date_order == "desc" else img_id
                             )

@@ -45,7 +45,7 @@ class QueryBuilder:
             db: SQLAlchemy database session
             tenant: Current tenant
             date_order: Sort order for dates ("asc" or "desc"), defaults to "desc"
-            order_by: Ordering strategy ("photo_creation", "image_id", "ml_score"), defaults to None
+            order_by: Ordering strategy ("photo_creation", "image_id", "processed", "ml_score", "rating"), defaults to None
         """
         self.db = db
         self.tenant = tenant
@@ -57,7 +57,7 @@ class QueryBuilder:
 
         # Validate and normalize order_by
         self.order_by = (order_by or "").lower() if order_by else None
-        if self.order_by and self.order_by not in ("photo_creation", "image_id", "processed", "ml_score"):
+        if self.order_by and self.order_by not in ("photo_creation", "image_id", "processed", "ml_score", "rating"):
             self.order_by = None
 
     def apply_subqueries(self, query: Query, subqueries_list: List[Selectable]) -> Query:
@@ -122,9 +122,12 @@ class QueryBuilder:
         # Return tuple of order clauses based on order_by strategy
         if self.order_by == "image_id":
             return (id_order,)
-        else:
-            # Default: date then id
-            return (order_by_date, id_order)
+        if self.order_by == "rating":
+            rating_order = ImageMetadata.rating.desc() if self.date_order == "desc" else ImageMetadata.rating.asc()
+            rating_order = rating_order.nullslast()
+            return (rating_order, order_by_date, id_order)
+        # Default: date then id
+        return (order_by_date, id_order)
 
     def apply_ml_score_ordering(
         self,
