@@ -48,7 +48,12 @@ class UserProfile(Base):
     last_login_at = Column(DateTime, nullable=True)
 
     # Relationships
-    tenant_memberships = relationship("UserTenant", back_populates="user", cascade="all, delete-orphan")
+    tenant_memberships = relationship(
+        "UserTenant",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        foreign_keys="[UserTenant.supabase_uid]"
+    )
 
     def __repr__(self) -> str:
         return f"<UserProfile(uid={self.supabase_uid}, email={self.email}, active={self.is_active})>"
