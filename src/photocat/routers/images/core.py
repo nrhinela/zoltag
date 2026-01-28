@@ -47,6 +47,35 @@ def get_keyword_category_name(db: Session, keyword_id: int) -> Optional[str]:
     return result[0] if result else None
 
 
+@router.get("/images/dropbox-folders")
+async def list_dropbox_folders(
+    tenant: Tenant = Depends(get_tenant),
+    q: Optional[str] = None,
+    limit: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """List Dropbox folder paths for a tenant, filtered by query."""
+    query = db.query(ImageMetadata.dropbox_path).filter(
+        ImageMetadata.tenant_id == tenant.id,
+        ImageMetadata.dropbox_path.isnot(None)
+    )
+    if q:
+        query = query.filter(ImageMetadata.dropbox_path.ilike(f"%{q}%"))
+    paths = query.distinct().all()
+    folders = set()
+    for (path,) in paths:
+        if not path:
+            continue
+        parent = path.rsplit("/", 1)[0]
+        if parent == "":
+            parent = "/"
+        folders.add(parent)
+    sorted_folders = sorted(folders)
+    if limit:
+        sorted_folders = sorted_folders[:limit]
+    return {"tenant_id": tenant.id, "folders": sorted_folders}
+
+
 @router.get("/images", response_model=dict, operation_id="list_images")
 async def list_images(
     tenant: Tenant = Depends(get_tenant),
@@ -61,6 +90,7 @@ async def list_images(
     rating_operator: str = "eq",
     hide_zero_rating: bool = False,
     reviewed: Optional[bool] = None,
+    dropbox_path_prefix: Optional[str] = None,
     permatag_keyword: Optional[str] = None,
     permatag_category: Optional[str] = None,
     permatag_signum: Optional[int] = None,
@@ -88,6 +118,7 @@ async def list_images(
         rating_operator=rating_operator,
         hide_zero_rating=hide_zero_rating,
         reviewed=reviewed,
+        dropbox_path_prefix=dropbox_path_prefix,
         permatag_keyword=permatag_keyword,
         permatag_category=permatag_category,
         permatag_signum=permatag_signum,

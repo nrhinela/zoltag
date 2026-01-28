@@ -96,6 +96,9 @@ export async function getImages(tenantId, filters = {}) {
   if (filters.mlTagType) {
     params.append('ml_tag_type', filters.mlTagType);
   }
+  if (filters.dropboxPathPrefix) {
+    params.append('dropbox_path_prefix', filters.dropboxPathPrefix);
+  }
 
 
   const response = await fetch(`${API_BASE_URL}/images?${params.toString()}`, {
@@ -110,6 +113,28 @@ export async function getImages(tenantId, filters = {}) {
 
   const data = await response.json();
   return data;
+}
+
+export async function getDropboxFolders(tenantId, { query = '', limit } = {}) {
+  const params = new URLSearchParams();
+  if (query) {
+    params.append('q', query);
+  }
+  if (limit) {
+    params.append('limit', String(limit));
+  }
+  const url = params.toString()
+    ? `${API_BASE_URL}/images/dropbox-folders?${params.toString()}`
+    : `${API_BASE_URL}/images/dropbox-folders`;
+  const response = await fetch(url, {
+    headers: {
+      'X-Tenant-ID': tenantId,
+    },
+  });
+  if (!response.ok) {
+    throw new Error('Failed to fetch Dropbox folders');
+  }
+  return await response.json();
 }
 
 export async function getImageStats(tenantId) {

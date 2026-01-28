@@ -13,7 +13,7 @@ import './person-manager.js';
 import './people-tagger.js';
 
 import { tailwind } from './tailwind-lit.js';
-import { getKeywords, getImageStats, getMlTrainingStats, getTagStats, getImages } from '../services/api.js';
+import { getKeywords, getImageStats, getMlTrainingStats, getTagStats, getImages, getDropboxFolders } from '../services/api.js';
 import { enqueueCommand, subscribeQueue, retryFailedCommand } from '../services/command-queue.js';
 
 class PhotoCatApp extends LitElement {
@@ -169,6 +169,9 @@ class PhotoCatApp extends LitElement {
         grid-template-columns: 2fr 1fr;
         gap: 16px;
         width: 100%;
+    }
+    .search-header-layout {
+        grid-template-columns: 1fr;
     }
     .curate-control-grid {
         display: grid;
@@ -727,6 +730,61 @@ class PhotoCatApp extends LitElement {
     .curate-process-tag-remove:hover {
         color: #b91c1c;
     }
+    .search-folder-input {
+        min-width: 18rem;
+        width: 100%;
+    }
+    .search-folder-selected {
+        word-break: break-all;
+    }
+    .search-folder-field {
+        position: relative;
+        width: 100%;
+        max-width: none;
+    }
+    .search-folder-menu {
+        position: absolute;
+        top: calc(100% + 6px);
+        left: 0;
+        right: 0;
+        z-index: 40;
+        max-height: 320px;
+        overflow-y: auto;
+        background: #111827;
+        color: #f9fafb;
+        border-radius: 12px;
+        box-shadow: 0 12px 30px rgba(0, 0, 0, 0.25);
+        padding: 6px;
+    }
+    .search-folder-option {
+        padding: 8px 10px;
+        border-radius: 8px;
+        cursor: pointer;
+        line-height: 1.3;
+        word-break: break-all;
+    }
+    .search-folder-option:hover {
+        background: rgba(255, 255, 255, 0.08);
+    }
+    .search-layout {
+        display: grid;
+        grid-template-columns: minmax(0, 5fr) minmax(0, 1fr);
+    }
+    .search-saved-pane {
+        min-width: 200px;
+    }
+    .search-accordion .curate-control-grid {
+        grid-template-columns: 1fr;
+    }
+    .search-inline-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 16px;
+        align-items: flex-end;
+    }
+    .search-advanced-btn {
+        margin-left: auto;
+    }
   `];
 
   static properties = {
@@ -783,6 +841,12 @@ class PhotoCatApp extends LitElement {
       curateCategoryCards: { type: Array },
       curateAuditTargets: { type: Array },
       curateExploreTargets: { type: Array },
+      searchSavedItems: { type: Array },
+      searchDropboxQuery: { type: String },
+      searchDropboxOptions: { type: Array },
+      searchDropboxPathPrefix: { type: String },
+      searchDropboxLoading: { type: Boolean },
+      searchDropboxOpen: { type: Boolean },
   }
 
   constructor() {
@@ -839,10 +903,18 @@ class PhotoCatApp extends LitElement {
       this.curateNoPositivePermatags = false;
       this.activeCurateTagSource = 'permatags';
       this.curateCategoryCards = [];
+      this.searchSavedItems = [];
+      this.searchDropboxQuery = '';
+      this.searchDropboxOptions = [];
+      this.searchDropboxPathPrefix = '';
+      this.searchDropboxLoading = false;
+      this.searchDropboxOpen = false;
       this.curateExploreTargets = [
         { id: 1, category: '', keyword: '', action: 'add', count: 0 },
       ];
       this._curateExploreHotspotNextId = 2;
+      this._searchSavedNextId = 1;
+      this._searchDropboxFetchTimer = null;
       this.curateAuditTargets = [
         { id: 1, category: '', keyword: '', action: 'remove', count: 0 },
       ];
@@ -1349,6 +1421,9 @@ class PhotoCatApp extends LitElement {
               filters.categoryFilterSource = 'permatags';
           }
       }
+      if (this.activeTab === 'search' && this.searchDropboxPathPrefix) {
+          filters.dropboxPathPrefix = this.searchDropboxPathPrefix;
+      }
       return filters;
   }
 
@@ -1766,6 +1841,88 @@ class PhotoCatApp extends LitElement {
         this.fetchStats();
         this.showUploadModal = false;
     }
+
+  _handleSearchSaveSelection() {
+      const count = this.curateDragSelection.length;
+      const label = count ? `Selection (${count})` : 'Selection';
+      const entry = {
+          id: this._searchSavedNextId++,
+          label,
+          count,
+          createdAt: new Date().toISOString(),
+      };
+      this.searchSavedItems = [...this.searchSavedItems, entry];
+  }
+
+  _handleSearchRemoveSaved(id) {
+      this.searchSavedItems = this.searchSavedItems.filter((item) => item.id !== id);
+  }
+
+  async _fetchDropboxFolders(query) {
+      if (!this.tenant) return;
+      this.searchDropboxLoading = true;
+      try {
+          const response = await getDropboxFolders(this.tenant, { query });
+          this.searchDropboxOptions = response.folders || [];
+      } catch (error) {
+          console.error('Failed to fetch Dropbox folders:', error);
+          this.searchDropboxOptions = [];
+      } finally {
+          this.searchDropboxLoading = false;
+      }
+  }
+
+  _handleSearchDropboxInput(event) {
+      const value = event.target.value || '';
+      this.searchDropboxQuery = value;
+      this.searchDropboxOpen = !!value.trim();
+      if (this._searchDropboxFetchTimer) {
+          clearTimeout(this._searchDropboxFetchTimer);
+      }
+      if (!value.trim()) {
+          this.searchDropboxOptions = [];
+          return;
+      }
+      this._searchDropboxFetchTimer = setTimeout(() => {
+          this._fetchDropboxFolders(value.trim());
+      }, 250);
+  }
+
+  _handleSearchDropboxFocus() {
+      if (this.searchDropboxQuery.trim()) {
+          this.searchDropboxOpen = true;
+      }
+  }
+
+  _handleSearchDropboxBlur() {
+      setTimeout(() => {
+          this.searchDropboxOpen = false;
+      }, 120);
+  }
+
+  _handleSearchDropboxSelect(event) {
+      const value = (event.target.value || '').trim();
+      this.searchDropboxPathPrefix = value;
+      this.curatePageOffset = 0;
+      this._applyCurateFilters({ resetOffset: true });
+  }
+
+  _handleSearchDropboxPick(folder) {
+      this.searchDropboxQuery = folder;
+      this.searchDropboxPathPrefix = folder;
+      this.searchDropboxOpen = false;
+      this.curatePageOffset = 0;
+      this._applyCurateFilters({ resetOffset: true });
+  }
+
+  _handleSearchDropboxClear() {
+      this.searchDropboxQuery = '';
+      this.searchDropboxPathPrefix = '';
+      this.searchDropboxOptions = [];
+      this.searchDropboxOpen = false;
+      this.curatePageOffset = 0;
+      this._applyCurateFilters({ resetOffset: true });
+  }
 
   async _fetchCurateImages(extraFilters = {}) {
       if (!this.tenant) return;
@@ -2345,7 +2502,7 @@ class PhotoCatApp extends LitElement {
       this._curateFlashSelectionTimers.set(imageId, timer);
   }
 
-  _renderCurateFilters({ mode = 'main', showHistogramOnly = false, showHistogram = true, showHeader = true } = {}) {
+  _renderCurateFilters({ mode = 'main', showHistogramOnly = false, showHistogram = true, showHeader = true, hideSortControls = false, hidePermatagMissing = false, hideRatingControls = false, renderDropboxFolder = false } = {}) {
     // If showing only histogram (for home tab), render just that
     if (showHistogramOnly) {
       return html`
@@ -2382,9 +2539,10 @@ class PhotoCatApp extends LitElement {
 
     const advancedPanel = this.curateAdvancedOpen ? html`
       <div class="border rounded-lg">
-        <div class="px-3 py-3 bg-gray-50 space-y-4">
+        <div class="px-3 py-3 bg-gray-50 space-y-4 ${renderDropboxFolder ? 'search-accordion' : ''}">
         <!-- Existing filter controls moved into accordion -->
         <div class="flex flex-wrap md:flex-nowrap items-end gap-4">
+                ${hideSortControls ? html`` : html`
                 <div class="flex-[2] min-w-[180px]">
                   <label class="block text-xs font-semibold text-gray-600 mb-1">Sort items by</label>
                   <div class="grid grid-cols-2 gap-2">
@@ -2406,6 +2564,8 @@ class PhotoCatApp extends LitElement {
                     </select>
                   </div>
                 </div>
+                `}
+                ${hideRatingControls ? html`` : html`
                 <div class="flex-[2] min-w-[200px]">
                   <label class="block text-xs font-semibold text-gray-600 mb-1">Rating</label>
                   <div class="flex flex-wrap items-center gap-2">
@@ -2439,6 +2599,8 @@ class PhotoCatApp extends LitElement {
                     </div>
                   </div>
                 </div>
+                `}
+                ${hidePermatagMissing ? html`` : html`
                 <div class="flex-[1.5] min-w-[180px]">
                   <label class="block text-xs font-semibold text-gray-600 mb-1">Permatags</label>
                   <label class="inline-flex items-center gap-2 text-xs text-gray-600">
@@ -2451,6 +2613,46 @@ class PhotoCatApp extends LitElement {
                     no positive permatags
                   </label>
                 </div>
+                `}
+                ${renderDropboxFolder ? html`
+                <div class="flex-1 min-w-0 w-full">
+                  <label class="block text-xs font-semibold text-gray-600 mb-1">Dropbox folder</label>
+                  <div class="search-folder-field">
+                    <input
+                      class="search-folder-input px-3 py-2 border rounded-lg"
+                      placeholder="Search folders..."
+                      .value=${this.searchDropboxQuery}
+                      @input=${this._handleSearchDropboxInput}
+                      @change=${this._handleSearchDropboxSelect}
+                      @focus=${this._handleSearchDropboxFocus}
+                      @blur=${this._handleSearchDropboxBlur}
+                    >
+                    ${this.searchDropboxOpen && this.searchDropboxOptions.length ? html`
+                      <div class="search-folder-menu">
+                        ${this.searchDropboxOptions.map((folder) => html`
+                          <div
+                            class="search-folder-option"
+                            @mousedown=${() => this._handleSearchDropboxPick(folder)}
+                          >
+                            ${folder}
+                          </div>
+                        `)}
+                      </div>
+                    ` : html``}
+                  </div>
+                  ${this.searchDropboxPathPrefix ? html`
+                    <div class="text-xs text-gray-500 search-folder-selected flex items-center gap-2 mt-2">
+                      <span>Filtered: ${this.searchDropboxPathPrefix}</span>
+                      <button
+                        class="text-xs text-blue-600 hover:text-blue-700"
+                        @click=${this._handleSearchDropboxClear}
+                      >
+                        Clear filter
+                      </button>
+                    </div>
+                  ` : html``}
+                </div>
+                ` : html``}
               </div>
         </div>
       </div>
@@ -2510,6 +2712,7 @@ class PhotoCatApp extends LitElement {
     const mlTagCount = this._formatStatNumber(this.imageStats?.ml_tag_count);
     const trainedTagCount = this._formatStatNumber(this.mlTrainingStats?.trained_image_count);
     const navCards = [
+      { key: 'search', label: 'Search', subtitle: 'Explore and save results', icon: 'fa-magnifying-glass' },
       { key: 'curate', label: 'Curate', subtitle: 'Build stories and sets', icon: 'fa-star' },
       { key: 'lists', label: 'Lists', subtitle: 'Organize saved sets', icon: 'fa-list' },
       { key: 'people', label: 'People', subtitle: 'Manage and tag people', icon: 'fa-users' },
@@ -2684,6 +2887,223 @@ class PhotoCatApp extends LitElement {
                       <span class="text-2xl text-blue-600"><i class="fas ${card.icon}"></i></span>
                     </button>
                   `)}
+                </div>
+            </div>
+            <div slot="search" class="container">
+                <div class="flex items-center justify-between mb-4">
+                    <div>
+                      <div class="text-xs text-gray-500 uppercase font-semibold">Search</div>
+                      <div class="text-lg font-semibold text-gray-900">Explore and save results</div>
+                    </div>
+                    <div class="ml-auto flex items-center gap-4 text-xs text-gray-600 mr-4">
+                      <label class="font-semibold text-gray-600">Thumb</label>
+                      <input
+                        type="range"
+                        min="80"
+                        max="220"
+                        step="10"
+                        .value=${String(this.curateThumbSize)}
+                        @input=${this._handleCurateThumbSizeChange}
+                        class="w-24"
+                      >
+                      <span class="w-12 text-right text-xs">${this.curateThumbSize}px</span>
+                    </div>
+                    <button
+                      class="inline-flex items-center gap-2 border rounded-lg px-4 py-2 text-xs text-gray-600 hover:bg-gray-50"
+                      @click=${() => this._fetchCurateImages()}
+                      title="Refresh"
+                    >
+                      <span aria-hidden="true">↻</span>
+                      Refresh
+                    </button>
+                </div>
+                <div class="curate-header-layout search-header-layout mb-4">
+                    <div class="bg-white rounded-lg shadow p-4 w-full">
+                      <div class="curate-control-grid">
+                        <div>
+                          <div class="text-xs font-semibold text-gray-600 mb-1">Quick sort</div>
+                          <div class="curate-audit-toggle">
+                              <button
+                                class=${this.curateOrderBy === 'photo_creation' ? 'active' : ''}
+                                @click=${() => this._handleCurateQuickSort('photo_creation')}
+                              >
+                                Photo Date ${this._getCurateQuickSortArrow('photo_creation')}
+                              </button>
+                              <button
+                                class=${this.curateOrderBy === 'processed' ? 'active' : ''}
+                                @click=${() => this._handleCurateQuickSort('processed')}
+                              >
+                                Process Date ${this._getCurateQuickSortArrow('processed')}
+                              </button>
+                          </div>
+                        </div>
+                        <div class="search-inline-row">
+                          <div>
+                            <div class="text-xs font-semibold text-gray-600 mb-1">Optional filter by keyword</div>
+                            <div class="curate-control-row">
+                              <select
+                                class="w-72 px-3 py-2 border rounded-lg ${selectedKeywordValueMain ? 'bg-yellow-100 border-yellow-200' : ''}"
+                                .value=${selectedKeywordValueMain}
+                                @change=${(event) => this._handleCurateKeywordSelect(event, 'main')}
+                              >
+                                <option value="">Select a keyword...</option>
+                                <option value="__untagged__">Untagged (${untaggedCountLabel})</option>
+                                ${this._getKeywordsByCategory().map(([category, keywords]) => html`
+                                  <optgroup label="${category} (${this._getCategoryCount(category)})">
+                                    ${keywords.map(kw => html`
+                                      <option value=${`${encodeURIComponent(category)}::${encodeURIComponent(kw.keyword)}`}>
+                                        ${kw.keyword} (${kw.count})
+                                      </option>
+                                    `)}
+                                  </optgroup>
+                                `)}
+                              </select>
+                            </div>
+                          </div>
+                          <div>
+                            <div class="text-xs font-semibold text-gray-600 mb-1">Rating</div>
+                            <div class="flex flex-wrap items-center gap-2">
+                              <label class="inline-flex items-center gap-2 text-xs text-gray-600">
+                                <input
+                                  type="checkbox"
+                                  class="h-4 w-4"
+                                  .checked=${this.curateHideDeleted}
+                                  @change=${this._handleCurateHideDeletedChange}
+                                >
+                                <span class="inline-flex items-center gap-2">
+                                  <i class="fas fa-trash"></i>
+                                  hide deleted
+                                </span>
+                              </label>
+                              <div class="flex items-center gap-1">
+                                ${[0, 1, 2, 3].map((value) => {
+                                  const label = value === 0 ? '0' : `${value}+`;
+                                  const title = value === 0 ? 'Quality = 0' : `Quality >= ${value}`;
+                                  return html`
+                                    <button
+                                      class="inline-flex items-center gap-1 px-2 py-1 rounded-lg border text-xs ${this.curateMinRating === value ? 'bg-yellow-100 text-yellow-800 border-yellow-200' : 'bg-gray-100 text-gray-500 border-gray-200'}"
+                                      title=${title}
+                                      @click=${() => this._handleCurateMinRating(value)}
+                                    >
+                                      <i class="fas fa-star"></i>
+                                      <span>${label}</span>
+                                    </button>
+                                  `;
+                                })}
+                              </div>
+                            </div>
+                          </div>
+                          <button
+                            class="search-advanced-btn h-10 w-10 flex items-center justify-center border rounded-lg text-gray-600 hover:bg-gray-50"
+                            title="Advanced filters"
+                            aria-pressed=${this.curateAdvancedOpen ? 'true' : 'false'}
+                            @click=${() => { this.curateAdvancedOpen = !this.curateAdvancedOpen; }}
+                          >
+                            <svg viewBox="0 0 24 24" class="h-7 w-7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                              <circle cx="12" cy="12" r="3"></circle>
+                              <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.02.02a2 2 0 1 1-2.83 2.83l-.02-.02a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.03a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.87.34l-.02.02a2 2 0 1 1-2.83-2.83l.02-.02a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.03a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.87l-.02-.02a2 2 0 1 1 2.83-2.83l.02.02a1.7 1.7 0 0 0 1.87.34H9a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.03a1.7 1.7 0 0 0 1 1.55 1.7 1.7 0 0 0 1.87-.34l.02-.02a2 2 0 1 1 2.83 2.83l-.02.02a1.7 1.7 0 0 0-.34 1.87V9c0 .68.4 1.3 1.02 1.58.24.11.5.17.77.17H21a2 2 0 1 1 0 4h-.03a1.7 1.7 0 0 0-1.55 1z"></path>
+                            </svg>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                </div>
+                ${this._renderCurateFilters({ mode: 'main', showHistogram: false, showHeader: false, hideSortControls: true, hidePermatagMissing: true, hideRatingControls: true, renderDropboxFolder: true })}
+                <div class="curate-layout search-layout" style="--curate-thumb-size: ${this.curateThumbSize}px;">
+                  <div class="curate-pane">
+                      <div class="curate-pane-header">
+                          <div class="curate-pane-header-row">
+                              <span>${leftPaneLabel}</span>
+                              <div class="curate-pane-header-actions">
+                                ${renderPaginationControls({
+                                  countLabel: curateCountLabel,
+                                  hasPrev: curateHasPrev,
+                                  hasNext: curateHasMore,
+                                  onPrev: this._handleCuratePagePrev,
+                                  onNext: this._handleCuratePageNext,
+                                  pageSize: this.curateLimit,
+                                  onPageSizeChange: this._handleCurateLimitChange,
+                                  disabled: this.curateLoading,
+                                })}
+                              </div>
+                          </div>
+                      </div>
+                      ${this.curateLoading ? html`
+                        <div class="curate-loading-overlay" aria-label="Loading">
+                          <span class="curate-spinner large"></span>
+                        </div>
+                      ` : html``}
+                      <div class="curate-pane-body">
+                          ${this.curateImages.length ? html`
+                            <div class="curate-grid">
+                              ${this.curateImages.map((image, index) => html`
+                                <div class="curate-thumb-wrapper" @click=${(event) => this._handleCurateImageClick(event, image)}>
+                                  <img
+                                    src=${image.thumbnail_url || `/api/v1/images/${image.id}/thumbnail`}
+                                    alt=${image.filename}
+                                    class="curate-thumb ${this.curateDragSelection.includes(image.id) ? 'selected' : ''}"
+                                    draggable="true"
+                                    @dragstart=${(event) => this._handleCurateDragStart(event, image)}
+                                    @pointerdown=${(event) => this._handleCuratePointerDown(event, index, image.id)}
+                                    @pointermove=${(event) => this._handleCuratePointerMove(event)}
+                                    @pointerenter=${() => this._handleCurateSelectHover(index)}
+                                  >
+                                  ${this._renderCurateRatingWidget(image)}
+                                  ${this._renderCurateRatingStatic(image)}
+                                  ${this._renderCuratePermatagSummary(image)}
+                                  ${this._formatCurateDate(image) ? html`
+                                    <div class="curate-thumb-date">
+                                      <span class="curate-thumb-id">#${image.id}</span>
+                                      <span class="curate-thumb-icon" aria-hidden="true">📷</span>${this._formatCurateDate(image)}
+                                    </div>
+                                  ` : html``}
+                                </div>
+                              `)}
+                            </div>
+                          ` : html`
+                            <div class="curate-drop">
+                              No images available.
+                            </div>
+                          `}
+                      </div>
+                  </div>
+                  <div class="curate-pane utility-targets search-saved-pane">
+                      <div class="curate-pane-header">
+                          <div class="curate-pane-header-row">
+                              <span>Saved Items</span>
+                              <button
+                                class="curate-pane-action secondary"
+                                ?disabled=${this.curateDragSelection.length === 0}
+                                @click=${this._handleSearchSaveSelection}
+                                title="Save selected images"
+                              >
+                                Save selection
+                              </button>
+                          </div>
+                      </div>
+                      <div class="curate-pane-body">
+                        ${this.searchSavedItems.length ? html`
+                          <div class="space-y-2">
+                            ${this.searchSavedItems.map((item) => html`
+                              <div class="flex items-center justify-between gap-2 border border-gray-200 rounded-lg px-3 py-2 text-sm">
+                                <div>
+                                  <div class="font-semibold text-gray-700">${item.label}</div>
+                                  <div class="text-xs text-gray-500">${item.count || 0} images · ${new Date(item.createdAt).toLocaleString()}</div>
+                                </div>
+                                <button
+                                  class="text-xs text-red-600 hover:text-red-700"
+                                  @click=${() => this._handleSearchRemoveSaved(item.id)}
+                                >
+                                  Remove
+                                </button>
+                              </div>
+                            `)}
+                          </div>
+                        ` : html`
+                          <div class="text-xs text-gray-400">No saved items yet.</div>
+                        `}
+                      </div>
+                  </div>
                 </div>
             </div>
             <div slot="curate" class="container">
