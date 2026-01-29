@@ -19,6 +19,33 @@ class ListEditor extends LitElement {
     .animate-spin {
       animation: spin 1s linear infinite;
     }
+    @keyframes skeleton-loading {
+      0% {
+        background-color: #e5e7eb;
+      }
+      50% {
+        background-color: #f3f4f6;
+      }
+      100% {
+        background-color: #e5e7eb;
+      }
+    }
+    .skeleton {
+      animation: skeleton-loading 1.5s infinite;
+      border-radius: 0.375rem;
+    }
+    .skeleton-text {
+      height: 1rem;
+      margin-bottom: 0.5rem;
+    }
+    .skeleton-title {
+      height: 1.75rem;
+      margin-bottom: 1rem;
+    }
+    .skeleton-row {
+      height: 2.5rem;
+      margin-bottom: 0.5rem;
+    }
   `];
 
   static properties = {
@@ -29,6 +56,7 @@ class ListEditor extends LitElement {
     listItems: { type: Array },
     editingSelectedList: { type: Boolean },
     isDownloading: { type: Boolean },
+    isLoadingItems: { type: Boolean },
   };
 
   constructor() {
@@ -39,6 +67,7 @@ class ListEditor extends LitElement {
     this.listItems = [];
     this.editingSelectedList = false;
     this.isDownloading = false;
+    this.isLoadingItems = false;
     this._isVisible = false;
     this._hasRefreshedOnce = false;
   }
@@ -115,6 +144,7 @@ class ListEditor extends LitElement {
 
   async _selectList(list) {
     this.selectedList = list;
+    this.isLoadingItems = true;
     await this._fetchListItems(list.id);
   }
 
@@ -124,6 +154,8 @@ class ListEditor extends LitElement {
     } catch (error) {
       console.error('Error fetching list items:', error);
       this.listItems = [];
+    } finally {
+      this.isLoadingItems = false;
     }
   }
 
@@ -310,61 +342,96 @@ class ListEditor extends LitElement {
       ${this.selectedList ? html`
         <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div class="bg-white rounded-lg shadow-lg w-full max-w-4xl mx-4 max-h-90vh overflow-auto p-6">
-            <div class="flex justify-between items-start mb-6">
-              <div class="flex-1">
-                <h3 class="text-2xl font-bold text-gray-900 mb-1">${this.selectedList.title}</h3>
-                <p class="text-base text-gray-600 mb-2">${this.selectedList.notebox || 'No notes.'}</p>
-                <div class="flex gap-4 text-xs text-gray-600 mb-4">
-                  <div>
-                    <span class="font-semibold">Author:</span> ${this.selectedList.created_by_name || 'Unknown'}
-                  </div>
-                  <div>
-                    <span class="font-semibold">Created:</span> ${new Date(this.selectedList.created_at).toLocaleDateString()}
+            ${this.isLoadingItems ? html`
+              <!-- Skeleton Loading State -->
+              <div class="flex justify-between items-start mb-6">
+                <div class="flex-1">
+                  <div class="skeleton skeleton-title w-1/3 mb-2"></div>
+                  <div class="skeleton skeleton-text w-1/2 mb-2"></div>
+                  <div class="flex gap-4 mb-4">
+                    <div class="skeleton skeleton-text w-32"></div>
+                    <div class="skeleton skeleton-text w-32"></div>
                   </div>
                 </div>
+                <div class="flex gap-2">
+                  <div class="skeleton skeleton-text w-20"></div>
+                  <div class="skeleton skeleton-text w-16"></div>
+                  <div class="skeleton skeleton-text w-8"></div>
+                </div>
               </div>
-              <div class="flex gap-2">
-                <button @click=${this._downloadListImages} ?disabled=${this.isDownloading} class="bg-blue-600 text-white px-3 py-1 rounded text-xs hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1">
-                  ${this.isDownloading ? html`<span class="inline-block w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></span>` : ''}
-                  Download
-                </button>
-                <button @click=${this._startEditingSelectedList} class="bg-green-600 text-white px-3 py-1 rounded text-xs hover:bg-green-700">Edit</button>
-                <button @click=${() => { this.selectedList = null; this.listItems = []; this.editingSelectedList = false; }} class="text-gray-500 hover:text-gray-700 text-2xl">×</button>
-              </div>
-            </div>
 
-            <h4 class="text-sm font-semibold text-gray-900 mb-4">List Items (${this.listItems.length})</h4>
+              <div class="skeleton skeleton-text w-32 mb-4"></div>
 
-            ${this.listItems.length === 0 ? html`
-              <p class="text-base text-gray-500">No items in this list yet.</p>
-            ` : html`
               <div class="border border-gray-300 rounded overflow-hidden">
-                <table class="w-full text-sm">
-                  <thead>
-                    <tr class="bg-gray-50 border-b border-gray-300">
-                      <th class="px-4 py-2 text-left text-xs font-semibold text-gray-700">Path</th>
-                      <th class="px-4 py-2 text-left text-xs font-semibold text-gray-700">Permatags</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    ${this.listItems.map(item => {
-                      const permatagNames = item.image.permatags
-                        .filter(tag => tag.signum > 0)
-                        .map(tag => tag.keyword)
-                        .join(', ');
-                      const dropboxUrl = `https://www.dropbox.com/home${item.image.dropbox_path}`;
-                      return html`
-                        <tr class="border-b border-gray-200 hover:bg-gray-50">
-                          <td class="px-4 py-3 text-xs text-gray-900 break-all">
-                            <a href="${dropboxUrl}" target="dropbox" rel="noopener noreferrer" class="text-blue-600 hover:text-blue-700 underline">${item.image.dropbox_path}</a>
-                          </td>
-                          <td class="px-4 py-3 text-xs text-gray-700">${permatagNames || '—'}</td>
-                        </tr>
-                      `;
-                    })}
-                  </tbody>
-                </table>
+                <div class="bg-gray-50 border-b border-gray-300 px-4 py-2 flex gap-4">
+                  <div class="skeleton skeleton-text w-1/2"></div>
+                  <div class="skeleton skeleton-text w-1/4"></div>
+                </div>
+                ${[...Array(5)].map(() => html`
+                  <div class="border-b border-gray-200 px-4 py-3 flex gap-4">
+                    <div class="skeleton skeleton-text w-1/2"></div>
+                    <div class="skeleton skeleton-text w-1/4"></div>
+                  </div>
+                `)}
               </div>
+            ` : html`
+              <!-- Loaded Content -->
+              <div class="flex justify-between items-start mb-6">
+                <div class="flex-1">
+                  <h3 class="text-2xl font-bold text-gray-900 mb-1">${this.selectedList.title}</h3>
+                  <p class="text-base text-gray-600 mb-2">${this.selectedList.notebox || 'No notes.'}</p>
+                  <div class="flex gap-4 text-xs text-gray-600 mb-4">
+                    <div>
+                      <span class="font-semibold">Author:</span> ${this.selectedList.created_by_name || 'Unknown'}
+                    </div>
+                    <div>
+                      <span class="font-semibold">Created:</span> ${new Date(this.selectedList.created_at).toLocaleDateString()}
+                    </div>
+                  </div>
+                </div>
+                <div class="flex gap-2">
+                  <button @click=${this._downloadListImages} ?disabled=${this.isDownloading} class="bg-blue-600 text-white px-3 py-1 rounded text-xs hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1">
+                    ${this.isDownloading ? html`<span class="inline-block w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></span>` : ''}
+                    Download
+                  </button>
+                  <button @click=${this._startEditingSelectedList} class="bg-green-600 text-white px-3 py-1 rounded text-xs hover:bg-green-700">Edit</button>
+                  <button @click=${() => { this.selectedList = null; this.listItems = []; this.editingSelectedList = false; }} class="text-gray-500 hover:text-gray-700 text-2xl">×</button>
+                </div>
+              </div>
+
+              <h4 class="text-sm font-semibold text-gray-900 mb-4">List Items (${this.listItems.length})</h4>
+
+              ${this.listItems.length === 0 ? html`
+                <p class="text-base text-gray-500">No items in this list yet.</p>
+              ` : html`
+                <div class="border border-gray-300 rounded overflow-hidden">
+                  <table class="w-full text-sm">
+                    <thead>
+                      <tr class="bg-gray-50 border-b border-gray-300">
+                        <th class="px-4 py-2 text-left text-xs font-semibold text-gray-700">Path</th>
+                        <th class="px-4 py-2 text-left text-xs font-semibold text-gray-700">Permatags</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      ${this.listItems.map(item => {
+                        const permatagNames = item.image.permatags
+                          .filter(tag => tag.signum > 0)
+                          .map(tag => tag.keyword)
+                          .join(', ');
+                        const dropboxUrl = `https://www.dropbox.com/home${item.image.dropbox_path}`;
+                        return html`
+                          <tr class="border-b border-gray-200 hover:bg-gray-50">
+                            <td class="px-4 py-3 text-xs text-gray-900 break-all">
+                              <a href="${dropboxUrl}" target="dropbox" rel="noopener noreferrer" class="text-blue-600 hover:text-blue-700 underline">${item.image.dropbox_path}</a>
+                            </td>
+                            <td class="px-4 py-3 text-xs text-gray-700">${permatagNames || '—'}</td>
+                          </tr>
+                        `;
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              `}
             `}
 
           </div>
