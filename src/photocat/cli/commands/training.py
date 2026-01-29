@@ -217,7 +217,6 @@ class RecomputeTrainedTagsCommand(CliCommand):
                         break
                     if not image.thumbnail_path:
                         skipped += 1
-                        bar.update(1)
                         continue
                     if not self.replace:
                         existing = self.db.query(MachineTag.id).filter(
@@ -228,7 +227,6 @@ class RecomputeTrainedTagsCommand(CliCommand):
                         ).first()
                         if existing:
                             skipped += 1
-                            bar.update(1)
                             continue
                     embedding_row = self.db.query(ImageEmbedding).filter(
                         ImageEmbedding.tenant_id == self.tenant.id,
@@ -255,7 +253,6 @@ class RecomputeTrainedTagsCommand(CliCommand):
                         blob = thumbnail_bucket.blob(image.thumbnail_path)
                         if not blob.exists():
                             skipped += 1
-                            bar.update(1)
                             continue
                         image_data = blob.download_as_bytes()
                         recompute_trained_tags_for_image(

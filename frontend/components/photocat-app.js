@@ -1525,6 +1525,10 @@ class PhotoCatApp extends LitElement {
       if (nextFilters.limit === undefined || nextFilters.limit === null || nextFilters.limit === '') {
           nextFilters.limit = 100;
       }
+      const parsedLimit = Number.parseInt(nextFilters.limit, 10);
+      if (Number.isFinite(parsedLimit) && parsedLimit !== this.curateLimit) {
+          this.curateLimit = parsedLimit;
+      }
       this.curateFilters = nextFilters;
       this._fetchCurateImages();
   }
@@ -2375,7 +2379,11 @@ class PhotoCatApp extends LitElement {
       if (!this.tenant) return;
       this.curateLoading = true;
       try {
-          const result = await getImages(this.tenant, { ...this.curateFilters, ...extraFilters });
+          const requestFilters = { ...this.curateFilters, ...extraFilters };
+          if (Number.isFinite(requestFilters.limit) && requestFilters.limit !== this.curateLimit) {
+              this.curateLimit = requestFilters.limit;
+          }
+          const result = await getImages(this.tenant, requestFilters);
           this.curateImages = Array.isArray(result) ? result : (result.images || []);
           this.curateTotal = Array.isArray(result)
             ? null
@@ -2384,8 +2392,10 @@ class PhotoCatApp extends LitElement {
               : null;
           if (!Array.isArray(result) && Number.isFinite(result.limit)) {
               const allowedSizes = new Set([50, 100, 200]);
-              if (allowedSizes.has(result.limit) && result.limit !== this.curateLimit) {
-                  this.curateLimit = result.limit;
+              if (allowedSizes.has(result.limit)) {
+                  if (result.limit !== this.curateLimit) {
+                      this.curateLimit = result.limit;
+                  }
                   this.curateFilters = { ...(this.curateFilters || {}), limit: result.limit };
               }
           }
@@ -3129,7 +3139,7 @@ class PhotoCatApp extends LitElement {
             <div class="w-1/2 min-w-[260px]">
               <label class="block text-base font-semibold text-gray-700 mb-2">Keywords</label>
               <select
-                class="w-full px-4 py-3 border rounded-lg text-lg ${selectedKeywordValue ? 'bg-yellow-100 border-yellow-200' : ''}"
+                class="w-full ${mode === 'tag-audit' ? 'px-3 py-2' : 'px-4 py-3 text-lg'} border rounded-lg ${selectedKeywordValue ? 'bg-yellow-100 border-yellow-200' : ''}"
                 .value=${selectedKeywordValue}
                 @change=${(event) => this._handleCurateKeywordSelect(event, mode)}
               >
@@ -3272,7 +3282,7 @@ class PhotoCatApp extends LitElement {
           .value=${String(value)}
           @change=${onChange}
         >
-          ${[50, 100, 200].map((size) => html`<option value=${String(size)}>${size}</option>`)}
+          ${[100, 50, 200].map((size) => html`<option value=${String(size)}>${size}</option>`)}
         </select>
       </label>
     `;
@@ -3504,17 +3514,20 @@ class PhotoCatApp extends LitElement {
                                 No images available.
                               </div>
                             `}
-                            <div class="mt-3">
-                              ${renderPaginationControls({
-                                countLabel: curateCountLabel,
-                                hasPrev: curateHasPrev,
-                                hasNext: curateHasMore,
-                                onPrev: this._handleCuratePagePrev,
-                                onNext: this._handleCuratePageNext,
-                                pageSize: this.curateLimit,
-                                onPageSizeChange: this._handleCurateLimitChange,
-                                disabled: this.curateLoading,
-                              })}
+                            <div class="curate-pane-header-row mt-3">
+                              <span>${leftPaneLabel}</span>
+                              <div class="curate-pane-header-actions">
+                                ${renderPaginationControls({
+                                  countLabel: curateCountLabel,
+                                  hasPrev: curateHasPrev,
+                                  hasNext: curateHasMore,
+                                  onPrev: this._handleCuratePagePrev,
+                                  onNext: this._handleCuratePageNext,
+                                  pageSize: this.curateLimit,
+                                  onPageSizeChange: this._handleCurateLimitChange,
+                                  disabled: this.curateLoading,
+                                })}
+                              </div>
                             </div>
                         </div>
                     </div>
@@ -3745,7 +3758,9 @@ class PhotoCatApp extends LitElement {
 
                     <!-- Right Column: Tag Counts -->
                     <div class="bg-white rounded-lg shadow p-4 self-start sticky top-0 max-h-[calc(100vh-200px)] overflow-y-auto">
-                      <div class="text-xs text-gray-500 uppercase font-semibold mb-2">Tag Counts</div>
+                      <div class="text-xs text-gray-500 uppercase font-semibold mb-2">
+                        Tag Counts: Total: ${this._formatStatNumber(this.imageStats?.image_count)} / Reviewed: ${this._formatStatNumber(this.imageStats?.reviewed_image_count)}
+                      </div>
                       <div class="flex items-center gap-2 mb-3 text-xs font-semibold text-gray-600">
                         ${[
                           { key: 'permatags', label: 'Permatags' },
