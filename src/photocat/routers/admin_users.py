@@ -365,6 +365,49 @@ async def enable_user(
     return {"message": "User enabled", "user_id": str(user.supabase_uid)}
 
 
+@router.post("/users/{supabase_uid}/set-super-admin", response_model=dict)
+async def set_super_admin(
+    supabase_uid: str,
+    request: dict,
+    admin: UserProfile = Depends(require_super_admin),
+    db: Session = Depends(get_db)
+):
+    """Set or unset super admin status for a user.
+
+    Only super admins can modify super admin status.
+
+    Args:
+        supabase_uid: User UUID to modify
+        request: dict with 'is_super_admin' boolean field
+        admin: Current user (must be super admin)
+        db: Database session
+
+    Returns:
+        dict: Success message and updated user status
+
+    Raises:
+        HTTPException 403: User is not a super admin
+        HTTPException 404: User not found
+    """
+    is_super_admin = request.get("is_super_admin", False)
+
+    user = db.query(UserProfile).filter(
+        UserProfile.supabase_uid == supabase_uid
+    ).first()
+
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    user.is_super_admin = is_super_admin
+    db.commit()
+
+    return {
+        "message": f"User {'promoted to' if is_super_admin else 'removed from'} super admin",
+        "user_id": str(user.supabase_uid),
+        "is_super_admin": user.is_super_admin
+    }
+
+
 # ============================================================================
 # Invitation Management Endpoints
 # ============================================================================

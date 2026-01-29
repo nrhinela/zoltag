@@ -590,6 +590,19 @@ export async function enableUser(supabaseUid) {
     });
 }
 
+/**
+ * Set super admin status for a user
+ * @param {string} supabaseUid - User UUID to modify
+ * @param {boolean} isSuperAdmin - Whether user should be super admin
+ * @returns {Promise<Object>} Success message with updated status
+ */
+export async function setSuperAdminStatus(supabaseUid, isSuperAdmin) {
+    return fetchWithAuth(`/admin/users/${supabaseUid}/set-super-admin`, {
+        method: 'POST',
+        body: JSON.stringify({ is_super_admin: isSuperAdmin })
+    });
+}
+
 // ============================================================================
 // People and Categories Management
 // ============================================================================

@@ -1,6 +1,6 @@
 import { LitElement, html, css } from 'lit';
 import { tailwind } from './tailwind-lit.js';
-import { fetchWithAuth, disableUser, enableUser } from '../services/api.js';
+import { fetchWithAuth, disableUser, enableUser, setSuperAdminStatus } from '../services/api.js';
 
 /**
  * Admin User Management Component
@@ -25,6 +25,7 @@ class AdminUsers extends LitElement {
     showDisableConfirmation: { type: Boolean },
     disablingUser: { type: Boolean },
     userToDisable: { type: Object },
+    updatingUserStatus: { type: Boolean },
   };
 
   static styles = [
@@ -341,6 +342,16 @@ class AdminUsers extends LitElement {
         color: #065f46;
       }
 
+      .status-super-admin {
+        background: #fce7f3;
+        color: #831843;
+      }
+
+      .status-user {
+        background: #e0e7ff;
+        color: #3730a3;
+      }
+
       .tenant-badge {
         display: inline-block;
         padding: 4px 8px;
@@ -593,6 +604,22 @@ class AdminUsers extends LitElement {
     }
   }
 
+  async toggleSuperAdmin(user) {
+    this.updatingUserStatus = true;
+    try {
+      const newStatus = !user.is_super_admin;
+      await setSuperAdminStatus(user.supabase_uid, newStatus);
+
+      // Success - reload users
+      await this.loadAllUsers();
+    } catch (error) {
+      console.error('Failed to update user status:', error);
+      this.error = error.message;
+    } finally {
+      this.updatingUserStatus = false;
+    }
+  }
+
   getTenantAssignments(user) {
     if (!user.tenants) return [];
     return user.tenants.map(t => t.tenant_id);
@@ -651,6 +678,7 @@ class AdminUsers extends LitElement {
             <th>User</th>
             <th>Email</th>
             <th>Status</th>
+            <th>Role</th>
             <th>Registered</th>
             ${this.activeUserTab !== 'pending' ? html`<th>Tenants</th>` : ''}
             <th>Actions</th>
@@ -674,6 +702,11 @@ class AdminUsers extends LitElement {
                   </span>
                 </td>
                 <td>
+                  <span class="user-status-badge ${user.is_super_admin ? 'status-super-admin' : 'status-user'}">
+                    ${user.is_super_admin ? 'Super Admin' : 'User'}
+                  </span>
+                </td>
+                <td>
                   <div class="created-date">${this.formatDate(user.created_at)}</div>
                 </td>
                 ${this.activeUserTab !== 'pending'
@@ -692,9 +725,9 @@ class AdminUsers extends LitElement {
                     `
                   : ''}
                 <td>
-                  ${user.is_active
-                    ? html`
-                        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                  <div style="display: flex; gap: 4px; flex-wrap: wrap;">
+                    ${user.is_active
+                      ? html`
                           <button
                             class="btn btn-primary"
                             @click=${() => this.openAssignTenantForm(user)}
@@ -703,16 +736,8 @@ class AdminUsers extends LitElement {
                           >
                             <i class="fas fa-plus"></i> Assign
                           </button>
-                          <button
-                            class="btn btn-danger"
-                            @click=${() => this.openDisableConfirmation(user)}
-                          >
-                            <i class="fas fa-ban"></i> Disable
-                          </button>
-                        </div>
-                      `
-                    : html`
-                        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                        `
+                      : html`
                           <button
                             class="btn btn-primary"
                             @click=${() => this.openApprovalForm(user)}
@@ -725,15 +750,23 @@ class AdminUsers extends LitElement {
                           >
                             <i class="fas fa-times"></i> Reject
                           </button>
-                          <button
-                            class="btn btn-warning"
-                            @click=${() => this.enableUserAccount(user)}
-                            ?disabled=${this.disablingUser}
-                          >
-                            <i class="fas fa-check-circle"></i> Enable
-                          </button>
-                        </div>
-                      `}
+                        `}
+                    <button
+                      class="btn ${user.is_super_admin ? 'btn-warning' : 'btn-info'}"
+                      @click=${() => this.toggleSuperAdmin(user)}
+                      ?disabled=${this.updatingUserStatus}
+                    >
+                      <i class="fas ${user.is_super_admin ? 'fa-crown' : 'fa-user'}"></i>
+                      ${user.is_super_admin ? 'Remove Admin' : 'Make Admin'}
+                    </button>
+                    <button
+                      class="btn btn-danger"
+                      @click=${() => this.openDisableConfirmation(user)}
+                      ?disabled=${!user.is_active}
+                    >
+                      <i class="fas fa-ban"></i> Disable
+                    </button>
+                  </div>
                 </td>
               </tr>
             `
