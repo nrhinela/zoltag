@@ -1523,7 +1523,7 @@ class PhotoCatApp extends LitElement {
   _handleCurateFilterChange(e) {
       const nextFilters = { ...(e.detail || {}) };
       if (nextFilters.limit === undefined || nextFilters.limit === null || nextFilters.limit === '') {
-          nextFilters.limit = 50;
+          nextFilters.limit = 100;
       }
       this.curateFilters = nextFilters;
       this._fetchCurateImages();
@@ -1580,7 +1580,7 @@ class PhotoCatApp extends LitElement {
       const parsed = Number.parseInt(e.target.value, 10);
       const allowedSizes = new Set([50, 100, 200]);
       if (!Number.isFinite(parsed) || !allowedSizes.has(parsed)) {
-          this.curateLimit = 50;
+          this.curateLimit = 100;
       } else {
           this.curateLimit = parsed;
       }
@@ -3504,6 +3504,18 @@ class PhotoCatApp extends LitElement {
                                 No images available.
                               </div>
                             `}
+                            <div class="mt-3">
+                              ${renderPaginationControls({
+                                countLabel: curateCountLabel,
+                                hasPrev: curateHasPrev,
+                                hasNext: curateHasMore,
+                                onPrev: this._handleCuratePagePrev,
+                                onNext: this._handleCuratePageNext,
+                                pageSize: this.curateLimit,
+                                onPageSizeChange: this._handleCurateLimitChange,
+                                disabled: this.curateLoading,
+                              })}
+                            </div>
                         </div>
                     </div>
                     <div
