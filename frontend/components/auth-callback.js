@@ -105,7 +105,12 @@ export class AuthCallback extends LitElement {
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({ detail: 'Registration failed' }));
-        throw new Error(`Registration failed: ${errorData.detail}`);
+        console.error('Backend error response:', {
+          status: response.status,
+          detail: errorData.detail,
+          raw: errorData
+        });
+        throw new Error(`Registration failed (${response.status}): ${errorData.detail}`);
       }
 
       const result = await response.json();

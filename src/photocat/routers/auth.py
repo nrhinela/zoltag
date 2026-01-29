@@ -70,10 +70,10 @@ async def register(
 
     try:
         supabase_uid = get_supabase_uid_from_token(token)
-    except JWTError:
+    except JWTError as e:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired token",
+            detail=f"Invalid or expired token: {str(e)}",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
@@ -92,23 +92,44 @@ async def register(
     # For new registrations, we need to extract email from Supabase
     # The JWT token includes the email claim
     from photocat.auth.jwt import verify_supabase_jwt
-    decoded = verify_supabase_jwt(token)
+    try:
+        decoded = verify_supabase_jwt(token)
+    except JWTError as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Failed to verify token: {str(e)}",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     email = decoded.get("email", "")
     email_verified = decoded.get("email_confirmed_at") is not None
 
-    # Create new profile (is_active=False, requires approval)
-    profile = UserProfile(
-        supabase_uid=supabase_uid,
-        email=email,
-        email_verified=email_verified,
-        display_name=request.display_name or email.split("@")[0] if email else "User",
-        is_active=False,
-        is_super_admin=False
-    )
+    if not email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Token does not contain email claim",
+        )
 
-    db.add(profile)
-    db.commit()
-    db.refresh(profile)
+    # Create new profile (is_active=False, requires approval)
+    try:
+        profile = UserProfile(
+            supabase_uid=supabase_uid,
+            email=email,
+            email_verified=email_verified,
+            display_name=request.display_name or email.split("@")[0],
+            is_active=False,
+            is_super_admin=False
+        )
+
+        db.add(profile)
+        db.commit()
+        db.refresh(profile)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Failed to create user profile: {str(e)}",
+        )
 
     return {
         "message": "Registration pending admin approval",
