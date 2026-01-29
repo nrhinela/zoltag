@@ -123,7 +123,9 @@ async def list_images(
         permatag_category=permatag_category,
         permatag_signum=permatag_signum,
         permatag_missing=permatag_missing,
-        permatag_positive_missing=permatag_positive_missing
+        permatag_positive_missing=permatag_positive_missing,
+        ml_keyword=ml_keyword,
+        ml_tag_type=ml_tag_type
     )
 
     # If any filter resulted in empty set, return empty response

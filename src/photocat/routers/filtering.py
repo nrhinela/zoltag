@@ -682,6 +682,57 @@ def apply_no_positive_permatag_filter_subquery(db: Session, tenant: Tenant):
     ).subquery()
 
 
+def apply_ml_tag_type_filter_subquery(
+    db: Session,
+    tenant: Tenant,
+    keyword: str,
+    tag_type: str
+) -> Selectable:
+    """Return subquery of images with ML tags for specified keyword and tag_type.
+
+    This is used for zero-shot filtering to ensure only images with actual
+    ML scores for the selected keyword and tag type are returned.
+
+    Zero-shot tagging workflow:
+    1. User selects a keyword and enables "Zero-Shot" in tag audit
+    2. Frontend sends: permatagMissing=true, mlKeyword=<keyword>, mlTagType='siglip'
+    3. This filter ensures result set contains ONLY images that have ML tags for that keyword
+    4. The permatagMissing filter (applied separately) ensures those images don't already have
+       a positive permatag, so they're candidates for manual review
+    5. Results are ordered by ML score, showing highest-confidence matches first
+
+    Args:
+        db: Database session
+        tenant: Current tenant
+        keyword: Keyword name to filter on
+        tag_type: Machine tag type (e.g., 'siglip', 'clip', 'trained')
+
+    Returns:
+        SQLAlchemy subquery of image IDs with ML tags for this keyword/tag_type
+    """
+    # Look up keyword by name (case-insensitive)
+    keyword_obj = db.query(Keyword).filter(
+        Keyword.tenant_id == tenant.id,
+        func.lower(Keyword.keyword) == func.lower(keyword.strip())
+    ).first()
+
+    if not keyword_obj:
+        # Keyword not found - return empty result
+        return db.query(ImageMetadata.id).filter(False).subquery()
+
+    # Return images that have MachineTag entries for this keyword and tag_type
+    ml_images = db.query(MachineTag.image_id).filter(
+        MachineTag.keyword_id == keyword_obj.id,
+        MachineTag.tag_type == tag_type,
+        MachineTag.tenant_id == tenant.id
+    ).distinct().subquery()
+
+    return db.query(ImageMetadata.id).filter(
+        ImageMetadata.tenant_id == tenant.id,
+        ImageMetadata.id.in_(ml_images)
+    ).subquery()
+
+
 def build_image_query_with_subqueries(
     db: Session,
     tenant: Tenant,
@@ -696,13 +747,15 @@ def build_image_query_with_subqueries(
     permatag_missing: bool = False,
     permatag_positive_missing: bool = False,
     dropbox_path_prefix: Optional[str] = None,
+    ml_keyword: Optional[str] = None,
+    ml_tag_type: Optional[str] = None,
 ) -> tuple:
     """Build a query with combined subquery filters (non-materialized).
-    
+
     This function replaces the materialized set intersection approach with
     SQLAlchemy subqueries, enabling database-native filtering without
     loading ID sets into Python memory.
-    
+
     Args:
         db: Database session
         tenant: Current tenant
@@ -716,7 +769,9 @@ def build_image_query_with_subqueries(
         permatag_signum: Optional permatag signum (1 or -1)
         permatag_missing: Whether to exclude permatag matches
         permatag_positive_missing: Whether to exclude images with positive permatags
-    
+        ml_keyword: Optional ML keyword to filter by (for zero-shot tagging)
+        ml_tag_type: Optional ML tag type (e.g., 'siglip', 'clip') to use with ml_keyword
+
     Returns:
         Tuple of (base_query, subqueries_list, is_empty)
         - base_query: SQLAlchemy query starting with ImageMetadata
@@ -783,7 +838,12 @@ def build_image_query_with_subqueries(
                 ImageMetadata.dropbox_path.ilike(f"{prefix}%")
             ).subquery()
             subqueries_list.append(dropbox_subquery)
-    
+
+    # Apply ML tag type filter if both keyword and tag_type provided
+    if ml_keyword and ml_tag_type:
+        ml_subquery = apply_ml_tag_type_filter_subquery(db, tenant, ml_keyword, ml_tag_type)
+        subqueries_list.append(ml_subquery)
+
     # Combine all subqueries with intersection logic
     for subquery in subqueries_list:
         base_query = base_query.filter(ImageMetadata.id.in_(select(subquery.c.id)))
