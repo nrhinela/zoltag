@@ -187,9 +187,17 @@ class ListEditor extends LitElement {
     }
 
     try {
-      // Dynamically import JSZip
-      const { default: JSZip } = await import('https://cdn.jsdelivr.net/npm/jszip@3/dist/jszip.min.js');
-      const zip = new JSZip();
+      // Load JSZip library from CDN if not already loaded
+      if (!window.JSZip) {
+        const script = document.createElement('script');
+        script.src = 'https://cdn.jsdelivr.net/npm/jszip@3/dist/jszip.min.js';
+        await new Promise((resolve, reject) => {
+          script.onload = resolve;
+          script.onerror = reject;
+          document.head.appendChild(script);
+        });
+      }
+      const zip = new window.JSZip();
 
       // Download each image and add to zip
       for (const item of this.listItems) {
