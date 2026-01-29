@@ -120,10 +120,18 @@ async def list_ml_training_images(
     for kw in all_keywords:
         by_category.setdefault(kw['category'], []).append(kw)
 
-    tagger = get_tagger(model_type=settings.tagging_model)
-    model_name = getattr(tagger, "model_name", settings.tagging_model)
-    model_version = getattr(tagger, "model_version", model_name)
-    keyword_models = load_keyword_models(db, tenant.id, model_name)
+    # Prefer the latest trained model name from the DB. Avoid loading the model
+    # unless refresh=true to keep listing lightweight in production.
+    model_name = model_row.model_name if model_row else settings.tagging_model
+    model_version = model_name
+    keyword_models = load_keyword_models(db, tenant.id, model_name) if model_name else {}
+    if refresh and keyword_models:
+        try:
+            tagger = get_tagger(model_type=settings.tagging_model)
+            model_name = getattr(tagger, "model_name", model_name)
+            model_version = getattr(tagger, "model_version", model_name)
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=f"ML model unavailable: {exc}")
 
     storage_client = storage.Client(project=settings.gcp_project_id)
     thumbnail_bucket = storage_client.bucket(tenant.get_thumbnail_bucket(settings))
@@ -244,4 +252,3 @@ async def get_ml_training_stats(
         "trained_tag_oldest": trained_oldest.isoformat() if trained_oldest else None,
         "trained_tag_newest": trained_newest.isoformat() if trained_newest else None
     }
-

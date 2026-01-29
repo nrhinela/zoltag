@@ -1,5 +1,7 @@
 """PhotoCat API routers package."""
 
+from . import auth
+from . import admin_users
 from . import keywords
 from . import lists
 from . import images
@@ -9,14 +11,18 @@ from . import admin_keywords
 from . import dropbox
 from . import sync
 from . import config
+from . import people
 
 __all__ = [
+    "auth",
+    "admin_users",
     "keywords",
     "lists",
     "images",
     "admin_people",
     "admin_tenants",
     "admin_keywords",
+    "people",
     "dropbox",
     "sync",
     "config",
