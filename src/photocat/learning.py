@@ -251,19 +251,21 @@ def build_keyword_models(
 
     for keyword, pos_ids in positive_ids.items():
         neg_ids = negative_ids.get(keyword, [])
-        if len(pos_ids) < min_positive or len(neg_ids) < min_negative:
+        # Require minimum positive examples, but allow zero negative examples
+        if len(pos_ids) < min_positive:
             skipped += 1
             continue
 
         pos_embeddings = _fetch_embeddings(db, tenant_id, pos_ids)
-        neg_embeddings = _fetch_embeddings(db, tenant_id, neg_ids)
+        neg_embeddings = _fetch_embeddings(db, tenant_id, neg_ids) if neg_ids else []
 
-        if not pos_embeddings or not neg_embeddings:
+        if not pos_embeddings:
             skipped += 1
             continue
 
         pos_centroid = np.mean(np.array(pos_embeddings), axis=0).tolist()
-        neg_centroid = np.mean(np.array(neg_embeddings), axis=0).tolist()
+        # Use zero vector if no negative examples available
+        neg_centroid = np.mean(np.array(neg_embeddings), axis=0).tolist() if neg_embeddings else [0.0] * len(pos_centroid)
 
         # Look up keyword_id for this keyword name
         keyword_obj = db.query(Keyword).filter(
