@@ -26,7 +26,7 @@ export async function fetchWithAuth(url, options = {}) {
 
   // Don't set Content-Type for FormData - let browser set it
   const isFormData = options.body instanceof FormData;
-  const headers = isFormData ? {} : { 'Content-Type': 'application/json' };
+  let headers = isFormData ? {} : { 'Content-Type': 'application/json' };
 
   if (options.headers) {
     headers = { ...headers, ...options.headers };

@@ -15,6 +15,7 @@ import './filter-chips.js';
 
 import { tailwind } from './tailwind-lit.js';
 import {
+  fetchWithAuth,
   getKeywords,
   getImageStats,
   getMlTrainingStats,
@@ -635,6 +636,169 @@ class PhotoCatApp extends LitElement {
         border-color: #fecaca;
         background: #fef2f2;
     }
+    .curate-rating-container {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 8px;
+    }
+    .curate-rating-checkbox {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        cursor: pointer;
+    }
+    .curate-rating-checkbox input[type="checkbox"] {
+        margin: 0;
+        cursor: pointer;
+    }
+    .curate-rating-checkbox label {
+        margin: 0;
+        font-size: 0.75rem;
+        font-weight: 600;
+        color: #1f2937;
+        cursor: pointer;
+        user-select: none;
+    }
+    .curate-rating-drop-zone {
+        width: 100%;
+        border: 1px solid #e5e7eb;
+        border-radius: 12px;
+        padding: 12px;
+        background: #f9fafb;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: flex-start;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        pointer-events: auto;
+        user-select: none;
+        margin-top: 8px;
+        box-sizing: border-box;
+        min-height: 140px;
+        gap: 10px;
+    }
+    .curate-rating-drop-zone.active {
+        border-color: #2563eb;
+        box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
+        background: #eff6ff;
+    }
+    .curate-rating-drop-zone-star {
+        font-size: 36px;
+        color: #fbbf24;
+        margin-top: 4px;
+    }
+    .curate-rating-drop-zone-content {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 8px;
+    }
+    .curate-rating-drop-zone:hover {
+        border-color: #2563eb;
+        background: #f0f9ff;
+        box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
+    }
+    .curate-rating-drop-zone.active {
+        border-color: #2563eb;
+        background: #dbeafe;
+        box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.3);
+        border-style: solid;
+    }
+    .curate-rating-drop-hint {
+        font-size: 0.875rem;
+        color: #6b7280;
+        text-align: center;
+        line-height: 1.4;
+    }
+    .curate-rating-count {
+        font-size: 0.75rem;
+        color: #6b7280;
+        margin-top: 4px;
+    }
+    .curate-rating-modal-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.5);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 10000;
+    }
+    .curate-rating-modal-content {
+        background: white;
+        border-radius: 12px;
+        padding: 32px;
+        box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
+        text-align: center;
+        max-width: 400px;
+    }
+    .curate-rating-modal-title {
+        font-size: 1.125rem;
+        font-weight: 600;
+        color: #1f2937;
+        margin-bottom: 8px;
+    }
+    .curate-rating-modal-subtitle {
+        font-size: 0.875rem;
+        color: #6b7280;
+        margin-bottom: 24px;
+    }
+    .curate-rating-modal-options {
+        display: flex;
+        gap: 16px;
+        justify-content: center;
+    }
+    .curate-rating-option {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 8px;
+        cursor: pointer;
+        padding: 12px;
+        border-radius: 8px;
+        border: 2px solid #e5e7eb;
+        background: #f9fafb;
+        transition: all 0.2s ease;
+        flex: 1;
+        max-width: 80px;
+    }
+    .curate-rating-option:hover {
+        border-color: #2563eb;
+        background: #eff6ff;
+        box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
+    }
+    .curate-rating-option-icon {
+        font-size: 2rem;
+        line-height: 1;
+    }
+    .curate-rating-option-label {
+        font-size: 0.75rem;
+        color: #6b7280;
+        font-weight: 500;
+    }
+    .curate-rating-modal-buttons {
+        display: flex;
+        gap: 12px;
+        justify-content: center;
+        margin-top: 24px;
+    }
+    .curate-rating-modal-cancel {
+        padding: 8px 16px;
+        border: 1px solid #d1d5db;
+        background: #f3f4f6;
+        color: #374151;
+        border-radius: 6px;
+        font-size: 0.875rem;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.2s ease;
+    }
+    .curate-rating-modal-cancel:hover {
+        background: #e5e7eb;
+        border-color: #9ca3af;
+    }
     .curate-tags-actions {
         display: flex;
         gap: 8px;
@@ -959,6 +1123,8 @@ class PhotoCatApp extends LitElement {
       curateCategoryCards: { type: Array },
       curateAuditTargets: { type: Array },
       curateExploreTargets: { type: Array },
+      curateExploreRatingEnabled: { type: Boolean },
+      curateAuditRatingEnabled: { type: Boolean },
       searchSavedItems: { type: Array },
       searchSavedDragTarget: { type: Boolean },
       searchLists: { type: Array },
@@ -1048,11 +1214,20 @@ class PhotoCatApp extends LitElement {
         { id: 1, category: '', keyword: '', action: 'add', count: 0 },
       ];
       this._curateExploreHotspotNextId = 2;
+      this.curateExploreRatingEnabled = false;
+      this.curateExploreRatingCount = 0;
+      this._curateExploreRatingPending = null;
       this._searchDropboxFetchTimer = null;
       this.curateAuditTargets = [
         { id: 1, category: '', keyword: '', action: 'remove', count: 0 },
       ];
       this._curateAuditHotspotNextId = 2;
+      this.curateAuditRatingEnabled = false;
+      this.curateAuditRatingCount = 0;
+      this._curateAuditRatingPending = null;
+      this._curateRatingModalActive = false;
+      this._curateRatingModalImageIds = null;
+      this._curateRatingModalSource = null;
       this._curateSubTabState = { main: null };
       this._curateActiveWorkingTab = 'main';
       this._curateSubTabState.main = this._snapshotCurateState();
@@ -1458,6 +1633,80 @@ class PhotoCatApp extends LitElement {
       this._handleCurateAuditHotspotDragLeave();
   }
 
+  _handleCurateExploreRatingToggle() {
+      this.curateExploreRatingEnabled = !this.curateExploreRatingEnabled;
+  }
+
+  _handleCurateExploreRatingDragOver(event) {
+      event.preventDefault();
+      this._curateExploreRatingDragTarget = true;
+      this.requestUpdate();
+  }
+
+  _handleCurateExploreRatingDragLeave() {
+      this._curateExploreRatingDragTarget = false;
+      this.requestUpdate();
+  }
+
+  _handleCurateExploreRatingDrop(event) {
+      event.preventDefault();
+      console.log('[Rating] _handleCurateExploreRatingDrop called');
+      const raw = event.dataTransfer?.getData('text/plain') || '';
+      console.log('[Rating] Raw data:', raw);
+      const ids = raw
+          .split(',')
+          .map((value) => Number.parseInt(value.trim(), 10))
+          .filter((value) => Number.isFinite(value) && value > 0);
+      console.log('[Rating] Parsed IDs:', ids);
+      if (!ids.length) {
+          console.log('[Rating] No valid IDs, aborting');
+          this._handleCurateExploreRatingDragLeave();
+          return;
+      }
+
+      // Show rating selection dialog
+      console.log('[Rating] Showing dialog for ids:', ids);
+      this._showExploreRatingDialog(ids);
+      this._handleCurateExploreRatingDragLeave();
+  }
+
+  _handleCurateAuditRatingToggle() {
+      this.curateAuditRatingEnabled = !this.curateAuditRatingEnabled;
+  }
+
+  _handleCurateAuditRatingDragOver(event) {
+      event.preventDefault();
+      this._curateAuditRatingDragTarget = true;
+      this.requestUpdate();
+  }
+
+  _handleCurateAuditRatingDragLeave() {
+      this._curateAuditRatingDragTarget = false;
+      this.requestUpdate();
+  }
+
+  _handleCurateAuditRatingDrop(event) {
+      event.preventDefault();
+      console.log('[Rating] _handleCurateAuditRatingDrop called');
+      const raw = event.dataTransfer?.getData('text/plain') || '';
+      console.log('[Rating] Raw data:', raw);
+      const ids = raw
+          .split(',')
+          .map((value) => Number.parseInt(value.trim(), 10))
+          .filter((value) => Number.isFinite(value) && value > 0);
+      console.log('[Rating] Parsed IDs:', ids);
+      if (!ids.length) {
+          console.log('[Rating] No valid IDs, aborting');
+          this._handleCurateAuditRatingDragLeave();
+          return;
+      }
+
+      // Show rating selection dialog
+      console.log('[Rating] Showing dialog for ids:', ids);
+      this._showAuditRatingDialog(ids);
+      this._handleCurateAuditRatingDragLeave();
+  }
+
   _handleCurateExploreReorderStart(event, image) {
       if (!image?.id) return;
       this._handleCurateDragStart(event, image);
@@ -1501,6 +1750,101 @@ class PhotoCatApp extends LitElement {
       window.addEventListener('pointerdown', this._handleCurateGlobalPointerDown);
       window.addEventListener('pointerup', this._handleCurateSelectionEnd);
       window.addEventListener('keyup', this._handleCurateSelectionEnd);
+      window.addEventListener('keydown', (e) => this._handleEscapeKey(e));
+  }
+
+  _showExploreRatingDialog(imageIds) {
+      console.log('[Rating] _showExploreRatingDialog called with ids:', imageIds);
+      this._curateRatingModalImageIds = imageIds;
+      this._curateRatingModalSource = 'explore';
+      this._curateRatingModalActive = true;
+      console.log('[Rating] Modal state set, active:', this._curateRatingModalActive);
+      this.requestUpdate();
+  }
+
+  _showAuditRatingDialog(imageIds) {
+      console.log('[Rating] _showAuditRatingDialog called with ids:', imageIds);
+      this._curateRatingModalImageIds = imageIds;
+      this._curateRatingModalSource = 'audit';
+      this._curateRatingModalActive = true;
+      console.log('[Rating] Modal state set, active:', this._curateRatingModalActive);
+      this.requestUpdate();
+  }
+
+  _handleRatingModalClick(rating) {
+      if (!this._curateRatingModalImageIds?.length) {
+          console.log('[Rating] No image IDs found');
+          return;
+      }
+      const ids = this._curateRatingModalImageIds;
+      const source = this._curateRatingModalSource;
+      console.log('[Rating] Modal clicked, rating:', rating, 'ids:', ids, 'source:', source);
+      this._closeRatingModal();
+      if (source === 'explore') {
+          console.log('[Rating] Applying explore rating');
+          this._applyExploreRating(ids, rating);
+      } else if (source === 'audit') {
+          console.log('[Rating] Applying audit rating');
+          this._applyAuditRating(ids, rating);
+      }
+  }
+
+  _closeRatingModal() {
+      this._curateRatingModalActive = false;
+      this._curateRatingModalImageIds = null;
+      this._curateRatingModalSource = null;
+      this.requestUpdate();
+  }
+
+  _handleEscapeKey(e) {
+      if (e.key === 'Escape' && this._curateRatingModalActive) {
+          this._closeRatingModal();
+      }
+  }
+
+  async _applyExploreRating(imageIds, rating) {
+      console.log('[Rating] _applyExploreRating called with ids:', imageIds, 'rating:', rating);
+      try {
+          const promises = imageIds.map((imageId) => {
+              console.log('[Rating] Sending PATCH for image:', imageId);
+              return fetchWithAuth(`/images/${imageId}/rating`, {
+                  method: 'PATCH',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ rating }),
+                  tenantId: this.tenant,
+              });
+          });
+          const results = await Promise.all(promises);
+          console.log('[Rating] All requests completed, results:', results);
+          this.curateExploreRatingCount += imageIds.length;
+          console.log('[Rating] Updated count to:', this.curateExploreRatingCount);
+          this._removeCurateImagesByIds(imageIds);
+          console.log('[Rating] Images removed from list');
+          this.requestUpdate();
+          console.log('[Rating] RequestUpdate called');
+      } catch (err) {
+          console.error('[Rating] Failed to apply explore rating:', err);
+      }
+  }
+
+  async _applyAuditRating(imageIds, rating) {
+      const idSet = new Set(imageIds);
+      try {
+          await Promise.all(imageIds.map((imageId) =>
+              fetchWithAuth(`/images/${imageId}/rating`, {
+                  method: 'PATCH',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ rating }),
+                  tenantId: this.tenant,
+              })
+          ));
+          this.curateAuditRatingCount += imageIds.length;
+          this.curateAuditImages = this.curateAuditImages.filter((img) => !idSet.has(img.id));
+          this.curateAuditDragSelection = this.curateAuditDragSelection.filter((id) => !idSet.has(id));
+          this.requestUpdate();
+      } catch (err) {
+          console.error('Failed to apply audit rating:', err);
+      }
   }
 
   disconnectedCallback() {
@@ -3318,6 +3662,35 @@ class PhotoCatApp extends LitElement {
     `;
 
     return html`
+        ${this._curateRatingModalActive ? html`
+          <div class="curate-rating-modal-overlay" @click=${this._closeRatingModal}>
+            <div class="curate-rating-modal-content" @click=${(e) => e.stopPropagation()}>
+              <div class="curate-rating-modal-title">Rate images</div>
+              <div class="curate-rating-modal-subtitle">${this._curateRatingModalImageIds?.length || 0} image(s)</div>
+              <div class="curate-rating-modal-options">
+                <div class="curate-rating-option" @click=${() => this._handleRatingModalClick(0)}>
+                  <div class="curate-rating-option-icon">🗑️</div>
+                  <div class="curate-rating-option-label">Garbage</div>
+                </div>
+                <div class="curate-rating-option" @click=${() => this._handleRatingModalClick(1)}>
+                  <div class="curate-rating-option-icon">⭐</div>
+                  <div class="curate-rating-option-label">1</div>
+                </div>
+                <div class="curate-rating-option" @click=${() => this._handleRatingModalClick(2)}>
+                  <div class="curate-rating-option-icon">⭐</div>
+                  <div class="curate-rating-option-label">2</div>
+                </div>
+                <div class="curate-rating-option" @click=${() => this._handleRatingModalClick(3)}>
+                  <div class="curate-rating-option-icon">⭐</div>
+                  <div class="curate-rating-option-label">3</div>
+                </div>
+              </div>
+              <div class="curate-rating-modal-buttons">
+                <button class="curate-rating-modal-cancel" @click=${this._closeRatingModal}>Cancel</button>
+              </div>
+            </div>
+          </div>
+        ` : html``}
         <app-header
             .tenant=${this.tenant}
             @tenant-change=${this._handleTenantChange}
@@ -3951,9 +4324,32 @@ class PhotoCatApp extends LitElement {
                         <div class="curate-pane-header">
                             <div class="curate-pane-header-row">
                                 <span>Hotspots</span>
+                                <div class="curate-rating-checkbox" style="margin-left: auto;">
+                                    <input
+                                        type="checkbox"
+                                        id="rating-checkbox-explore"
+                                        .checked=${this.curateExploreRatingEnabled}
+                                        @change=${this._handleCurateExploreRatingToggle}
+                                    />
+                                    <label for="rating-checkbox-explore">Rating</label>
+                                </div>
                             </div>
                         </div>
                         <div class="curate-pane-body">
+                          ${this.curateExploreRatingEnabled ? html`
+                            <div
+                              class="curate-rating-drop-zone ${this._curateExploreRatingDragTarget ? 'active' : ''}"
+                              @dragover=${(event) => this._handleCurateExploreRatingDragOver(event)}
+                              @dragleave=${this._handleCurateExploreRatingDragLeave}
+                              @drop=${(event) => this._handleCurateExploreRatingDrop(event)}
+                            >
+                              <div class="curate-rating-drop-zone-star">⭐</div>
+                              <div class="curate-rating-drop-zone-content">
+                                <div class="curate-rating-drop-hint">Drop to rate</div>
+                                <div class="curate-rating-count">${this.curateExploreRatingCount || 0} rated</div>
+                              </div>
+                            </div>
+                          ` : html``}
                           <div class="curate-utility-panel">
                             ${(this.curateExploreTargets || []).map((target) => {
                               const isFirstTarget = (this.curateExploreTargets?.[0]?.id === target.id);
@@ -4011,6 +4407,7 @@ class PhotoCatApp extends LitElement {
                             <button class="curate-utility-add" @click=${this._handleCurateExploreHotspotAddTarget}>
                               +
                             </button>
+                          </div>
                           </div>
                         </div>
                     </div>
@@ -4161,9 +4558,32 @@ class PhotoCatApp extends LitElement {
                             <div class="curate-pane-header">
                                 <div class="curate-pane-header-row">
                                     <span>Hotspots</span>
+                                    <div class="curate-rating-checkbox" style="margin-left: auto;">
+                                        <input
+                                            type="checkbox"
+                                            id="rating-checkbox-audit"
+                                            .checked=${this.curateAuditRatingEnabled}
+                                            @change=${this._handleCurateAuditRatingToggle}
+                                        />
+                                        <label for="rating-checkbox-audit">Rating</label>
+                                    </div>
                                 </div>
                             </div>
                             <div class="curate-pane-body">
+                              ${this.curateAuditRatingEnabled ? html`
+                                <div
+                                  class="curate-rating-drop-zone ${this._curateAuditRatingDragTarget ? 'active' : ''}"
+                                  @dragover=${(event) => this._handleCurateAuditRatingDragOver(event)}
+                                  @dragleave=${this._handleCurateAuditRatingDragLeave}
+                                  @drop=${(event) => this._handleCurateAuditRatingDrop(event)}
+                                >
+                                  <div class="curate-rating-drop-zone-star">⭐</div>
+                                  <div class="curate-rating-drop-zone-content">
+                                    <div class="curate-rating-drop-hint">Drop to rate</div>
+                                    <div class="curate-rating-count">${this.curateAuditRatingCount || 0} rated</div>
+                                  </div>
+                                </div>
+                              ` : html``}
                               <div class="curate-utility-panel">
                                 ${(this.curateAuditTargets || []).map((target) => {
                                   const isPrimary = (this.curateAuditTargets?.[0]?.id === target.id);
@@ -4223,6 +4643,7 @@ class PhotoCatApp extends LitElement {
                                 <button class="curate-utility-add" @click=${this._handleCurateAuditHotspotAddTarget}>
                                   +
                                 </button>
+                              </div>
                               </div>
                             </div>
                         </div>
