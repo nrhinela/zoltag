@@ -243,7 +243,7 @@ class ListEditor extends LitElement {
       }
 
       // Load jsPDF library for README generation
-      if (!window.jsPDF) {
+      if (!window.jspdf) {
         const pdfScript = document.createElement('script');
         pdfScript.src = 'https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js';
         await new Promise((resolve, reject) => {
@@ -256,7 +256,7 @@ class ListEditor extends LitElement {
       const zip = new window.JSZip();
 
       // Create README.pdf with list information
-      const { jsPDF } = window;
+      const jsPDF = window.jspdf.jsPDF;
       const doc = new jsPDF();
       const pageWidth = doc.internal.pageSize.getWidth();
       const pageHeight = doc.internal.pageSize.getHeight();
