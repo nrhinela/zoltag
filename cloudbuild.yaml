@@ -10,10 +10,10 @@ steps:
   # Use Node 20 for Vite 7.x compatibility - clean install + build
   - name: 'node:20'
     entrypoint: 'bash'
-    args: ['-c', 'export VITE_SUPABASE_URL=https://mmpluqmxpgbgmimfviru.supabase.co && export VITE_SUPABASE_ANON_KEY=sb_publishable_aV2IHPkdJYcXER87Qamntw_QO-rr2Lm && npm ci --include=dev && npm run build']
-    env:
-      - 'VITE_SUPABASE_URL=https://mmpluqmxpgbgmimfviru.supabase.co'
-      - 'VITE_SUPABASE_ANON_KEY=sb_publishable_aV2IHPkdJYcXER87Qamntw_QO-rr2Lm'
+    args: ['-c', 'export VITE_SUPABASE_URL=$$SUPABASE_URL && export VITE_SUPABASE_ANON_KEY=$$SUPABASE_ANON_KEY && npm ci --include=dev && npm run build']
+    secretEnv:
+      - 'SUPABASE_URL'
+      - 'SUPABASE_ANON_KEY'
   
   # Build the container image with BuildKit and cache
   - name: 'gcr.io/cloud-builders/docker'
@@ -57,9 +57,9 @@ steps:
       - '--max-instances=1'
       - '--min-instances=0'
       - '--set-env-vars'
-      - 'GCP_PROJECT_ID=$PROJECT_ID,ENVIRONMENT=prod,TAGGING_MODEL=siglip,THUMBNAIL_BUCKET_NAME=photocat-483622-prod-shared,THUMBNAIL_CDN_BASE_URL=https://pc.nedeva.com,DATABASE_URL=postgresql://postgres:EcrZH7UymHpa6kqduFHG@db.mmpluqmxpgbgmimfviru.supabase.co:5432/postgres?sslmode=require,SUPABASE_URL=https://mmpluqmxpgbgmimfviru.supabase.co,SUPABASE_ANON_KEY=sb_publishable_aV2IHPkdJYcXER87Qamntw_QO-rr2Lm'
+      - 'GCP_PROJECT_ID=$PROJECT_ID,ENVIRONMENT=prod,TAGGING_MODEL=siglip,THUMBNAIL_BUCKET_NAME=photocat-483622-prod-shared,THUMBNAIL_CDN_BASE_URL=https://pc.nedeva.com'
       - '--set-secrets'
-      - 'DROPBOX_APP_KEY=dropbox-app-key:latest,DROPBOX_APP_SECRET=dropbox-app-secret:latest,SUPABASE_SERVICE_ROLE_KEY=supabase-service-role-key:latest'
+      - 'DROPBOX_APP_KEY=dropbox-app-key:latest,DROPBOX_APP_SECRET=dropbox-app-secret:latest,SUPABASE_SERVICE_ROLE_KEY=supabase-service-role-key:latest,SUPABASE_URL=supabase-url:latest,SUPABASE_ANON_KEY=supabase-anon-key:latest,DATABASE_URL=supabase-db-url:latest'
 
   # Deploy worker service
   - name: 'gcr.io/cloud-builders/gcloud'
@@ -80,9 +80,9 @@ steps:
       - '--timeout=900'
       - '--max-instances=1'
       - '--set-env-vars'
-      - 'GCP_PROJECT_ID=$PROJECT_ID,ENVIRONMENT=prod,WORKER_MODE=true,TAGGING_MODEL=siglip,THUMBNAIL_BUCKET_NAME=photocat-483622-prod-shared,THUMBNAIL_CDN_BASE_URL=https://pc.nedeva.com,DATABASE_URL=postgresql://postgres:EcrZH7UymHpa6kqduFHG@db.mmpluqmxpgbgmimfviru.supabase.co:5432/postgres?sslmode=require,SUPABASE_URL=https://mmpluqmxpgbgmimfviru.supabase.co,SUPABASE_ANON_KEY=sb_publishable_aV2IHPkdJYcXER87Qamntw_QO-rr2Lm'
+      - 'GCP_PROJECT_ID=$PROJECT_ID,ENVIRONMENT=prod,WORKER_MODE=true,TAGGING_MODEL=siglip,THUMBNAIL_BUCKET_NAME=photocat-483622-prod-shared,THUMBNAIL_CDN_BASE_URL=https://pc.nedeva.com'
       - '--set-secrets'
-      - 'DROPBOX_APP_KEY=dropbox-app-key:latest,DROPBOX_APP_SECRET=dropbox-app-secret:latest,SUPABASE_SERVICE_ROLE_KEY=supabase-service-role-key:latest'
+      - 'DROPBOX_APP_KEY=dropbox-app-key:latest,DROPBOX_APP_SECRET=dropbox-app-secret:latest,SUPABASE_SERVICE_ROLE_KEY=supabase-service-role-key:latest,SUPABASE_URL=supabase-url:latest,SUPABASE_ANON_KEY=supabase-anon-key:latest,DATABASE_URL=supabase-db-url:latest'
 
 images:
   - 'gcr.io/$PROJECT_ID/photocat:$_COMMIT_SHA'
@@ -91,3 +91,10 @@ options:
   machineType: 'E2_MEDIUM'
 
 timeout: '2400s'  # 40 minutes
+
+availableSecrets:
+  secretManager:
+    - versionName: projects/$PROJECT_ID/secrets/supabase-url/versions/latest
+      env: 'SUPABASE_URL'
+    - versionName: projects/$PROJECT_ID/secrets/supabase-anon-key/versions/latest
+      env: 'SUPABASE_ANON_KEY'
