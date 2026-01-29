@@ -11,6 +11,14 @@ class ListEditor extends LitElement {
     .left-justified-header {
       text-align: left;
     }
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+    .animate-spin {
+      animation: spin 1s linear infinite;
+    }
   `];
 
   static properties = {
@@ -20,6 +28,7 @@ class ListEditor extends LitElement {
     selectedList: { type: Object },
     listItems: { type: Array },
     editingSelectedList: { type: Boolean },
+    isDownloading: { type: Boolean },
   };
 
   constructor() {
@@ -29,6 +38,7 @@ class ListEditor extends LitElement {
     this.selectedList = null;
     this.listItems = [];
     this.editingSelectedList = false;
+    this.isDownloading = false;
     this._isVisible = false;
     this._hasRefreshedOnce = false;
   }
@@ -186,6 +196,8 @@ class ListEditor extends LitElement {
       return;
     }
 
+    this.isDownloading = true;
+
     try {
       // Load JSZip library from CDN if not already loaded
       if (!window.JSZip) {
@@ -231,6 +243,8 @@ class ListEditor extends LitElement {
     } catch (error) {
       console.error('Error creating zip file:', error);
       alert('Failed to download images. Please try again.');
+    } finally {
+      this.isDownloading = false;
     }
   }
 
@@ -310,6 +324,10 @@ class ListEditor extends LitElement {
                 </div>
               </div>
               <div class="flex gap-2">
+                <button @click=${this._downloadListImages} ?disabled=${this.isDownloading} class="bg-blue-600 text-white px-3 py-1 rounded text-xs hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1">
+                  ${this.isDownloading ? html`<span class="inline-block w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></span>` : ''}
+                  Download
+                </button>
                 <button @click=${this._startEditingSelectedList} class="bg-green-600 text-white px-3 py-1 rounded text-xs hover:bg-green-700">Edit</button>
                 <button @click=${() => { this.selectedList = null; this.listItems = []; this.editingSelectedList = false; }} class="text-gray-500 hover:text-gray-700 text-2xl">×</button>
               </div>
@@ -349,9 +367,6 @@ class ListEditor extends LitElement {
               </div>
             `}
 
-            <div class="mt-6 flex justify-end gap-2 border-t border-gray-200 pt-4">
-              <button @click=${this._downloadListImages} class="bg-blue-600 text-white px-4 py-2 rounded text-sm hover:bg-blue-700">Download</button>
-            </div>
           </div>
         </div>
       ` : ''}
