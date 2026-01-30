@@ -529,6 +529,32 @@ class ImageEditor extends LitElement {
       color: #ffffff;
       font-size: 12px;
       text-align: center;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .fullscreen-zoom-buttons {
+      display: flex;
+      gap: 6px;
+    }
+    .fullscreen-zoom-button {
+      padding: 4px 8px;
+      border: 1px solid rgba(255, 255, 255, 0.3);
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.1);
+      color: #ffffff;
+      font-size: 11px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .fullscreen-zoom-button:hover {
+      background: rgba(255, 255, 255, 0.2);
+      border-color: rgba(255, 255, 255, 0.5);
+    }
+    .fullscreen-zoom-button.active {
+      background: rgba(255, 255, 255, 0.3);
+      border-color rgba(255, 255, 255, 0.7);
+      font-weight: 600;
     }
     @media (max-width: 900px) {
       .panel-body {
@@ -567,6 +593,7 @@ class ImageEditor extends LitElement {
     fullscreenOpen: { type: Boolean },
     imageSet: { type: Array },
     currentImageIndex: { type: Number },
+    fullscreenZoom: { type: Number },
   };
 
   constructor() {
@@ -593,6 +620,7 @@ class ImageEditor extends LitElement {
     this.fullscreenOpen = false;
     this.imageSet = [];
     this.currentImageIndex = -1;
+    this.fullscreenZoom = 50;
     this._ratingBurstActive = false;
     this._ratingBurstTimer = null;
     this._suppressPermatagRefresh = false;
@@ -661,9 +689,7 @@ class ImageEditor extends LitElement {
     }
     if (changedProperties.has('details')) {
       this._syncTagSubTab();
-      if (this.activeTab === 'image') {
-        this._loadFullImage();
-      }
+      this._loadFullImage();
     }
     if (changedProperties.has('open') && !this.open && !this.embedded) {
       this._resetFullImage();
@@ -795,6 +821,11 @@ class ImageEditor extends LitElement {
 
   _closeFullscreen() {
     this.fullscreenOpen = false;
+    this.fullscreenZoom = 50;
+  }
+
+  _setFullscreenZoom(zoom) {
+    this.fullscreenZoom = zoom;
   }
 
   _goToPreviousImage() {
@@ -1396,11 +1427,18 @@ class ImageEditor extends LitElement {
             src="${fullscreenImageSrc}"
             alt="${this.image.filename}"
             @click=${(e) => e.stopPropagation()}
+            style="transform: scale(${this.fullscreenZoom / 100}); transform-origin: top left;"
           >
         </div>
         <button class="fullscreen-close" @click=${() => this._closeFullscreen()}>×</button>
-        <div class="fullscreen-controls">
-          Scroll to pan • Click to close
+        <div class="fullscreen-controls" @click=${(e) => e.stopPropagation()}>
+          <div class="fullscreen-zoom-buttons">
+            <button class="fullscreen-zoom-button ${this.fullscreenZoom === 50 ? 'active' : ''}" @click=${(e) => { e.stopPropagation(); this._setFullscreenZoom(50); }}>50%</button>
+            <button class="fullscreen-zoom-button ${this.fullscreenZoom === 75 ? 'active' : ''}" @click=${(e) => { e.stopPropagation(); this._setFullscreenZoom(75); }}>75%</button>
+            <button class="fullscreen-zoom-button ${this.fullscreenZoom === 100 ? 'active' : ''}" @click=${(e) => { e.stopPropagation(); this._setFullscreenZoom(100); }}>100%</button>
+          </div>
+          <span style="color: rgba(255, 255, 255, 0.6);">•</span>
+          <span style="font-size: 11px; color: rgba(255, 255, 255, 0.7); cursor: pointer;" @click=${(e) => { e.stopPropagation(); this._closeFullscreen(); }}>Scroll to pan • Click to close</span>
         </div>
       </div>
     `;

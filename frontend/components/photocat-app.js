@@ -3247,9 +3247,6 @@ class PhotoCatApp extends LitElement {
           this.curateAuditImages = this.curateAuditImages.map(update);
           this.curateAuditSelection = this.curateAuditSelection.map(update);
       }
-      if (this.curateEditorImage?.id === imageId) {
-          this.curateEditorImage = { ...this.curateEditorImage, rating };
-      }
   }
 
   _handleCurateRating(event, image, rating) {
