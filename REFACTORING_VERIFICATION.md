@@ -251,11 +251,17 @@ The refactoring phase is complete and successful.
 
 **Root Cause:** The `_handleChipFiltersChanged()` event handler reset most filter state but forgot to reset `curateNoPositivePermatags`, causing it to leak from curate operations into search queries.
 
-**Fix Applied (Commits 1234a80, 07ce3d7):**
-1. Added tab-gating check: Only apply `curateNoPositivePermatags` filter when `activeTab === 'curate'`
-2. Reset `curateNoPositivePermatags = false` in `_handleChipFiltersChanged()` along with other filter resets
+**Fix Applied (Commits 1234a80, 07ce3d7, 3df5d81):**
+1. **Commit 1234a80:** Added tab-gating check: Only apply `curateNoPositivePermatags` filter when `activeTab === 'curate'`
+2. **Commit 07ce3d7:** Reset `curateNoPositivePermatags = false` in `_handleChipFiltersChanged()` along with other filter resets
+3. **Commit 3df5d81:** Also reset `curateAuditMode`, `curateAuditKeyword`, and `curateAuditCategory` to prevent audit state from leaking into search queries
 
-**Result:** Search queries no longer include unwanted permatag filters from previous operations.
+**Root Causes Fixed:**
+- `curateNoPositivePermatags` flag persisting across tabs
+- `curateAuditMode === 'missing'` causing `permatag_missing=true` to be added to search queries
+- Incomplete state reset in filter chip handler
+
+**Result:** Search queries no longer include unwanted permatag or audit filters from previous operations.
 
 ---
 
