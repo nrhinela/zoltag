@@ -2929,6 +2929,62 @@ class PhotoCatApp extends LitElement {
           return;
       }
       this.searchSubTab = nextTab;
+      if (nextTab === 'explore-by-tag') {
+          this._loadExploreByTagData();
+      }
+  }
+
+  async _loadExploreByTagData() {
+      // Get all keywords with 2+ star ratings
+      const keywordsByRating = {};
+      const imageStats = this.imageStats;
+
+      if (imageStats?.rating_by_category) {
+          Object.entries(imageStats.rating_by_category).forEach(([category, categoryData]) => {
+              Object.entries(categoryData.keywords || {}).forEach(([keyword, keywordData]) => {
+                  const twoStarPlus = (keywordData.stars_2 || 0) + (keywordData.stars_3 || 0);
+                  if (twoStarPlus > 0) {
+                      // Use category - keyword format to match template rendering
+                      const keywordName = `${category} - ${keyword}`;
+                      keywordsByRating[keywordName] = { category, keyword, twoStarPlus };
+                  }
+              });
+          });
+      }
+
+      // Fetch images for each keyword, sorted alphabetically
+      const sortedKeywords = Object.entries(keywordsByRating).sort(([a], [b]) => a.localeCompare(b));
+      for (const [keywordName, data] of sortedKeywords) {
+          const cacheKey = `exploreByTag_${keywordName}`;
+          if (!this[cacheKey]) {
+              try {
+                  const result = await getImages(this.tenant, {
+                      permatagKeyword: data.keyword,
+                      permatagCategory: data.category,
+                      permatagSignum: 1,
+                      rating: 2,
+                      ratingOperator: 'gte',
+                      limit: 10,
+                      orderBy: 'rating',
+                      sortOrder: 'desc'
+                  });
+                  console.log(`Raw API result for keyword "${keywordName}":`, result);
+                  const images = Array.isArray(result) ? result : (result?.images || []);
+                  console.log(`Processed images for keyword "${keywordName}": ${images.length} items`);
+                  if (images.length > 0) {
+                      console.log(`First image keys:`, Object.keys(images[0]));
+                      console.log(`First image:`, images[0]);
+                  }
+                  // Filter out any invalid images before caching
+                  const validImages = images.filter(img => img && img.id);
+                  console.log(`Valid images after filtering: ${validImages.length}/${images.length}`);
+                  this[cacheKey] = validImages;
+              } catch (error) {
+                  console.error(`Error loading images for keyword "${keywordName}":`, error);
+              }
+          }
+      }
+      this.requestUpdate();
   }
 
   _handleCurateAuditModeChange(valueOrEvent) {
@@ -3865,6 +3921,12 @@ class PhotoCatApp extends LitElement {
                         >
                           Search Home
                         </button>
+                        <button
+                          class="curate-subtab ${this.searchSubTab === 'explore-by-tag' ? 'active' : ''}"
+                          @click=${() => this._handleSearchSubTabChange('explore-by-tag')}
+                        >
+                          Explore by Tag
+                        </button>
                     </div>
                     <div class="ml-auto flex items-center gap-4 text-xs text-gray-600 mr-4">
                       <label class="font-semibold text-gray-600">Thumb</label>
@@ -4136,6 +4198,223 @@ class PhotoCatApp extends LitElement {
                     </div>
                   </div>
                 </div>
+                <div ?hidden=${this.searchSubTab !== 'explore-by-tag'}>
+                  <!-- Explore by Tag View with Saved Items Panel -->
+                  <div class="curate-layout search-layout">
+                    <div class="curate-pane">
+                      <div class="curate-pane-body p-4">
+                        ${(() => {
+                          // Get all keywords with at least one 2+ star rating
+                          const keywordsByRating = {};
+                          const imageStats = this.imageStats;
+
+                          if (imageStats?.rating_by_category) {
+                            Object.entries(imageStats.rating_by_category).forEach(([category, categoryData]) => {
+                              Object.entries(categoryData.keywords || {}).forEach(([keyword, keywordData]) => {
+                                // Check if keyword has at least one 2+ star item
+                                const twoStarPlus = (keywordData.stars_2 || 0) + (keywordData.stars_3 || 0);
+                                if (twoStarPlus > 0) {
+                                  const keywordName = `${category} - ${keyword}`;
+                                  keywordsByRating[keywordName] = {
+                                    category,
+                                    keyword,
+                                    twoStarPlus
+                                  };
+                                }
+                              });
+                            });
+                          }
+
+                          // Sort keywords alphabetically
+                          const sortedKeywords = Object.keys(keywordsByRating).sort();
+
+                          if (sortedKeywords.length === 0) {
+                            return html`
+                              <div class="text-center py-8 text-gray-500">
+                                <p>No keywords with 2+ star ratings found.</p>
+                              </div>
+                            `;
+                          }
+
+                          return html`
+                            <div class="space-y-6">
+                              ${sortedKeywords.map((keywordName) => {
+                                return html`
+                                  <div>
+                                    <h3 class="text-sm font-semibold text-gray-800 mb-3">${keywordName}</h3>
+                                    <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2">
+                                      ${(() => {
+                                        // Get images for this keyword from the explore by tag cache
+                                        const cacheKey = `exploreByTag_${keywordName}`;
+                                        const cachedImages = this[cacheKey] || [];
+
+                                        if (cachedImages.length === 0) {
+                                          return html`
+                                            <div class="col-span-full text-xs text-gray-400 py-4 text-center">
+                                              Loading...
+                                            </div>
+                                          `;
+                                        }
+
+                                        return cachedImages.map((image, index) => {
+                                          if (!image || !image.id) {
+                                            console.warn(`Invalid image object at index ${index}:`, image, 'Keys:', image ? Object.keys(image) : 'N/A');
+                                            return html``;
+                                          }
+                                          return html`
+                                            <div class="curate-thumb-wrapper ${this.curateDragSelection.includes(image.id) ? 'selected' : ''}" @click=${(event) => this._handleCurateImageClick(event, image)}>
+                                              <img
+                                                src=${image.thumbnail_url || `/api/v1/images/${image.id}/thumbnail`}
+                                                alt=${image.filename}
+                                                class="curate-thumb ${this.curateDragSelection.includes(image.id) ? 'selected' : ''}"
+                                                draggable="true"
+                                                @dragstart=${(event) => this._handleCurateDragStart(event, image)}
+                                                @pointerdown=${(event) => this._handleCuratePointerDown(event, index, image.id)}
+                                                @pointermove=${(event) => this._handleCuratePointerMove(event)}
+                                                @pointerenter=${() => this._handleCurateSelectHover(index)}
+                                              >
+                                              ${this._renderCurateRatingWidget(image)}
+                                              ${this._renderCurateRatingStatic(image)}
+                                              ${this._renderCurateAiMLScore(image)}
+                                              ${this._renderCuratePermatagSummary(image)}
+                                            </div>
+                                          `;
+                                        });
+                                      })()}
+                                    </div>
+                                  </div>
+                                `;
+                              })}
+                            </div>
+                          `;
+                        })()}
+                      </div>
+                    </div>
+                    <div
+                      class="curate-pane utility-targets search-saved-pane ${this.searchSavedDragTarget ? 'drag-active' : ''}"
+                      @dragover=${this._handleSearchSavedDragOver}
+                      @dragleave=${this._handleSearchSavedDragLeave}
+                      @drop=${this._handleSearchSavedDrop}
+                    >
+                        <div class="curate-pane-header">
+                            <div class="curate-pane-header-row">
+                                <span>Saved Items</span>
+                            </div>
+                            <div class="search-list-controls mt-2">
+                              ${(() => {
+                                const options = [...(this.searchLists || [])];
+                                const selectedValue = this.searchListId ? String(this.searchListId) : '';
+                                if (selectedValue && !options.some((list) => String(list.id) === selectedValue)) {
+                                  options.unshift({
+                                    id: this.searchListId,
+                                    title: this.searchListTitle || `List ${this.searchListId}`,
+                                  });
+                                }
+                                const hasSearchListTitle = this.searchListTitle && this.searchListTitle.trim();
+                                const duplicateNewListTitle = hasSearchListTitle && (this.searchLists || []).some((list) => list.title === this.searchListTitle);
+                                return html`
+                              <div class="search-list-row">
+                                <span class="search-list-label">Current List:</span>
+                                <select
+                                  class="flex-1 min-w-[160px]"
+                                  ?disabled=${this.searchListLoading}
+                                  @change=${this._handleSearchListSelect}
+                                >
+                                  <option value="" ?selected=${!selectedValue}>New list</option>
+                                  ${options.map((list) => html`
+                                    <option
+                                      value=${String(list.id)}
+                                      ?selected=${String(list.id) === selectedValue}
+                                    >
+                                      ${list.title || `List ${list.id}`}
+                                    </option>
+                                  `)}
+                                </select>
+                              </div>
+                              ${this.searchListId ? html`` : html`
+                                <div class="search-list-row">
+                                  <span class="search-list-label">New List Name:</span>
+                                  <input
+                                    type="text"
+                                    placeholder="List title"
+                                    class="flex-1 min-w-[160px]"
+                                    .value=${this.searchListTitle}
+                                    ?disabled=${this.searchListLoading}
+                                    @input=${this._handleSearchListTitleChange}
+                                    data-search-list-title
+                                  >
+                                </div>
+                              `}
+                              <div class="search-list-actions">
+                                <button
+                                  class="curate-pane-action secondary"
+                                  ?disabled=${this.searchListSaving || this.searchListLoading || !hasSearchListTitle || (!this.searchListId && duplicateNewListTitle)}
+                                  @click=${this.searchListId ? this._handleSearchSaveExistingList : this._handleSearchSaveNewList}
+                                  title=${this.searchListId ? 'Save to existing list' : 'Save new list'}
+                                >
+                                  Save
+                                </button>
+                                ${this.searchListId ? html`
+                                  <button
+                                    class="curate-pane-action secondary"
+                                    ?disabled=${this.searchListSaving || this.searchListLoading}
+                                    @click=${this._handleSearchSaveNewList}
+                                    title="Save as new list"
+                                  >
+                                    Save new
+                                  </button>
+                                ` : html``}
+                              </div>
+                                `;
+                              })()}
+                            </div>
+                            ${(() => {
+                              const hasSearchListTitle = this.searchListTitle && this.searchListTitle.trim();
+                              const duplicateNewListTitle = hasSearchListTitle && (this.searchLists || []).some((list) => list.title === this.searchListTitle);
+                              return this.searchListPromptNewTitle ? html`
+                                <div class="text-xs text-blue-600 mt-1">Enter a new list title, then click "Save new".</div>
+                              ` : duplicateNewListTitle ? html`
+                                <div class="text-xs text-red-600 mt-1">List title already exists.</div>
+                              ` : html``;
+                            })()}
+                        </div>
+                        <div class="curate-pane-body">
+                          ${this.searchSavedItems.length ? html`
+                            <div class="search-saved-grid">
+                              ${this.searchSavedItems.map((item) => html`
+                                <div
+                                  class="search-saved-item"
+                                  draggable="true"
+                                  @dragstart=${(event) => this._handleSearchSavedDragStart(event, item)}
+                                >
+                                  <img
+                                    src=${item.thumbnail_url || `/api/v1/images/${item.id}/thumbnail`}
+                                    alt=${item.filename || `Saved ${item.id}`}
+                                    class="search-saved-thumb"
+                                  >
+                                  <button
+                                    class="search-saved-remove"
+                                    title="Remove from saved"
+                                    @click=${() => this._handleSearchRemoveSaved(item.id)}
+                                  >
+                                    ×
+                                  </button>
+                                  <div class="search-saved-meta">
+                                    <span>#${item.id}</span>
+                                    ${Number.isFinite(item.rating) ? html`<span>${item.rating}★</span>` : html``}
+                                  </div>
+                                </div>
+                              `)}
+                            </div>
+                          ` : html`
+                            <div class="curate-drop ${this.searchSavedDragTarget ? 'active' : ''}">
+                              Drag images here
+                            </div>
+                          `}
+                        </div>
+                    </div>
+                  </div>
+                </div>
             </div>
             <div slot="curate" class="container">
                 <div class="flex items-center justify-between mb-4">
@@ -4198,7 +4477,97 @@ class PhotoCatApp extends LitElement {
                 </div>
                 <div ?hidden=${this.curateSubTab !== 'home'}>
                   <div class="grid grid-cols-1 lg:grid-cols-[1fr_1fr] gap-6">
-                    <!-- Left Column: Ratings Information -->
+                    <!-- Left Column: Tag Counts -->
+                    <div class="bg-white rounded-lg shadow p-4 self-start sticky top-0 max-h-[calc(100vh-200px)] overflow-y-auto">
+                      <div class="text-xs text-gray-500 uppercase font-semibold mb-4">TAGS</div>
+                      <!-- Tag Counts Summary Box -->
+                      <div class="border border-gray-200 rounded-lg p-2 bg-green-50 mb-2">
+                        <!-- Headers -->
+                        <div class="grid grid-cols-5 gap-1 text-xs mb-1 pb-1 border-b border-green-200">
+                          <div class="text-left py-1 px-1 font-semibold text-green-900">Tags</div>
+                          <div class="text-center py-1 px-1 font-semibold text-green-900">Total</div>
+                          <div class="text-center py-1 px-1 font-semibold text-green-900">Tagged</div>
+                          <div class="text-center py-1 px-1 font-semibold text-green-900">Untagged</div>
+                          <div class="text-center py-1 px-1 font-semibold text-green-900">%Tagged</div>
+                        </div>
+                        <!-- Data Row -->
+                        <div class="grid grid-cols-5 gap-1 text-xs">
+                          <div class="text-left py-1 px-1"></div>
+                          ${(() => {
+                            const total = this.imageStats?.image_count || 0;
+                            const tagged = this.imageStats?.positive_permatag_image_count || 0;
+                            const untagged = total - tagged;
+                            const percent = total > 0 ? Math.round((tagged / total) * 100) : 0;
+                            return html`
+                              <div class="text-center py-1 px-1 bg-white rounded border border-gray-100">
+                                <div class="text-gray-700">${this._formatStatNumber(total)}</div>
+                              </div>
+                              <div class="text-center py-1 px-1 bg-white rounded border border-gray-100">
+                                <div class="text-green-600">${this._formatStatNumber(tagged)}</div>
+                              </div>
+                              <div class="text-center py-1 px-1 bg-white rounded border border-gray-100">
+                                <div class="text-orange-600">${this._formatStatNumber(untagged)}</div>
+                              </div>
+                              <div class="text-center py-1 px-1 bg-white rounded border border-gray-100">
+                                <div class="text-green-600 font-semibold">${percent}%</div>
+                              </div>
+                            `;
+                          })()}
+                        </div>
+                      </div>
+
+                      <div class="flex items-center gap-2 mb-3 text-xs font-semibold text-gray-600">
+                        ${[
+                          { key: 'permatags', label: 'Permatags' },
+                          { key: 'zero_shot', label: 'Zero-Shot' },
+                          { key: 'keyword_model', label: 'Keyword-Model' },
+                        ].map((tab) => html`
+                          <button
+                            class="px-2 py-1 rounded border ${this.activeCurateTagSource === tab.key ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-200'}"
+                            @click=${() => {
+                              this.activeCurateTagSource = tab.key;
+                              this._updateCurateCategoryCards();
+                            }}
+                          >
+                            ${tab.label}
+                          </button>
+                        `)}
+                      </div>
+                      ${(this.curateCategoryCards || []).length ? html`
+                        <div class="tag-carousel">
+                          ${(this.curateCategoryCards || []).map((item) => {
+                            const label = item.category.replace(/_/g, ' ');
+                            return html`
+                              <div class="tag-card border border-gray-200 rounded-lg p-2">
+                                <div class="text-xs font-semibold text-gray-700 truncate" title=${label}>${label}</div>
+                                <div class="tag-card-body mt-2 space-y-2">
+                                  ${item.keywordRows.length ? item.keywordRows.map((kw) => {
+                                    const width = item.maxCount
+                                      ? Math.round((kw.count / item.maxCount) * 100)
+                                      : 0;
+                                    return html`
+                                      <div>
+                                        <div class="flex items-center justify-between gap-2 text-xs text-gray-600">
+                                          <span class="truncate" title=${kw.keyword}>${kw.keyword}</span>
+                                          <span class="text-gray-500">${this._formatStatNumber(kw.count)}</span>
+                                        </div>
+                                        <div class="tag-bar mt-1">
+                                          <div class="tag-bar-fill" style="width: ${width}%"></div>
+                                        </div>
+                                      </div>
+                                    `;
+                                  }) : html`<div class="text-xs text-gray-400">No tags yet.</div>`}
+                                </div>
+                              </div>
+                            `;
+                          })}
+                        </div>
+                      ` : html`
+                        <div class="text-xs text-gray-400">No tag data yet.</div>
+                      `}
+                    </div>
+
+                    <!-- Right Column: Ratings Information -->
                     <div class="bg-white rounded-lg shadow p-4 self-start sticky top-0 max-h-[calc(100vh-200px)] overflow-y-auto">
                       <div class="text-xs text-gray-500 uppercase font-semibold mb-4">
                         Ratings
@@ -4288,96 +4657,6 @@ class PhotoCatApp extends LitElement {
                           `}
                         </div>
                       </div>
-                    </div>
-
-                    <!-- Right Column: Tag Counts -->
-                    <div class="bg-white rounded-lg shadow p-4 self-start sticky top-0 max-h-[calc(100vh-200px)] overflow-y-auto">
-                      <div class="text-xs text-gray-500 uppercase font-semibold mb-4">TAGS</div>
-                      <!-- Tag Counts Summary Box -->
-                      <div class="border border-gray-200 rounded-lg p-2 bg-green-50 mb-2">
-                        <!-- Headers -->
-                        <div class="grid grid-cols-5 gap-1 text-xs mb-1 pb-1 border-b border-green-200">
-                          <div class="text-left py-1 px-1 font-semibold text-green-900">Tags</div>
-                          <div class="text-center py-1 px-1 font-semibold text-green-900">Total</div>
-                          <div class="text-center py-1 px-1 font-semibold text-green-900">Tagged</div>
-                          <div class="text-center py-1 px-1 font-semibold text-green-900">Untagged</div>
-                          <div class="text-center py-1 px-1 font-semibold text-green-900">%Tagged</div>
-                        </div>
-                        <!-- Data Row -->
-                        <div class="grid grid-cols-5 gap-1 text-xs">
-                          <div class="text-left py-1 px-1"></div>
-                          ${(() => {
-                            const total = this.imageStats?.image_count || 0;
-                            const tagged = this.imageStats?.positive_permatag_image_count || 0;
-                            const untagged = total - tagged;
-                            const percent = total > 0 ? Math.round((tagged / total) * 100) : 0;
-                            return html`
-                              <div class="text-center py-1 px-1 bg-white rounded border border-gray-100">
-                                <div class="text-gray-700">${this._formatStatNumber(total)}</div>
-                              </div>
-                              <div class="text-center py-1 px-1 bg-white rounded border border-gray-100">
-                                <div class="text-green-600">${this._formatStatNumber(tagged)}</div>
-                              </div>
-                              <div class="text-center py-1 px-1 bg-white rounded border border-gray-100">
-                                <div class="text-orange-600">${this._formatStatNumber(untagged)}</div>
-                              </div>
-                              <div class="text-center py-1 px-1 bg-white rounded border border-gray-100">
-                                <div class="text-green-600 font-semibold">${percent}%</div>
-                              </div>
-                            `;
-                          })()}
-                        </div>
-                      </div>
-
-                      <div class="flex items-center gap-2 mb-3 text-xs font-semibold text-gray-600">
-                        ${[
-                          { key: 'permatags', label: 'Permatags' },
-                          { key: 'zero_shot', label: 'Zero-Shot' },
-                          { key: 'keyword_model', label: 'Keyword-Model' },
-                        ].map((tab) => html`
-                          <button
-                            class="px-2 py-1 rounded border ${this.activeCurateTagSource === tab.key ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-200'}"
-                            @click=${() => {
-                              this.activeCurateTagSource = tab.key;
-                              this._updateCurateCategoryCards();
-                            }}
-                          >
-                            ${tab.label}
-                          </button>
-                        `)}
-                      </div>
-                      ${(this.curateCategoryCards || []).length ? html`
-                        <div class="tag-carousel">
-                          ${(this.curateCategoryCards || []).map((item) => {
-                            const label = item.category.replace(/_/g, ' ');
-                            return html`
-                              <div class="tag-card border border-gray-200 rounded-lg p-2">
-                                <div class="text-xs font-semibold text-gray-700 truncate" title=${label}>${label}</div>
-                                <div class="tag-card-body mt-2 space-y-2">
-                                  ${item.keywordRows.length ? item.keywordRows.map((kw) => {
-                                    const width = item.maxCount
-                                      ? Math.round((kw.count / item.maxCount) * 100)
-                                      : 0;
-                                    return html`
-                                      <div>
-                                        <div class="flex items-center justify-between gap-2 text-xs text-gray-600">
-                                          <span class="truncate" title=${kw.keyword}>${kw.keyword}</span>
-                                          <span class="text-gray-500">${this._formatStatNumber(kw.count)}</span>
-                                        </div>
-                                        <div class="tag-bar mt-1">
-                                          <div class="tag-bar-fill" style="width: ${width}%"></div>
-                                        </div>
-                                      </div>
-                                    `;
-                                  }) : html`<div class="text-xs text-gray-400">No tags yet.</div>`}
-                                </div>
-                              </div>
-                            `;
-                          })}
-                        </div>
-                      ` : html`
-                        <div class="text-xs text-gray-400">No tag data yet.</div>
-                      `}
                     </div>
                   </div>
                 </div>
