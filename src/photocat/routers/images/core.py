@@ -862,6 +862,42 @@ async def get_full_image(
             content_type, _ = mimetypes.guess_type(image.filename or dropbox_ref)
             content_type = content_type or "application/octet-stream"
         filename = getattr(metadata, "name", None) or image.filename or "image"
+
+        # Convert HEIC to JPEG for browser compatibility
+        if filename.lower().endswith((".heic", ".heif")):
+            try:
+                from photocat.image import ImageProcessor
+                image_data = response.content
+                processor = ImageProcessor()
+                pil_image = processor.load_image(image_data)
+                # Convert to JPEG (create_thumbnail uses JPEG but we want full size)
+                pil_image_rgb = pil_image.convert("RGB") if pil_image.mode != "RGB" else pil_image
+                import io
+                buffer = io.BytesIO()
+                pil_image_rgb.save(buffer, format="JPEG", quality=95, optimize=False)
+                converted_data = buffer.getvalue()
+                filename = filename.rsplit(".", 1)[0] + ".jpg"
+                content_type = "image/jpeg"
+                return StreamingResponse(
+                    iter([converted_data]),
+                    media_type=content_type,
+                    headers={
+                        "Cache-Control": "no-store",
+                        "Content-Disposition": f'inline; filename="{filename}"'
+                    }
+                )
+            except Exception as e:
+                # Fallback: stream original if conversion fails
+                print(f"HEIC conversion failed for {image.filename}: {e}")
+                return StreamingResponse(
+                    response.iter_content(chunk_size=1024 * 1024),
+                    media_type=content_type,
+                    headers={
+                        "Cache-Control": "no-store",
+                        "Content-Disposition": f'inline; filename="{filename}"'
+                    }
+                )
+
         return StreamingResponse(
             response.iter_content(chunk_size=1024 * 1024),
             media_type=content_type,

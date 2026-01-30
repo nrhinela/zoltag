@@ -21,32 +21,37 @@ from photocat.cli.base import CliCommand
 @click.option('--limit', default=None, type=int, help='Maximum number of images to process (unlimited if not specified)')
 @click.option('--offset', default=0, type=int, help='Skip first N images in the list (useful for resuming)')
 @click.option('--batch-size', default=25, type=int, help='Number of images to batch before committing to database')
+@click.option('--regenerate-all', is_flag=True, help='Regenerate ALL thumbnails (not just missing ones)')
 @click.option('--dry-run', is_flag=True, help='Preview changes without writing to database or GCP buckets')
 def backfill_thumbnails_command(
     tenant_id: str,
     limit: Optional[int],
     offset: int,
     batch_size: int,
+    regenerate_all: bool,
     dry_run: bool
 ):
-    """Generate and upload missing thumbnails from Dropbox images to GCP Cloud Storage.
+    """Generate and upload thumbnails from Dropbox images to GCP Cloud Storage.
 
     This command processes images for a tenant to:
 
-    1. Query database for images missing thumbnail_path or thumbnail_url
+    1. Query database for images (missing or all, based on --regenerate-all)
     2. Download each image from Dropbox
     3. Generate thumbnail file (configurable size, default 300x300px)
     4. Upload thumbnail to GCP Cloud Storage (tenant's thumbnail bucket)
     5. Store thumbnail_path in database for later retrieval
 
+    By default, only regenerates missing thumbnails. Use --regenerate-all to regenerate all thumbnails
+    (useful after fixing thumbnail path collision bug).
+
     Storage: Thumbnails uploaded to GCP Cloud Storage (tenant bucket), paths stored in PostgreSQL.
     Use --dry-run to preview changes first, useful for testing batch size and performance."""
-    cmd = BackfillThumbnailsCommand(tenant_id, limit, offset, batch_size, dry_run)
+    cmd = BackfillThumbnailsCommand(tenant_id, limit, offset, batch_size, regenerate_all, dry_run)
     cmd.run()
 
 
 class BackfillThumbnailsCommand(CliCommand):
-    """Command to backfill thumbnails from Dropbox."""
+    """Command to backfill or regenerate thumbnails from Dropbox."""
 
     def __init__(
         self,
@@ -54,6 +59,7 @@ class BackfillThumbnailsCommand(CliCommand):
         limit: Optional[int],
         offset: int,
         batch_size: int,
+        regenerate_all: bool,
         dry_run: bool
     ):
         super().__init__()
@@ -61,6 +67,7 @@ class BackfillThumbnailsCommand(CliCommand):
         self.limit = limit
         self.offset = offset
         self.batch_size = batch_size
+        self.regenerate_all = regenerate_all
         self.dry_run = dry_run
 
     def run(self):
@@ -106,14 +113,19 @@ class BackfillThumbnailsCommand(CliCommand):
         storage_client = storage.Client(project=settings.gcp_project_id)
         thumbnail_bucket = storage_client.bucket(tenant_context.get_thumbnail_bucket(settings))
 
-        missing_filter = or_(
-            ImageMetadata.thumbnail_path.is_(None),
-            ImageMetadata.thumbnail_path == ''
-        )
-        query = self.db.query(ImageMetadata).filter(
-            ImageMetadata.tenant_id == self.tenant_id,
-            missing_filter
-        ).order_by(ImageMetadata.id.asc())
+        if self.regenerate_all:
+            query = self.db.query(ImageMetadata).filter(
+                ImageMetadata.tenant_id == self.tenant_id
+            ).order_by(ImageMetadata.id.asc())
+        else:
+            missing_filter = or_(
+                ImageMetadata.thumbnail_path.is_(None),
+                ImageMetadata.thumbnail_path == ''
+            )
+            query = self.db.query(ImageMetadata).filter(
+                ImageMetadata.tenant_id == self.tenant_id,
+                missing_filter
+            ).order_by(ImageMetadata.id.asc())
 
         if self.offset:
             query = query.offset(self.offset)
@@ -158,8 +170,10 @@ class BackfillThumbnailsCommand(CliCommand):
                 pil_image = processor.load_image(image_data)
                 thumbnail_bytes = processor.create_thumbnail(pil_image)
 
-                stem = Path(filename).stem or f"image_{image.id}"
-                thumbnail_filename = f"{stem}_thumb.jpg"
+                # Use Dropbox file ID to ensure unique thumbnail paths
+                # (prevents collisions when files have same name but different extensions)
+                dropbox_id = image.dropbox_id or f"image_{image.id}"
+                thumbnail_filename = f"{dropbox_id}_thumb.jpg"
                 thumbnail_path = tenant_context.get_storage_path(thumbnail_filename, "thumbnails")
 
                 if not self.dry_run:

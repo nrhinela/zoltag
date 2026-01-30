@@ -181,7 +181,9 @@ def process_dropbox_entry(
     if existing:
         return ProcessResult(status="skipped", image_id=existing.id)
 
-    thumbnail_filename = f"{Path(entry.name).stem}_thumb.jpg"
+    # Use Dropbox file ID to ensure unique thumbnail paths
+    # (prevents collisions when files have same name but different extensions)
+    thumbnail_filename = f"{entry.id}_thumb.jpg"
     thumbnail_path = tenant.get_storage_path(thumbnail_filename, "thumbnails")
     blob = thumbnail_bucket.blob(thumbnail_path)
     blob.cache_control = "public, max-age=31536000, immutable"

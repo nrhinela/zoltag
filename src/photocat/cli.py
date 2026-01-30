@@ -843,6 +843,32 @@ def recompute_siglip_tags(
     cmd.run()
 
 
+@cli.command(name='backfill-thumbnails')
+@click.option('--tenant-id', required=True, help='Tenant ID for which to backfill thumbnails')
+@click.option('--limit', default=None, type=int, help='Maximum number of images to process (unlimited if not specified)')
+@click.option('--offset', default=0, type=int, help='Skip first N images in the list (useful for resuming)')
+@click.option('--batch-size', default=25, type=int, help='Number of images to batch before committing to database')
+@click.option('--regenerate-all', is_flag=True, help='Regenerate ALL thumbnails (not just missing ones)')
+@click.option('--dry-run', is_flag=True, help='Preview changes without writing to database or GCP buckets')
+def backfill_thumbnails(
+    tenant_id: str,
+    limit: Optional[int],
+    offset: int,
+    batch_size: int,
+    regenerate_all: bool,
+    dry_run: bool
+):
+    """Generate and upload thumbnails from Dropbox images to GCP Cloud Storage.
+
+    By default, only regenerates missing thumbnails. Use --regenerate-all to regenerate all thumbnails
+    (useful after fixing thumbnail path collision bug).
+
+    Use --dry-run to preview changes first."""
+    from photocat.cli.commands.thumbnails import backfill_thumbnails_command
+
+    backfill_thumbnails_command(tenant_id, limit, offset, batch_size, regenerate_all, dry_run)
+
+
 @cli.command(name='sync-dropbox')
 @click.option('--tenant-id', default='demo', help='Tenant ID to sync')
 @click.option('--count', default=1, help='Number of images to sync (default: 1)')

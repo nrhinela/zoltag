@@ -111,8 +111,10 @@ class IngestCommand(CliCommand):
         # Extract features
         features = self.processor.extract_features(image_data)
 
-        # Upload thumbnail to Cloud Storage
-        thumbnail_path = f"{self.tenant.id}/thumbnails/{image_path.stem}_thumb.jpg"
+        # Use perceptual hash as unique ID to prevent collisions
+        # (prevents overwriting when files have same name but different extensions)
+        unique_id = features.get('perceptual_hash', image_path.stem)
+        thumbnail_path = f"{self.tenant.id}/thumbnails/{unique_id}_thumb.jpg"
         blob = self.thumbnail_bucket.blob(thumbnail_path)
         blob.upload_from_string(features['thumbnail'], content_type='image/jpeg')
 
@@ -149,6 +151,7 @@ class IngestCommand(CliCommand):
             aperture=aperture,
             shutter_speed=shutter_speed,
             focal_length=focal_length,
+            thumbnail_path=thumbnail_path,
         )
 
         self.db.add(metadata)
