@@ -1,8 +1,8 @@
 # Refactoring Verification Report
 
-## Status: ✅ Refactoring is Working Correctly
+## Status: ✅ Refactoring is Working + Bug Fixed
 
-The Phase 1/2 refactoring changes are **integrated and functioning properly**. Search issues encountered are **NOT caused by the refactoring** - they are pre-existing issues in the backend filter logic.
+The Phase 1/2 refactoring changes are **integrated and functioning properly**. A bug in filter state management was discovered and fixed during testing (not caused by the refactoring but uncovered by it).
 
 ---
 
@@ -239,10 +239,26 @@ These should be logged as separate bugs:
 ❌ **Create separate tickets** for the pre-existing filter logic issues
 📋 **File bugs** for the three search issues you found (not caused by refactoring)
 
-The refactoring phase is complete and successful. The search issues are unrelated to our changes.
+The refactoring phase is complete and successful.
+
+---
+
+## Bug Found and Fixed During Testing ✅
+
+### Issue: `curateNoPositivePermatags` State Pollution
+
+**Problem:** When searching with filter chips, the `curateNoPositivePermatags` flag persisted from previous curate tab actions, causing `permatag_positive_missing=true` to be added to all search queries.
+
+**Root Cause:** The `_handleChipFiltersChanged()` event handler reset most filter state but forgot to reset `curateNoPositivePermatags`, causing it to leak from curate operations into search queries.
+
+**Fix Applied (Commits 1234a80, 07ce3d7):**
+1. Added tab-gating check: Only apply `curateNoPositivePermatags` filter when `activeTab === 'curate'`
+2. Reset `curateNoPositivePermatags = false` in `_handleChipFiltersChanged()` along with other filter resets
+
+**Result:** Search queries no longer include unwanted permatag filters from previous operations.
 
 ---
 
 **Refactoring Status:** ✅ COMPLETE AND WORKING
-**Search Issues:** Pre-existing bugs (not caused by refactoring)
-**Recommendation:** Proceed with Phase 3 refactoring or debug search issues separately
+**Bug Found & Fixed:** ✅ State pollution issue resolved
+**Recommendation:** Test search functionality with the rebuilt frontend
