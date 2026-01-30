@@ -485,6 +485,11 @@ class ImageEditor extends LitElement {
       overflow: auto;
       padding: 20px;
     }
+    .fullscreen-viewer-content.fit-mode {
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
     .fullscreen-viewer-image {
       width: auto;
       height: auto;
@@ -492,8 +497,17 @@ class ImageEditor extends LitElement {
       max-height: none;
       cursor: grab;
     }
+    .fullscreen-viewer-image.fit-mode {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      cursor: default;
+    }
     .fullscreen-viewer-image:active {
       cursor: grabbing;
+    }
+    .fullscreen-viewer-image.fit-mode:active {
+      cursor: default;
     }
     .fullscreen-close {
       position: absolute;
@@ -548,6 +562,9 @@ class ImageEditor extends LitElement {
       font-size: 11px;
       cursor: pointer;
       transition: all 0.15s ease;
+      outline: none;
+      user-select: none;
+      -webkit-user-select: none;
     }
     .fullscreen-zoom-button:hover {
       background: rgba(255, 255, 255, 0.2);
@@ -555,7 +572,7 @@ class ImageEditor extends LitElement {
     }
     .fullscreen-zoom-button.active {
       background: rgba(255, 255, 255, 0.3);
-      border-color rgba(255, 255, 255, 0.7);
+      border-color: rgba(255, 255, 255, 0.7);
       font-weight: 600;
     }
     @media (max-width: 900px) {
@@ -596,6 +613,7 @@ class ImageEditor extends LitElement {
     imageSet: { type: Array },
     currentImageIndex: { type: Number },
     fullscreenZoom: { type: Number },
+    fullscreenFitMode: { type: Boolean },
   };
 
   constructor() {
@@ -623,6 +641,7 @@ class ImageEditor extends LitElement {
     this.imageSet = [];
     this.currentImageIndex = -1;
     this.fullscreenZoom = 50;
+    this.fullscreenFitMode = false;
     this._ratingBurstActive = false;
     this._ratingBurstTimer = null;
     this._suppressPermatagRefresh = false;
@@ -819,15 +838,55 @@ class ImageEditor extends LitElement {
 
   _openFullscreen() {
     this.fullscreenOpen = true;
+    this.fullscreenFitMode = false;
+    this.fullscreenZoom = 50;
   }
 
   _closeFullscreen() {
     this.fullscreenOpen = false;
     this.fullscreenZoom = 50;
+    this.fullscreenFitMode = false;
   }
 
   _setFullscreenZoom(zoom) {
-    this.fullscreenZoom = zoom;
+    if (zoom === 'fit') {
+      this._fitImageToScreen();
+    } else {
+      this.fullscreenZoom = zoom;
+      this.fullscreenFitMode = false;
+      this.requestUpdate();
+    }
+  }
+
+  _fitImageToScreen() {
+    this.fullscreenFitMode = true;
+    // Image will be calculated in render based on container dimensions
+    this.requestUpdate();
+  }
+
+  _calculateFitZoom() {
+    // Get the fullscreen viewer content container
+    const container = this.shadowRoot?.querySelector('.fullscreen-viewer-content');
+    const img = this.shadowRoot?.querySelector('.fullscreen-viewer-image');
+
+    if (!container || !img) return 100;
+
+    // Container dimensions (minus padding of 20px on each side = 40px total)
+    const containerWidth = container.clientWidth - 40;
+    const containerHeight = container.clientHeight - 40;
+
+    // Image natural dimensions
+    const imgWidth = img.naturalWidth || img.width;
+    const imgHeight = img.naturalHeight || img.height;
+
+    if (!imgWidth || !imgHeight) return 100;
+
+    // Calculate zoom to fit both dimensions
+    const zoomX = (containerWidth / imgWidth) * 100;
+    const zoomY = (containerHeight / imgHeight) * 100;
+
+    // Use the smaller zoom to fit both dimensions
+    return Math.min(zoomX, zoomY, 100);
   }
 
   _goToPreviousImage() {
@@ -1415,21 +1474,23 @@ class ImageEditor extends LitElement {
         </div>
       </div>
       <div class="fullscreen-viewer ${this.fullscreenOpen ? 'open' : ''}" @click=${() => this._closeFullscreen()}>
-        <div class="fullscreen-viewer-content" @click=${(e) => e.stopPropagation()}>
+        <div class="fullscreen-viewer-content ${this.fullscreenFitMode ? 'fit-mode' : ''}" @click=${(e) => e.stopPropagation()}>
           <img
-            class="fullscreen-viewer-image"
+            class="fullscreen-viewer-image ${this.fullscreenFitMode ? 'fit-mode' : ''}"
             src="${fullscreenImageSrc}"
             alt="${this.image.filename}"
             @click=${(e) => e.stopPropagation()}
-            style="transform: scale(${this.fullscreenZoom / 100}); transform-origin: top left;"
+            @load=${() => this.fullscreenFitMode && this.requestUpdate()}
+            style="${this.fullscreenFitMode ? `transform: translate(-50%, -50%) scale(${this._calculateFitZoom() / 100});` : `transform: scale(${this.fullscreenZoom / 100}); transform-origin: top left;`}"
           >
         </div>
         <button class="fullscreen-close" @click=${() => this._closeFullscreen()}>×</button>
         <div class="fullscreen-controls" @click=${(e) => e.stopPropagation()}>
           <div class="fullscreen-zoom-buttons">
-            <button class="fullscreen-zoom-button ${this.fullscreenZoom === 50 ? 'active' : ''}" @click=${(e) => { e.stopPropagation(); this._setFullscreenZoom(50); }}>50%</button>
-            <button class="fullscreen-zoom-button ${this.fullscreenZoom === 75 ? 'active' : ''}" @click=${(e) => { e.stopPropagation(); this._setFullscreenZoom(75); }}>75%</button>
-            <button class="fullscreen-zoom-button ${this.fullscreenZoom === 100 ? 'active' : ''}" @click=${(e) => { e.stopPropagation(); this._setFullscreenZoom(100); }}>100%</button>
+            <button class="fullscreen-zoom-button ${this.fullscreenFitMode ? 'active' : ''}" @click=${(e) => { e.stopPropagation(); this._setFullscreenZoom('fit'); }}>Fit</button>
+            <button class="fullscreen-zoom-button ${this.fullscreenZoom === 50 && !this.fullscreenFitMode ? 'active' : ''}" @click=${(e) => { e.stopPropagation(); this._setFullscreenZoom(50); }}>50%</button>
+            <button class="fullscreen-zoom-button ${this.fullscreenZoom === 75 && !this.fullscreenFitMode ? 'active' : ''}" @click=${(e) => { e.stopPropagation(); this._setFullscreenZoom(75); }}>75%</button>
+            <button class="fullscreen-zoom-button ${this.fullscreenZoom === 100 && !this.fullscreenFitMode ? 'active' : ''}" @click=${(e) => { e.stopPropagation(); this._setFullscreenZoom(100); }}>100%</button>
           </div>
           <span style="color: rgba(255, 255, 255, 0.6);">•</span>
           <span style="font-size: 11px; color: rgba(255, 255, 255, 0.7); cursor: pointer;" @click=${(e) => { e.stopPropagation(); this._closeFullscreen(); }}>Scroll to pan • Click to close</span>
