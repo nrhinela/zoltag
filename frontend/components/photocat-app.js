@@ -4010,7 +4010,13 @@ class PhotoCatApp extends LitElement {
                     </div>
                     <button
                       class="inline-flex items-center gap-2 border rounded-lg px-4 py-2 text-xs text-gray-600 hover:bg-gray-50"
-                      @click=${() => { this._fetchCurateImages(); this._fetchSearchLists(); }}
+                      @click=${() => {
+                        this._fetchCurateImages();
+                        this._fetchSearchLists();
+                        if (this.searchSubTab === 'explore-by-tag') {
+                          this._loadExploreByTagData(true);
+                        }
+                      }}
                       title="Refresh"
                     >
                       <span aria-hidden="true">↻</span>
@@ -4269,20 +4275,6 @@ class PhotoCatApp extends LitElement {
                   <!-- Explore by Tag View with Saved Items Panel -->
                   <div class="curate-layout search-layout" style="--curate-thumb-size: ${this.curateThumbSize}px;">
                     <div class="curate-pane">
-                      <div class="curate-pane-header">
-                          <div class="curate-pane-header-row">
-                              <span>Highly Rated Items by Keyword</span>
-                              <div class="curate-pane-header-actions">
-                                  <button
-                                    class="curate-pane-action"
-                                    @click=${() => this._loadExploreByTagData(true)}
-                                    title="Refresh data"
-                                  >
-                                    ↻
-                                  </button>
-                              </div>
-                          </div>
-                      </div>
                       <div class="curate-pane-body p-4">
                         ${(() => {
                           // Get all keywords with at least one 2+ star rating
