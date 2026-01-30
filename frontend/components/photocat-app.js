@@ -5633,14 +5633,16 @@ class PhotoCatApp extends LitElement {
       const mlTag = tags.find((tag) => tag.keyword === this.curateAuditKeyword);
       if (!mlTag) return html``;
 
-      // Format the model name for display
-      const modelName = this.curateAuditAiModel === 'trained' ? 'Keyword-Model' : 'Siglip';
+      // DISABLED: Confidence label was confusing to users
+      // Re-enable by uncommenting the code below
+      // const modelName = this.curateAuditAiModel === 'trained' ? 'Keyword-Model' : 'Siglip';
+      // return html`
+      //   <div class="curate-thumb-ml-score">
+      //     <span class="curate-thumb-icon" aria-hidden="true">🤖</span>${modelName}: ${this.curateAuditKeyword}=${(mlTag.confidence).toFixed(2)}
+      //   </div>
+      // `;
 
-      return html`
-        <div class="curate-thumb-ml-score">
-          <span class="curate-thumb-icon" aria-hidden="true">🤖</span>${modelName}: ${this.curateAuditKeyword}=${(mlTag.confidence).toFixed(2)}
-        </div>
-      `;
+      return html``;
   }
 
   _renderCuratePermatagSummary(image) {
