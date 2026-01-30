@@ -4193,7 +4193,7 @@ class PhotoCatApp extends LitElement {
                 </div>
                 <div ?hidden=${this.searchSubTab !== 'explore-by-tag'}>
                   <!-- Explore by Tag View with Saved Items Panel -->
-                  <div class="curate-layout search-layout">
+                  <div class="curate-layout search-layout" style="--curate-thumb-size: ${this.curateThumbSize}px;">
                     <div class="curate-pane">
                       <div class="curate-pane-body p-4">
                         ${(() => {
@@ -4235,7 +4235,7 @@ class PhotoCatApp extends LitElement {
                                 return html`
                                   <div>
                                     <h3 class="text-sm font-semibold text-gray-800 mb-3">${keywordName}</h3>
-                                    <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2">
+                                    <div class="curate-grid">
                                       ${(() => {
                                         // Get images for this keyword from the explore by tag cache
                                         const cacheKey = `exploreByTag_${keywordName}`;
