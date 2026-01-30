@@ -2949,7 +2949,7 @@ class PhotoCatApp extends LitElement {
       }
   }
 
-  async _loadExploreByTagData() {
+  async _loadExploreByTagData(forceRefresh = false) {
       // Get all keywords with 2+ star ratings
       const keywordsByRating = {};
       const imageStats = this.imageStats;
@@ -2971,7 +2971,7 @@ class PhotoCatApp extends LitElement {
       const sortedKeywords = Object.entries(keywordsByRating).sort(([a], [b]) => a.localeCompare(b));
       for (const [keywordName, data] of sortedKeywords) {
           const cacheKey = `exploreByTag_${keywordName}`;
-          if (!this[cacheKey]) {
+          if (forceRefresh || !this[cacheKey]) {
               try {
                   const result = await getImages(this.tenant, {
                       permatagKeyword: data.keyword,
@@ -4269,6 +4269,20 @@ class PhotoCatApp extends LitElement {
                   <!-- Explore by Tag View with Saved Items Panel -->
                   <div class="curate-layout search-layout" style="--curate-thumb-size: ${this.curateThumbSize}px;">
                     <div class="curate-pane">
+                      <div class="curate-pane-header">
+                          <div class="curate-pane-header-row">
+                              <span>Highly Rated Items by Keyword</span>
+                              <div class="curate-pane-header-actions">
+                                  <button
+                                    class="curate-pane-action"
+                                    @click=${() => this._loadExploreByTagData(true)}
+                                    title="Refresh data"
+                                  >
+                                    ↻
+                                  </button>
+                              </div>
+                          </div>
+                      </div>
                       <div class="curate-pane-body p-4">
                         ${(() => {
                           // Get all keywords with at least one 2+ star rating
