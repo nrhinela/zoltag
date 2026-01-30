@@ -3161,6 +3161,9 @@ class PhotoCatApp extends LitElement {
           if (this.curateHideDeleted) {
               filters.hideZeroRating = true;
           }
+          if (this.curateNoPositivePermatags) {
+              filters.permatagPositiveMissing = true;
+          }
           if (this.curateMinRating !== null && this.curateMinRating !== undefined) {
               filters.rating = this.curateMinRating;
               filters.ratingOperator = this.curateMinRating === 0 ? 'eq' : 'gte';
