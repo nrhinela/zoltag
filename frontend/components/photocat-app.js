@@ -2669,7 +2669,22 @@ class PhotoCatApp extends LitElement {
       const additions = [];
       ids.forEach((id) => {
           if (existingIds.has(id)) return;
-          const image = (this.curateImages || []).find((img) => img.id === id);
+
+          // Search in curate images first (search home view)
+          let image = (this.curateImages || []).find((img) => img.id === id);
+
+          // If not found, search in explore-by-tag cache
+          if (!image) {
+              // Check all explore-by-tag caches
+              for (const key in this) {
+                  if (key.startsWith('exploreByTag_')) {
+                      const cachedImages = this[key] || [];
+                      image = cachedImages.find((img) => img.id === id);
+                      if (image) break;
+                  }
+              }
+          }
+
           if (!image) return;
           additions.push({
               id: image.id,
