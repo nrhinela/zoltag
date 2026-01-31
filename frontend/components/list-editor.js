@@ -57,6 +57,7 @@ class ListEditor extends LitElement {
     editingSelectedList: { type: Boolean },
     isDownloading: { type: Boolean },
     isLoadingItems: { type: Boolean },
+    isLoadingLists: { type: Boolean },
   };
 
   constructor() {
@@ -68,6 +69,7 @@ class ListEditor extends LitElement {
     this.editingSelectedList = false;
     this.isDownloading = false;
     this.isLoadingItems = false;
+    this.isLoadingLists = false;
     this._isVisible = false;
     this._hasRefreshedOnce = false;
   }
@@ -121,6 +123,7 @@ class ListEditor extends LitElement {
       return;
     }
     console.log('fetchLists: Fetching lists for tenant:', this.tenant);
+    this.isLoadingLists = true;
     try {
       const fetchedLists = await getLists(this.tenant);
       console.log('fetchLists: Fetched lists:', fetchedLists);
@@ -128,6 +131,8 @@ class ListEditor extends LitElement {
       this.dispatchEvent(new CustomEvent('lists-updated', { bubbles: true, composed: true }));
     } catch (error) {
       console.error('Error fetching lists:', error);
+    } finally {
+      this.isLoadingLists = false;
     }
   }
 
@@ -382,11 +387,13 @@ class ListEditor extends LitElement {
               </button>
               <button
                 @click=${() => this.fetchLists()}
-                class="inline-flex items-center gap-2 border rounded-lg px-4 py-2 text-xs text-gray-600 hover:bg-gray-50"
+                class="inline-flex items-center gap-2 border rounded-lg px-4 py-2 text-xs text-gray-600 hover:bg-gray-50 disabled:opacity-60 disabled:cursor-not-allowed"
                 title="Refresh"
+                ?disabled=${this.isLoadingLists}
+                aria-busy=${this.isLoadingLists ? 'true' : 'false'}
               >
-                <span aria-hidden="true">↻</span>
-                Refresh
+                <span aria-hidden="true" class=${this.isLoadingLists ? 'animate-spin' : ''}>↻</span>
+                ${this.isLoadingLists ? 'Refreshing…' : 'Refresh'}
               </button>
             </div>
         </div>

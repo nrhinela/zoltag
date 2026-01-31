@@ -598,7 +598,8 @@ async def list_images(
 @router.get("/images/stats", response_model=dict, operation_id="get_image_stats")
 async def get_image_stats(
     tenant: Tenant = Depends(get_tenant),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    include_ratings: bool = False
 ):
     """Return image summary stats for a tenant."""
     image_count = db.query(func.count(ImageMetadata.id)).filter(
@@ -608,13 +609,15 @@ async def get_image_stats(
     reviewed_image_count = db.query(func.count(distinct(Permatag.image_id))).join(
         ImageMetadata, ImageMetadata.id == Permatag.image_id
     ).filter(
-        ImageMetadata.tenant_id == tenant.id
+        ImageMetadata.tenant_id == tenant.id,
+        Permatag.tenant_id == tenant.id
     ).scalar() or 0
 
     positive_permatag_image_count = db.query(func.count(distinct(Permatag.image_id))).join(
         ImageMetadata, ImageMetadata.id == Permatag.image_id
     ).filter(
         ImageMetadata.tenant_id == tenant.id,
+        Permatag.tenant_id == tenant.id,
         Permatag.signum == 1
     ).scalar() or 0
 
@@ -644,89 +647,138 @@ async def get_image_stats(
         ImageMetadata.rating > 0
     ).scalar() or 0
 
-    # Get rating counts by keyword category
-    from photocat.models.config import Keyword, KeywordCategory
     rating_by_category = {}
+    if include_ratings:
+        from photocat.models.config import KeywordCategory
 
-    # Get all keyword categories for this tenant
-    categories = db.query(KeywordCategory).filter(
-        KeywordCategory.tenant_id == tenant.id
-    ).all()
+        categories = db.query(KeywordCategory.id, KeywordCategory.name).filter(
+            KeywordCategory.tenant_id == tenant.id
+        ).order_by(KeywordCategory.name).all()
 
-    for category in categories:
-        rating_by_category[category.name] = {
-            'total': {'stars_3': 0, 'stars_2': 0, 'stars_1': 0, 'trash': 0},
-            'keywords': {}
+        category_ids = [cat_id for cat_id, _ in categories]
+        category_name_by_id = {cat_id: name for cat_id, name in categories}
+
+        rating_by_category = {
+            name: {
+                'total': {'stars_3': 0, 'stars_2': 0, 'stars_1': 0, 'trash': 0},
+                'keywords': {}
+            }
+            for name in category_name_by_id.values()
         }
 
-        # Get all keywords in this category
-        keywords = db.query(Keyword).filter(
-            Keyword.category_id == category.id
-        ).all()
+        keyword_rows = []
+        if category_ids:
+            keyword_rows = db.query(
+                Keyword.id,
+                Keyword.keyword,
+                Keyword.category_id
+            ).filter(
+                Keyword.category_id.in_(category_ids)
+            ).all()
 
-        if keywords:
-            keyword_ids = [kw.id for kw in keywords]
+        keyword_ids = []
+        keyword_name_by_id = {}
+        keyword_category_name_by_id = {}
+        for kw_id, kw_name, cat_id in keyword_rows:
+            category_name = category_name_by_id.get(cat_id)
+            if not category_name:
+                continue
+            keyword_ids.append(kw_id)
+            keyword_name_by_id[kw_id] = kw_name
+            keyword_category_name_by_id[kw_id] = category_name
+            rating_by_category[category_name]['keywords'][kw_name] = {
+                'total_images': 0,
+                'rated_images': 0,
+                'stars_3': 0,
+                'stars_2': 0,
+                'stars_1': 0,
+                'trash': 0
+            }
 
-            # Count images with each rating that have permatags in this category (total)
-            for rating_val in [0, 1, 2, 3]:
-                count = db.query(func.count(distinct(Permatag.image_id))).join(
-                    ImageMetadata, ImageMetadata.id == Permatag.image_id
-                ).filter(
-                    ImageMetadata.tenant_id == tenant.id,
-                    ImageMetadata.rating == rating_val,
-                    Permatag.keyword_id.in_(keyword_ids),
-                    Permatag.signum == 1
-                ).scalar() or 0
+        if keyword_ids:
+            keyword_total_rows = db.query(
+                Permatag.keyword_id,
+                func.count(distinct(Permatag.image_id))
+            ).filter(
+                Permatag.tenant_id == tenant.id,
+                Permatag.signum == 1,
+                Permatag.keyword_id.in_(keyword_ids)
+            ).group_by(Permatag.keyword_id).all()
 
+            for kw_id, total in keyword_total_rows:
+                category_name = keyword_category_name_by_id.get(kw_id)
+                keyword_name = keyword_name_by_id.get(kw_id)
+                if not category_name or not keyword_name:
+                    continue
+                rating_by_category[category_name]['keywords'][keyword_name]['total_images'] = int(total or 0)
+
+            keyword_rating_rows = db.query(
+                Permatag.keyword_id,
+                ImageMetadata.rating,
+                func.count(distinct(Permatag.image_id))
+            ).join(
+                ImageMetadata, ImageMetadata.id == Permatag.image_id
+            ).filter(
+                Permatag.tenant_id == tenant.id,
+                ImageMetadata.tenant_id == tenant.id,
+                Permatag.signum == 1,
+                Permatag.keyword_id.in_(keyword_ids),
+                ImageMetadata.rating.in_([0, 1, 2, 3])
+            ).group_by(
+                Permatag.keyword_id,
+                ImageMetadata.rating
+            ).all()
+
+            for kw_id, rating_val, count in keyword_rating_rows:
+                category_name = keyword_category_name_by_id.get(kw_id)
+                keyword_name = keyword_name_by_id.get(kw_id)
+                if not category_name or not keyword_name:
+                    continue
                 if rating_val == 0:
-                    rating_by_category[category.name]['total']['trash'] = int(count)
+                    rating_by_category[category_name]['keywords'][keyword_name]['trash'] = int(count or 0)
                 else:
-                    rating_by_category[category.name]['total'][f'stars_{rating_val}'] = int(count)
+                    rating_by_category[category_name]['keywords'][keyword_name][f'stars_{rating_val}'] = int(count or 0)
 
-            # Count ratings for each individual keyword in this category
-            for keyword in keywords:
-                # Total images with this keyword (positive permatags only)
-                total_images = db.query(func.count(distinct(Permatag.image_id))).join(
-                    ImageMetadata, ImageMetadata.id == Permatag.image_id
-                ).filter(
-                    ImageMetadata.tenant_id == tenant.id,
-                    Permatag.keyword_id == keyword.id,
-                    Permatag.signum == 1
-                ).scalar() or 0
+            for kw_id in keyword_ids:
+                category_name = keyword_category_name_by_id.get(kw_id)
+                keyword_name = keyword_name_by_id.get(kw_id)
+                if not category_name or not keyword_name:
+                    continue
+                keyword_stats = rating_by_category[category_name]['keywords'][keyword_name]
+                keyword_stats['rated_images'] = int(
+                    keyword_stats['stars_1']
+                    + keyword_stats['stars_2']
+                    + keyword_stats['stars_3']
+                )
 
-                # Total images with this keyword that have rating > 0
-                rated_images = db.query(func.count(distinct(Permatag.image_id))).join(
-                    ImageMetadata, ImageMetadata.id == Permatag.image_id
-                ).filter(
-                    ImageMetadata.tenant_id == tenant.id,
-                    ImageMetadata.rating > 0,
-                    Permatag.keyword_id == keyword.id,
-                    Permatag.signum == 1
-                ).scalar() or 0
+        if category_ids:
+            category_rating_rows = db.query(
+                Keyword.category_id,
+                ImageMetadata.rating,
+                func.count(distinct(Permatag.image_id))
+            ).join(
+                Keyword, Keyword.id == Permatag.keyword_id
+            ).join(
+                ImageMetadata, ImageMetadata.id == Permatag.image_id
+            ).filter(
+                Permatag.tenant_id == tenant.id,
+                ImageMetadata.tenant_id == tenant.id,
+                Permatag.signum == 1,
+                Keyword.category_id.in_(category_ids),
+                ImageMetadata.rating.in_([0, 1, 2, 3])
+            ).group_by(
+                Keyword.category_id,
+                ImageMetadata.rating
+            ).all()
 
-                rating_by_category[category.name]['keywords'][keyword.keyword] = {
-                    'total_images': int(total_images),
-                    'rated_images': int(rated_images),
-                    'stars_3': 0,
-                    'stars_2': 0,
-                    'stars_1': 0,
-                    'trash': 0
-                }
-
-                for rating_val in [0, 1, 2, 3]:
-                    count = db.query(func.count(distinct(Permatag.image_id))).join(
-                        ImageMetadata, ImageMetadata.id == Permatag.image_id
-                    ).filter(
-                        ImageMetadata.tenant_id == tenant.id,
-                        ImageMetadata.rating == rating_val,
-                        Permatag.keyword_id == keyword.id,
-                        Permatag.signum == 1
-                    ).scalar() or 0
-
-                    if rating_val == 0:
-                        rating_by_category[category.name]['keywords'][keyword.keyword]['trash'] = int(count)
-                    else:
-                        rating_by_category[category.name]['keywords'][keyword.keyword][f'stars_{rating_val}'] = int(count)
+            for cat_id, rating_val, count in category_rating_rows:
+                category_name = category_name_by_id.get(cat_id)
+                if not category_name:
+                    continue
+                if rating_val == 0:
+                    rating_by_category[category_name]['total']['trash'] = int(count or 0)
+                else:
+                    rating_by_category[category_name]['total'][f'stars_{rating_val}'] = int(count or 0)
 
     return {
         "tenant_id": tenant.id,

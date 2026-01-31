@@ -16,21 +16,71 @@ router = APIRouter(
 
 
 @router.get("", response_model=list)
-async def list_tenants(db: Session = Depends(get_db)):
+async def list_tenants(
+    db: Session = Depends(get_db),
+    details: bool = False
+):
     """List all tenants."""
-    tenants = db.query(TenantModel).all()
+    if details:
+        tenants = db.query(TenantModel).all()
+        return [{
+            "id": t.id,
+            "name": t.name,
+            "active": t.active,
+            "dropbox_app_key": t.dropbox_app_key,
+            "dropbox_configured": bool(t.dropbox_app_key),  # Has app key configured
+            "storage_bucket": t.storage_bucket,
+            "thumbnail_bucket": t.thumbnail_bucket,
+            "settings": t.settings,
+            "created_at": t.created_at.isoformat() if t.created_at else None,
+            "updated_at": t.updated_at.isoformat() if t.updated_at else None
+        } for t in tenants]
+
+    rows = db.query(
+        TenantModel.id,
+        TenantModel.name,
+        TenantModel.active,
+        TenantModel.dropbox_app_key,
+        TenantModel.storage_bucket,
+        TenantModel.thumbnail_bucket,
+        TenantModel.created_at,
+        TenantModel.updated_at
+    ).all()
+
     return [{
-        "id": t.id,
-        "name": t.name,
-        "active": t.active,
-        "dropbox_app_key": t.dropbox_app_key,
-        "dropbox_configured": bool(t.dropbox_app_key),  # Has app key configured
-        "storage_bucket": t.storage_bucket,
-        "thumbnail_bucket": t.thumbnail_bucket,
-        "settings": t.settings,
-        "created_at": t.created_at.isoformat() if t.created_at else None,
-        "updated_at": t.updated_at.isoformat() if t.updated_at else None
-    } for t in tenants]
+        "id": row.id,
+        "name": row.name,
+        "active": row.active,
+        "dropbox_configured": bool(row.dropbox_app_key),
+        "storage_bucket": row.storage_bucket,
+        "thumbnail_bucket": row.thumbnail_bucket,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None
+    } for row in rows]
+
+
+@router.get("/{tenant_id}", response_model=dict)
+async def get_tenant(
+    tenant_id: str,
+    db: Session = Depends(get_db)
+):
+    """Get a single tenant (full details)."""
+    tenant = db.query(TenantModel).filter(TenantModel.id == tenant_id).first()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    return {
+        "id": tenant.id,
+        "name": tenant.name,
+        "active": tenant.active,
+        "dropbox_app_key": tenant.dropbox_app_key,
+        "dropbox_configured": bool(tenant.dropbox_app_key),
+        "storage_bucket": tenant.storage_bucket,
+        "thumbnail_bucket": tenant.thumbnail_bucket,
+        "settings": tenant.settings,
+        "created_at": tenant.created_at.isoformat() if tenant.created_at else None,
+        "updated_at": tenant.updated_at.isoformat() if tenant.updated_at else None
+    }
 
 
 @router.post("", response_model=dict)

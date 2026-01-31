@@ -13,6 +13,7 @@
 
 import { supabase, getAccessToken } from './supabase.js';
 import { fetchWithAuth } from './api.js';
+import { cachedRequest } from './request-cache.js';
 
 /**
  * Sign up with email and password
@@ -166,9 +167,13 @@ export async function signInWithGoogle() {
  * @returns {Promise<Object>} User profile and tenant list
  * @throws {Error} If user is not authenticated or not approved
  */
-export async function getCurrentUser() {
+export async function getCurrentUser({ force = false } = {}) {
   try {
-    const response = await fetchWithAuth('/auth/me');
+    const response = await cachedRequest(
+      'auth:me',
+      () => fetchWithAuth('/auth/me'),
+      { ttlMs: 30000, force }
+    );
     return response;
   } catch (error) {
     throw new Error(`Failed to get user info: ${error.message}`);

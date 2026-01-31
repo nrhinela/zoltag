@@ -1,5 +1,5 @@
 import { LitElement, html, css } from 'lit';
-import { getTenants, sync, retagAll } from '../services/api.js';
+import { getTenantsPublic, sync, retagAll } from '../services/api.js';
 import { getCurrentUser } from '../services/auth.js';
 import { supabase } from '../services/supabase.js';
 import { tailwind } from './tailwind-lit.js';
@@ -155,7 +155,7 @@ class AppHeader extends LitElement {
 
   async fetchTenants() {
       try {
-          this.tenants = await getTenants();
+          this.tenants = await getTenantsPublic();
       } catch (error) {
           console.error('Error fetching tenants:', error);
       }

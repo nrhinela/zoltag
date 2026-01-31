@@ -9,9 +9,12 @@ import {
   addMiscParams
 } from './api-params.js';
 import { createCrudOps } from './crud-helper.js';
+import { cachedRequest } from './request-cache.js';
 
 // Use relative URL - works in both dev (via Vite proxy) and production
 const API_BASE_URL = '/api/v1';
+const STATS_CACHE_MS = 10000;
+const TENANTS_CACHE_MS = 5 * 60 * 1000;
 
 /**
  * Fetch with authentication headers
@@ -123,8 +126,18 @@ export async function getDropboxFolders(tenantId, { query = '', limit } = {}) {
   return fetchWithAuth(`/images/dropbox-folders${params.toString() ? '?' + params.toString() : ''}`, { tenantId });
 }
 
-export async function getImageStats(tenantId) {
-  return fetchWithAuth(`/images/stats`, { tenantId });
+export async function getImageStats(tenantId, { force = false, includeRatings = false } = {}) {
+  const params = new URLSearchParams();
+  if (includeRatings) {
+    params.append('include_ratings', 'true');
+  }
+  const suffix = params.toString() ? `?${params.toString()}` : '';
+  const cacheKey = `imageStats:${tenantId}:${includeRatings ? 'full' : 'summary'}`;
+  return cachedRequest(
+    cacheKey,
+    () => fetchWithAuth(`/images/stats${suffix}`, { tenantId }),
+    { ttlMs: STATS_CACHE_MS, force }
+  );
 }
 
 export async function getFullImage(tenantId, imageId) {
@@ -134,8 +147,12 @@ export async function getFullImage(tenantId, imageId) {
   });
 }
 
-export async function getTagStats(tenantId) {
-  return fetchWithAuth(`/tag-stats`, { tenantId });
+export async function getTagStats(tenantId, { force = false } = {}) {
+  return cachedRequest(
+    `tagStats:${tenantId}`,
+    () => fetchWithAuth(`/tag-stats`, { tenantId }),
+    { ttlMs: STATS_CACHE_MS, force }
+  );
 }
 
 export async function getMlTrainingImages(tenantId, { limit = 50, offset = 0, refresh = false } = {}) {
@@ -152,8 +169,12 @@ export async function getMlTrainingImages(tenantId, { limit = 50, offset = 0, re
   return fetchWithAuth(`/ml-training/images${params.toString() ? '?' + params.toString() : ''}`, { tenantId });
 }
 
-export async function getMlTrainingStats(tenantId) {
-  return fetchWithAuth(`/ml-training/stats`, { tenantId });
+export async function getMlTrainingStats(tenantId, { force = false } = {}) {
+  return cachedRequest(
+    `mlTrainingStats:${tenantId}`,
+    () => fetchWithAuth(`/ml-training/stats`, { tenantId }),
+    { ttlMs: STATS_CACHE_MS, force }
+  );
 }
 
 export async function getKeywords(tenantId, filters = {}) {
@@ -173,18 +194,26 @@ export async function getKeywords(tenantId, filters = {}) {
     return data.keywords_by_category || {};
 }
 
-export async function getTenants() {
-    // Use admin endpoint for complete tenant data (includes settings, dropbox config, etc)
-    try {
-        return await fetchWithAuth(`/admin/tenants`);
-    } catch (error) {
-        // Fallback to non-admin endpoint if admin endpoint not available
+export async function getTenants({ force = false } = {}) {
+    return cachedRequest('tenants:admin', async () => {
+        // Use admin endpoint for complete tenant data (includes settings, dropbox config, etc)
         try {
-            return await fetchWithAuth(`/tenants`);
-        } catch (fallbackError) {
-            throw new Error('Failed to fetch tenants');
+            return await fetchWithAuth(`/admin/tenants?details=true`);
+        } catch (error) {
+            // Fallback to non-admin endpoint if admin endpoint not available
+            try {
+                return await fetchWithAuth(`/tenants`);
+            } catch (fallbackError) {
+                throw new Error('Failed to fetch tenants');
+            }
         }
-    }
+    }, { ttlMs: TENANTS_CACHE_MS, force });
+}
+
+export async function getTenantsPublic({ force = false } = {}) {
+    return cachedRequest('tenants:public', async () => {
+        return await fetchWithAuth(`/tenants`);
+    }, { ttlMs: TENANTS_CACHE_MS, force });
 }
 
 export async function setRating(tenantId, imageId, rating) {

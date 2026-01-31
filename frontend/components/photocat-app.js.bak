@@ -880,11 +880,6 @@ class PhotoCatApp extends LitElement {
         height: 28px;
         border-width: 3px;
     }
-    .curate-spinner.xlarge {
-        width: 52px;
-        height: 52px;
-        border-width: 4px;
-    }
     .curate-loading-overlay {
         position: fixed;
         inset: 0;
@@ -894,35 +889,6 @@ class PhotoCatApp extends LitElement {
         background: rgba(255, 255, 255, 0.55);
         z-index: 1000;
         pointer-events: none;
-    }
-    .curate-stats-overlay {
-        position: fixed;
-        inset: 0;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        background: rgba(148, 163, 184, 0.25);
-        z-index: 1100;
-    }
-    .curate-stats-overlay .curate-spinner {
-        border-color: rgba(148, 163, 184, 0.4);
-        border-top-color: #475569;
-    }
-    .curate-stats-card {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        gap: 12px;
-        background: rgba(255, 255, 255, 0.92);
-        border-radius: 14px;
-        padding: 18px 26px;
-        box-shadow: 0 12px 28px rgba(15, 23, 42, 0.12);
-    }
-    .curate-stats-text {
-        font-size: 13px;
-        font-weight: 600;
-        color: #475569;
-        letter-spacing: 0.2px;
     }
     @keyframes curate-spin {
         to {
@@ -1214,7 +1180,6 @@ class PhotoCatApp extends LitElement {
       curateAuditMinRating: { type: Number },
       curateAuditNoPositivePermatags: { type: Boolean },
       curateHomeRefreshing: { type: Boolean },
-      curateStatsLoading: { type: Boolean },
       curateAdvancedOpen: { type: Boolean },
       curateNoPositivePermatags: { type: Boolean },
       activeCurateTagSource: { type: String },
@@ -1314,7 +1279,6 @@ class PhotoCatApp extends LitElement {
       this.curateAuditMinRating = null;
       this.curateAuditNoPositivePermatags = false;
       this.curateHomeRefreshing = false;
-      this.curateStatsLoading = false;
       this.curateAdvancedOpen = false;
       this.curateNoPositivePermatags = false;
       this.activeCurateTagSource = 'permatags';
@@ -1354,7 +1318,6 @@ class PhotoCatApp extends LitElement {
       this._curateActiveWorkingTab = 'main';
       this._curateSubTabState.main = this._snapshotCurateState();
       this._statsRefreshTimer = null;
-      this._curateStatsLoadingCount = 0;
       this._curatePressTimer = null;
       this._curatePressActive = false;
       this._curatePressStart = null;
@@ -1368,7 +1331,6 @@ class PhotoCatApp extends LitElement {
       this._curateAuditPressIndex = null;
       this._curateAuditPressImageId = null;
       this._curateAuditLongPressTriggered = false;
-      this._tabBootstrapped = new Set();
       this._curateRatingBurstIds = new Set();
       this._curateRatingBurstTimers = new Map();
       this._curateFlashSelectionIds = new Set();
@@ -1948,7 +1910,12 @@ class PhotoCatApp extends LitElement {
 
   connectedCallback() {
       super.connectedCallback();
-      this._initializeTab(this.activeTab);
+      this.fetchKeywords();
+      this.fetchStats();
+      const curateFilters = this._buildCurateFilterObject();
+      this.curateHomeFilterPanel.updateFilters(curateFilters);
+      this.curateHomeFilterPanel.fetchImages();
+      this._fetchSearchLists();
       this._unsubscribeQueue = subscribeQueue((state) => {
         this.queueState = state;
       });
@@ -1958,99 +1925,6 @@ class PhotoCatApp extends LitElement {
       window.addEventListener('pointerup', this._handleCurateSelectionEnd);
       window.addEventListener('keyup', this._handleCurateSelectionEnd);
       window.addEventListener('keydown', (e) => this._handleEscapeKey(e));
-  }
-
-  _getTabBootstrapKey(tab) {
-      const tenantKey = this.tenant || 'no-tenant';
-      return `${tab}:${tenantKey}`;
-  }
-
-  async _fetchHomeStats({ force = false } = {}) {
-      if (!this.tenant) return;
-      const results = await Promise.allSettled([
-          getImageStats(this.tenant, { force, includeRatings: false }),
-          getMlTrainingStats(this.tenant, { force }),
-      ]);
-      const imageResult = results[0];
-      const mlResult = results[1];
-      if (imageResult.status === 'fulfilled') {
-          this.imageStats = imageResult.value;
-      } else {
-          console.error('Error fetching image stats:', imageResult.reason);
-          this.imageStats = null;
-      }
-      if (mlResult.status === 'fulfilled') {
-          this.mlTrainingStats = mlResult.value;
-      } else {
-          console.error('Error fetching ML training stats:', mlResult.reason);
-          this.mlTrainingStats = null;
-      }
-  }
-
-  _initializeTab(tab, { force = false } = {}) {
-      if (!tab) return;
-      if (!this._tabBootstrapped) {
-          this._tabBootstrapped = new Set();
-      }
-      const key = this._getTabBootstrapKey(tab);
-      if (!force && this._tabBootstrapped.has(key)) {
-          return;
-      }
-
-      if (tab === 'home') {
-          this._fetchHomeStats();
-          this._tabBootstrapped.add(key);
-          return;
-      }
-
-      if (!this.tenant) {
-          return;
-      }
-
-      switch (tab) {
-          case 'search': {
-              this.fetchKeywords();
-              this.fetchStats();
-              this._fetchSearchLists();
-              if (this.searchSubTab === 'home') {
-                  if (!this.curateImages?.length && !this.curateLoading) {
-                      const searchFilters = this.searchFilterPanel.getState();
-                      this.searchFilterPanel.updateFilters(searchFilters);
-                      this.searchFilterPanel.fetchImages();
-                  }
-              } else if (this.searchSubTab === 'explore-by-tag') {
-                  this._loadExploreByTagData();
-              }
-              break;
-          }
-          case 'curate': {
-              this.fetchKeywords();
-              this.fetchStats();
-              if (this.curateSubTab === 'main') {
-                  const curateFilters = this._buildCurateFilterObject();
-                  this.curateHomeFilterPanel.updateFilters(curateFilters);
-                  if (!this.curateImages?.length && !this.curateLoading) {
-                      this.curateHomeFilterPanel.fetchImages();
-                  }
-              } else if (this.curateSubTab === 'tag-audit' && this.curateAuditKeyword) {
-                  this._fetchCurateAuditImages();
-              }
-              break;
-          }
-          case 'system': {
-              this.fetchStats();
-              break;
-          }
-          case 'admin':
-          case 'people':
-          case 'tagging':
-          case 'lists':
-          case 'queue':
-          default:
-              break;
-      }
-
-      this._tabBootstrapped.add(key);
   }
 
   _showExploreRatingDialog(imageIds) {
@@ -2638,7 +2512,7 @@ class PhotoCatApp extends LitElement {
       if (this.curateHomeRefreshing) return;
       this.curateHomeRefreshing = true;
       try {
-          await this.fetchStats({ force: true });
+          await this.fetchStats();
       } finally {
           this.curateHomeRefreshing = false;
       }
@@ -2805,6 +2679,9 @@ class PhotoCatApp extends LitElement {
       this.curateHomeFilterPanel.setTenant(this.tenant);
       this.curateAuditFilterPanel.setTenant(this.tenant);
 
+      this.fetchKeywords();
+      this.fetchStats();
+      this._fetchSearchLists();
       this.curateHideDeleted = true;
       this.curateMinRating = null;
       this.curateNoPositivePermatags = false;
@@ -2813,9 +2690,9 @@ class PhotoCatApp extends LitElement {
       this.curateFilters = this._buildCurateFilterObject({ resetOffset: true });
       this.curatePageOffset = 0;
       this.curateTotal = null;
-      this.curateImages = [];
       const curateFilters = this._buildCurateFilterObject({ resetOffset: true });
       this.curateHomeFilterPanel.updateFilters(curateFilters);
+      this.curateHomeFilterPanel.fetchImages();
       this.curateDragSelection = [];
       this.curateSubTab = 'home';
       this.curateAuditMode = 'existing';
@@ -2836,8 +2713,6 @@ class PhotoCatApp extends LitElement {
       this.curateAuditAiEnabled = false;
       this.curateAuditAiModel = '';
       this._resetSearchListDraft();
-      this._tabBootstrapped = new Set();
-      this._initializeTab(this.activeTab, { force: true });
   }
 
   _handleOpenUploadModal() {
@@ -2861,7 +2736,7 @@ class PhotoCatApp extends LitElement {
         const curateFilters = this._buildCurateFilterObject();
         this.curateHomeFilterPanel.updateFilters(curateFilters);
         this.curateHomeFilterPanel.fetchImages();
-        this.fetchStats({ force: true });
+        this.fetchStats();
         this.showUploadModal = false;
     }
 
@@ -3157,9 +3032,6 @@ class PhotoCatApp extends LitElement {
               this.curateHomeFilterPanel.fetchImages();
           }
       }
-      if (nextTab === 'home') {
-          this.fetchStats({ includeRatings: true });
-      }
       if (nextTab === 'tag-audit' && this.curateAuditKeyword) {
           this._fetchCurateAuditImages();
       }
@@ -3170,21 +3042,12 @@ class PhotoCatApp extends LitElement {
           return;
       }
       this.searchSubTab = nextTab;
-      if (nextTab === 'home') {
-          if (!this.curateImages.length && !this.curateLoading) {
-              const searchFilters = this.searchFilterPanel.getState();
-              this.searchFilterPanel.updateFilters(searchFilters);
-              this.searchFilterPanel.fetchImages();
-          }
-      } else if (nextTab === 'explore-by-tag') {
+      if (nextTab === 'explore-by-tag') {
           this._loadExploreByTagData();
       }
   }
 
   async _loadExploreByTagData(forceRefresh = false) {
-      if (!this.imageStats?.rating_by_category || !Object.keys(this.imageStats.rating_by_category || {}).length) {
-          await this.fetchStats({ includeRatings: true });
-      }
       // Get all keywords with 2+ star ratings
       const keywordsByRating = {};
       const imageStats = this.imageStats;
@@ -3984,7 +3847,6 @@ class PhotoCatApp extends LitElement {
     const reviewedCount = this._formatStatNumber(this.imageStats?.reviewed_image_count);
     const mlTagCount = this._formatStatNumber(this.imageStats?.ml_tag_count);
     const trainedTagCount = this._formatStatNumber(this.mlTrainingStats?.trained_image_count);
-    const showCurateStatsOverlay = this.curateStatsLoading && !this.imageStats;
     const navCards = [
       { key: 'search', label: 'Search', subtitle: 'Explore and save results', icon: 'fa-magnifying-glass' },
       { key: 'curate', label: 'Curate', subtitle: 'Build stories and sets', icon: 'fa-star' },
@@ -4048,7 +3910,7 @@ class PhotoCatApp extends LitElement {
       ? `Drag here to ${auditActionVerb} tag: ${auditKeywordLabel}`
       : 'Select a keyword to start';
     const curateRefreshBusy = this.curateSubTab === 'home'
-      ? (this.curateHomeRefreshing || this.curateStatsLoading)
+      ? this.curateHomeRefreshing
       : (this.curateSubTab === 'tag-audit' ? this.curateAuditLoading : this.curateLoading);
     const auditLeftImages = this.curateAuditImages;
     this._curateAuditLeftOrder = auditLeftImages.map((img) => img.id);
@@ -4165,7 +4027,6 @@ class PhotoCatApp extends LitElement {
         ></app-header>
         
         <tab-container .activeTab=${this.activeTab}>
-            ${this.activeTab === 'home' ? html`
             <div slot="home" class="container">
                 <div class="flex flex-wrap gap-4 mb-6">
                     <div class="flex-1 min-w-[200px] border border-gray-200 rounded-lg p-3 bg-white shadow">
@@ -4201,8 +4062,6 @@ class PhotoCatApp extends LitElement {
                   `)}
                 </div>
             </div>
-            ` : ''}
-            ${this.activeTab === 'search' ? html`
             <div slot="search" class="container">
                 <div class="flex items-center justify-between mb-4">
                     <div class="curate-subtabs">
@@ -4235,9 +4094,7 @@ class PhotoCatApp extends LitElement {
                     <button
                       class="inline-flex items-center gap-2 border rounded-lg px-4 py-2 text-xs text-gray-600 hover:bg-gray-50"
                       @click=${() => {
-                        if (this.searchSubTab === 'home') {
-                          this.searchFilterPanel.fetchImages();
-                        }
+                        this.searchFilterPanel.fetchImages();
                         this._fetchSearchLists();
                         if (this.searchSubTab === 'explore-by-tag') {
                           this._loadExploreByTagData(true);
@@ -4249,8 +4106,7 @@ class PhotoCatApp extends LitElement {
                       Refresh
                     </button>
                 </div>
-                ${this.searchSubTab === 'home' ? html`
-                <div>
+                <div ?hidden=${this.searchSubTab !== 'home'}>
                   <!-- Search Home View -->
                   <filter-chips
                     .tenant=${this.tenant}
@@ -4498,9 +4354,7 @@ class PhotoCatApp extends LitElement {
                     </div>
                   </div>
                 </div>
-                ` : html``}
-                ${this.searchSubTab === 'explore-by-tag' ? html`
-                <div>
+                <div ?hidden=${this.searchSubTab !== 'explore-by-tag'}>
                   <!-- Explore by Tag View with Saved Items Panel -->
                   <div class="curate-layout search-layout" style="--curate-thumb-size: ${this.curateThumbSize}px;">
                     <div class="curate-pane">
@@ -4716,10 +4570,7 @@ class PhotoCatApp extends LitElement {
                     </div>
                   </div>
                 </div>
-                ` : html``}
             </div>
-            ` : ''}
-            ${this.activeTab === 'curate' ? html`
             <div slot="curate" class="container">
                 <div class="flex items-center justify-between mb-4">
                     <div class="curate-subtabs">
@@ -4781,30 +4632,192 @@ class PhotoCatApp extends LitElement {
                   ${curateRefreshBusy ? 'Refreshing' : 'Refresh'}
                 </button>
                 </div>
-                ${this.curateSubTab === 'home' ? html`
-                <div>
-                  ${showCurateStatsOverlay ? html`
-                    <div class="curate-stats-overlay" aria-live="polite" aria-busy="true">
-                      <div class="curate-stats-card">
-                        <span class="curate-spinner xlarge" aria-hidden="true"></span>
-                        <div class="curate-stats-text">Refreshing Curate Stats...</div>
+                <div ?hidden=${this.curateSubTab !== 'home'}>
+                  <div class="grid grid-cols-1 lg:grid-cols-[1fr_1fr] gap-6">
+                    <!-- Left Column: Tag Counts -->
+                    <div class="bg-white rounded-lg shadow p-4 self-start sticky top-0 max-h-[calc(100vh-200px)] overflow-y-auto">
+                      <div class="text-xs text-gray-500 uppercase font-semibold mb-4">TAGS</div>
+                      <!-- Tag Counts Summary Box -->
+                      <div class="border border-gray-200 rounded-lg p-2 bg-green-50 mb-2">
+                        <!-- Headers -->
+                        <div class="grid grid-cols-5 gap-1 text-xs mb-1 pb-1 border-b border-green-200">
+                          <div class="text-left py-1 px-1 font-semibold text-green-900">Tags</div>
+                          <div class="text-center py-1 px-1 font-semibold text-green-900">Total</div>
+                          <div class="text-center py-1 px-1 font-semibold text-green-900">Tagged</div>
+                          <div class="text-center py-1 px-1 font-semibold text-green-900">Untagged</div>
+                          <div class="text-center py-1 px-1 font-semibold text-green-900">%Tagged</div>
+                        </div>
+                        <!-- Data Row -->
+                        <div class="grid grid-cols-5 gap-1 text-xs">
+                          <div class="text-left py-1 px-1"></div>
+                          ${(() => {
+                            const total = this.imageStats?.image_count || 0;
+                            const tagged = this.imageStats?.positive_permatag_image_count || 0;
+                            const untagged = total - tagged;
+                            const percent = total > 0 ? Math.round((tagged / total) * 100) : 0;
+                            return html`
+                              <div class="text-center py-1 px-1 bg-white rounded border border-gray-100">
+                                <div class="text-gray-700">${this._formatStatNumber(total)}</div>
+                              </div>
+                              <div class="text-center py-1 px-1 bg-white rounded border border-gray-100">
+                                <div class="text-green-600">${this._formatStatNumber(tagged)}</div>
+                              </div>
+                              <div class="text-center py-1 px-1 bg-white rounded border border-gray-100">
+                                <div class="text-orange-600">${this._formatStatNumber(untagged)}</div>
+                              </div>
+                              <div class="text-center py-1 px-1 bg-white rounded border border-gray-100">
+                                <div class="text-green-600 font-semibold">${percent}%</div>
+                              </div>
+                            `;
+                          })()}
+                        </div>
+                      </div>
+
+                      <div class="flex items-center gap-2 mb-3 text-xs font-semibold text-gray-600">
+                        ${[
+                          { key: 'permatags', label: 'Permatags' },
+                          { key: 'zero_shot', label: 'Zero-Shot' },
+                          { key: 'keyword_model', label: 'Keyword-Model' },
+                        ].map((tab) => html`
+                          <button
+                            class="px-2 py-1 rounded border ${this.activeCurateTagSource === tab.key ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-200'}"
+                            @click=${() => {
+                              this.activeCurateTagSource = tab.key;
+                              this._updateCurateCategoryCards();
+                            }}
+                          >
+                            ${tab.label}
+                          </button>
+                        `)}
+                      </div>
+                      ${(this.curateCategoryCards || []).length ? html`
+                        <div class="tag-carousel">
+                          ${(this.curateCategoryCards || []).map((item) => {
+                            const label = item.category.replace(/_/g, ' ');
+                            return html`
+                              <div class="tag-card border border-gray-200 rounded-lg p-2">
+                                <div class="text-xs font-semibold text-gray-700 truncate" title=${label}>${label}</div>
+                                <div class="tag-card-body mt-2 space-y-2">
+                                  ${item.keywordRows.length ? item.keywordRows.map((kw) => {
+                                    const width = item.maxCount
+                                      ? Math.round((kw.count / item.maxCount) * 100)
+                                      : 0;
+                                    return html`
+                                      <div>
+                                        <div class="flex items-center justify-between gap-2 text-xs text-gray-600">
+                                          <span class="truncate" title=${kw.keyword}>${kw.keyword}</span>
+                                          <span class="text-gray-500">${this._formatStatNumber(kw.count)}</span>
+                                        </div>
+                                        <div class="tag-bar mt-1">
+                                          <div class="tag-bar-fill" style="width: ${width}%"></div>
+                                        </div>
+                                      </div>
+                                    `;
+                                  }) : html`<div class="text-xs text-gray-400">No tags yet.</div>`}
+                                </div>
+                              </div>
+                            `;
+                          })}
+                        </div>
+                      ` : html`
+                        <div class="text-xs text-gray-400">No tag data yet.</div>
+                      `}
+                    </div>
+
+                    <!-- Right Column: Ratings Information -->
+                    <div class="bg-white rounded-lg shadow p-4 self-start sticky top-0 max-h-[calc(100vh-200px)] overflow-y-auto">
+                      <div class="text-xs text-gray-500 uppercase font-semibold mb-4">
+                        Ratings
+                      </div>
+
+                      <!-- Ratings by Keyword (Category Grid with Keywords) -->
+                      <div class="mb-2">
+                        <!-- Summary Row -->
+                        <div class="border border-gray-200 rounded-lg p-2 bg-blue-50 mb-2">
+                          <!-- Headers -->
+                          <div class="grid grid-cols-5 gap-1 text-xs mb-1 pb-1 border-b border-blue-200">
+                            <div class="text-left py-1 px-1 font-semibold text-blue-900">Total Ratings</div>
+                            <div class="text-center py-1 px-1 font-semibold text-blue-900">Total</div>
+                            <div class="text-center py-1 px-1 font-semibold text-blue-900">Rated</div>
+                            <div class="text-center py-1 px-1 font-semibold text-blue-900">Trash</div>
+                            <div class="text-center py-1 px-1 font-semibold text-blue-900">%Rated</div>
+                          </div>
+                          <!-- Data Row -->
+                          <div class="grid grid-cols-5 gap-1 text-xs">
+                            <div class="text-left py-1 px-1"></div>
+                            ${(() => {
+                              const totalRated = (this.imageStats?.rated_image_count || 0) + (this.imageStats?.rating_counts?.trash || 0);
+                              const totalImages = this.imageStats?.image_count || 0;
+                              const percent = totalImages > 0 ? Math.round((totalRated / totalImages) * 100) : 0;
+                              return html`
+                                <div class="text-center py-1 px-1 bg-white rounded border border-gray-100">
+                                  <div class="text-gray-700">${this._formatStatNumber(totalImages)}</div>
+                                </div>
+                                <div class="text-center py-1 px-1 bg-white rounded border border-gray-100">
+                                  <div class="text-blue-600">${this._formatStatNumber(this.imageStats?.rated_image_count || 0)}</div>
+                                </div>
+                                <div class="text-center py-1 px-1 bg-white rounded border border-gray-100">
+                                  <div class="text-red-600">${this._formatStatNumber(this.imageStats?.rating_counts?.trash || 0)}</div>
+                                </div>
+                                <div class="text-center py-1 px-1 bg-white rounded border border-gray-100">
+                                  <div class="text-purple-600 font-semibold">${percent}%</div>
+                                </div>
+                              `;
+                            })()}
+                          </div>
+                        </div>
+
+                        <div class="space-y-2">
+                          ${Object.keys(this.imageStats?.rating_by_category || {}).length ? html`
+                            ${Object.entries(this.imageStats?.rating_by_category || {}).map(([category, categoryData]) => html`
+                              <div class="border border-gray-200 rounded-lg p-2 bg-gray-50">
+                                <!-- Category Header -->
+                                <div class="text-xs font-semibold text-gray-700 mb-2">${category.replace(/_/g, ' ')}</div>
+
+                                <!-- Column Headers -->
+                                <div class="grid grid-cols-5 gap-1 text-xs mb-1 pb-1 border-b border-gray-200">
+                                  <div class="text-left py-1 px-1"></div>
+                                  <div class="text-center py-1 px-1 font-semibold text-gray-600">Total</div>
+                                  <div class="text-center py-1 px-1 font-semibold text-gray-600">Rated</div>
+                                  <div class="text-center py-1 px-1 font-semibold text-gray-600">Trash</div>
+                                  <div class="text-center py-1 px-1 font-semibold text-gray-600">%Rated</div>
+                                </div>
+
+                                <!-- Individual Keywords -->
+                                <div class="space-y-0.5">
+                                  ${Object.entries(categoryData.keywords || {}).sort(([a], [b]) => a.localeCompare(b)).map(([keywordName, keywordData]) => {
+                                    const ratedPlusTrash = (keywordData.rated_images || 0) + (keywordData.trash || 0);
+                                    const total = keywordData.total_images || 0;
+                                    const percentRated = total > 0 ? Math.round((ratedPlusTrash / total) * 100) : 0;
+                                    return html`
+                                    <div class="grid grid-cols-5 gap-1 text-xs">
+                                      <div class="text-left py-1 px-1 text-gray-600 truncate" title="${keywordName}">${keywordName}</div>
+                                      <div class="text-center py-1 px-1 bg-white rounded border border-gray-100">
+                                        <div class="text-gray-700">${this._formatStatNumber(total)}</div>
+                                      </div>
+                                      <div class="text-center py-1 px-1 bg-white rounded border border-gray-100">
+                                        <div class="text-blue-600">${this._formatStatNumber(keywordData.rated_images || 0)}</div>
+                                      </div>
+                                      <div class="text-center py-1 px-1 bg-white rounded border border-gray-100">
+                                        <div class="text-red-600">${this._formatStatNumber(keywordData.trash || 0)}</div>
+                                      </div>
+                                      <div class="text-center py-1 px-1 bg-white rounded border border-gray-100">
+                                        <div class="text-purple-600 font-semibold">${percentRated}%</div>
+                                      </div>
+                                    </div>
+                                  `})}
+                                </div>
+                              </div>
+                            `)}
+                          ` : html`
+                            <div class="text-xs text-gray-400">No keyword categories yet.</div>
+                          `}
+                        </div>
                       </div>
                     </div>
-                  ` : html``}
-                  <curate-home-tab-v2
-                    .imageStats=${this.imageStats}
-                    .tagStatsBySource=${this.tagStatsBySource}
-                    .activeCurateTagSource=${this.activeCurateTagSource}
-                    .curateCategoryCards=${this.curateCategoryCards}
-                    @tag-source-changed=${(e) => {
-                      this.activeCurateTagSource = e.detail.source;
-                      this._updateCurateCategoryCards();
-                    }}
-                  ></curate-home-tab-v2>
+                  </div>
                 </div>
-                ` : html``}
-                ${this.curateSubTab === 'main' ? html`
-                <div>
+                <div ?hidden=${this.curateSubTab !== 'main'}>
                   <div class="curate-header-layout mb-4">
                       <div class="bg-white rounded-lg shadow p-4 w-full">
                         <div class="curate-control-grid">
@@ -5057,9 +5070,7 @@ class PhotoCatApp extends LitElement {
                         </div>
                     </div>
                 </div>
-                ` : html``}
-                ${this.curateSubTab === 'tag-audit' ? html`
-                <div>
+                <div ?hidden=${this.curateSubTab !== 'tag-audit'}>
                     ${this._renderCurateFilters({ mode: 'tag-audit', showHistogram: false })}
                     ${this.curateAuditKeyword ? html`
                       <div class="text-center text-xl font-semibold text-gray-800 mb-3">
@@ -5324,9 +5335,7 @@ class PhotoCatApp extends LitElement {
                       </div>
                     `}
                 </div>
-                ` : html``}
-                ${this.curateSubTab === 'help' ? html`
-                <div>
+                <div ?hidden=${this.curateSubTab !== 'help'}>
                   <div class="space-y-6">
                     <div class="bg-white rounded-lg shadow p-6">
                       <h2 class="text-2xl font-bold text-gray-900 mb-6">Curate Your Collection</h2>
@@ -5376,15 +5385,10 @@ class PhotoCatApp extends LitElement {
                     </div>
                   </div>
                 </div>
-                ` : html``}
             </div>
-            ` : ''}
-            ${this.activeTab === 'lists' ? html`
             <div slot="lists" class="container p-4">
                 <list-editor .tenant=${this.tenant}></list-editor>
             </div>
-            ` : ''}
-            ${this.activeTab === 'admin' ? html`
             <div slot="admin" class="container p-4">
                 <div class="admin-subtabs">
                     <button
@@ -5407,18 +5411,12 @@ class PhotoCatApp extends LitElement {
                     <person-manager .tenant=${this.tenant}></person-manager>
                 ` : ''}
             </div>
-            ` : ''}
-            ${this.activeTab === 'people' ? html`
             <div slot="people" class="container p-4">
                 <person-manager .tenant=${this.tenant}></person-manager>
             </div>
-            ` : ''}
-            ${this.activeTab === 'tagging' ? html`
             <div slot="tagging" class="container p-4">
                 <tagging-admin .tenant=${this.tenant} @open-upload-modal=${this._handleOpenUploadModal}></tagging-admin>
             </div>
-            ` : ''}
-            ${this.activeTab === 'system' ? html`
             <div slot="system" class="container p-4">
                 <div class="system-subtabs">
                     <button
@@ -5444,21 +5442,15 @@ class PhotoCatApp extends LitElement {
                     <cli-commands></cli-commands>
                 ` : ''}
             </div>
-            ` : ''}
-            ${this.activeTab === 'ml-training' ? html`
             <div slot="ml-training" class="container p-4">
                 <ml-training
                   .tenant=${this.tenant}
                   @open-image-editor=${this._handlePipelineOpenImage}
                 ></ml-training>
             </div>
-            ` : ''}
-            ${this.activeTab === 'cli' ? html`
             <div slot="cli" class="container p-4">
                 <cli-commands></cli-commands>
             </div>
-            ` : ''}
-            ${this.activeTab === 'queue' ? html`
             <div slot="queue" class="container p-4">
                 <div class="border border-gray-200 rounded-lg p-4 bg-white text-sm text-gray-600 space-y-3">
                     <div class="font-semibold text-gray-700">Work Queue</div>
@@ -5499,7 +5491,6 @@ class PhotoCatApp extends LitElement {
                     ` : html`<div class="text-gray-400">No failed commands.</div>`}
                 </div>
             </div>
-            ` : ''}
         </tab-container>
 
         ${this.showUploadModal ? html`<upload-modal .tenant=${this.tenant} @close=${this._handleCloseUploadModal} @upload-complete=${this._handleUploadComplete} active></upload-modal>` : ''}
@@ -5536,54 +5527,34 @@ class PhotoCatApp extends LitElement {
       }
   }
 
-  _shouldIncludeRatingStats() {
-      return (
-          (this.activeTab === 'curate' && this.curateSubTab === 'home')
-          || (this.activeTab === 'search' && this.searchSubTab === 'explore-by-tag')
-      );
-  }
-
-  async fetchStats({ force = false, includeRatings } = {}) {
+  async fetchStats() {
       if (!this.tenant) return;
-      const include = includeRatings ?? this._shouldIncludeRatingStats();
-      const showCurateLoading = this.activeTab === 'curate' && this.curateSubTab === 'home';
-      if (showCurateLoading) {
-          this._curateStatsLoadingCount = (this._curateStatsLoadingCount || 0) + 1;
-          this.curateStatsLoading = true;
+      const results = await Promise.allSettled([
+          getImageStats(this.tenant),
+          getMlTrainingStats(this.tenant),
+          getTagStats(this.tenant),
+      ]);
+      const imageResult = results[0];
+      const mlResult = results[1];
+      const tagResult = results[2];
+      if (imageResult.status === 'fulfilled') {
+          this.imageStats = imageResult.value;
+      } else {
+          console.error('Error fetching image stats:', imageResult.reason);
+          this.imageStats = null;
       }
-      try {
-          const results = await Promise.allSettled([
-              getImageStats(this.tenant, { force, includeRatings: include }),
-              getMlTrainingStats(this.tenant, { force }),
-              getTagStats(this.tenant, { force }),
-          ]);
-          const imageResult = results[0];
-          const mlResult = results[1];
-          const tagResult = results[2];
-          if (imageResult.status === 'fulfilled') {
-              this.imageStats = imageResult.value;
-          } else {
-              console.error('Error fetching image stats:', imageResult.reason);
-              this.imageStats = null;
-          }
-          if (mlResult.status === 'fulfilled') {
-              this.mlTrainingStats = mlResult.value;
-          } else {
-              console.error('Error fetching ML training stats:', mlResult.reason);
-              this.mlTrainingStats = null;
-          }
-          if (tagResult.status === 'fulfilled') {
-              this.tagStatsBySource = tagResult.value?.sources || {};
-              this._updateCurateCategoryCards();
-          } else {
-              console.error('Error fetching tag stats:', tagResult.reason);
-              this.tagStatsBySource = {};
-          }
-      } finally {
-          if (showCurateLoading) {
-              this._curateStatsLoadingCount = Math.max(0, (this._curateStatsLoadingCount || 1) - 1);
-              this.curateStatsLoading = this._curateStatsLoadingCount > 0;
-          }
+      if (mlResult.status === 'fulfilled') {
+          this.mlTrainingStats = mlResult.value;
+      } else {
+          console.error('Error fetching ML training stats:', mlResult.reason);
+          this.mlTrainingStats = null;
+      }
+      if (tagResult.status === 'fulfilled') {
+          this.tagStatsBySource = tagResult.value?.sources || {};
+          this._updateCurateCategoryCards();
+      } else {
+          console.error('Error fetching tag stats:', tagResult.reason);
+          this.tagStatsBySource = {};
       }
   }
 
@@ -5599,7 +5570,7 @@ class PhotoCatApp extends LitElement {
 
   _handleSyncComplete(e) {
       console.log(`Sync complete: ${e.detail.count} total images processed`);
-      this.fetchStats({ force: true });
+      this.fetchStats();
   }
 
   _handleSyncError(e) {
@@ -5613,7 +5584,7 @@ class PhotoCatApp extends LitElement {
       }
       this._statsRefreshTimer = setTimeout(() => {
           this._statsRefreshTimer = null;
-          this.fetchStats({ force: true });
+          this.fetchStats();
       }, 400);
   }
 
@@ -5921,9 +5892,6 @@ class PhotoCatApp extends LitElement {
   updated(changedProperties) {
       if (changedProperties.has('curateAuditKeyword') || changedProperties.has('curateAuditMode')) {
           this._syncAuditHotspotPrimary();
-      }
-      if (changedProperties.has('activeTab')) {
-          this._initializeTab(this.activeTab);
       }
   }
 

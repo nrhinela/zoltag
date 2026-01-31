@@ -226,8 +226,9 @@ async def get_ml_training_stats(
         KeywordModel.tenant_id == tenant.id
     ).scalar()
 
-    trained_count, trained_oldest, trained_newest = db.query(
+    trained_count, trained_image_count, trained_oldest, trained_newest = db.query(
         func.count(MachineTag.id),
+        func.count(distinct(MachineTag.image_id)),
         func.min(MachineTag.created_at),
         func.max(MachineTag.created_at)
     ).filter(
@@ -235,17 +236,12 @@ async def get_ml_training_stats(
         MachineTag.tag_type == 'trained'
     ).one()
 
-    trained_image_count = db.query(func.count(distinct(MachineTag.image_id))).filter(
-        MachineTag.tenant_id == tenant.id,
-        MachineTag.tag_type == 'trained'
-    ).scalar() or 0
-
     return {
         "tenant_id": tenant.id,
         "image_count": int(image_count),
         "embedding_count": int(embedding_count),
         "zero_shot_image_count": int(zero_shot_image_count),
-        "trained_image_count": int(trained_image_count),
+        "trained_image_count": int(trained_image_count or 0),
         "keyword_model_count": int(model_count),
         "keyword_model_last_trained": last_trained.isoformat() if last_trained else None,
         "trained_tag_count": int(trained_count or 0),

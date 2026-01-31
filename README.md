@@ -38,9 +38,10 @@ The backend utilizes a robust technology stack that combines web development (Fa
 #### Core Frontend Architecture
 
 
-- Lit-based Web Components: All UI elements are implemented as reusable Lit components
+- Lit-based Web Components: All UI elements are implemented as reusable Lit components using Light DOM (not Shadow DOM)
 - Modular Organization: Components are organized in a structured directory with clear separation of concerns
 - Declarative Rendering: UI is defined using Lit's html template literals with automatic DOM updates based on component state
+- Tailwind CSS: Components use Tailwind utility classes directly via Light DOM rendering
 ####  Development Workflow
 - Modern Build Process: Powered by Vite for development server, code bundling, and optimization
 - ESLint & Prettier: Integrated for code quality and consistent formatting
@@ -94,6 +95,34 @@ Maintainability: Small, focused components are easy to understand and modify
 - Scalable Architecture: Clear separation of concerns supports future feature additions
 - Developer Experience: Modern tooling and component-based development workflow
 - This architecture provides a solid foundation for continued development and maintenance of the PhotoCat frontend.
+
+#### Component Pattern: Light DOM + Tailwind
+
+**All LitElement components use Light DOM** to maintain access to Tailwind CSS classes:
+
+```javascript
+export class MyComponent extends LitElement {
+  createRenderRoot() {
+    return this; // Render to Light DOM, not Shadow DOM
+  }
+
+  render() {
+    return html`
+      <div class="grid grid-cols-2 gap-4">
+        <!-- Tailwind classes work directly -->
+      </div>
+    `;
+  }
+}
+```
+
+This approach provides:
+- ✅ Component encapsulation (logic, props, events)
+- ✅ Direct use of Tailwind classes without CSS translation
+- ✅ Simplified development (no scoped CSS needed)
+- ✅ Consistent styling with parent application
+
+See `frontend/components/curate-home-tab.js` for reference implementation.
 
 ## Setup
 
