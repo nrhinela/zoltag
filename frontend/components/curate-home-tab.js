@@ -73,7 +73,9 @@ export class CurateHomeTab extends LitElement {
             <div class="grid grid-cols-5 gap-1 text-xs">
               <div class="text-left py-1 px-1"></div>
               ${(() => {
-                const tagged = this.imageStats?.tagged_image_count || 0;
+                const tagged = Number.isFinite(this.imageStats?.positive_permatag_image_count)
+                  ? this.imageStats.positive_permatag_image_count
+                  : (this.imageStats?.tagged_image_count || 0);
                 const total = this.imageStats?.image_count || 0;
                 const untagged = total - tagged;
                 const percent = total > 0 ? Math.round((tagged / total) * 100) : 0;
