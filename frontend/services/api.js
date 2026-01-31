@@ -15,6 +15,7 @@ import { cachedRequest } from './request-cache.js';
 const API_BASE_URL = '/api/v1';
 const STATS_CACHE_MS = 10000;
 const TENANTS_CACHE_MS = 5 * 60 * 1000;
+const LISTS_CACHE_MS = 10000;
 
 /**
  * Fetch with authentication headers
@@ -224,7 +225,15 @@ export async function setRating(tenantId, imageId, rating) {
     });
 }
 
-export async function addToList(tenantId, photoId) {
+export async function addToList(tenantId, listId, photoId) {
+    return fetchWithAuth(`/lists/${listId}/add-photo`, {
+        method: 'POST',
+        tenantId,
+        body: JSON.stringify({ photo_id: photoId }),
+    });
+}
+
+export async function addToRecentList(tenantId, photoId) {
     return fetchWithAuth(`/lists/add-photo`, {
         method: 'POST',
         tenantId,
@@ -370,8 +379,12 @@ export async function deleteKeyword(tenantId, keywordId) {
 // List CRUD
 const listCrud = createCrudOps('/lists');
 
-export async function getLists(tenantId) {
-  const data = await listCrud.list(tenantId);
+export async function getLists(tenantId, { force = false } = {}) {
+  const data = await cachedRequest(
+    `lists:${tenantId}`,
+    () => listCrud.list(tenantId),
+    { ttlMs: LISTS_CACHE_MS, force }
+  );
   return data || [];
 }
 

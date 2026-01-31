@@ -673,7 +673,8 @@ async def get_image_stats(
                 Keyword.keyword,
                 Keyword.category_id
             ).filter(
-                Keyword.category_id.in_(category_ids)
+                Keyword.category_id.in_(category_ids),
+                Keyword.tenant_id == tenant.id
             ).all()
 
         keyword_ids = []
@@ -765,6 +766,7 @@ async def get_image_stats(
                 ImageMetadata.tenant_id == tenant.id,
                 Permatag.signum == 1,
                 Keyword.category_id.in_(category_ids),
+                Keyword.tenant_id == tenant.id,
                 ImageMetadata.rating.in_([0, 1, 2, 3])
             ).group_by(
                 Keyword.category_id,

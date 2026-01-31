@@ -200,6 +200,7 @@ class Permatag(Base):
         Index("idx_permatag_image_id", "image_id"),
         Index("idx_permatag_keyword_id", "keyword_id"),
         Index("idx_permatag_image_keyword_signum", "image_id", "keyword_id", "signum"),
+        Index("idx_permatag_tenant_keyword_signum_image", "tenant_id", "keyword_id", "signum", "image_id"),
     )
 
 

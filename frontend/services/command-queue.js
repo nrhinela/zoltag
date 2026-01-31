@@ -5,6 +5,7 @@ import {
   getPermatags,
   deletePermatag,
   addToList,
+  addToRecentList,
   bulkPermatags,
 } from './api.js';
 
@@ -106,7 +107,7 @@ async function executeCommand(command) {
     case 'retag':
       return retagImage(command.tenantId, command.imageId);
     case 'add-to-list':
-      return addToList(command.tenantId, command.imageId);
+      return addToRecentList(command.tenantId, command.imageId);
     case 'add-negative-permatag':
       return addPermatag(
         command.tenantId,
