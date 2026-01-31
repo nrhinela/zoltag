@@ -20,6 +20,7 @@ from photocat.tenant import Tenant
 from photocat.metadata import ImageMetadata, MachineTag, Permatag
 from photocat.models.config import PhotoList, PhotoListItem, Keyword, KeywordCategory
 from photocat.dependencies import get_tenant_setting
+from photocat.routers.filter_builder import FilterBuilder
 
 
 def apply_list_filter(
@@ -69,24 +70,8 @@ def apply_rating_filter(
     Returns:
         Set of image IDs matching rating criteria
     """
-    rating_query = db.query(ImageMetadata.id).filter(
-        ImageMetadata.tenant_id == tenant.id
-    )
-
-    if operator == "gte":
-        rating_query = rating_query.filter(ImageMetadata.rating >= rating)
-    elif operator == "gt":
-        rating_query = rating_query.filter(ImageMetadata.rating > rating)
-    else:
-        rating_query = rating_query.filter(ImageMetadata.rating == rating)
-
-    rating_image_ids = rating_query.all()
-    rating_ids = {row[0] for row in rating_image_ids}
-
-    if existing_filter is None:
-        return rating_ids
-    else:
-        return existing_filter.intersection(rating_ids)
+    builder = FilterBuilder(db, tenant)
+    return builder.apply_rating(rating, operator, existing_filter=existing_filter)
 
 
 def apply_hide_zero_rating_filter(

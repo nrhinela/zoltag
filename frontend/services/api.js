@@ -1,4 +1,14 @@
 import { getAccessToken } from './supabase.js';
+import {
+  addPaginationParams,
+  addRatingParams,
+  addPermatagParams,
+  addMlTagParams,
+  addCategoryFilterParams,
+  addOrderingParams,
+  addMiscParams
+} from './api-params.js';
+import { createCrudOps } from './crud-helper.js';
 
 // Use relative URL - works in both dev (via Vite proxy) and production
 const API_BASE_URL = '/api/v1';
@@ -79,106 +89,25 @@ export async function fetchWithAuth(url, options = {}) {
 export async function getImages(tenantId, filters = {}) {
   const params = new URLSearchParams();
 
-
+  // Legacy search parameter
   if (filters.search) {
-      // The backend doesn't seem to have a direct text search endpoint,
-      // but the old frontend had a client-side search. We will add a 'keywords'
-      // parameter for now, which is a deprecated feature of the API, but might work.
-      params.append('keywords', filters.search);
+    // The backend doesn't seem to have a direct text search endpoint,
+    // but the old frontend had a client-side search. We will add a 'keywords'
+    // parameter for now, which is a deprecated feature of the API, but might work.
+    params.append('keywords', filters.search);
   }
 
-  if (filters.sort) {
-    // The backend seems to sort by relevance score when keywords are provided,
-    // and by ID desc otherwise. We will ignore this for now.
-  }
-  
-  if (filters.date) {
-    // The backend doesn't seem to have a date filter.
-  }
+  // Add parameters by category
+  addMiscParams(params, filters);
+  addRatingParams(params, filters);
+  addPaginationParams(params, filters);
+  addCategoryFilterParams(params, filters);
+  addOrderingParams(params, filters);
+  addPermatagParams(params, filters);
+  addMlTagParams(params, filters);
 
-  if (filters.listId) {
-    params.append('list_id', filters.listId);
-  }
-
-  if (filters.rating !== undefined && filters.rating !== '') {
-    params.append('rating', filters.rating);
-    if (filters.ratingOperator) {
-      params.append('rating_operator', filters.ratingOperator);
-    }
-  } else if (filters.ratingOperator === 'is_null') {
-    params.append('rating_operator', 'is_null');
-  }
-
-  if (filters.hideZeroRating) {
-    params.append('hide_zero_rating', 'true');
-  }
-
-  if (filters.reviewed !== undefined && filters.reviewed !== '') {
-    params.append('reviewed', filters.reviewed);
-  }
-
-  if (filters.limit !== undefined && filters.limit !== null && filters.limit !== '') {
-    params.append('limit', String(filters.limit));
-  }
-
-  if (filters.offset !== undefined && filters.offset !== null && filters.offset !== '') {
-    params.append('offset', String(filters.offset));
-  }
-  if (filters.anchorId !== undefined && filters.anchorId !== null && filters.anchorId !== '') {
-    params.append('anchor_id', String(filters.anchorId));
-  }
-
-  if (filters.keywords && Object.keys(filters.keywords).length > 0) {
-      const categoryFilters = {};
-      for (const [category, keywordsSet] of Object.entries(filters.keywords)) {
-          if (keywordsSet.size > 0) {
-              categoryFilters[category] = {
-                  keywords: [...keywordsSet],
-                  operator: filters.operators[category] || 'OR',
-              };
-          }
-      }
-      if (Object.keys(categoryFilters).length > 0) {
-        params.append('category_filters', JSON.stringify(categoryFilters));
-      }
-      if (filters.categoryFilterSource) {
-        params.append('category_filter_source', filters.categoryFilterSource);
-      }
-  }
-
-  if (filters.sortOrder) {
-    params.append('date_order', filters.sortOrder);
-  }
-  if (filters.orderBy) {
-    params.append('order_by', filters.orderBy);
-  }
-  if (filters.permatagKeyword) {
-    params.append('permatag_keyword', filters.permatagKeyword);
-  }
-  if (filters.permatagCategory) {
-    params.append('permatag_category', filters.permatagCategory);
-  }
-  if (filters.permatagSignum !== undefined && filters.permatagSignum !== null) {
-    params.append('permatag_signum', String(filters.permatagSignum));
-  }
-  if (filters.permatagMissing) {
-    params.append('permatag_missing', 'true');
-  }
-  if (filters.permatagPositiveMissing) {
-    params.append('permatag_positive_missing', 'true');
-  }
-  if (filters.mlKeyword) {
-    params.append('ml_keyword', filters.mlKeyword);
-  }
-  if (filters.mlTagType) {
-    params.append('ml_tag_type', filters.mlTagType);
-  }
-  if (filters.dropboxPathPrefix) {
-    params.append('dropbox_path_prefix', filters.dropboxPathPrefix);
-  }
-
-
-  return fetchWithAuth(`/images?${params.toString()}`, {
+  const url = `/images?${params.toString()}`;
+  return fetchWithAuth(url, {
     tenantId,
   });
 }
@@ -191,10 +120,7 @@ export async function getDropboxFolders(tenantId, { query = '', limit } = {}) {
   if (limit) {
     params.append('limit', String(limit));
   }
-  const url = params.toString()
-    ? `/images/dropbox-folders?${params.toString()}`
-    : `/images/dropbox-folders`;
-  return fetchWithAuth(url, { tenantId });
+  return fetchWithAuth(`/images/dropbox-folders${params.toString() ? '?' + params.toString() : ''}`, { tenantId });
 }
 
 export async function getImageStats(tenantId) {
@@ -223,10 +149,7 @@ export async function getMlTrainingImages(tenantId, { limit = 50, offset = 0, re
   if (refresh) {
     params.append('refresh', 'true');
   }
-  const url = params.toString()
-    ? `/ml-training/images?${params.toString()}`
-    : `/ml-training/images`;
-  return fetchWithAuth(url, { tenantId });
+  return fetchWithAuth(`/ml-training/images${params.toString() ? '?' + params.toString() : ''}`, { tenantId });
 }
 
 export async function getMlTrainingStats(tenantId) {
@@ -237,26 +160,12 @@ export async function getKeywords(tenantId, filters = {}) {
     const params = new URLSearchParams();
 
     // Pass filter parameters to match the images endpoint
-    if (filters.rating !== undefined && filters.rating !== '') {
-        params.append('rating', filters.rating);
-        if (filters.ratingOperator) {
-            params.append('rating_operator', filters.ratingOperator);
-        }
-    }
+    addRatingParams(params, filters);
+    addMiscParams(params, filters);
 
-    if (filters.hideZeroRating) {
-        params.append('hide_zero_rating', 'true');
-    }
-
-    if (filters.listId) {
-        params.append('list_id', filters.listId);
-    }
-
-    if (filters.reviewed !== undefined && filters.reviewed !== '') {
-        params.append('reviewed', filters.reviewed);
-    }
+    // Keywords endpoint specific parameter
     if (filters.source) {
-        params.append('source', filters.source);
+      params.append('source', filters.source);
     }
 
     const url = params.toString() ? `/keywords?${params.toString()}` : `/keywords`;
@@ -341,104 +250,9 @@ export async function uploadImages(tenantId, files) {
     });
 }
 
-export async function getLists(tenantId) {
-    const data = await fetchWithAuth(`/lists`, { tenantId });
-    return data || [];
-}
-
 export async function getActiveList(tenantId) {
     const data = await fetchWithAuth(`/lists/active`, { tenantId });
     return data || {};
-}
-
-export async function getKeywordCategories(tenantId) {
-    const data = await fetchWithAuth(`/admin/keywords/categories`, { tenantId });
-    return data || [];
-}
-
-export async function createKeywordCategory(tenantId, payload) {
-    return fetchWithAuth(`/admin/keywords/categories`, {
-        method: 'POST',
-        tenantId,
-        body: JSON.stringify(payload),
-    });
-}
-
-export async function updateKeywordCategory(tenantId, categoryId, payload) {
-    return fetchWithAuth(`/admin/keywords/categories/${categoryId}`, {
-        method: 'PUT',
-        tenantId,
-        body: JSON.stringify(payload),
-    });
-}
-
-export async function deleteKeywordCategory(tenantId, categoryId) {
-    return fetchWithAuth(`/admin/keywords/categories/${categoryId}`, {
-        method: 'DELETE',
-        tenantId,
-    });
-}
-
-export async function getKeywordsInCategory(tenantId, categoryId) {
-    const data = await fetchWithAuth(`/admin/keywords/categories/${categoryId}/keywords`, { tenantId });
-    return data || [];
-}
-
-export async function createKeyword(tenantId, categoryId, payload) {
-    return fetchWithAuth(`/admin/keywords/categories/${categoryId}/keywords`, {
-        method: 'POST',
-        tenantId,
-        body: JSON.stringify(payload),
-    });
-}
-
-export async function updateKeyword(tenantId, keywordId, payload) {
-    return fetchWithAuth(`/admin/keywords/${keywordId}`, {
-        method: 'PUT',
-        tenantId,
-        body: JSON.stringify(payload),
-    });
-}
-
-export async function deleteKeyword(tenantId, keywordId) {
-    return fetchWithAuth(`/admin/keywords/${keywordId}`, {
-        method: 'DELETE',
-        tenantId,
-    });
-}
-
-export async function createList(tenantId, list) {
-    return fetchWithAuth(`/lists`, {
-        method: 'POST',
-        tenantId,
-        body: JSON.stringify(list),
-    });
-}
-
-export async function deleteList(tenantId, listId) {
-    return fetchWithAuth(`/lists/${listId}`, {
-        method: 'DELETE',
-        tenantId,
-    });
-}
-
-export async function getListItems(tenantId, listId, { idsOnly = false } = {}) {
-    const params = new URLSearchParams();
-    if (idsOnly) {
-        params.append('ids_only', 'true');
-    }
-    const url = params.toString()
-        ? `/lists/${listId}/items?${params.toString()}`
-        : `/lists/${listId}/items`;
-    const data = await fetchWithAuth(url, { tenantId });
-    return data || [];
-}
-
-export async function deleteListItem(tenantId, itemId) {
-    return fetchWithAuth(`/lists/items/${itemId}`, {
-        method: 'DELETE',
-        tenantId,
-    });
 }
 
 export async function freezePermatags(tenantId, imageId) {
@@ -476,15 +290,94 @@ export async function getPermatags(tenantId, imageId) {
     return data || [];
 }
 
-export async function updateList(tenantId, list) {
-    return fetchWithAuth(`/lists/${list.id}`, {
-        method: 'PATCH',
-        tenantId,
-        body: JSON.stringify(list),
-    });
+// ============================================================================
+// CRUD Operations for Common Resources
+// ============================================================================
+
+// Keyword category CRUD
+const keywordCategoryCrud = createCrudOps('/admin/keywords/categories');
+
+export async function getKeywordCategories(tenantId) {
+  const data = await keywordCategoryCrud.list(tenantId);
+  return data || [];
 }
 
+export async function createKeywordCategory(tenantId, payload) {
+  return keywordCategoryCrud.create(tenantId, payload);
+}
+
+export async function updateKeywordCategory(tenantId, categoryId, payload) {
+  return keywordCategoryCrud.update(tenantId, categoryId, payload);
+}
+
+export async function deleteKeywordCategory(tenantId, categoryId) {
+  return keywordCategoryCrud.delete(tenantId, categoryId);
+}
+
+export async function getKeywordsInCategory(tenantId, categoryId) {
+  const data = await fetchWithAuth(`/admin/keywords/categories/${categoryId}/keywords`, { tenantId });
+  return data || [];
+}
+
+// Keyword CRUD
+const keywordCrud = createCrudOps('/admin/keywords');
+
+export async function createKeyword(tenantId, categoryId, payload) {
+  return fetchWithAuth(`/admin/keywords/categories/${categoryId}/keywords`, {
+    method: 'POST',
+    tenantId,
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateKeyword(tenantId, keywordId, payload) {
+  return keywordCrud.update(tenantId, keywordId, payload);
+}
+
+export async function deleteKeyword(tenantId, keywordId) {
+  return keywordCrud.delete(tenantId, keywordId);
+}
+
+// List CRUD
+const listCrud = createCrudOps('/lists');
+
+export async function getLists(tenantId) {
+  const data = await listCrud.list(tenantId);
+  return data || [];
+}
+
+export async function createList(tenantId, list) {
+  return listCrud.create(tenantId, list);
+}
+
+export async function deleteList(tenantId, listId) {
+  return listCrud.delete(tenantId, listId);
+}
+
+export async function getListItems(tenantId, listId, { idsOnly = false } = {}) {
+  const params = new URLSearchParams();
+  if (idsOnly) {
+    params.append('ids_only', 'true');
+  }
+  const url = `/lists/${listId}/items${params.toString() ? '?' + params.toString() : ''}`;
+  const data = await fetchWithAuth(url, { tenantId });
+  return data || [];
+}
+
+export async function deleteListItem(tenantId, itemId) {
+  return fetchWithAuth(`/lists/items/${itemId}`, {
+    method: 'DELETE',
+    tenantId,
+  });
+}
+
+export async function updateList(tenantId, list) {
+  return listCrud.patch(tenantId, list.id, list);
+}
+
+// ============================================================================
 // Admin endpoints
+// ============================================================================
 
 /**
  * Create a new tenant
@@ -631,10 +524,7 @@ export async function getPeople(tenantId, options = {}) {
     if (options.limit) params.append('limit', options.limit);
     if (options.person_category) params.append('person_category', options.person_category);
 
-    const url = `/people${params.toString() ? '?' + params.toString() : ''}`;
-    return fetchWithAuth(url, {
-        tenantId
-    });
+    return fetchWithAuth(`/people${params.toString() ? '?' + params.toString() : ''}`, { tenantId });
 }
 
 /**
