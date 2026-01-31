@@ -1237,6 +1237,7 @@ class PhotoCatApp extends LitElement {
       this.curatePageOffset = 0;
       this.curateTotal = null;
       this.curateLoading = false;
+      this._curateLoadingCount = 0;
       this.curateDragSelection = [];
       this.curateDragSelecting = false;
       this.curateDragStartIndex = null;
@@ -1913,7 +1914,7 @@ class PhotoCatApp extends LitElement {
       this.fetchStats();
       const curateFilters = this._buildCurateFilterObject();
       this.curateHomeFilterPanel.updateFilters(curateFilters);
-      this.curateHomeFilterPanel.fetchImages();
+      this._fetchCurateHomeImages();
       this._fetchSearchLists();
       this._unsubscribeQueue = subscribeQueue((state) => {
         this.queueState = state;
@@ -2047,7 +2048,7 @@ class PhotoCatApp extends LitElement {
       }
       this.curateFilters = nextFilters;
       this.curateHomeFilterPanel.updateFilters(nextFilters);
-      this.curateHomeFilterPanel.fetchImages();
+      this._fetchCurateHomeImages();
   }
 
   /**
@@ -2152,13 +2153,32 @@ class PhotoCatApp extends LitElement {
 
       // Update filter panel and fetch
       this.curateHomeFilterPanel.updateFilters(curateFilters);
-      this.curateHomeFilterPanel.fetchImages();
+      this._fetchCurateHomeImages();
 
       // Keep local mirror for UI state (no deprecated builder)
       if (resetOffset) {
           this.curatePageOffset = 0;
       }
       this.curateFilters = { ...curateFilters };
+  }
+
+  _startCurateLoading() {
+      this._curateLoadingCount = (this._curateLoadingCount || 0) + 1;
+      this.curateLoading = true;
+  }
+
+  _stopCurateLoading() {
+      this._curateLoadingCount = Math.max(0, (this._curateLoadingCount || 1) - 1);
+      this.curateLoading = this._curateLoadingCount > 0;
+  }
+
+  async _fetchCurateHomeImages() {
+      this._startCurateLoading();
+      try {
+          return await this.curateHomeFilterPanel.fetchImages();
+      } finally {
+          this._stopCurateLoading();
+      }
   }
 
   _handleCurateLimitChange(e) {
@@ -2186,7 +2206,7 @@ class PhotoCatApp extends LitElement {
       });
 
       this.curateHomeFilterPanel.updateFilters(curateFilters);
-      this.curateHomeFilterPanel.fetchImages();
+      this._fetchCurateHomeImages();
   }
 
   _handleCurateOrderByChange(e) {
@@ -2196,7 +2216,7 @@ class PhotoCatApp extends LitElement {
       if (this.curateSubTab === 'main') {
           const curateFilters = this._buildCurateFilterObject({ resetOffset: true });
           this.curateHomeFilterPanel.updateFilters(curateFilters);
-          this.curateHomeFilterPanel.fetchImages();
+          this._fetchCurateHomeImages();
       } else if (this.curateSubTab === 'tag-audit' && this.curateAuditKeyword) {
           this._fetchCurateAuditImages();
       }
@@ -2209,7 +2229,7 @@ class PhotoCatApp extends LitElement {
       if (this.curateSubTab === 'main') {
           const curateFilters = this._buildCurateFilterObject({ resetOffset: true });
           this.curateHomeFilterPanel.updateFilters(curateFilters);
-          this.curateHomeFilterPanel.fetchImages();
+          this._fetchCurateHomeImages();
       } else if (this.curateSubTab === 'tag-audit' && this.curateAuditKeyword) {
           this._fetchCurateAuditImages();
       }
@@ -2227,7 +2247,7 @@ class PhotoCatApp extends LitElement {
       if (this.curateSubTab === 'main') {
           const curateFilters = this._buildCurateFilterObject({ resetOffset: true });
           this.curateHomeFilterPanel.updateFilters(curateFilters);
-          this.curateHomeFilterPanel.fetchImages();
+          this._fetchCurateHomeImages();
       } else if (this.curateSubTab === 'tag-audit' && this.curateAuditKeyword) {
           this._fetchCurateAuditImages();
       }
@@ -2425,7 +2445,7 @@ class PhotoCatApp extends LitElement {
       if (this.curateSubTab === 'main') {
           const curateFilters = this._buildCurateFilterObject({ resetOffset: true });
           this.curateHomeFilterPanel.updateFilters(curateFilters);
-          this.curateHomeFilterPanel.fetchImages();
+          this._fetchCurateHomeImages();
       } else if (this.curateSubTab === 'tag-audit' && this.curateAuditKeyword) {
           this._fetchCurateAuditImages();
       }
@@ -2453,7 +2473,7 @@ class PhotoCatApp extends LitElement {
               resetOffset: true
           });
           this.curateHomeFilterPanel.updateFilters(curateFilters);
-          this.curateHomeFilterPanel.fetchImages();
+          this._fetchCurateHomeImages();
       } else if (this.curateSubTab === 'tag-audit' && this.curateAuditKeyword) {
           // Update Audit tab (both existing and missing share same settings)
           this._fetchCurateAuditImages();
@@ -2691,7 +2711,7 @@ class PhotoCatApp extends LitElement {
       this.curateTotal = null;
       const curateFilters = this._buildCurateFilterObject({ resetOffset: true });
       this.curateHomeFilterPanel.updateFilters(curateFilters);
-      this.curateHomeFilterPanel.fetchImages();
+      this._fetchCurateHomeImages();
       this.curateDragSelection = [];
       this.curateSubTab = 'home';
       this.curateAuditMode = 'existing';
@@ -2734,7 +2754,7 @@ class PhotoCatApp extends LitElement {
     _handleUploadComplete() {
         const curateFilters = this._buildCurateFilterObject();
         this.curateHomeFilterPanel.updateFilters(curateFilters);
-        this.curateHomeFilterPanel.fetchImages();
+        this._fetchCurateHomeImages();
         this.fetchStats();
         this.showUploadModal = false;
     }
@@ -3028,7 +3048,7 @@ class PhotoCatApp extends LitElement {
               // Use filter panel instead of deprecated method
               const curateFilters = this._buildCurateFilterObject();
               this.curateHomeFilterPanel.updateFilters(curateFilters);
-              this.curateHomeFilterPanel.fetchImages();
+              this._fetchCurateHomeImages();
           }
       }
       if (nextTab === 'tag-audit' && this.curateAuditKeyword) {
@@ -3426,7 +3446,7 @@ class PhotoCatApp extends LitElement {
           anchorId: imageId,
       };
       this.curateHomeFilterPanel.updateFilters(curateFilters);
-      await this.curateHomeFilterPanel.fetchImages();
+      await this._fetchCurateHomeImages();
       await this.updateComplete;
       this._scrollCurateThumbIntoView(imageId);
   }
@@ -4622,7 +4642,7 @@ class PhotoCatApp extends LitElement {
                     } else {
                       const curateFilters = this._buildCurateFilterObject();
                       this.curateHomeFilterPanel.updateFilters(curateFilters);
-                      this.curateHomeFilterPanel.fetchImages();
+                      this._fetchCurateHomeImages();
                     }
                   }}
                   title="Refresh"

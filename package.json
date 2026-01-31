@@ -12,7 +12,7 @@
     "build:css": "tailwindcss -i ./frontend/styles.css -o ./frontend/components/tailwind-output.css --minify",
     "build:css:watch": "tailwindcss -i ./frontend/styles.css -o ./frontend/components/tailwind-output.css --watch",
     "dev": "vite",
-    "build": "vite build"
+    "build": "vite build --emptyOutDir"
   },
   "repository": {
     "type": "git",
