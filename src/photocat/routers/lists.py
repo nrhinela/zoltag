@@ -323,6 +323,34 @@ async def get_list_items(
     return response_items
 
 
+@router.post("/{list_id:int}/add-photo", response_model=dict)
+async def add_photo_to_specific_list(
+    list_id: int,
+    req: AddPhotoRequest,
+    tenant: Tenant = Depends(get_tenant),
+    db: Session = Depends(get_db)
+):
+    """Add a photo to a specific list."""
+    photo_id = req.photo_id
+
+    # Verify list belongs to tenant
+    lst = db.query(PhotoList).filter_by(id=list_id, tenant_id=tenant.id).first()
+    if not lst:
+        raise HTTPException(status_code=404, detail="List not found")
+
+    # Prevent duplicate items in the list
+    existing_item = db.query(PhotoListItem).filter_by(list_id=list_id, photo_id=photo_id).first()
+    if existing_item:
+        # Silent no-op if already present
+        return {"list_id": list_id, "item_id": existing_item.id, "added_at": existing_item.added_at}
+
+    item = PhotoListItem(list_id=list_id, photo_id=photo_id)
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return {"list_id": list_id, "item_id": item.id, "added_at": item.added_at}
+
+
 @router.post("/add-photo", response_model=dict)
 async def add_photo_to_list(
     req: AddPhotoRequest,

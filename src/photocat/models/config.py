@@ -40,6 +40,10 @@ class KeywordCategory(Base):
     keywords = relationship("Keyword", back_populates="category", cascade="all, delete-orphan")
     person_category = relationship("PersonCategory", back_populates="keyword_category")
 
+    __table_args__ = (
+        Index("idx_keyword_categories_tenant_name", "tenant_id", "name"),
+    )
+
 
 class PersonCategory(Base):
     """Categories for organizing people (Photo Author, People in Scene, etc.)."""
@@ -94,6 +98,7 @@ class Keyword(Base):
 
     __table_args__ = (
         Index("idx_keywords_tenant_keyword_category", "tenant_id", "keyword", "category_id", unique=True),
+        Index("idx_keywords_tenant_lower_keyword_category", "tenant_id", func.lower(keyword), "category_id"),
         Index("idx_keywords_person_id", "person_id"),
         Index("idx_keywords_tag_type", "tag_type"),
     )

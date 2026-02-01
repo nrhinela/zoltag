@@ -55,25 +55,20 @@ async def list_dropbox_folders(
     db: Session = Depends(get_db)
 ):
     """List Dropbox folder paths for a tenant, filtered by query."""
-    query = db.query(ImageMetadata.dropbox_path).filter(
+    parent_expr = func.regexp_replace(ImageMetadata.dropbox_path, "/[^/]+$", "")
+    folder_expr = func.coalesce(func.nullif(parent_expr, ""), "/")
+    query = db.query(folder_expr.label("folder")).filter(
         ImageMetadata.tenant_id == tenant.id,
-        ImageMetadata.dropbox_path.isnot(None)
+        ImageMetadata.dropbox_path.isnot(None),
     )
     if q:
-        query = query.filter(ImageMetadata.dropbox_path.ilike(f"%{q}%"))
-    paths = query.distinct().all()
-    folders = set()
-    for (path,) in paths:
-        if not path:
-            continue
-        parent = path.rsplit("/", 1)[0]
-        if parent == "":
-            parent = "/"
-        folders.add(parent)
-    sorted_folders = sorted(folders)
+        query = query.filter(folder_expr.ilike(f"%{q}%"))
+    query = query.distinct().order_by(folder_expr)
     if limit:
-        sorted_folders = sorted_folders[:limit]
-    return {"tenant_id": tenant.id, "folders": sorted_folders}
+        query = query.limit(limit)
+    rows = query.all()
+    folders = [row[0] for row in rows]
+    return {"tenant_id": tenant.id, "folders": folders}
 
 
 @router.get("/images", response_model=dict, operation_id="list_images")
@@ -673,7 +668,8 @@ async def get_image_stats(
                 Keyword.keyword,
                 Keyword.category_id
             ).filter(
-                Keyword.category_id.in_(category_ids)
+                Keyword.category_id.in_(category_ids),
+                Keyword.tenant_id == tenant.id
             ).all()
 
         keyword_ids = []
@@ -765,6 +761,7 @@ async def get_image_stats(
                 ImageMetadata.tenant_id == tenant.id,
                 Permatag.signum == 1,
                 Keyword.category_id.in_(category_ids),
+                Keyword.tenant_id == tenant.id,
                 ImageMetadata.rating.in_([0, 1, 2, 3])
             ).group_by(
                 Keyword.category_id,

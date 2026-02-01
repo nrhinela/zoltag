@@ -74,6 +74,11 @@ class ListEditor extends LitElement {
     this._hasRefreshedOnce = false;
   }
 
+  // Use Light DOM instead of Shadow DOM to access Tailwind CSS classes
+  createRenderRoot() {
+    return this;
+  }
+
   connectedCallback() {
     super.connectedCallback();
     this.fetchLists();
@@ -117,7 +122,7 @@ class ListEditor extends LitElement {
     this._isVisible = isNowVisible;
   }
 
-  async fetchLists() {
+  async fetchLists({ force = false } = {}) {
     if (!this.tenant) {
       console.warn('fetchLists: Tenant ID is not available.');
       return;
@@ -125,7 +130,7 @@ class ListEditor extends LitElement {
     console.log('fetchLists: Fetching lists for tenant:', this.tenant);
     this.isLoadingLists = true;
     try {
-      const fetchedLists = await getLists(this.tenant);
+      const fetchedLists = await getLists(this.tenant, { force });
       console.log('fetchLists: Fetched lists:', fetchedLists);
       this.lists = fetchedLists;
       this.dispatchEvent(new CustomEvent('lists-updated', { bubbles: true, composed: true }));
@@ -170,7 +175,7 @@ class ListEditor extends LitElement {
       if (this.selectedList) {
         await this._fetchListItems(this.selectedList.id);
       }
-      await this.fetchLists();
+      await this.fetchLists({ force: true });
     } catch (error) {
       console.error('Error deleting list item:', error);
     }
@@ -204,8 +209,8 @@ class ListEditor extends LitElement {
   }
 
   async _saveSelectedListChanges() {
-    const title = this.shadowRoot.getElementById('edit-list-title')?.value.trim();
-    const notebox = this.shadowRoot.getElementById('edit-list-notes')?.value;
+    const title = this.querySelector('#edit-list-title')?.value.trim();
+    const notebox = this.querySelector('#edit-list-notes')?.value;
 
     if (!title) {
       console.warn('List title cannot be empty');
@@ -220,7 +225,7 @@ class ListEditor extends LitElement {
       });
       this.selectedList = updated;
       this.editingSelectedList = false;
-      await this.fetchLists();
+      await this.fetchLists({ force: true });
       this.dispatchEvent(new CustomEvent('lists-updated', { bubbles: true, composed: true }));
     } catch (error) {
       console.error('Error saving list changes:', error);
@@ -386,7 +391,7 @@ class ListEditor extends LitElement {
                 Add New List
               </button>
               <button
-                @click=${() => this.fetchLists()}
+                @click=${() => this.fetchLists({ force: true })}
                 class="inline-flex items-center gap-2 border rounded-lg px-4 py-2 text-xs text-gray-600 hover:bg-gray-50 disabled:opacity-60 disabled:cursor-not-allowed"
                 title="Refresh"
                 ?disabled=${this.isLoadingLists}

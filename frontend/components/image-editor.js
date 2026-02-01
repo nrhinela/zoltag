@@ -999,6 +999,12 @@ class ImageEditor extends LitElement {
     return date.toLocaleString();
   }
 
+  _buildDropboxHref(path) {
+    if (!path) return '';
+    const encodedPath = path.split('/').map((part) => encodeURIComponent(part)).join('/');
+    return `https://www.dropbox.com/home${encodedPath}`;
+  }
+
   _renderEditTab() {
     const permatags = (this.details?.permatags || []).filter((tag) => tag.signum === 1);
     const categories = Object.keys(this.keywordsByCategory || {}).sort((a, b) => a.localeCompare(b));
@@ -1008,9 +1014,7 @@ class ImageEditor extends LitElement {
       ? `${encodeURIComponent(selectedCategory)}::${encodeURIComponent(this.tagInput)}`
       : '';
     const dropboxPath = this.details?.dropbox_path || '';
-    const dropboxHref = dropboxPath
-      ? `https://www.dropbox.com/home${encodeURIComponent(dropboxPath)}`
-      : '';
+    const dropboxHref = this._buildDropboxHref(dropboxPath);
     const sortedKeywordsByCategory = categories.map((category) => {
       const keywords = (this.keywordsByCategory?.[category] || [])
         .map((entry) => entry.keyword)
@@ -1192,7 +1196,11 @@ class ImageEditor extends LitElement {
           <div class="metadata-label">Filename</div>
           <div>${details.filename || 'Unknown'}</div>
           <div class="metadata-label">Dropbox path</div>
-          <div>${details.dropbox_path || 'Unknown'}</div>
+          <div>
+            ${details.dropbox_path
+              ? html`<a class="text-blue-600 hover:text-blue-700 break-all" href=${this._buildDropboxHref(details.dropbox_path)} target="dropbox" rel="noopener noreferrer">${details.dropbox_path}</a>`
+              : html`Unknown`}
+          </div>
           <div class="metadata-label">Photo taken</div>
           <div>${this._formatDateTime(details.capture_timestamp)}</div>
           <div class="metadata-label">Dropbox modified</div>

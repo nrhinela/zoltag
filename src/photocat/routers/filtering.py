@@ -162,14 +162,14 @@ def apply_permatag_filter(
     Returns:
         Set of image IDs matching permatag criteria
     """
-    normalized_keyword = (keyword or "").strip()
+    normalized_keyword = (keyword or "").strip().lower()
     if not normalized_keyword:
         return existing_filter if existing_filter is not None else set()
 
     # Look up keyword by name (case-insensitive)
     keyword_query = db.query(Keyword).filter(
         Keyword.tenant_id == tenant.id,
-        func.lower(Keyword.keyword) == func.lower(normalized_keyword)
+        func.lower(Keyword.keyword) == normalized_keyword
     )
 
     # Join with category if provided
@@ -177,7 +177,8 @@ def apply_permatag_filter(
         keyword_query = keyword_query.join(
             KeywordCategory, Keyword.category_id == KeywordCategory.id
         ).filter(
-            KeywordCategory.name == category
+            KeywordCategory.name == category,
+            KeywordCategory.tenant_id == tenant.id
         )
 
     keyword_obj = keyword_query.first()
@@ -198,7 +199,8 @@ def apply_permatag_filter(
 
     # Query permatags by keyword_id
     permatag_query = db.query(Permatag.image_id).filter(
-        Permatag.keyword_id == keyword_obj.id
+        Permatag.keyword_id == keyword_obj.id,
+        Permatag.tenant_id == tenant.id
     )
     if signum is not None:
         permatag_query = permatag_query.filter(Permatag.signum == signum)
@@ -601,7 +603,7 @@ def apply_permatag_filter_subquery(
     Returns:
         SQLAlchemy subquery of image IDs
     """
-    normalized_keyword = (keyword or "").strip()
+    normalized_keyword = (keyword or "").strip().lower()
     if not normalized_keyword:
         # Empty keyword returns all images for tenant
         return db.query(ImageMetadata.id).filter(
@@ -611,7 +613,7 @@ def apply_permatag_filter_subquery(
     # Look up keyword by name (case-insensitive)
     keyword_query = db.query(Keyword).filter(
         Keyword.tenant_id == tenant.id,
-        func.lower(Keyword.keyword) == func.lower(normalized_keyword)
+        func.lower(Keyword.keyword) == normalized_keyword
     )
 
     # Join with category if provided
@@ -619,7 +621,8 @@ def apply_permatag_filter_subquery(
         keyword_query = keyword_query.join(
             KeywordCategory, Keyword.category_id == KeywordCategory.id
         ).filter(
-            KeywordCategory.name == category
+            KeywordCategory.name == category,
+            KeywordCategory.tenant_id == tenant.id
         )
 
     keyword_obj = keyword_query.first()
@@ -637,7 +640,8 @@ def apply_permatag_filter_subquery(
 
     # Query permatag image IDs
     permatag_subquery = db.query(Permatag.image_id).filter(
-        Permatag.keyword_id == keyword_obj.id
+        Permatag.keyword_id == keyword_obj.id,
+        Permatag.tenant_id == tenant.id
     )
     if signum is not None:
         permatag_subquery = permatag_subquery.filter(Permatag.signum == signum)
