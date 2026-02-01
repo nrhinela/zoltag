@@ -34,6 +34,7 @@ import {
 import { enqueueCommand, subscribeQueue, retryFailedCommand } from '../services/command-queue.js';
 import { createHotspotHandlers, createRatingDragHandlers, createSelectionHandlers, createPaginationHandlers, parseUtilityKeywordValue } from './curate-shared.js';
 import './curate-home-tab.js';
+import './curate-explore-tab.js';
 import './search-tab.js';
 
 class PhotoCatApp extends LitElement {
@@ -1513,6 +1514,15 @@ class PhotoCatApp extends LitElement {
           return;
         }
         const path = event.composedPath ? event.composedPath() : [];
+        const clickedThumb = path.some((node) => {
+          if (!node || !node.classList) {
+            return false;
+          }
+          return (
+            node.classList.contains('curate-thumb-wrapper') ||
+            node.classList.contains('curate-thumb')
+          );
+        });
         const clickedSelected = path.some((node) => {
           if (!node || !node.classList) {
             return false;
@@ -1526,7 +1536,7 @@ class PhotoCatApp extends LitElement {
           return;
         }
         this.curateDragSelection = [];
-        this._curateSuppressClick = true;
+        this._curateSuppressClick = clickedThumb;
       };
       this._handleCurateSelectionEnd = () => {
         if (this.curateDragSelecting) {
@@ -1677,6 +1687,30 @@ class PhotoCatApp extends LitElement {
 
   _handleCurateExploreHotspotDrop(event, targetId) {
       return this._exploreHotspotHandlers.handleDrop(event, targetId);
+  }
+
+  _handleCurateHotspotChanged(event) {
+      const { type, targetId, value } = event.detail;
+      switch (type) {
+          case 'keyword-change':
+              return this._handleCurateExploreHotspotKeywordChange({ target: { value } }, targetId);
+          case 'action-change':
+              return this._handleCurateExploreHotspotActionChange({ target: { value } }, targetId);
+          case 'type-change':
+              return this._handleCurateExploreHotspotTypeChange({ target: { value } }, targetId);
+          case 'rating-change':
+              return this._handleCurateExploreHotspotRatingChange({ target: { value } }, targetId);
+          case 'add-target':
+              return this._handleCurateExploreHotspotAddTarget();
+          case 'remove-target':
+              return this._handleCurateExploreHotspotRemoveTarget(targetId);
+          case 'rating-toggle':
+              return this._handleCurateExploreRatingToggle({ target: { checked: event.detail.enabled } });
+          case 'hotspot-drop':
+              return this._handleCurateExploreHotspotDrop(event.detail.event, targetId);
+          default:
+              console.warn('Unknown hotspot event type:', type);
+      }
   }
 
   _removeCurateImagesByIds(ids) {
@@ -3842,6 +3876,8 @@ class PhotoCatApp extends LitElement {
   _handleCurateEditorClose() {
       this.curateEditorOpen = false;
       this.curateEditorImage = null;
+      // Clear any lingering drag selection that might block next click
+      this.curateDragSelection = [];
   }
 
   _handleImageNavigate(event) {
@@ -4484,257 +4520,52 @@ class PhotoCatApp extends LitElement {
                 ` : html``}
                 ${this.curateSubTab === 'main' ? html`
                 <div>
-                  <div class="curate-header-layout mb-4">
-                      <div class="bg-white rounded-lg shadow p-4 w-full">
-                        <div class="curate-control-grid">
-                          <div>
-                            <div class="text-xs font-semibold text-gray-600 mb-1">Quick sort</div>
-                            <div class="curate-audit-toggle">
-                                <button
-                                  class=${this.curateOrderBy === 'photo_creation' ? 'active' : ''}
-                                  @click=${() => this._handleCurateQuickSort('photo_creation')}
-                                >
-                                  Photo Date ${this._getCurateQuickSortArrow('photo_creation')}
-                                </button>
-                                <button
-                                  class=${this.curateOrderBy === 'processed' ? 'active' : ''}
-                                  @click=${() => this._handleCurateQuickSort('processed')}
-                                >
-                                  Process Date ${this._getCurateQuickSortArrow('processed')}
-                                </button>
-                            </div>
-                          </div>
-                          <div>
-                            <div class="text-xs font-semibold text-gray-600 mb-1">Optional filter by keyword</div>
-                            <div class="curate-control-row">
-                              <select
-                                class="w-full px-3 py-2 border rounded-lg ${selectedKeywordValueMain ? 'bg-yellow-100 border-yellow-200' : ''}"
-                                .value=${selectedKeywordValueMain}
-                                @change=${(event) => this._handleCurateKeywordSelect(event, 'main')}
-                              >
-                                <option value="">Select a keyword...</option>
-                                <option value="__untagged__">Untagged (${untaggedCountLabel})</option>
-                                ${this._getKeywordsByCategory().map(([category, keywords]) => html`
-                                  <optgroup label="${category} (${this._getCategoryCount(category)})">
-                                    ${keywords.map(kw => html`
-                                      <option value=${`${encodeURIComponent(category)}::${encodeURIComponent(kw.keyword)}`}>
-                                        ${kw.keyword} (${kw.count})
-                                      </option>
-                                    `)}
-                                  </optgroup>
-                                `)}
-                              </select>
-                              <button
-                                class="h-10 w-10 flex items-center justify-center border rounded-lg text-gray-600 hover:bg-gray-50"
-                                title="Advanced filters"
-                                aria-pressed=${this.curateAdvancedOpen ? 'true' : 'false'}
-                                @click=${() => { this.curateAdvancedOpen = !this.curateAdvancedOpen; }}
-                              >
-                                <svg viewBox="0 0 24 24" class="h-7 w-7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                                  <circle cx="12" cy="12" r="3"></circle>
-                                  <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.02.02a2 2 0 0 1-2.83 2.83l-.02-.02a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.03a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.87.34l-.02.02a2 2 0 1 1-2.83-2.83l.02-.02a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.03a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.87l-.02-.02a2 2 0 1 1 2.83-2.83l.02.02a1.7 1.7 0 0 0 1.87.34H9a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.03a1.7 1.7 0 0 0 1 1.55 1.7 1.7 0 0 0 1.87-.34l.02-.02a2 2 0 0 1 2.83 2.83l-.02.02a1.7 1.7 0 0 0-.34 1.87V9c0 .68.4 1.3 1.02 1.58.24.11.5.17.77.17H21a2 2 0 1 1 0 4h-.03a1.7 1.7 0 0 0-1.55 1z"></path>
-                                </svg>
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                      <div></div>
-                  </div>
-                  ${this._renderCurateFilters({ mode: 'main', showHistogram: false, showHeader: false })}
-                  <div class="curate-layout" style="--curate-thumb-size: ${this.curateThumbSize}px;">
-                    <div class="curate-pane">
-                        <div class="curate-pane-header">
-                            <div class="curate-pane-header-row">
-                                <span>${leftPaneLabel}</span>
-                                <div class="curate-pane-header-actions">
-                                  ${renderPaginationControls({
-                                    countLabel: curateCountLabel,
-                                    hasPrev: curateHasPrev,
-                                    hasNext: curateHasMore,
-                                    onPrev: this._handleCuratePagePrev,
-                                    onNext: this._handleCuratePageNext,
-                                    pageSize: this.curateLimit,
-                                    onPageSizeChange: this._handleCurateLimitChange,
-                                    disabled: this.curateLoading,
-                                  })}
-                                </div>
-                            </div>
-                        </div>
-                        ${this.curateLoading ? html`
-                          <div class="curate-loading-overlay" aria-label="Loading">
-                            <span class="curate-spinner large"></span>
-                          </div>
-                        ` : html``}
-                        <div class="curate-pane-body">
-                            ${leftImages.length ? html`
-                              <div class="curate-grid">
-                                  ${leftImages.map((image, index) => html`
-                                  <div
-                                    class="curate-thumb-wrapper ${this.curateDragSelection.includes(image.id) ? 'selected' : ''}"
-                                    data-image-id="${image.id}"
-                                    draggable="true"
-                                    @dragstart=${(event) => this._handleCurateExploreReorderStart(event, image)}
-                                    @dragover=${(event) => this._handleCurateExploreReorderOver(event, image.id)}
-                                    @dragend=${this._handleCurateExploreReorderEnd}
-                                    @click=${(event) => this._handleCurateImageClick(event, image)}
-                                  >
-                                      <img
-                                        src=${image.thumbnail_url || `/api/v1/images/${image.id}/thumbnail`}
-                                        alt=${image.filename}
-                                      class="curate-thumb ${this.curateDragSelection.includes(image.id) ? 'selected' : ''} ${this._curateFlashSelectionIds?.has(image.id) ? 'flash' : ''}"
-                                      draggable="false"
-                                      @pointerdown=${(event) => this._handleCuratePointerDownWithOrder(event, index, image.id, this._curateLeftOrder)}
-                                      @pointermove=${(event) => this._handleCuratePointerMove(event)}
-                                      @pointerenter=${() => this._handleCurateSelectHoverWithOrder(index, this._curateLeftOrder)}
-                                    >
-                                      ${this._renderCurateRatingWidget(image)}
-                                      ${this._renderCurateRatingStatic(image)}
-                                      ${this._renderCurateAiMLScore(image)}
-                                      ${this._renderCuratePermatagSummary(image)}
-                                      ${this._formatCurateDate(image) ? html`
-                                        <div class="curate-thumb-date">
-                                          <span class="curate-thumb-id">#${image.id}</span>
-                                          <span class="curate-thumb-icon" aria-hidden="true">📷</span>${this._formatCurateDate(image)}
-                                        </div>
-                                      ` : html``}
-                                    </div>
-                                  `)}
-                              </div>
-                            ` : html`
-                              <div class="curate-drop">
-                                No images available.
-                              </div>
-                            `}
-                            <div class="mt-3">
-                              ${renderPaginationControls({
-                                countLabel: curateCountLabel,
-                                hasPrev: curateHasPrev,
-                                hasNext: curateHasMore,
-                                onPrev: this._handleCuratePagePrev,
-                                onNext: this._handleCuratePageNext,
-                                pageSize: this.curateLimit,
-                                onPageSizeChange: this._handleCurateLimitChange,
-                                disabled: this.curateLoading,
-                                showPageSize: false,
-                              })}
-                            </div>
-                        </div>
-                    </div>
-                    <div class="curate-pane utility-targets">
-                        <div class="curate-pane-header">
-                            <div class="curate-pane-header-row">
-                                <span>Hotspots</span>
-                                <div class="curate-rating-checkbox" style="margin-left: auto;">
-                                    <input
-                                        type="checkbox"
-                                        id="rating-checkbox-explore"
-                                        .checked=${this.curateExploreRatingEnabled}
-                                        @change=${this._handleCurateExploreRatingToggle}
-                                    />
-                                    <label for="rating-checkbox-explore">Rating</label>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="curate-pane-body">
-                          ${this.curateExploreRatingEnabled ? html`
-                            <div
-                              class="curate-rating-drop-zone ${this._curateExploreRatingDragTarget ? 'active' : ''}"
-                              @dragover=${(event) => this._handleCurateExploreRatingDragOver(event)}
-                              @dragleave=${this._handleCurateExploreRatingDragLeave}
-                              @drop=${(event) => this._handleCurateExploreRatingDrop(event)}
-                            >
-                              <div class="curate-rating-drop-zone-star">⭐</div>
-                              <div class="curate-rating-drop-zone-content">
-                                <div class="curate-rating-drop-hint">Drop to rate</div>
-                                <div class="curate-rating-count">${this.curateExploreRatingCount || 0} rated</div>
-                              </div>
-                            </div>
-                          ` : html``}
-                          <div class="curate-utility-panel">
-                            ${(this.curateExploreTargets || []).map((target) => {
-                              const isFirstTarget = (this.curateExploreTargets?.[0]?.id === target.id);
-                              const isRating = target.type === 'rating';
-                              const selectedValue = target.keyword
-                                ? `${encodeURIComponent(target.category || 'Uncategorized')}::${encodeURIComponent(target.keyword)}`
-                                : '';
-                              return html`
-                                <div
-                                  class="curate-utility-box ${this._curateExploreHotspotDragTarget === target.id ? 'active' : ''}"
-                                  @dragover=${(event) => this._handleCurateExploreHotspotDragOver(event, target.id)}
-                                  @dragleave=${this._handleCurateExploreHotspotDragLeave}
-                                  @drop=${(event) => this._handleCurateExploreHotspotDrop(event, target.id)}
-                                >
-                                  <div class="curate-utility-controls">
-                                    <select
-                                      class="curate-utility-type-select"
-                                      .value=${target.type || 'keyword'}
-                                      @change=${(event) => this._handleCurateExploreHotspotTypeChange(event, target.id)}
-                                    >
-                                      <option value="keyword">Keyword</option>
-                                      <option value="rating">Rating</option>
-                                    </select>
-                                    ${isRating ? html`
-                                      <select
-                                        class="curate-utility-select"
-                                        .value=${target.rating ?? ''}
-                                        @change=${(event) => this._handleCurateExploreHotspotRatingChange(event, target.id)}
-                                      >
-                                        <option value="">Select rating…</option>
-                                        <option value="0">🗑️ Garbage</option>
-                                        <option value="1">⭐ 1 Star</option>
-                                        <option value="2">⭐⭐ 2 Stars</option>
-                                        <option value="3">⭐⭐⭐ 3 Stars</option>
-                                      </select>
-                                    ` : html`
-                                      <select
-                                        class="curate-utility-select ${selectedValue ? 'selected' : ''}"
-                                        .value=${selectedValue}
-                                        @change=${(event) => this._handleCurateExploreHotspotKeywordChange(event, target.id)}
-                                      >
-                                        <option value="">Select keyword…</option>
-                                        ${this._getKeywordsByCategory().map(([category, keywords]) => html`
-                                          <optgroup label="${category}">
-                                            ${keywords.map((kw) => html`
-                                              <option value=${`${encodeURIComponent(category)}::${encodeURIComponent(kw.keyword)}`}>
-                                                ${kw.keyword}
-                                              </option>
-                                            `)}
-                                          </optgroup>
-                                        `)}
-                                      </select>
-                                      <select
-                                        class="curate-utility-action"
-                                        .value=${target.action || 'add'}
-                                        @change=${(event) => this._handleCurateExploreHotspotActionChange(event, target.id)}
-                                      >
-                                        <option value="add">Add</option>
-                                        <option value="remove">Remove</option>
-                                      </select>
-                                    `}
-                                  </div>
-                                  ${!isFirstTarget ? html`
-                                    <button
-                                      type="button"
-                                      class="curate-utility-remove"
-                                      title="Remove box"
-                                      @click=${() => this._handleCurateExploreHotspotRemoveTarget(target.id)}
-                                    >
-                                      ×
-                                    </button>
-                                  ` : html``}
-                                  <div class="curate-utility-count">${target.count || 0}</div>
-                                  <div class="curate-utility-drop-hint">Drop images here</div>
-                                </div>
-                              `;
-                            })}
-                            <button class="curate-utility-add" @click=${this._handleCurateExploreHotspotAddTarget}>
-                              +
-                            </button>
-                          </div>
-                          </div>
-                        </div>
-                    </div>
+                  <curate-explore-tab
+                    .tenant=${this.tenant}
+                    .images=${leftImages}
+                    .thumbSize=${this.curateThumbSize}
+                    .orderBy=${this.curateOrderBy}
+                    .dateOrder=${this.curateDateOrder}
+                    .limit=${this.curateLimit}
+                    .offset=${this.curatePageOffset}
+                    .total=${this.curateTotal}
+                    .loading=${this.curateLoading}
+                    .advancedOpen=${this.curateAdvancedOpen}
+                    .advancedContent=${this._renderCurateFilters({ mode: 'main', showHistogram: false, showHeader: false })}
+                    .dragSelection=${this.curateDragSelection}
+                    .dragSelecting=${this.curateDragSelecting}
+                    .dragStartIndex=${this.curateDragStartIndex}
+                    .dragEndIndex=${this.curateDragEndIndex}
+                    .renderCurateRatingWidget=${this._renderCurateRatingWidget.bind(this)}
+                    .renderCurateRatingStatic=${this._renderCurateRatingStatic.bind(this)}
+                    .renderCuratePermatagSummary=${this._renderCuratePermatagSummary.bind(this)}
+                    .renderCurateAiMLScore=${this._renderCurateAiMLScore.bind(this)}
+                    .formatCurateDate=${this._formatCurateDate.bind(this)}
+                    .imageStats=${this.imageStats}
+                    .curateCategoryCards=${this.curateCategoryCards}
+                    .selectedKeywordValueMain=${selectedKeywordValueMain}
+                    .tagStatsBySource=${this.tagStatsBySource}
+                    .activeCurateTagSource=${this.activeCurateTagSource}
+                    .curateExploreTargets=${this.curateExploreTargets}
+                    .curateExploreRatingEnabled=${this.curateExploreRatingEnabled}
+                    .curateExploreRatingCount=${this.curateExploreRatingCount}
+                    @image-clicked=${(e) => this._handleCurateImageClick(e.detail.event, e.detail.image, e.detail.imageSet)}
+                    @sort-changed=${(e) => {
+                      this.curateOrderBy = e.detail.orderBy;
+                      this.curateDateOrder = e.detail.dateOrder;
+                      this._applyCurateFilters();
+                    }}
+                    @keyword-selected=${(e) => this._handleCurateKeywordSelect(e.detail.event, e.detail.mode)}
+                    @pagination-changed=${(e) => {
+                      this.curatePageOffset = e.detail.offset;
+                      this.curateLimit = e.detail.limit;
+                      this._applyCurateFilters();
+                    }}
+                    @advanced-toggled=${(e) => { this.curateAdvancedOpen = e.detail.open; }}
+                    @hotspot-changed=${this._handleCurateHotspotChanged}
+                    @selection-changed=${(e) => { this.curateDragSelection = e.detail.selection; }}
+                    @rating-drop=${(e) => this._handleCurateExploreRatingDrop(e.detail.event)}
+                  ></curate-explore-tab>
                 </div>
                 ` : html``}
                 ${this.curateSubTab === 'tag-audit' ? html`

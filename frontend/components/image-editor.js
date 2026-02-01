@@ -1469,7 +1469,11 @@ class ImageEditor extends LitElement {
 
     const fullscreenImageSrc = this.fullImageUrl
       ? this.fullImageUrl
-      : (this.details?.thumbnail_url || `/api/v1/images/${this.details?.id}/thumbnail`);
+      : (
+        this.details?.thumbnail_url
+        || this.image?.thumbnail_url
+        || (this.details?.id || this.image?.id ? `/api/v1/images/${this.details?.id || this.image?.id}/thumbnail` : '')
+      );
 
     return html`
       <div class="modal ${this.open ? 'open' : ''}" @click=${this._close}>

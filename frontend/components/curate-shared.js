@@ -268,43 +268,48 @@ export function renderResultsPagination({
  * @returns {TemplateResult}
  */
 export function renderPaginationControls(offset, limit, total, handlers, loading = false) {
-  const currentPage = Math.floor(offset / limit) + 1;
-  const totalPages = Math.ceil(total / limit);
   const hasPrev = offset > 0;
   const hasNext = offset + limit < total;
+  const totalFormatted = total.toLocaleString('en-US');
+  const rangeStart = offset + 1;
+  const rangeEnd = Math.min(offset + limit, total);
 
   return html`
-    <div class="curate-pagination">
-      <button
-        class="curate-pane-action secondary"
-        ?disabled=${!hasPrev || loading}
-        @click=${handlers.onPrev}
-        title="Previous page"
-      >
-        ← Prev
-      </button>
-      <span class="text-xs text-gray-600">
-        Page ${currentPage} of ${totalPages} (${formatStatNumber(total)} total)
-      </span>
-      <button
-        class="curate-pane-action secondary"
-        ?disabled=${!hasNext || loading}
-        @click=${handlers.onNext}
-        title="Next page"
-      >
-        Next →
-      </button>
-      <select
-        class="curate-select text-xs"
-        .value=${String(limit)}
-        @change=${handlers.onLimitChange}
-        ?disabled=${loading}
-      >
-        <option value="25">25</option>
-        <option value="50">50</option>
-        <option value="100">100</option>
-        <option value="200">200</option>
-      </select>
+    <div class="flex flex-wrap items-center justify-between gap-4 text-xs">
+      <div class="font-semibold text-gray-700 uppercase tracking-wide">
+        ${totalFormatted} ITEMS
+      </div>
+      <div class="flex items-center gap-3">
+        <span class="font-medium text-gray-600 uppercase tracking-wide">Results per page:</span>
+        <select
+          class="curate-select text-xs"
+          .value=${String(limit)}
+          @change=${handlers.onLimitChange}
+          ?disabled=${loading}
+        >
+          <option value="25">25</option>
+          <option value="50">50</option>
+          <option value="100">100</option>
+          <option value="200">200</option>
+        </select>
+        <span class="text-gray-600 uppercase tracking-wide">${rangeStart}-${rangeEnd} OF ${totalFormatted}</span>
+        <button
+          class="curate-pane-action secondary"
+          ?disabled=${loading || !hasPrev}
+          @click=${handlers.onPrev}
+          aria-label="Previous page"
+        >
+          &lt;
+        </button>
+        <button
+          class="curate-pane-action secondary"
+          ?disabled=${loading || !hasNext}
+          @click=${handlers.onNext}
+          aria-label="Next page"
+        >
+          &gt;
+        </button>
+      </div>
     </div>
   `;
 }

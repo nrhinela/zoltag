@@ -480,6 +480,70 @@ createRenderRoot() {
 - **Location**: search-tab.js:10, 103-135, 360-404, 481-507
 - **Status**: ✅ Fixed
 
+### ✅ Curate Explore Tab Extraction (COMPLETE!)
+
+**File**: `frontend/components/curate-explore-tab.js` (815 lines)
+**Status**: ✅ Complete - fully functional!
+**Integration**: ✅ Integrated into photocat-app.js
+**Build**: ✅ Passing
+**Architecture**: ✅ Light DOM from the start
+**Runtime**: ✅ All features working!
+
+#### What's Complete
+- ✅ Component skeleton with Light DOM pattern
+- ✅ All curate methods extracted
+- ✅ Event-based communication with parent
+- ✅ Image grid with rating overlays
+- ✅ Multi-select via long-press and drag
+- ✅ Hotspot drag & drop for rating/tagging
+- ✅ Pagination controls
+- ✅ Integrated into photocat-app.js (replaced 254 lines!)
+- ✅ Build passes
+- ✅ All runtime integration issues fixed
+
+#### Final Impact
+- **photocat-app.js**: 5,625 → 5,440 lines (**-185 lines, -3.3%**)
+- **curate-explore-tab.js**: 815 lines (complete with all templates and logic)
+- **Code organization**: Much improved - curate functionality now isolated
+
+#### Features Extracted
+- Image grid with rating and permatag overlays
+- Multi-select with long-press and drag
+- Keyword filtering by category
+- Hotspot targets for quick rating/tagging
+- Thumbnail size control
+- Sort controls (Rating, Photo Date, Process Date)
+- Advanced filtering integration
+- Pagination controls (top and bottom)
+- Drag & drop reordering
+
+#### Bug Fixes (2026-01-31)
+
+**Issue #1: Pagination showing NaN and images not advancing**
+- **Problem**: Pagination showed NaN values, clicking arrows didn't load new images
+- **Root Cause**: Property name mismatch - parent using `curatePageOffset` internally but setting `curateOffset` from pagination event, component receiving undefined `offset` prop
+- **Location**: photocat-app.js:4520, 4549; curate-explore-tab.js:339-355
+- **Fix**:
+  - Changed pagination event handler to set `curatePageOffset` instead of `curateOffset`
+  - Changed component prop binding from `this.curateOffset` to `this.curatePageOffset`
+  - Now `_buildCurateFilterObject` receives correct offset value
+- **Status**: ✅ Fixed
+
+**Issue #2: Should we use shared renderPaginationControls?**
+- **Question**: Why reimplementing pagination instead of using shared function?
+- **Analysis**: Initially the shared function had different UI format, but we updated it to match requirements
+- **Decision**: Use shared implementation for consistency and maintainability
+- **Changes Made**:
+  1. Updated shared `renderPaginationControls` in curate-shared.js to match design:
+     - Left side: "12,881 ITEMS"
+     - Right side: "RESULTS PER PAGE: 100  1-100 OF 12,881" with < > buttons
+  2. Imported `renderPaginationControls` from curate-shared.js in curate-explore-tab.js
+  3. Removed local `_renderPaginationControls` method (73 lines)
+  4. Updated both pagination calls to use shared function signature
+  5. All components using this function now show consistent format
+- **Benefits**: Single source of truth, consistent UI across all components, reduced code duplication
+- **Status**: ✅ Fixed - using shared implementation with updated format
+
 ### Next Big Extraction
 **curate-explore-tab.js** (660 lines - will have biggest impact!)
 - This is the main curate workflow
