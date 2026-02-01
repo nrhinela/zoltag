@@ -1,5 +1,5 @@
 import { LitElement, html } from 'lit';
-import { formatStatNumber } from './curate-shared.js';
+import { formatStatNumber } from './shared/formatting.js';
 
 /**
  * Curate Home Tab Component

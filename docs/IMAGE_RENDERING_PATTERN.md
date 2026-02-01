@@ -23,7 +23,7 @@ These issues were fixed by adopting the standardized pattern from curate compone
 ## Required Imports
 
 ```javascript
-import { createSelectionHandlers } from './curate-shared.js';
+import { createSelectionHandlers } from './shared/selection-handlers.js';
 ```
 
 ---
@@ -241,7 +241,7 @@ ${this.searchImages.map((image, index) => html`
 
 **Original Implementation**: `frontend/components/curate-explore-tab.js`
 
-**Shared Code**: `frontend/components/curate-shared.js`
+**Shared Code**: `frontend/components/shared/curate-shared.js` (legacy barrel; canonical modules live in `frontend/components/shared/*`)
 - Comprehensive documentation in header (lines 1-120)
 - `createSelectionHandlers()` function (line 593+)
 - `renderRatingWidget()` and `renderRatingStatic()` functions
@@ -252,7 +252,7 @@ ${this.searchImages.map((image, index) => html`
 
 When creating a component that displays images:
 
-- [ ] Import `createSelectionHandlers` from curate-shared.js
+- [ ] Import `createSelectionHandlers` from `frontend/components/shared/selection-handlers.js`
 - [ ] Add all required props (renderCurateRatingWidget, etc.)
 - [ ] Initialize all selection state properties in constructor
 - [ ] Configure selection handlers in constructor
@@ -269,7 +269,7 @@ When creating a component that displays images:
 ## Questions?
 
 See the comprehensive documentation in:
-- `frontend/components/curate-shared.js` (header comment)
+- `frontend/components/shared/curate-shared.js` (legacy barrel header comment)
 - `CLAUDE.md` (Standardized Image Rendering Pattern section)
 - This file
 

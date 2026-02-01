@@ -8,10 +8,11 @@ import {
   getListItems,
   getDropboxFolders
 } from '../services/api.js';
-import { createSelectionHandlers, renderResultsPagination } from './curate-shared.js';
-import './filter-chips.js';
-import './image-card.js';
-import ImageFilterPanel from './image-filter-panel.js';
+import { createSelectionHandlers } from './shared/selection-handlers.js';
+import { renderResultsPagination } from './shared/pagination-controls.js';
+import './shared/widgets/filter-chips.js';
+import './shared/widgets/image-card.js';
+import ImageFilterPanel from './shared/state/image-filter-panel.js';
 import FolderBrowserPanel from './folder-browser-panel.js';
 
 /**
@@ -182,7 +183,7 @@ export class SearchTab extends LitElement {
 
     // ⭐ REFERENCE: Selection handler configuration for long-press multi-select
     // This pattern is REQUIRED for all components displaying images
-    // See curate-shared.js createSelectionHandlers() documentation for details
+    // See shared/selection-handlers.js createSelectionHandlers() documentation for details
     this._searchSelectionHandlers = createSelectionHandlers(this, {
       selectionProperty: 'searchDragSelection',
       selectingProperty: 'searchDragSelecting',

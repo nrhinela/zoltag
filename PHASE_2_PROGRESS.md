@@ -6,6 +6,9 @@
 
 ---
 
+> **Note (2026-02-01)**: `curate-shared.js` has since been split into canonical modules under
+> `frontend/components/shared/` (legacy barrel: `frontend/components/shared/curate-shared.js`).
+
 ## Summary
 
 Phase 2 focuses on extracting components from the monolithic 6,004-line photocat-app.js to improve maintainability for "lesser LLMs" per project goals.
@@ -19,7 +22,7 @@ Phase 2 focuses on extracting components from the monolithic 6,004-line photocat
 Before starting component extraction, we completed the filter panel refactoring:
 
 **Files Modified**:
-- [frontend/components/image-filter-panel.js](frontend/components/image-filter-panel.js) - Pure state container (270 lines)
+- [frontend/components/shared/state/image-filter-panel.js](frontend/components/shared/state/image-filter-panel.js) - Pure state container (270 lines)
 - [frontend/components/photocat-app.js](frontend/components/photocat-app.js) - Integrated 3 filter panel instances
 
 **Changes**:

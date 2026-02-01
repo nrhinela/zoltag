@@ -1,10 +1,8 @@
 import { LitElement, html } from 'lit';
 import { enqueueCommand } from '../services/command-queue.js';
-import {
-  createSelectionHandlers,
-  renderPaginationControls
-} from './curate-shared.js';
-import { renderImageGrid } from './image-grid-renderer.js';
+import { createSelectionHandlers } from './shared/selection-handlers.js';
+import { renderResultsPagination } from './shared/pagination-controls.js';
+import { renderImageGrid } from './shared/image-grid.js';
 
 /**
  * Curate Explore Tab Component
@@ -625,17 +623,16 @@ export class CurateExploreTab extends LitElement {
         <div class="curate-layout" style="--curate-thumb-size: ${this.thumbSize}px;">
           <div class="curate-pane">
               <div class="curate-pane-header" style="padding: 4px;">
-                  ${renderPaginationControls(
+                  ${renderResultsPagination({
+                    total,
                     offset,
                     limit,
-                    total,
-                    {
-                      onPrev: this._handleCuratePagePrev,
-                      onNext: this._handleCuratePageNext,
-                      onLimitChange: (e) => this._handleCurateLimitChange(Number(e.target.value))
-                    },
-                    this.loading
-                  )}
+                    count: leftImages.length,
+                    onPrev: this._handleCuratePagePrev,
+                    onNext: this._handleCuratePageNext,
+                    onLimitChange: (e) => this._handleCurateLimitChange(Number(e.target.value)),
+                    disabled: this.loading,
+                  })}
               </div>
               ${this.loading ? html`
                 <div class="curate-loading-overlay" aria-label="Loading">
@@ -671,17 +668,16 @@ export class CurateExploreTab extends LitElement {
                       emptyMessage: 'No images available.',
                     },
                   })}
-                  ${renderPaginationControls(
+                  ${renderResultsPagination({
+                    total,
                     offset,
                     limit,
-                    total,
-                    {
-                      onPrev: this._handleCuratePagePrev,
-                      onNext: this._handleCuratePageNext,
-                      onLimitChange: (e) => this._handleCurateLimitChange(Number(e.target.value))
-                    },
-                    this.loading
-                  )}
+                    count: leftImages.length,
+                    onPrev: this._handleCuratePagePrev,
+                    onNext: this._handleCuratePageNext,
+                    onLimitChange: (e) => this._handleCurateLimitChange(Number(e.target.value)),
+                    disabled: this.loading,
+                  })}
               </div>
           </div>
           <div class="curate-pane utility-targets">

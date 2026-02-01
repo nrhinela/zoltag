@@ -64,7 +64,7 @@ export class MyComponent extends LitElement {
 
 ### Standardized Image Rendering Pattern
 
-**CRITICAL**: All components that display images MUST use the standardized rendering pattern from `curate-shared.js`.
+**CRITICAL**: All components that display images MUST use the standardized rendering pattern from the shared modules under `frontend/components/shared/`.
 
 **Why this matters**:
 - Ensures consistent user experience (selection, drag & drop, ratings, modal behavior)
@@ -73,7 +73,7 @@ export class MyComponent extends LitElement {
 
 **Required imports**:
 ```javascript
-import { createSelectionHandlers } from './curate-shared.js';
+import { createSelectionHandlers } from './shared/selection-handlers.js';
 ```
 
 **Required props from parent** (photocat-app.js):
@@ -159,7 +159,7 @@ ${this.searchImages.map((image, index) => html`
 
 **Reference implementations**:
 - `frontend/components/search-tab.js` (lines 136-149, 369-410, 479-507)
-- `frontend/components/curate-shared.js` (comprehensive documentation at top)
+- `frontend/components/shared/curate-shared.js` (legacy barrel; comprehensive pattern doc at top)
 
 **Common mistakes to avoid**:
 1. ❌ Using simple `<img>` tags without wrapper divs
@@ -170,4 +170,3 @@ ${this.searchImages.map((image, index) => html`
 6. ❌ Forgetting to emit 'image-clicked' event for modal
 
 **When creating ANY new component that displays images**, copy the pattern from search-tab.js exactly. Don't reinvent - reuse!
-

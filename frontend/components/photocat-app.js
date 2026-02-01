@@ -11,9 +11,9 @@ import './image-editor.js';
 import './cli-commands.js';
 import './person-manager.js';
 import './people-tagger.js';
-import './filter-chips.js';
+import './shared/widgets/filter-chips.js';
 
-import ImageFilterPanel from './image-filter-panel.js';
+import ImageFilterPanel from './shared/state/image-filter-panel.js';
 import { tailwind } from './tailwind-lit.js';
 import {
   fetchWithAuth,
@@ -32,7 +32,10 @@ import {
   deleteListItem,
 } from '../services/api.js';
 import { enqueueCommand, subscribeQueue, retryFailedCommand } from '../services/command-queue.js';
-import { createHotspotHandlers, createRatingDragHandlers, createSelectionHandlers, createPaginationHandlers, parseUtilityKeywordValue } from './curate-shared.js';
+import { createSelectionHandlers } from './shared/selection-handlers.js';
+import { createPaginationHandlers, renderResultsPagination } from './shared/pagination-controls.js';
+import { createRatingDragHandlers } from './shared/rating-drag-handlers.js';
+import { createHotspotHandlers, parseUtilityKeywordValue } from './shared/hotspot-controls.js';
 import './curate-home-tab.js';
 import './curate-explore-tab.js';
 import './search-tab.js';
@@ -4259,69 +4262,9 @@ class PhotoCatApp extends LitElement {
       : Number.isFinite(this.curateAuditTotal)
         ? this.curateAuditTotal
         : null;
-    const auditPageStart = auditLeftImages.length
-      ? (auditLoadAll ? 1 : (this.curateAuditPageOffset || 0) + 1)
-      : 0;
-    const auditPageEnd = auditLeftImages.length
-      ? (auditLoadAll
-        ? auditLeftImages.length
-        : (this.curateAuditPageOffset || 0) + auditLeftImages.length)
-      : 0;
-    const auditCountLabel = auditTotalCount !== null
-      ? (auditPageEnd === 0
-        ? `0 of ${auditTotalCount}`
-        : `${auditPageStart}-${auditPageEnd} of ${auditTotalCount}`)
-      : `${auditLeftImages.length} loaded`;
-    const auditHasMore = !auditLoadAll && auditTotalCount !== null
-      && auditPageEnd < auditTotalCount;
-    const auditHasPrev = !auditLoadAll && (this.curateAuditPageOffset || 0) > 0;
-
-    const renderPageSizeSelect = (value, onChange) => html`
-      <label class="inline-flex items-center gap-2 text-xs text-gray-500">
-        <span>Results per page:</span>
-        <select
-          class="px-2 py-1 border rounded-md text-xs bg-white"
-          .value=${String(value)}
-          @change=${onChange}
-        >
-          ${[100, 50, 200].map((size) => html`<option value=${String(size)}>${size}</option>`)}
-        </select>
-      </label>
-    `;
-    const renderPaginationControls = ({
-      countLabel,
-      hasPrev,
-      hasNext,
-      onPrev,
-      onNext,
-      pageSize,
-      onPageSizeChange,
-      disabled = false,
-      showPageSize = true,
-    }) => html`
-      <div class="flex flex-wrap items-center justify-between gap-2 text-xs text-gray-500">
-        ${showPageSize ? renderPageSizeSelect(pageSize, onPageSizeChange) : html``}
-        <div class="flex items-center gap-3">
-          <span>${countLabel}</span>
-          <button
-            class="curate-pane-action secondary"
-            ?disabled=${disabled || !hasPrev}
-            @click=${onPrev}
-            aria-label="Previous page"
-          >
-            &lt;
-          </button>
-          <button
-            class="curate-pane-action secondary"
-            ?disabled=${disabled || !hasNext}
-            @click=${onNext}
-            aria-label="Next page"
-          >
-            &gt;
-          </button>
-        </div>
-      </div>
-    `;
+    const auditPaginationTotal = Number.isFinite(auditTotalCount)
+      ? auditTotalCount
+      : auditLeftImages.length;
 
     return html`
         ${this._curateRatingModalActive ? html`
@@ -4637,14 +4580,14 @@ class PhotoCatApp extends LitElement {
                                     <span>${auditLeftLabel}</span>
                                     <div class="curate-pane-header-actions">
                                         ${this.curateAuditKeyword && !auditLoadAll ? html`
-                                          ${renderPaginationControls({
-                                            countLabel: auditCountLabel,
-                                            hasPrev: auditHasPrev,
-                                            hasNext: auditHasMore,
+                                          ${renderResultsPagination({
+                                            total: auditPaginationTotal,
+                                            offset: this.curateAuditPageOffset || 0,
+                                            limit: this.curateAuditLimit,
+                                            count: auditLeftImages.length,
                                             onPrev: this._handleCurateAuditPagePrev,
                                             onNext: this._handleCurateAuditPageNext,
-                                            pageSize: this.curateAuditLimit,
-                                            onPageSizeChange: this._handleCurateAuditLimitChange,
+                                            onLimitChange: this._handleCurateAuditLimitChange,
                                             disabled: this.curateAuditLoading,
                                           })}
                                         ` : html``}
@@ -4692,14 +4635,14 @@ class PhotoCatApp extends LitElement {
                                 ${this.curateAuditKeyword ? html`
                                   ${auditLoadAll ? html`` : html`
                                     <div class="mt-3">
-                                      ${renderPaginationControls({
-                                        countLabel: auditCountLabel,
-                                        hasPrev: auditHasPrev,
-                                        hasNext: auditHasMore,
+                                      ${renderResultsPagination({
+                                        total: auditPaginationTotal,
+                                        offset: this.curateAuditPageOffset || 0,
+                                        limit: this.curateAuditLimit,
+                                        count: auditLeftImages.length,
                                         onPrev: this._handleCurateAuditPagePrev,
                                         onNext: this._handleCurateAuditPageNext,
-                                        pageSize: this.curateAuditLimit,
-                                        onPageSizeChange: this._handleCurateAuditLimitChange,
+                                        onLimitChange: this._handleCurateAuditLimitChange,
                                         disabled: this.curateAuditLoading,
                                         showPageSize: false,
                                       })}

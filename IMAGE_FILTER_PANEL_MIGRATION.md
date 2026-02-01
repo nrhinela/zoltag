@@ -120,7 +120,7 @@ _handleFilterPanelImagesLoaded(event) {
 
 ```javascript
 // Import the component in photocat-app.js
-import './image-filter-panel.js';
+import './shared/state/image-filter-panel.js';
 
 render() {
   return html`
@@ -273,10 +273,10 @@ Once all panels are migrated:
 
 ## File References
 
-- **Component**: `frontend/components/image-filter-panel.js`
+- **Component**: `frontend/components/shared/state/image-filter-panel.js`
 - **Parent**: `frontend/components/photocat-app.js`
 - **API Helpers**: `frontend/services/api-params.js`
-- **Filter UI**: `frontend/components/filter-chips.js`
+- **Filter UI**: `frontend/components/shared/widgets/filter-chips.js`
 
 ## Questions or Issues?
 

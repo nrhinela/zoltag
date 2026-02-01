@@ -7,6 +7,10 @@
 
 ---
 
+> **Note (2026-02-01)**: The legacy `curate-shared.js` file has been split into canonical modules under
+> `frontend/components/shared/` (with a legacy barrel at `frontend/components/shared/curate-shared.js`).
+> New work should import from the specific shared modules.
+
 ## Executive Summary
 
 The curate subsystem is currently embedded across ~1,300 lines of photocat-app.js (template + methods + properties). This extraction will create modular, maintainable components following the proven Light DOM pattern used successfully in search-tab.js extraction.
@@ -121,7 +125,7 @@ curateAuditFilterPanel: { type: Object }    // ImageFilterPanel instance
 - `_handleCurateDragEnd(event)`
 - `_flashCurateSelection(imageId)` - Visual feedback
 - `_clearCurateDragSelection()` - Reset selection
-- ... selection handler methods from curate-shared.js
+- ... selection handler methods from shared modules (`shared/selection-handlers.js`)
 
 **Curate Rating** (~8 methods):
 - `_renderCurateRatingWidget(image)` - Interactive rating overlay
@@ -194,10 +198,11 @@ curateAuditFilterPanel: { type: Object }    // ImageFilterPanel instance
 **Dependencies**:
 ```javascript
 import { LitElement, html } from 'lit';
-import { createSelectionHandlers, createRatingDragHandlers,
-         renderResultsPagination, renderPaginationControls,
-         formatStatNumber } from './curate-shared.js';
-import './image-filter-panel.js';
+import { createSelectionHandlers } from './shared/selection-handlers.js';
+import { createRatingDragHandlers } from './shared/rating-drag-handlers.js';
+import { renderResultsPagination } from './shared/pagination-controls.js';
+import { formatStatNumber } from './shared/formatting.js';
+import './shared/state/image-filter-panel.js';
 import { enqueueCommand } from '../services/command-queue.js';
 import { getImages, updateImageRating, addPermatag } from '../services/api.js';
 ```
@@ -339,10 +344,10 @@ export class CurateExploreTab extends LitElement {
 
 ### 2. Standardized Image Rendering Pattern (CRITICAL)
 
-**ALL curate components MUST use the pattern from curate-shared.js**:
+**ALL curate components MUST use the pattern from shared modules (`frontend/components/shared/`)**:
 
 ```javascript
-import { createSelectionHandlers } from './curate-shared.js';
+import { createSelectionHandlers } from './shared/selection-handlers.js';
 
 // In constructor:
 this._curateSelectionHandlers = createSelectionHandlers(this, {
@@ -443,7 +448,7 @@ async _handleCurateRatingChange(event) {
 1. ✅ Create file with Light DOM boilerplate
 2. ✅ Define all properties (from analysis above)
 3. ✅ Add constructor with property initialization
-4. ✅ Configure selection handlers from curate-shared.js
+4. ✅ Configure selection handlers from `shared/selection-handlers.js`
 5. ✅ Add disconnectedCallback for cleanup
 
 **Estimated Size**: 800 lines total
@@ -695,7 +700,7 @@ cd frontend && npm run build
 
 **Direct Imports**:
 - `lit` - LitElement, html
-- `./curate-shared.js` - Selection handlers, rating handlers, pagination
+- `frontend/components/shared/*` - Selection handlers, rating handlers, pagination (legacy barrel: `shared/curate-shared.js`)
 - `./image-filter-panel.js` - Filter panel component
 - `../services/command-queue.js` - API call queuing
 - `../services/api.js` - Backend API calls
@@ -818,9 +823,9 @@ cd frontend && npm run build
    - **Con**: Only ~50 lines of static HTML
    - **Recommendation**: Keep inline for now, extract later if needed
 
-2. **Should rating widget methods stay in parent or move to curate-shared.js?**
+2. **Should rating widget methods stay in parent or move to shared modules?**
    - **Current**: Methods in photocat-app.js, passed as props
-   - **Alternative**: Move to curate-shared.js as standalone functions
+   - **Alternative**: Move to `shared/rating-widget.js` as standalone functions
    - **Recommendation**: Keep in parent for now (less refactoring), move to shared later if needed
 
 3. **Should we batch Light DOM fixes with this extraction?**
@@ -851,11 +856,11 @@ cd frontend && npm run build
 **Reference Implementations**:
 - [frontend/components/search-tab.js](frontend/components/search-tab.js) - Successful extraction example
 - [frontend/components/curate-home-tab.js](frontend/components/curate-home-tab.js) - Light DOM pattern
-- [frontend/components/curate-shared.js](frontend/components/curate-shared.js) - Shared utilities
+- [frontend/components/shared/curate-shared.js](frontend/components/shared/curate-shared.js) - Legacy barrel (canonical modules in `frontend/components/shared/`)
 
 **Key Files**:
 - [frontend/components/photocat-app.js](frontend/components/photocat-app.js) - Main app (extraction target)
-- [frontend/components/image-filter-panel.js](frontend/components/image-filter-panel.js) - Filter integration
+- [frontend/components/shared/state/image-filter-panel.js](frontend/components/shared/state/image-filter-panel.js) - Filter integration
 
 ---
 
@@ -886,13 +891,13 @@ cd frontend && npm run build
 - ✅ Keyword filter dropdown
 - ✅ Advanced filter panel toggle
 - ✅ Image grid with rating widgets
-- ✅ Integration with curate-shared.js patterns
+- ✅ Integration with shared module patterns
 
 **Architecture**:
 - ✅ Light DOM pattern (Tailwind CSS compatible)
 - ✅ Event-based parent ↔ component communication
 - ✅ Follows standardized image rendering pattern
-- ✅ Uses createSelectionHandlers from curate-shared.js
+- ✅ Uses createSelectionHandlers from `frontend/components/shared/selection-handlers.js`
 
 **Build Status**: ✅ Passing (3.81s)
 

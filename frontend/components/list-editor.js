@@ -1,7 +1,7 @@
 import { LitElement, html, css } from 'lit';
 import { tailwind } from './tailwind-lit.js';
 import { getLists, createList, updateList, deleteList, getListItems, deleteListItem, fetchWithAuth } from '../services/api.js';
-import './image-card.js';
+import './shared/widgets/image-card.js';
 
 class ListEditor extends LitElement {
   static styles = [tailwind, css`

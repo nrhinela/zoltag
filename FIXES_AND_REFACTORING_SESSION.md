@@ -184,7 +184,7 @@ this.filterPanelStates = {
 
 ### New Files Created:
 
-1. **`frontend/components/image-filter-panel.js`** (350 lines)
+1. **`frontend/components/shared/state/image-filter-panel.js`** (350 lines)
    - Reusable filter panel component
    - Handles filtering, fetching, pagination
    - Emits events for state persistence

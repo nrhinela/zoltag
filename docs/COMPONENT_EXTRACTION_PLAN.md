@@ -201,7 +201,7 @@ curateCategoryCards
 
 ---
 
-### Phase 5: Create Shared Utilities → `curate-shared.js`
+### Phase 5: Create Shared Utilities → `frontend/components/shared/*` (legacy barrel: `shared/curate-shared.js`)
 
 **Size Estimate**: ~200-300 lines
 
@@ -225,7 +225,7 @@ export function renderPaginationControls(offset, limit, total, onChange) { ... }
 ## Implementation Order
 
 1. ✅ **Phase 0** (Completed): Filter panel migration
-2. 🔄 **Phase 1**: Extract `curate-shared.js` first (needed by all components)
+2. 🔄 **Phase 1**: Extract shared utilities first (canonical modules under `frontend/components/shared/`)
 3. 🔄 **Phase 2**: Extract `curate-explore-tab.js`
 4. 🔄 **Phase 3**: Extract `curate-audit-tab.js`
 5. 🔄 **Phase 4**: Extract `curate-home-tab.js`
@@ -241,7 +241,7 @@ export function renderPaginationControls(offset, limit, total, onChange) { ... }
 
 ### After
 - `photocat-app.js`: ~2,000-2,500 lines (orchestration, state management, main layout)
-- `curate-shared.js`: ~200-300 lines (shared utilities)
+- `frontend/components/shared/*`: shared utilities (with legacy barrel at `shared/curate-shared.js`)
 - `curate-explore-tab.js`: ~800-1,000 lines (explore functionality)
 - `curate-audit-tab.js`: ~800-1,000 lines (audit functionality)
 - `curate-home-tab.js`: ~300-400 lines (home dashboard)

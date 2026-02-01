@@ -117,9 +117,9 @@ import {
   addToList,
   getDropboxFolders
 } from '../services/api.js';
-import './filter-chips.js';
-import './image-card.js';
-import ImageFilterPanel from './image-filter-panel.js';
+import './shared/widgets/filter-chips.js';
+import './shared/widgets/image-card.js';
+import ImageFilterPanel from './shared/state/image-filter-panel.js';
 ```
 
 ---
