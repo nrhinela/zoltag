@@ -16,7 +16,6 @@ class AppHeader extends LitElement {
         lastSyncAt: { type: String },
         lastSyncCount: { type: Number },
         queueCount: { type: Number },
-        userMenuOpen: { type: Boolean },
         currentUser: { type: Object },
     }
 
@@ -32,7 +31,6 @@ class AppHeader extends LitElement {
         this.lastSyncAt = '';
         this.lastSyncCount = 0;
         this.queueCount = 0;
-        this.userMenuOpen = false;
         this.currentUser = null;
     }
 
@@ -46,15 +44,6 @@ class AppHeader extends LitElement {
       this.fetchEnvironment();
       this._loadSyncStatus();
       this.fetchCurrentUser();
-      this._clickHandler = this._handleDocumentClick.bind(this);
-      document.addEventListener('click', this._clickHandler);
-  }
-
-  disconnectedCallback() {
-      super.disconnectedCallback();
-      if (this._clickHandler) {
-          document.removeEventListener('click', this._clickHandler);
-      }
   }
 
   async fetchCurrentUser() {
@@ -94,18 +83,6 @@ class AppHeader extends LitElement {
       }
   }
 
-  _handleDocumentClick(e) {
-      // Check if click is inside the user menu container
-      const userMenu = this.querySelector('.user-menu-container');
-      if (!userMenu) return;
-
-      // If the click is from inside the component, don't close
-      if (userMenu.contains(e.target)) return;
-
-      // Close the menu if clicking outside
-      this.userMenuOpen = false;
-  }
-
   _handleUserMenuChange(e) {
       const value = e.target.value;
       if (value === 'admin') {
@@ -118,13 +95,7 @@ class AppHeader extends LitElement {
   }
 
   _isAdmin() {
-      // User is admin if they are a super admin
       return this.currentUser?.user?.is_super_admin || false;
-  }
-
-  _getUserInitial() {
-      const name = this.currentUser?.user?.display_name || 'U';
-      return name.charAt(0).toUpperCase();
   }
 
   async _handleLogout() {

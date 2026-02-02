@@ -64,7 +64,7 @@ export class SearchTab extends LitElement {
   static properties = {
     tenant: { type: String },
     searchSubTab: { type: String },
-    searchChipFilters: { type: Array },
+    searchChipFilters: { type: Array, state: true },  // Internal state - managed by filter-chips component
     searchFilterPanel: { type: Object },
     searchDropboxOptions: { type: Array },
     searchImages: { type: Array },
@@ -815,7 +815,7 @@ export class SearchTab extends LitElement {
       return;
     }
     this._searchInitialLoadPending = true;
-    this.searchRefreshing = true;
+    this._refreshSearch();
   }
 
   _finishInitialRefresh() {
@@ -1004,11 +1004,59 @@ export class SearchTab extends LitElement {
   }
 
   _handleChipFiltersChanged(event) {
-    this.dispatchEvent(new CustomEvent('search-filters-changed', {
-      detail: event.detail,
-      bubbles: true,
-      composed: true
-    }));
+    const chips = event.detail.filters;
+
+    // Store the chip filters for UI state
+    this.searchChipFilters = chips;
+
+    // Build filter object from chip filters
+    const searchFilters = {
+      limit: 100,
+      offset: 0,
+      sortOrder: 'desc',
+      orderBy: 'photo_creation',
+      hideZeroRating: true,
+      keywords: {},
+      operators: {},
+      categoryFilterSource: 'permatags',
+    };
+
+    // Apply each chip filter to the filter object
+    chips.forEach(chip => {
+      switch (chip.type) {
+        case 'keyword':
+          if (chip.value === '__untagged__') {
+            searchFilters.permatagPositiveMissing = true;
+          } else {
+            // Merge into keywords object instead of replacing it
+            if (!searchFilters.keywords[chip.category]) {
+              searchFilters.keywords[chip.category] = new Set();
+            }
+            searchFilters.keywords[chip.category].add(chip.value);
+          }
+          break;
+        case 'rating':
+          if (chip.value === 'unrated') {
+            searchFilters.rating = undefined;
+            searchFilters.ratingOperator = 'is_null';
+            searchFilters.hideZeroRating = true;
+          } else {
+            searchFilters.rating = chip.value;
+            searchFilters.ratingOperator = chip.value === 0 ? 'eq' : 'gte';
+            searchFilters.hideZeroRating = false;
+          }
+          break;
+        case 'folder':
+          searchFilters.dropboxPathPrefix = chip.value;
+          break;
+      }
+    });
+
+    // Update filter panel with the complete filter object
+    if (this.searchFilterPanel) {
+      this.searchFilterPanel.updateFilters(searchFilters);
+      this.searchFilterPanel.fetchImages();
+    }
   }
 
   // ========================================
