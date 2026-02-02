@@ -38,6 +38,7 @@ import {
   getCurateHomeFetchKey,
   shouldIncludeRatingStats,
 } from './shared/curate-filters.js';
+import { scheduleStatsRefresh, shouldAutoRefreshCurateStats } from './shared/curate-stats.js';
 import {
   buildCategoryCards,
   getCategoryCount,
@@ -1476,7 +1477,7 @@ class PhotoCatApp extends LitElement {
           detail.type === 'add-positive-permatag' ||
           detail.type === 'add-negative-permatag'
         ) {
-          this._scheduleStatsRefresh();
+          scheduleStatsRefresh(this);
         }
       };
       this._handleQueueCommandFailed = (event) => {
@@ -2725,20 +2726,6 @@ class PhotoCatApp extends LitElement {
       this.curateThumbSize = Number(event.target.value);
   }
 
-  _shouldAutoRefreshCurateStats() {
-      if (this._curateStatsAutoRefreshDone) {
-          return false;
-      }
-      if (this.curateHomeRefreshing || this.curateStatsLoading) {
-          return false;
-      }
-      const sourceKey = this.activeCurateTagSource || 'permatags';
-      const sourceStats = this.tagStatsBySource?.[sourceKey] || null;
-      const hasTagStats = !!(sourceStats && Object.keys(sourceStats).length > 0);
-      const hasCategoryCards = Array.isArray(this.curateCategoryCards) && this.curateCategoryCards.length > 0;
-      return !hasTagStats && !hasCategoryCards;
-  }
-
   _handleCurateSubTabChange(nextTab) {
       if (!nextTab || this.curateSubTab === nextTab) {
           return;
@@ -2771,7 +2758,7 @@ class PhotoCatApp extends LitElement {
                   this._curateHomeLastFetchKey = fetchKey;
               });
           }
-          if (this._shouldAutoRefreshCurateStats()) {
+          if (shouldAutoRefreshCurateStats(this)) {
               this._curateStatsAutoRefreshDone = true;
               this._refreshCurateHome();
           }
@@ -4120,19 +4107,6 @@ class PhotoCatApp extends LitElement {
       // Could show a toast/notification here
   }
 
-  _scheduleStatsRefresh() {
-      if (this._statsRefreshTimer) {
-          clearTimeout(this._statsRefreshTimer);
-      }
-      this._statsRefreshTimer = setTimeout(() => {
-          this._statsRefreshTimer = null;
-          this.fetchStats({
-            force: true,
-            includeTagStats: this.activeTab === 'curate' && this.curateSubTab === 'home',
-          });
-      }, 400);
-  }
-
   _renderCurateAiMLScore(image) {
       // Only show ML score in AI mode (zero-shot tagging)
       const isAiMode = this.curateAuditMode === 'missing'
@@ -4253,7 +4227,7 @@ class PhotoCatApp extends LitElement {
           this._syncAuditHotspotPrimary();
       }
       if (this.activeTab === 'curate' && this.curateSubTab === 'home') {
-          if (this._shouldAutoRefreshCurateStats()) {
+          if (shouldAutoRefreshCurateStats(this)) {
               this._curateStatsAutoRefreshDone = true;
               this._refreshCurateHome();
           }
