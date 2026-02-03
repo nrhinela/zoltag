@@ -149,7 +149,7 @@ export class ListTargetsPanel extends LitElement {
                 ` : target.itemsError ? html`
                   <div class="text-xs text-red-500">${target.itemsError}</div>
                 ` : target.listId && (target.items || []).length ? html`
-                  <div class="list-target-grid">
+                  <div class="list-target-grid" style="--curate-thumb-size: 130px;">
                     ${(() => {
                       const items = Array.isArray(target.items) ? target.items : [];
                       const images = items

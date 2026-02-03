@@ -274,6 +274,13 @@ export async function refreshImageMetadata(tenantId, imageId) {
     });
 }
 
+export async function propagateDropboxTags(tenantId, imageId) {
+    return fetchWithAuth(`/images/${imageId}/dropbox-tags`, {
+        method: 'POST',
+        tenantId,
+    });
+}
+
 export async function uploadImages(tenantId, files) {
     const formData = new FormData();
     for (let file of files) {

@@ -1,6 +1,7 @@
 """Core image endpoints: list, get, stats, rating, thumbnail."""
 
 import json
+import re
 import mimetypes
 from datetime import datetime
 from pathlib import Path
@@ -1178,4 +1179,93 @@ async def refresh_image_metadata(
     return {
         "status": "ok",
         "image_id": image.id
+    }
+
+
+@router.post("/images/{image_id}/dropbox-tags", response_model=dict, operation_id="propagate_dropbox_tags")
+async def propagate_dropbox_tags(
+    image_id: int,
+    tenant: Tenant = Depends(get_tenant),
+    db: Session = Depends(get_db)
+):
+    """Apply calculated tags to Dropbox for a single image."""
+    image = db.query(ImageMetadata).filter_by(
+        id=image_id,
+        tenant_id=tenant.id
+    ).first()
+    if not image:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    dropbox_ref = image.dropbox_path
+    if not dropbox_ref and image.dropbox_id:
+        dropbox_ref = image.dropbox_id if image.dropbox_id.startswith("id:") else f"id:{image.dropbox_id}"
+    if not dropbox_ref or dropbox_ref.startswith("/local/") or (image.dropbox_id and image.dropbox_id.startswith("local_")):
+        raise HTTPException(status_code=404, detail="Image not available in Dropbox")
+
+    if not tenant.dropbox_app_key:
+        raise HTTPException(status_code=400, detail="Dropbox app key not configured for tenant")
+    if not tenant.dropbox_token_secret or not tenant.dropbox_app_secret:
+        raise HTTPException(status_code=400, detail="Dropbox secrets not configured for tenant")
+
+    try:
+        refresh_token = get_secret(tenant.dropbox_token_secret)
+        app_secret = get_secret(tenant.dropbox_app_secret)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Dropbox secrets missing: {exc}")
+
+    permatags = db.query(Permatag).filter(
+        Permatag.image_id == image.id
+    ).all()
+    keyword_ids = {tag.keyword_id for tag in permatags}
+    keywords_map = load_keywords_map(db, tenant.id, keyword_ids)
+
+    gmm_tags = []
+    for tag in permatags:
+        if tag.signum != 1:
+            continue
+        kw_info = keywords_map.get(tag.keyword_id, {"keyword": "unknown"})
+        keyword = (kw_info.get("keyword") or "").strip()
+        if not keyword:
+            continue
+        normalized = re.sub(r"[^A-Za-z0-9_]+", "_", keyword.lower()).strip("_")
+        if not normalized:
+            continue
+        gmm_tags.append(f"gmm_{normalized}")
+    if image.rating is not None:
+        gmm_tags.append(f"gmm_rating_{image.rating}")
+    gmm_tags = sorted(set(gmm_tags))
+
+    try:
+        dbx = Dropbox(
+            oauth2_refresh_token=refresh_token,
+            app_key=tenant.dropbox_app_key,
+            app_secret=app_secret
+        )
+        existing_tags = []
+        try:
+            tags_result = dbx.files_tags_get(dropbox_ref)
+            for tag in getattr(tags_result, "tags", []) or []:
+                tag_text = getattr(tag, "tag_text", None) or getattr(tag, "tag", None)
+                if tag_text:
+                    existing_tags.append(tag_text)
+        except Exception:
+            existing_tags = []
+
+        removed = []
+        for tag_text in existing_tags:
+            if tag_text.startswith("gmm_"):
+                dbx.files_tags_remove(dropbox_ref, tag_text)
+                removed.append(tag_text)
+
+        for tag_text in gmm_tags:
+            dbx.files_tags_add(dropbox_ref, tag_text)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error applying Dropbox tags: {exc}")
+
+    return {
+        "status": "ok",
+        "image_id": image.id,
+        "dropbox_ref": dropbox_ref,
+        "applied_tags": gmm_tags,
+        "removed_tags": removed,
     }

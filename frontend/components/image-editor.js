@@ -1,5 +1,5 @@
 import { LitElement, html, css } from 'lit';
-import { getImageDetails, getKeywords, addPermatag, getFullImage, setRating, refreshImageMetadata } from '../services/api.js';
+import { getImageDetails, getKeywords, addPermatag, getFullImage, setRating, refreshImageMetadata, propagateDropboxTags } from '../services/api.js';
 import { tailwind } from './tailwind-lit.js';
 import './people-tagger.js';
 
@@ -608,6 +608,7 @@ class ImageEditor extends LitElement {
     ratingSaving: { type: Boolean },
     ratingError: { type: String },
     metadataRefreshing: { type: Boolean },
+    tagsPropagating: { type: Boolean },
     isActualSize: { type: Boolean },
     fullscreenOpen: { type: Boolean },
     imageSet: { type: Array },
@@ -642,6 +643,7 @@ class ImageEditor extends LitElement {
     this.ratingSaving = false;
     this.ratingError = '';
     this.metadataRefreshing = false;
+    this.tagsPropagating = false;
     this.isActualSize = false;
     this.fullscreenOpen = false;
     this.imageSet = [];
@@ -747,6 +749,19 @@ class ImageEditor extends LitElement {
       console.error('ImageEditor: metadata refresh failed', error);
     } finally {
       this.metadataRefreshing = false;
+    }
+  }
+
+  async _handlePropagateDropboxTags() {
+    if (!this.details || !this.tenant || this.tagsPropagating) return;
+    this.tagsPropagating = true;
+    try {
+      await propagateDropboxTags(this.tenant, this.details.id);
+      await this.fetchDetails();
+    } catch (error) {
+      console.error('ImageEditor: tag propagation failed', error);
+    } finally {
+      this.tagsPropagating = false;
     }
   }
 
@@ -1110,6 +1125,16 @@ class ImageEditor extends LitElement {
               `)}
             </div>
           ` : html`<div class="empty-text">No active tags.</div>`}
+          <div class="mt-2">
+            <button
+              class="text-xs text-blue-600 hover:text-blue-700"
+              ?disabled=${this.tagsPropagating}
+              @click=${this._handlePropagateDropboxTags}
+              title="Write GMM tags to Dropbox for this image"
+            >
+              ${this.tagsPropagating ? 'Propagating...' : 'Propagate tags'}
+            </button>
+          </div>
         </div>
         <div class="right-pane">
           <div class="text-xs font-semibold text-gray-600 uppercase mb-2">Add Tag</div>
@@ -1286,13 +1311,15 @@ class ImageEditor extends LitElement {
         </div>
         <div class="mt-3 flex items-center justify-between text-xs text-gray-500">
           <span>Re-download the file and refresh metadata.</span>
-          <button
-            class="px-2.5 py-1 rounded border border-gray-200 text-gray-600 hover:bg-gray-50"
-            ?disabled=${this.metadataRefreshing}
-            @click=${this._handleMetadataRefresh}
-          >
-            ${this.metadataRefreshing ? 'Refreshing...' : 'Reprocess image'}
-          </button>
+          <div class="flex items-center gap-2">
+            <button
+              class="px-2.5 py-1 rounded border border-gray-200 text-gray-600 hover:bg-gray-50"
+              ?disabled=${this.metadataRefreshing}
+              @click=${this._handleMetadataRefresh}
+            >
+              ${this.metadataRefreshing ? 'Refreshing...' : 'Reprocess image'}
+            </button>
+          </div>
         </div>
         <div class="exif-block">
           <div class="text-xs font-semibold text-gray-600 uppercase mb-2">EXIF Data</div>

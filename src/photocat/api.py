@@ -87,7 +87,7 @@ async def list_tenants(db: Session = Depends(get_db)):
 # The catch-all route below handles SPA routing
 if dist_dir.exists():
     app.mount("/assets", StaticFiles(directory=dist_dir / "assets"), name="assets")
-elif static_dir.exists():
+if static_dir.exists():
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 # Admin page route
