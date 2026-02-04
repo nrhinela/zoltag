@@ -22,6 +22,7 @@ class KeywordCategoryInput(BaseModel):
     keywords: List[str | dict]
     subcategories: List["KeywordCategoryInput"] = []
     sort_order: int = 0
+    is_attribution: bool = False
 
 
 class PersonInput(BaseModel):

@@ -16,9 +16,9 @@ class ConfigManager:
         self.session = session
         self.tenant_id = tenant_id
     
-    def get_all_keywords(self) -> List[dict]:
+    def get_all_keywords(self, include_people: bool = False) -> List[dict]:
         """Get all keywords from database."""
-        return self._get_keywords_from_db()
+        return self._get_keywords_from_db(include_people=include_people)
     
     def get_people(self) -> List[dict]:
         """Get all people from database."""
@@ -80,7 +80,7 @@ class ConfigManager:
         
         self.session.commit()
     
-    def _get_keywords_from_db(self) -> List[dict]:
+    def _get_keywords_from_db(self, include_people: bool = False) -> List[dict]:
         """Fetch keywords from database."""
         categories = self.session.query(DBKeywordCategory).filter(
             DBKeywordCategory.tenant_id == self.tenant_id,
@@ -92,11 +92,17 @@ class ConfigManager:
         
         result = []
         for category in categories:
-            self._extract_keywords_recursive(category, "", result)
+            self._extract_keywords_recursive(category, "", result, include_people=include_people)
         
         return result
     
-    def _extract_keywords_recursive(self, category: DBKeywordCategory, parent_path: str, result: List[dict]):
+    def _extract_keywords_recursive(
+        self,
+        category: DBKeywordCategory,
+        parent_path: str,
+        result: List[dict],
+        include_people: bool = False
+    ):
         """Recursively extract keywords with category paths.
 
         Excludes 'person' type keywords since those are for manual people tagging,
@@ -106,7 +112,7 @@ class ConfigManager:
 
         for keyword in sorted(category.keywords, key=lambda k: k.sort_order):
             # Skip person keywords - they're for manual tagging, not ML
-            if getattr(keyword, 'tag_type', 'keyword') == 'person':
+            if not include_people and getattr(keyword, 'tag_type', 'keyword') == 'person':
                 continue
             result.append({
                 'keyword': keyword.keyword,
@@ -115,7 +121,12 @@ class ConfigManager:
             })
 
         for subcat in sorted(category.subcategories, key=lambda c: c.sort_order):
-            self._extract_keywords_recursive(subcat, category_path, result)
+            self._extract_keywords_recursive(
+                subcat,
+                category_path,
+                result,
+                include_people=include_people
+            )
     
     def _get_people_from_db(self) -> List[dict]:
         """Fetch people from database."""
@@ -131,6 +142,7 @@ class ConfigManager:
             tenant_id=self.tenant_id,
             name=cat_data['name'],
             parent_id=parent_id,
+            is_attribution=cat_data.get('is_attribution', False),
             sort_order=cat_data.get('sort_order', 0)
         )
         self.session.add(category)

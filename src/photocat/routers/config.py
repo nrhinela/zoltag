@@ -1,14 +1,7 @@
 """Router for system configuration endpoints."""
 
-from typing import List
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
-from pydantic import BaseModel, Field
+from fastapi import APIRouter
 import click
-
-from photocat.dependencies import get_db, get_tenant
-from photocat.tenant import Tenant
-from photocat.models.config import PersonCategory
 
 router = APIRouter(
     prefix="/api/v1/config",
@@ -19,17 +12,6 @@ router = APIRouter(
 # ============================================================================
 # Request/Response Models
 # ============================================================================
-
-class PersonCategoryResponse(BaseModel):
-    """Response model for a person category."""
-    id: int
-    name: str
-    display_name: str
-    created_at: str = ""
-
-    class Config:
-        from_attributes = True
-
 
 @router.get("/system")
 async def get_system_config():
@@ -82,120 +64,3 @@ async def get_cli_commands():
         })
 
     return {"commands": commands}
-
-
-# ============================================================================
-# People Categories Configuration
-# ============================================================================
-
-@router.get("/people/categories", response_model=List[PersonCategoryResponse])
-async def get_people_categories(
-    tenant: Tenant = Depends(get_tenant),
-    db: Session = Depends(get_db)
-):
-    """Get all person categories for a tenant.
-
-    Automatically initializes default categories on first access.
-    """
-    # Auto-initialize categories if tenant doesn't have any
-    existing_categories = db.query(PersonCategory).filter(
-        PersonCategory.tenant_id == tenant.id
-    ).count()
-
-    if existing_categories == 0:
-        # Create default categories
-        default_categories = [
-            {"name": "photo_author", "display_name": "Photo Author"},
-            {"name": "people_in_scene", "display_name": "People in Scene"}
-        ]
-        for cat_def in default_categories:
-            category = PersonCategory(
-                tenant_id=tenant.id,
-                name=cat_def["name"],
-                display_name=cat_def["display_name"]
-            )
-            db.add(category)
-        db.commit()
-
-    categories = db.query(PersonCategory).filter(
-        PersonCategory.tenant_id == tenant.id
-    ).order_by(PersonCategory.name).all()
-
-    return [
-        PersonCategoryResponse(
-            id=cat.id,
-            name=cat.name,
-            display_name=cat.display_name,
-            created_at=cat.created_at.isoformat() if cat.created_at else ""
-        )
-        for cat in categories
-    ]
-
-
-@router.post("/people/categories/initialize", response_model=dict)
-async def initialize_default_people_categories(
-    tenant: Tenant = Depends(get_tenant),
-    db: Session = Depends(get_db)
-):
-    """Initialize default person categories for a tenant.
-
-    Creates standard categories:
-    - photo_author: Person who took the photo
-    - people_in_scene: People appearing in the photo
-
-    Safely handles tenants that already have categories (no-op).
-    """
-    # Check if categories already exist
-    existing = db.query(PersonCategory).filter(
-        PersonCategory.tenant_id == tenant.id
-    ).count()
-
-    if existing > 0:
-        return {
-            "status": "already_initialized",
-            "message": f"Tenant already has {existing} person categories",
-            "categories_count": existing
-        }
-
-    try:
-        # Default categories
-        default_categories = [
-            {
-                "name": "photo_author",
-                "display_name": "Photo Author"
-            },
-            {
-                "name": "people_in_scene",
-                "display_name": "People in Scene"
-            }
-        ]
-
-        created_categories = []
-        for cat_def in default_categories:
-            category = PersonCategory(
-                tenant_id=tenant.id,
-                name=cat_def["name"],
-                display_name=cat_def["display_name"]
-            )
-            db.add(category)
-            db.flush()
-            created_categories.append({
-                "id": category.id,
-                "name": category.name,
-                "display_name": category.display_name
-            })
-
-        db.commit()
-
-        return {
-            "status": "initialized",
-            "message": "Default person categories created",
-            "categories": created_categories
-        }
-
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to initialize categories: {str(e)}"
-        )

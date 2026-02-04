@@ -7,9 +7,8 @@ from pydantic import BaseModel, Field
 
 from photocat.dependencies import get_db, get_tenant
 from photocat.tenant import Tenant
-from photocat.metadata import Person, ImageMetadata, MachineTag
-from photocat.models.config import Keyword, KeywordCategory, PersonCategory
-from photocat.settings import settings
+from photocat.metadata import Person, MachineTag
+from photocat.models.config import Keyword, KeywordCategory
 
 router = APIRouter(prefix="/api/v1/people", tags=["people"])
 
@@ -23,7 +22,6 @@ class PersonResponse(BaseModel):
     id: int
     name: str
     instagram_url: Optional[str] = None
-    person_category: str
     keyword_id: Optional[int] = None
     aliases: Optional[List[str]] = None
     tag_count: int = 0
@@ -39,26 +37,12 @@ class PersonCreateRequest(BaseModel):
     """Request to create a new person."""
     name: str = Field(..., min_length=1, max_length=255)
     instagram_url: Optional[str] = Field(None, max_length=512)
-    person_category: str = Field(default="people_in_scene", pattern="^[a-z_]+$")
 
 
 class PersonUpdateRequest(BaseModel):
     """Request to update a person."""
     name: Optional[str] = Field(None, min_length=1, max_length=255)
     instagram_url: Optional[str] = Field(None, max_length=512)
-    person_category: Optional[str] = Field(None, pattern="^[a-z_]+$")
-
-
-class PersonCategoryResponse(BaseModel):
-    """Response model for a person category."""
-    id: int
-    name: str
-    display_name: str
-    people_count: int = 0
-    created_at: str = ""
-
-    class Config:
-        from_attributes = True
 
 
 class PersonStatsResponse(BaseModel):
@@ -103,24 +87,22 @@ async def create_person(
         person = Person(
             tenant_id=tenant.id,
             name=request.name,
-            instagram_url=request.instagram_url,
-            person_category=request.person_category
+            instagram_url=request.instagram_url
         )
         db.add(person)
         db.flush()  # Get person.id before creating keyword
 
-        # Find or create keyword category for this person category
+        # Find or create keyword category for people
         keyword_cat = db.query(KeywordCategory).filter(
             KeywordCategory.tenant_id == tenant.id,
-            KeywordCategory.is_people_category == True,
-            # TODO: Join with PersonCategory to filter by category type
+            KeywordCategory.is_people_category == True
         ).first()
 
         if not keyword_cat:
             # Create keyword category for people
             keyword_cat = KeywordCategory(
                 tenant_id=tenant.id,
-                name=f"people_{request.person_category}",
+                name="people",
                 is_people_category=True,
                 sort_order=0
             )
@@ -143,7 +125,6 @@ async def create_person(
             id=person.id,
             name=person.name,
             instagram_url=person.instagram_url,
-            person_category=person.person_category,
             keyword_id=keyword.id,
             created_at=person.created_at.isoformat() if person.created_at else "",
             updated_at=person.updated_at.isoformat() if person.updated_at else ""
@@ -158,38 +139,12 @@ async def create_person(
 async def list_people(
     tenant: Tenant = Depends(get_tenant),
     db: Session = Depends(get_db),
-    person_category: Optional[str] = Query(None),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500)
 ):
-    """List all people for a tenant.
-
-    Automatically initializes default person categories on first access.
-    """
-    # Auto-initialize categories if tenant doesn't have any
-    existing_categories = db.query(PersonCategory).filter(
-        PersonCategory.tenant_id == tenant.id
-    ).count()
-
-    if existing_categories == 0:
-        # Create default categories
-        default_categories = [
-            {"name": "photo_author", "display_name": "Photo Author"},
-            {"name": "people_in_scene", "display_name": "People in Scene"}
-        ]
-        for cat_def in default_categories:
-            category = PersonCategory(
-                tenant_id=tenant.id,
-                name=cat_def["name"],
-                display_name=cat_def["display_name"]
-            )
-            db.add(category)
-        db.commit()
+    """List all people for a tenant."""
 
     query = db.query(Person).filter(Person.tenant_id == tenant.id)
-
-    if person_category:
-        query = query.filter(Person.person_category == person_category)
 
     people = query.order_by(Person.name).offset(skip).limit(limit).all()
 
@@ -213,7 +168,6 @@ async def list_people(
             id=person.id,
             name=person.name,
             instagram_url=person.instagram_url,
-            person_category=person.person_category,
             keyword_id=keyword_id,
             tag_count=tag_count,
             created_at=person.created_at.isoformat() if person.created_at else "",
@@ -255,7 +209,6 @@ async def get_person(
         id=person.id,
         name=person.name,
         instagram_url=person.instagram_url,
-        person_category=person.person_category,
         keyword_id=keyword_id,
         tag_count=tag_count,
         aliases=person.aliases,
@@ -296,9 +249,6 @@ async def update_person(
         if request.instagram_url is not None:
             person.instagram_url = request.instagram_url
 
-        if request.person_category is not None:
-            person.person_category = request.person_category
-
         db.commit()
         db.refresh(person)
 
@@ -314,7 +264,6 @@ async def update_person(
             id=person.id,
             name=person.name,
             instagram_url=person.instagram_url,
-            person_category=person.person_category,
             keyword_id=keyword_id,
             tag_count=tag_count,
             created_at=person.created_at.isoformat() if person.created_at else "",

@@ -52,6 +52,9 @@ import {
   formatStatNumber,
 } from './shared/formatting.js';
 import './home-tab.js';
+import './home-chips-tab.js';
+import './home-insights-tab.js';
+import './lab-tab.js';
 import './curate-home-tab.js';
 import './curate-explore-tab.js';
 import './curate-browse-folder-tab.js';
@@ -1329,6 +1332,7 @@ class PhotoCatApp extends LitElement {
       curateAuditDropboxPathPrefix: { type: String },
       curateHomeRefreshing: { type: Boolean },
       curateStatsLoading: { type: Boolean },
+      homeSubTab: { type: String },
       curateAdvancedOpen: { type: Boolean },
       curateNoPositivePermatags: { type: Boolean },
       activeCurateTagSource: { type: String },
@@ -1346,6 +1350,7 @@ class PhotoCatApp extends LitElement {
       this.tenant = 'bcg'; // Default tenant
       this.showUploadModal = false;
       this.activeTab = 'home'; // Default to home tab
+      this.homeSubTab = 'overview';
       this.activeAdminSubTab = 'tagging'; // Default admin subtab
       this.activeSystemSubTab = 'ml-training'; // Default system subtab
 
@@ -2123,6 +2128,9 @@ class PhotoCatApp extends LitElement {
 
       if (tab === 'home') {
           this._fetchHomeStats();
+          if (this.homeSubTab === 'chips' || this.homeSubTab === 'insights') {
+              this.fetchKeywords();
+          }
           this._tabBootstrapped.add(key);
           return;
       }
@@ -3739,13 +3747,79 @@ class PhotoCatApp extends LitElement {
         
         <tab-container .activeTab=${this.activeTab}>
             ${this.activeTab === 'home' ? html`
-            <home-tab
-              slot="home"
-              .imageStats=${this.imageStats}
-              .mlTrainingStats=${this.mlTrainingStats}
-              .navCards=${navCards}
-              @navigate=${(e) => { this.activeTab = e.detail.tab; }}
-            ></home-tab>
+            <div slot="home">
+              <div class="container">
+                <div class="curate-subtabs">
+                  <button
+                    class="curate-subtab ${this.homeSubTab === 'overview' ? 'active' : ''}"
+                    @click=${() => { this.homeSubTab = 'overview'; }}
+                  >
+                    Overview
+                  </button>
+                  <button
+                    class="curate-subtab ${this.homeSubTab === 'lab' ? 'active' : ''}"
+                    @click=${() => { this.homeSubTab = 'lab'; }}
+                  >
+                    Lab
+                  </button>
+                  <button
+                    class="curate-subtab ${this.homeSubTab === 'chips' ? 'active' : ''}"
+                    @click=${() => { this.homeSubTab = 'chips'; }}
+                  >
+                    Chips
+                  </button>
+                  <button
+                    class="curate-subtab ${this.homeSubTab === 'insights' ? 'active' : ''}"
+                    @click=${() => { this.homeSubTab = 'insights'; }}
+                  >
+                    Insights
+                  </button>
+                </div>
+              </div>
+              ${this.homeSubTab === 'overview' ? html`
+                <home-tab
+                  .imageStats=${this.imageStats}
+                  .mlTrainingStats=${this.mlTrainingStats}
+                  .navCards=${navCards}
+                  @navigate=${(e) => { this.activeTab = e.detail.tab; }}
+                ></home-tab>
+              ` : html``}
+              ${this.homeSubTab === 'lab' ? html`
+                <lab-tab
+                  .tenant=${this.tenant}
+                  .tagStatsBySource=${this.tagStatsBySource}
+                  .activeCurateTagSource=${this.activeCurateTagSource}
+                  .keywords=${this.keywords}
+                  .imageStats=${this.imageStats}
+                  .renderCurateRatingWidget=${this._renderCurateRatingWidget.bind(this)}
+                  .renderCurateRatingStatic=${this._renderCurateRatingStatic.bind(this)}
+                  .formatCurateDate=${formatCurateDate}
+                  @image-clicked=${(e) => this._handleCurateImageClick(e.detail.event, e.detail.image, e.detail.imageSet)}
+                  @image-selected=${(e) => this._handleCurateImageClick(null, e.detail.image, e.detail.imageSet)}
+                ></lab-tab>
+              ` : html``}
+              ${this.homeSubTab === 'chips' ? html`
+                <home-chips-tab
+                  .tenant=${this.tenant}
+                  .tagStatsBySource=${this.tagStatsBySource}
+                  .activeCurateTagSource=${this.activeCurateTagSource}
+                  .keywords=${this.keywords}
+                  .imageStats=${this.imageStats}
+                  .renderCurateRatingWidget=${this._renderCurateRatingWidget.bind(this)}
+                  .renderCurateRatingStatic=${this._renderCurateRatingStatic.bind(this)}
+                  .formatCurateDate=${formatCurateDate}
+                  @image-clicked=${(e) => this._handleCurateImageClick(e.detail.event, e.detail.image, e.detail.imageSet)}
+                  @image-selected=${(e) => this._handleCurateImageClick(null, e.detail.image, e.detail.imageSet)}
+                ></home-chips-tab>
+              ` : html``}
+              ${this.homeSubTab === 'insights' ? html`
+                <home-insights-tab
+                  .imageStats=${this.imageStats}
+                  .mlTrainingStats=${this.mlTrainingStats}
+                  .keywords=${this.keywords}
+                ></home-insights-tab>
+              ` : html``}
+            </div>
             ` : ''}
             ${this.activeTab === 'search' ? html`
             <search-tab
@@ -4210,7 +4284,7 @@ class PhotoCatApp extends LitElement {
   async fetchKeywords() {
       if (!this.tenant) return;
       try {
-          const keywordsByCategory = await getKeywords(this.tenant, { source: 'permatags' });
+          const keywordsByCategory = await getKeywords(this.tenant, { source: 'permatags', includePeople: true });
           const flat = [];
           Object.entries(keywordsByCategory || {}).forEach(([category, list]) => {
               list.forEach((kw) => {
@@ -4431,6 +4505,11 @@ class PhotoCatApp extends LitElement {
       }
       if (changedProperties.has('activeTab')) {
           this._initializeTab(this.activeTab);
+      }
+      if (changedProperties.has('homeSubTab') && this.activeTab === 'home') {
+          if (this.homeSubTab === 'chips' || this.homeSubTab === 'insights') {
+              this.fetchKeywords();
+          }
       }
   }
 

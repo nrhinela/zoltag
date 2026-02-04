@@ -12,6 +12,7 @@ from . import dropbox
 from . import sync
 from . import config
 from . import people
+from . import nl_search
 
 __all__ = [
     "auth",
@@ -26,4 +27,5 @@ __all__ = [
     "dropbox",
     "sync",
     "config",
+    "nl_search",
 ]

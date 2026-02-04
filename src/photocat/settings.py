@@ -77,6 +77,11 @@ class Settings(BaseSettings):
     supabase_anon_key: Optional[str] = None
     supabase_service_role_key: Optional[str] = None
 
+    # Gemini API (Natural language search)
+    gemini_api_key: Optional[str] = None
+    gemini_model: str = "gemini-2.5-flash"
+    gemini_api_mode: str = "generativelanguage"  # "generativelanguage" or "vertex"
+
     @property
     def thumbnail_bucket(self) -> str:
         """Get thumbnail bucket name (defaults to main bucket)."""

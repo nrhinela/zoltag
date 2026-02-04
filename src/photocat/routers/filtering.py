@@ -369,8 +369,8 @@ def apply_category_filters(
             db, tenant, all_image_ids, active_tag_type
         )
 
-    # Collect image IDs matching any category filter
-    category_image_ids = []
+    # Collect image IDs matching ALL category filters (AND across categories)
+    category_match_ids = None
 
     for category, filter_data in filters.items():
         category_keywords = filter_data.get('keywords', [])
@@ -380,22 +380,31 @@ def apply_category_filters(
             continue
 
         # Filter based on current tags
+        matching_ids = set()
         if category_operator == "OR":
             # Image must have ANY of the keywords in this category
             for image_id, current_keywords in current_tags_by_image.items():
                 if any(kw in category_keywords for kw in current_keywords):
-                    category_image_ids.append(image_id)
+                    matching_ids.add(image_id)
         elif category_operator == "AND":
             # Image must have ALL keywords in this category
             for image_id, current_keywords in current_tags_by_image.items():
                 if all(kw in current_keywords for kw in category_keywords):
-                    category_image_ids.append(image_id)
+                    matching_ids.add(image_id)
 
-    if not category_image_ids:
-        return set()  # Empty set means no matches
+        if category_match_ids is None:
+            category_match_ids = matching_ids
+        else:
+            category_match_ids = category_match_ids.intersection(matching_ids)
 
-    # Remove duplicates
-    unique_image_ids = set(category_image_ids)
+        if not category_match_ids:
+            return set()  # Early exit if any category has no matches
+
+    if category_match_ids is None:
+        # No category filters provided
+        return existing_filter
+
+    unique_image_ids = category_match_ids
 
     # Intersect with existing filter if provided
     if existing_filter is not None:

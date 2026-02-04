@@ -27,7 +27,8 @@ from photocat.routers import (
     admin_keywords,
     dropbox,
     sync,
-    config
+    config,
+    nl_search
 )
 
 app = FastAPI(
@@ -61,6 +62,7 @@ app.include_router(admin_keywords.router)
 app.include_router(dropbox.router)
 app.include_router(sync.router)
 app.include_router(config.router)
+app.include_router(nl_search.router)
 
 # Static file paths
 static_dir = Path(__file__).parent / "static"

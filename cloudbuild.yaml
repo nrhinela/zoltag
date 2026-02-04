@@ -57,9 +57,9 @@ steps:
       - '--max-instances=1'
       - '--min-instances=0'
       - '--set-env-vars'
-      - 'GCP_PROJECT_ID=$PROJECT_ID,ENVIRONMENT=prod,TAGGING_MODEL=siglip,THUMBNAIL_BUCKET_NAME=photocat-483622-prod-shared,THUMBNAIL_CDN_BASE_URL=https://pc.nedeva.com'
+      - 'GCP_PROJECT_ID=$PROJECT_ID,ENVIRONMENT=prod,TAGGING_MODEL=siglip,THUMBNAIL_BUCKET_NAME=photocat-483622-prod-shared,THUMBNAIL_CDN_BASE_URL=https://pc.nedeva.com,GEMINI_API_MODE=vertex,GEMINI_MODEL=gemini-2.5-flash-lite'
       - '--set-secrets'
-      - 'DROPBOX_APP_KEY=dropbox-app-key:latest,DROPBOX_APP_SECRET=dropbox-app-secret:latest,SUPABASE_SERVICE_ROLE_KEY=supabase-service-role-key:latest,SUPABASE_URL=supabase-url:latest,SUPABASE_ANON_KEY=supabase-anon-key:latest,DATABASE_URL=supabase-db-url:latest'
+      - 'DROPBOX_APP_KEY=dropbox-app-key:latest,DROPBOX_APP_SECRET=dropbox-app-secret:latest,SUPABASE_SERVICE_ROLE_KEY=supabase-service-role-key:latest,SUPABASE_URL=supabase-url:latest,SUPABASE_ANON_KEY=supabase-anon-key:latest,DATABASE_URL=supabase-db-url:latest,GEMINI_API_KEY=gemini-api-key:latest'
 
   # Deploy worker service
   - name: 'gcr.io/cloud-builders/gcloud'
@@ -80,9 +80,9 @@ steps:
       - '--timeout=900'
       - '--max-instances=1'
       - '--set-env-vars'
-      - 'GCP_PROJECT_ID=$PROJECT_ID,ENVIRONMENT=prod,WORKER_MODE=true,TAGGING_MODEL=siglip,THUMBNAIL_BUCKET_NAME=photocat-483622-prod-shared,THUMBNAIL_CDN_BASE_URL=https://pc.nedeva.com'
+      - 'GCP_PROJECT_ID=$PROJECT_ID,ENVIRONMENT=prod,WORKER_MODE=true,TAGGING_MODEL=siglip,THUMBNAIL_BUCKET_NAME=photocat-483622-prod-shared,THUMBNAIL_CDN_BASE_URL=https://pc.nedeva.com,GEMINI_API_MODE=vertex,GEMINI_MODEL=gemini-2.5-flash-lite'
       - '--set-secrets'
-      - 'DROPBOX_APP_KEY=dropbox-app-key:latest,DROPBOX_APP_SECRET=dropbox-app-secret:latest,SUPABASE_SERVICE_ROLE_KEY=supabase-service-role-key:latest,SUPABASE_URL=supabase-url:latest,SUPABASE_ANON_KEY=supabase-anon-key:latest,DATABASE_URL=supabase-db-url:latest'
+      - 'DROPBOX_APP_KEY=dropbox-app-key:latest,DROPBOX_APP_SECRET=dropbox-app-secret:latest,SUPABASE_SERVICE_ROLE_KEY=supabase-service-role-key:latest,SUPABASE_URL=supabase-url:latest,SUPABASE_ANON_KEY=supabase-anon-key:latest,DATABASE_URL=supabase-db-url:latest,GEMINI_API_KEY=gemini-api-key:latest'
 
 images:
   - 'gcr.io/$PROJECT_ID/photocat:$_COMMIT_SHA'

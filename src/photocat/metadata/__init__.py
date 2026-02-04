@@ -62,7 +62,6 @@ class Person(Base):
     # Core attributes
     name = Column(String(255), nullable=False, index=True)
     instagram_url = Column(String(512), nullable=True)
-    person_category = Column(String(50), nullable=False, default='people_in_scene', index=True)
 
     # Legacy face recognition (kept for backward compatibility)
     aliases = Column(JSONB, default=list)  # List of alternative names
@@ -75,9 +74,7 @@ class Person(Base):
     tenant = relationship("Tenant", back_populates="people")
     detected_faces = relationship("DetectedFace", back_populates="person")
 
-    __table_args__ = (
-        Index("idx_people_tenant_category", "tenant_id", "person_category"),
-    )
+
 
 
 class ImageMetadata(Base):

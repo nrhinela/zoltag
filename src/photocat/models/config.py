@@ -22,14 +22,14 @@ class KeywordCategory(Base):
     id = Column(Integer, primary_key=True)
     tenant_id = Column(String(50), nullable=False, index=True)
     name = Column(String(100), nullable=False)
+    slug = Column(String(60), nullable=True)
     parent_id = Column(Integer, ForeignKey('keyword_categories.id', ondelete='CASCADE'), nullable=True)
     sort_order = Column(Integer, nullable=False, default=0)
 
-    # NEW: Link to PersonCategory if this is a people category
-    person_category_id = Column(Integer, ForeignKey('person_categories.id', ondelete='CASCADE'), nullable=True, unique=True)
-
     # NEW: Mark if this is a people category
     is_people_category = Column(sa.Boolean, nullable=False, server_default=sa.text('false'))
+    # NEW: Mark if this category is used for attribution keywords
+    is_attribution = Column(sa.Boolean, nullable=False, server_default=sa.text('false'))
 
     created_at = Column(DateTime, nullable=False, server_default=func.now())
     updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
@@ -38,34 +38,9 @@ class KeywordCategory(Base):
     parent = relationship("KeywordCategory", remote_side=[id], back_populates="subcategories")
     subcategories = relationship("KeywordCategory", back_populates="parent", cascade="all, delete-orphan")
     keywords = relationship("Keyword", back_populates="category", cascade="all, delete-orphan")
-    person_category = relationship("PersonCategory", back_populates="keyword_category")
-
     __table_args__ = (
         Index("idx_keyword_categories_tenant_name", "tenant_id", "name"),
     )
-
-
-class PersonCategory(Base):
-    """Categories for organizing people (Photo Author, People in Scene, etc.)."""
-
-    __tablename__ = "person_categories"
-
-    id = Column(Integer, primary_key=True)
-    tenant_id = Column(String(50), nullable=False, index=True)
-
-    name = Column(String(50), nullable=False)  # e.g., 'photo_author', 'people_in_scene'
-    display_name = Column(String(100), nullable=False)  # e.g., 'Photo Author', 'People in Scene'
-
-    created_at = Column(DateTime, nullable=False, server_default=func.now())
-    updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
-
-    # Relationships
-    keyword_category = relationship("KeywordCategory", back_populates="person_category", uselist=False)
-
-    __table_args__ = (
-        Index("idx_person_categories_tenant_name", "tenant_id", "name", unique=True),
-    )
-
 
 class Keyword(Base):
     """Individual keyword within a category."""

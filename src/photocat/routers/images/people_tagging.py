@@ -1,6 +1,6 @@
 """Image people tagging endpoints: tag/untag people on images."""
 
-from typing import List, Optional
+from typing import List
 from fastapi import APIRouter, Depends, HTTPException, Body
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
@@ -30,7 +30,6 @@ class PersonTagResponse(BaseModel):
     id: int
     person_id: int
     person_name: str
-    person_category: str
     confidence: float
     tag_type: str
     created_at: str
@@ -115,7 +114,6 @@ async def tag_person_on_image(
             id=tag.id,
             person_id=person.id,
             person_name=person.name,
-            person_category=person.person_category,
             confidence=tag.confidence,
             tag_type=tag.tag_type,
             created_at=tag.created_at.isoformat() if tag.created_at else ""
@@ -222,7 +220,6 @@ async def get_image_people_tags(
             id=tag.id,
             person_id=person.id,
             person_name=person.name,
-            person_category=person.person_category,
             confidence=tag.confidence,
             tag_type=tag.tag_type,
             created_at=tag.created_at.isoformat() if tag.created_at else ""
@@ -289,7 +286,6 @@ async def update_person_tag_confidence(
             id=tag.id,
             person_id=person.id,
             person_name=person.name,
-            person_category=person.person_category,
             confidence=tag.confidence,
             tag_type=tag.tag_type,
             created_at=tag.created_at.isoformat() if tag.created_at else ""

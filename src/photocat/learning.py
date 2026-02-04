@@ -226,7 +226,14 @@ def score_keywords_for_categories(
     all_tags: List[Tuple[str, float]] = []
 
     for _, keywords in keywords_by_category.items():
-        prompt_scores = tagger.tag_image(image_data, keywords, threshold=0.0)
+        # Skip zero-shot scoring for keywords without explicit prompts.
+        eligible_keywords = [
+            kw for kw in keywords
+            if isinstance(kw.get("prompt"), str) and kw["prompt"].strip()
+        ]
+        if not eligible_keywords:
+            continue
+        prompt_scores = tagger.tag_image(image_data, eligible_keywords, threshold=0.0)
         combined_scores = compute_combined_scores(prompt_scores, model_scores or {}, model_weight)
         for keyword, score in combined_scores.items():
             if score >= threshold:

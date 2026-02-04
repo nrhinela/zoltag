@@ -1,6 +1,6 @@
 # Makefile for PhotoCat development and deployment
 
-.PHONY: help install test lint format clean deploy migrate dev worker dev-backend dev-frontend dev-css
+.PHONY: help install test lint format clean deploy migrate dev worker dev-backend dev-frontend dev-css dev-clean
 .PHONY: db-dev db-prod db-migrate-prod db-migrate-dev db-create-migration
 .PHONY: deploy-api deploy-worker deploy-all status logs-api logs-worker env-check
 .PHONY: train-and-recompute daily
@@ -76,14 +76,29 @@ clean:
 	find . -type f -name "*.pyo" -delete
 
 dev:
-	@echo "Stopping any existing development processes..."
-	@pkill -f "uvicorn photocat.api:app" || true
-	@pkill -f "npm run dev" || true
-	@pkill -f "npm run build:css" || true
-	@pkill -f "vite" || true
-	@sleep 1
+	@$(MAKE) dev-clean
 	@echo "Starting development servers..."
 	make dev-backend & make dev-frontend & make dev-css
+
+dev-clean:
+	@echo "Stopping any existing development processes..."
+	@for pattern in "uvicorn photocat.api:app" "photocat.api:app" "npm run dev" "npm run build:css" "vite" "tailwindcss"; do \
+		if command -v pkill >/dev/null 2>&1; then \
+			pkill -f "$$pattern" 2>/dev/null || true; \
+		fi; \
+	done
+	@for port in 8000 5173; do \
+		if command -v lsof >/dev/null 2>&1; then \
+			ids=$$(lsof -tiTCP:$$port -sTCP:LISTEN || true); \
+			if [ -n "$$ids" ]; then \
+				echo "Killing processes on port $$port: $$ids"; \
+				for id in $$ids; do \
+					kill -9 $$id 2>/dev/null || true; \
+				done; \
+			fi; \
+		fi; \
+	done
+	@sleep 1
 
 dev-backend:
 	@echo "Starting backend development server..."

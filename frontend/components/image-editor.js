@@ -2,6 +2,7 @@ import { LitElement, html, css } from 'lit';
 import { getImageDetails, getKeywords, addPermatag, getFullImage, setRating, refreshImageMetadata, propagateDropboxTags } from '../services/api.js';
 import { tailwind } from './tailwind-lit.js';
 import './people-tagger.js';
+import './shared/widgets/keyword-dropdown.js';
 
 class ImageEditor extends LitElement {
   static styles = [tailwind, css`
@@ -79,8 +80,7 @@ class ImageEditor extends LitElement {
       display: flex;
       flex-direction: column;
       gap: 12px;
-      overflow: auto;
-      max-height: 100%;
+      overflow: visible;
       min-height: 0;
       min-width: 0;
     }
@@ -363,14 +363,7 @@ class ImageEditor extends LitElement {
       45% { transform: scale(1.1); opacity: 1; }
       100% { transform: scale(1.35); opacity: 0; }
     }
-    .tag-select {
-      border: 1px solid #e5e7eb;
-      border-radius: 8px;
-      padding: 8px 10px;
-      font-size: inherit;
-      color: #111827;
-    }
-    .tag-select {
+    .tag-dropdown {
       flex: 1;
       min-width: 220px;
     }
@@ -757,7 +750,6 @@ class ImageEditor extends LitElement {
     this.tagsPropagating = true;
     try {
       await propagateDropboxTags(this.tenant, this.details.id);
-      await this.fetchDetails();
     } catch (error) {
       console.error('ImageEditor: tag propagation failed', error);
     } finally {
@@ -768,7 +760,7 @@ class ImageEditor extends LitElement {
   async fetchKeywords() {
     if (!this.tenant) return;
     try {
-      this.keywordsByCategory = await getKeywords(this.tenant, { source: 'permatags' });
+      this.keywordsByCategory = await getKeywords(this.tenant, { source: 'permatags', includePeople: true });
     } catch (error) {
       console.error('ImageEditor: fetchKeywords failed', error);
       this.keywordsByCategory = {};
@@ -1023,7 +1015,7 @@ class ImageEditor extends LitElement {
   }
 
   _handleTagSelectChange(event) {
-    const value = event.target.value;
+    const value = event?.detail?.value ?? event?.target?.value ?? '';
     if (!value) {
       this.tagInput = '';
       this.tagCategory = '';
@@ -1082,13 +1074,15 @@ class ImageEditor extends LitElement {
       : '';
     const dropboxPath = this.details?.dropbox_path || '';
     const dropboxHref = this._buildDropboxHref(dropboxPath);
-    const sortedKeywordsByCategory = categories.map((category) => {
-      const keywords = (this.keywordsByCategory?.[category] || [])
-        .map((entry) => entry.keyword)
-        .filter(Boolean)
-        .sort((a, b) => a.localeCompare(b));
-      return [category, keywords];
-    });
+    const flatKeywords = categories.flatMap((category) => (
+      (this.keywordsByCategory?.[category] || [])
+        .filter((entry) => entry.keyword)
+        .map((entry) => ({
+          keyword: entry.keyword,
+          category,
+          count: entry.count || 0,
+        }))
+    ));
     return html`
       <div class="tag-section">
         <div class="space-y-1 text-xs text-gray-600">
@@ -1139,22 +1133,15 @@ class ImageEditor extends LitElement {
         <div class="right-pane">
           <div class="text-xs font-semibold text-gray-600 uppercase mb-2">Add Tag</div>
           <div class="tag-form">
-            <select
-              class="tag-select"
+            <keyword-dropdown
+              class="tag-dropdown"
               .value=${selectedValue}
+              .keywords=${flatKeywords}
+              .includeUntagged=${false}
+              .compact=${true}
+              @keyword-selected=${this._handleTagSelectChange}
               @change=${this._handleTagSelectChange}
-            >
-              <option value="">Select a keyword...</option>
-              ${sortedKeywordsByCategory.map(([category, keywords]) => html`
-                <optgroup label="${category}">
-                  ${keywords.map((keyword) => html`
-                    <option value=${`${encodeURIComponent(category)}::${encodeURIComponent(keyword)}`}>
-                      ${keyword}
-                    </option>
-                  `)}
-                </optgroup>
-              `)}
-            </select>
+            ></keyword-dropdown>
             <button class="tag-add" @click=${this._handleAddTag}>Add Tag</button>
           </div>
         </div>

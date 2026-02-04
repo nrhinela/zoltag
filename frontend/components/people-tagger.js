@@ -163,10 +163,6 @@ class PeopleTagger extends LitElement {
       font-weight: 600;
       color: #111827;
     }
-    .tag-category {
-      font-size: 11px;
-      color: #6b7280;
-    }
     .tag-confidence {
       font-size: 11px;
       color: #6b7280;
@@ -351,7 +347,7 @@ class PeopleTagger extends LitElement {
                   <option value="">Select a person...</option>
                   ${this.people.map(person => html`
                     <option value="${person.id}">
-                      ${person.name} (${person.person_category})
+                      ${person.name}
                     </option>
                   `)}
                 </select>
@@ -396,7 +392,6 @@ class PeopleTagger extends LitElement {
                           <span class="confidence-indicator ${this.getConfidenceIndicator(tag.confidence)}"></span>
                           ${tag.person_name}
                         </div>
-                        <div class="tag-category">${tag.person_category}</div>
                       </div>
                       <div style="display: flex; gap: 8px; align-items: center;">
                         <div class="tag-confidence">${(tag.confidence * 100).toFixed(0)}%</div>

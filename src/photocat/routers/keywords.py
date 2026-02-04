@@ -26,14 +26,15 @@ async def get_available_keywords(
     rating_operator: str = "eq",
     hide_zero_rating: bool = False,
     reviewed: Optional[bool] = None,
-    source: Optional[str] = None
+    source: Optional[str] = None,
+    include_people: bool = False
 ):
     """Get all available keywords from config for faceted search with counts.
 
     Counts reflect active filters (list, rating) so dropdown matches actual results.
     """
     config_mgr = ConfigManager(db, tenant.id)
-    all_keywords = config_mgr.get_all_keywords()
+    all_keywords = config_mgr.get_all_keywords(include_people=include_people)
 
     image_ids_query = db.query(ImageMetadata.id).filter(ImageMetadata.tenant_id == tenant.id)
 

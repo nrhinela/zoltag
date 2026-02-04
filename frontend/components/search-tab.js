@@ -103,6 +103,7 @@ export class SearchTab extends LitElement {
     browseByFolderOffset: { type: Number, state: true },
     browseByFolderLimit: { type: Number, state: true },
     searchRefreshing: { type: Boolean },
+    hideSubtabs: { type: Boolean },
     curateThumbSize: { type: Number },
     tagStatsBySource: { type: Object },
     activeCurateTagSource: { type: String },
@@ -167,6 +168,7 @@ export class SearchTab extends LitElement {
     this.browseByFolderOffset = 0;
     this.browseByFolderLimit = 100;
     this.searchRefreshing = false;
+    this.hideSubtabs = false;
     this.curateThumbSize = 120;
     this.tagStatsBySource = {};
     this.activeCurateTagSource = 'permatags';
@@ -431,6 +433,10 @@ export class SearchTab extends LitElement {
     }
 
     if (changedProps.has('searchSubTab')) {
+      if (this.hideSubtabs && this.searchSubTab !== 'home') {
+        this.searchSubTab = 'home';
+        return;
+      }
       if (this.searchSubTab === 'explore-by-tag') {
         this.exploreByTagOffset = 0;
         if (this.exploreByTagLoading || (!this._exploreInitialLoadComplete && !(this.exploreByTagKeywords || []).length)) {
@@ -1316,6 +1322,7 @@ export class SearchTab extends LitElement {
   // ========================================
 
   _handleSearchSubTabChange(nextTab) {
+    if (this.hideSubtabs) return;
     this.searchSubTab = nextTab;
     this.dispatchEvent(new CustomEvent('search-subtab-changed', {
       detail: { subtab: nextTab },
@@ -1336,12 +1343,10 @@ export class SearchTab extends LitElement {
     if (this._searchFilterPanelHandlers?.panel) {
       this._teardownSearchFilterPanel(this._searchFilterPanelHandlers.panel);
     }
-    const handleLoaded = (detail) => {
-      if (detail?.tabId !== 'search') return;
+    const handleLoaded = () => {
       this._finishInitialRefresh();
     };
-    const handleError = (detail) => {
-      if (detail?.tabId !== 'search') return;
+    const handleError = () => {
       this._finishInitialRefresh();
     };
     this._searchFilterPanelHandlers = { panel, handleLoaded, handleError };
@@ -2075,26 +2080,28 @@ export class SearchTab extends LitElement {
       <div class="container">
         <!-- Search Tab Header -->
         <div class="flex items-center justify-between mb-4">
-          <div class="curate-subtabs">
-            <button
-              class="curate-subtab ${this.searchSubTab === 'home' ? 'active' : ''}"
-              @click=${() => this._handleSearchSubTabChange('home')}
-            >
-              Search Home
-            </button>
-            <button
-              class="curate-subtab ${this.searchSubTab === 'browse-by-folder' ? 'active' : ''}"
-              @click=${() => this._handleSearchSubTabChange('browse-by-folder')}
-            >
-              Browse by Folder
-            </button>
-            <button
-              class="curate-subtab ${this.searchSubTab === 'explore-by-tag' ? 'active' : ''}"
-              @click=${() => this._handleSearchSubTabChange('explore-by-tag')}
-            >
-              Explore by Tag
-            </button>
-          </div>
+          ${this.hideSubtabs ? html`` : html`
+            <div class="curate-subtabs">
+              <button
+                class="curate-subtab ${this.searchSubTab === 'home' ? 'active' : ''}"
+                @click=${() => this._handleSearchSubTabChange('home')}
+              >
+                Search Home
+              </button>
+              <button
+                class="curate-subtab ${this.searchSubTab === 'browse-by-folder' ? 'active' : ''}"
+                @click=${() => this._handleSearchSubTabChange('browse-by-folder')}
+              >
+                Browse by Folder
+              </button>
+              <button
+                class="curate-subtab ${this.searchSubTab === 'explore-by-tag' ? 'active' : ''}"
+                @click=${() => this._handleSearchSubTabChange('explore-by-tag')}
+              >
+                Explore by Tag
+              </button>
+            </div>
+          `}
 
           <div class="ml-auto flex items-center gap-4 text-xs text-gray-600 mr-4">
             <label class="font-semibold text-gray-600">Thumb</label>

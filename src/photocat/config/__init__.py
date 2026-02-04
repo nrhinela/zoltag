@@ -10,6 +10,7 @@ class KeywordCategory(BaseModel):
     name: str
     keywords: List[str | dict] = Field(default_factory=list)  # Can be string or dict with prompt
     subcategories: List["KeywordCategory"] = Field(default_factory=list)
+    is_attribution: bool = False
 
 
 class Person(BaseModel):

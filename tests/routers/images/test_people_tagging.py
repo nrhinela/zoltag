@@ -45,13 +45,11 @@ def setup_people_and_images(test_db: Session, tenant: Tenant):
     alice = Person(
         tenant_id=tenant.id,
         name="Alice",
-        instagram_url="https://instagram.com/alice",
-        person_category="photo_author"
+        instagram_url="https://instagram.com/alice"
     )
     bob = Person(
         tenant_id=tenant.id,
-        name="Bob",
-        person_category="people_in_scene"
+        name="Bob"
     )
     test_db.add(alice)
     test_db.add(bob)

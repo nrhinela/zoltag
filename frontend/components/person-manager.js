@@ -1,19 +1,17 @@
 import { LitElement, html, css } from 'lit';
 import { tailwind } from './tailwind-lit.js';
-import { getPeopleCategories, getPeople, createPerson, deletePerson } from '../services/api.js';
+import { getPeople, createPerson, deletePerson } from '../services/api.js';
 
 class PersonManager extends LitElement {
   static properties = {
     tenant: { type: String },
     view: { type: String }, // 'list' or 'editor'
     people: { type: Array },
-    categories: { type: Array },
     selectedPersonId: { type: Number },
     loading: { type: Boolean },
     error: { type: String },
     formData: { type: Object },
     searchQuery: { type: String },
-    filterCategory: { type: String },
   };
 
   static styles = [tailwind, css`
@@ -51,13 +49,6 @@ class PersonManager extends LitElement {
       border: 1px solid #d1d5db;
       border-radius: 6px;
       font-size: 13px;
-    }
-    .filter-select {
-      padding: 8px 12px;
-      border: 1px solid #d1d5db;
-      border-radius: 6px;
-      font-size: 13px;
-      background: #ffffff;
     }
     .btn-primary {
       padding: 10px 16px;
@@ -116,10 +107,6 @@ class PersonManager extends LitElement {
       font-size: 16px;
       font-weight: 600;
       margin-bottom: 4px;
-    }
-    .person-category {
-      font-size: 12px;
-      opacity: 0.9;
     }
     .person-card-body {
       padding: 16px;
@@ -249,13 +236,11 @@ class PersonManager extends LitElement {
     super();
     this.view = 'list';
     this.people = [];
-    this.categories = [];
     this.selectedPersonId = null;
     this.loading = false;
     this.error = '';
-    this.formData = { name: '', instagram_url: '', person_category: 'people_in_scene' };
+    this.formData = { name: '', instagram_url: '' };
     this.searchQuery = '';
-    this.filterCategory = '';
   }
 
   async connectedCallback() {
@@ -269,8 +254,6 @@ class PersonManager extends LitElement {
     this.loading = true;
     this.error = '';
     try {
-      await this.loadCategories();
-      console.log('[PersonManager] categories loaded:', this.categories);
       await this.loadPeople();
       console.log('[PersonManager] people loaded:', this.people);
     } catch (err) {
@@ -281,16 +264,10 @@ class PersonManager extends LitElement {
     }
   }
 
-  async loadCategories() {
-    const tenantId = this.tenant || localStorage.getItem('tenantId') || 'default';
-    this.categories = await getPeopleCategories(tenantId);
-  }
-
   async loadPeople() {
     const tenantId = this.tenant || localStorage.getItem('tenantId') || 'default';
     let data = await getPeople(tenantId, {
-      limit: 500,
-      person_category: this.filterCategory || undefined
+      limit: 500
     });
 
     if (this.searchQuery) {
@@ -316,7 +293,7 @@ class PersonManager extends LitElement {
       const tenantId = this.tenant || localStorage.getItem('tenantId') || 'default';
       await createPerson(tenantId, this.formData);
 
-      this.formData = { name: '', instagram_url: '', person_category: 'people_in_scene' };
+      this.formData = { name: '', instagram_url: '' };
       this.view = 'list';
       await this.loadPeople();
     } catch (err) {
@@ -360,17 +337,7 @@ class PersonManager extends LitElement {
                 .value="${this.searchQuery}"
                 @input="${(e) => { this.searchQuery = e.target.value; this.loadPeople(); }}"
               />
-              <select
-                class="filter-select"
-                .value="${this.filterCategory}"
-                @change="${(e) => { this.filterCategory = e.target.value; this.loadPeople(); }}"
-              >
-                <option value="">All Categories</option>
-                ${this.categories.map(cat => html`
-                  <option value="${cat.name}">${cat.display_name}</option>
-                `)}
-              </select>
-              <button class="btn-primary" @click="${() => { this.view = 'editor'; this.formData = { name: '', instagram_url: '', person_category: 'people_in_scene' }; }}">
+              <button class="btn-primary" @click="${() => { this.view = 'editor'; this.formData = { name: '', instagram_url: '' }; }}">
                 + Add Person
               </button>
             ` : html`
@@ -401,7 +368,6 @@ class PersonManager extends LitElement {
                   <div class="person-card">
                     <div class="person-card-header">
                       <div class="person-name">${person.name}</div>
-                      <div class="person-category">${person.person_category}</div>
                     </div>
                     <div class="person-card-body">
                       <div class="stat">
@@ -456,19 +422,6 @@ class PersonManager extends LitElement {
                   @input="${(e) => { this.formData = { ...this.formData, instagram_url: e.target.value }; }}"
                 />
                 <div class="form-hint">Optional. Include the full URL starting with https://</div>
-              </div>
-
-              <div class="form-group">
-                <label class="form-label">Category</label>
-                <select
-                  class="form-input"
-                  .value="${this.formData.person_category || 'people_in_scene'}"
-                  @change="${(e) => { this.formData = { ...this.formData, person_category: e.target.value }; }}"
-                >
-                  ${this.categories.map(cat => html`
-                    <option value="${cat.name}">${cat.display_name}</option>
-                  `)}
-                </select>
               </div>
 
               <div class="form-actions">

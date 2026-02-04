@@ -190,10 +190,21 @@ export async function getKeywords(tenantId, filters = {}) {
     if (filters.source) {
       params.append('source', filters.source);
     }
+    if (filters.includePeople) {
+      params.append('include_people', 'true');
+    }
 
     const url = params.toString() ? `/keywords?${params.toString()}` : `/keywords`;
     const data = await fetchWithAuth(url, { tenantId });
     return data.keywords_by_category || {};
+}
+
+export async function getNlSearchFilters(tenantId, payload) {
+  return fetchWithAuth(`/search/nl`, {
+    method: 'POST',
+    body: JSON.stringify(payload || {}),
+    tenantId,
+  });
 }
 
 export async function getTenants({ force = false } = {}) {
@@ -553,26 +564,14 @@ export async function setSuperAdminStatus(supabaseUid, isSuperAdmin) {
 // ============================================================================
 
 /**
- * Get all person categories for a tenant
- * @param {string} tenantId - Tenant ID
- * @returns {Promise<Array>} List of person categories
- */
-export async function getPeopleCategories(tenantId) {
-    return fetchWithAuth('/config/people/categories', {
-        tenantId
-    });
-}
-
-/**
  * Get all people for a tenant
  * @param {string} tenantId - Tenant ID
- * @param {Object} options - Query options (limit, person_category)
+ * @param {Object} options - Query options (limit)
  * @returns {Promise<Array>} List of people
  */
 export async function getPeople(tenantId, options = {}) {
     const params = new URLSearchParams();
     if (options.limit) params.append('limit', options.limit);
-    if (options.person_category) params.append('person_category', options.person_category);
 
     return fetchWithAuth(`/people${params.toString() ? '?' + params.toString() : ''}`, { tenantId });
 }
@@ -580,7 +579,7 @@ export async function getPeople(tenantId, options = {}) {
 /**
  * Create a new person
  * @param {string} tenantId - Tenant ID
- * @param {Object} data - Person data (name, instagram_url, person_category)
+ * @param {Object} data - Person data (name, instagram_url)
  * @returns {Promise<Object>} Created person
  */
 export async function createPerson(tenantId, data) {

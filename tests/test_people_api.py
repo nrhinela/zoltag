@@ -45,8 +45,7 @@ class TestCreatePerson:
         person = Person(
             tenant_id=tenant.id,
             name="Alice Smith",
-            instagram_url="https://instagram.com/alice",
-            person_category="photo_author"
+            instagram_url="https://instagram.com/alice"
         )
         test_db.add(person)
         test_db.commit()
@@ -56,15 +55,13 @@ class TestCreatePerson:
         assert person.id is not None
         assert person.name == "Alice Smith"
         assert person.instagram_url == "https://instagram.com/alice"
-        assert person.person_category == "photo_author"
 
     def test_create_person_with_keyword(self, test_db: Session, tenant: Tenant):
         """Test that creating a person automatically creates a keyword."""
         # Create person
         person = Person(
             tenant_id=tenant.id,
-            name="Bob Jones",
-            person_category="people_in_scene"
+            name="Bob Jones"
         )
         test_db.add(person)
         test_db.flush()
@@ -99,27 +96,13 @@ class TestCreatePerson:
         """Test creating a person without instagram_url (optional field)."""
         person = Person(
             tenant_id=tenant.id,
-            name="Charlie Brown",
-            person_category="photo_author"
+            name="Charlie Brown"
         )
         test_db.add(person)
         test_db.commit()
         test_db.refresh(person)
 
         assert person.instagram_url is None
-
-    def test_create_person_default_category(self, test_db: Session, tenant: Tenant):
-        """Test that person_category defaults to 'people_in_scene'."""
-        person = Person(
-            tenant_id=tenant.id,
-            name="Diana Prince"
-        )
-        test_db.add(person)
-        test_db.commit()
-        test_db.refresh(person)
-
-        assert person.person_category == "people_in_scene"
-
 
 class TestListPeople:
     """Tests for GET /api/v1/people endpoint."""
@@ -138,8 +121,7 @@ class TestListPeople:
         for i in range(3):
             person = Person(
                 tenant_id=tenant.id,
-                name=f"Person {i}",
-                person_category="photo_author" if i % 2 == 0 else "people_in_scene"
+                name=f"Person {i}"
             )
             test_db.add(person)
         test_db.commit()
@@ -150,33 +132,6 @@ class TestListPeople:
         ).all()
 
         assert len(people) == 3
-
-    def test_list_people_filtered_by_category(self, test_db: Session, tenant: Tenant):
-        """Test filtering people by category."""
-        # Create people
-        for i in range(3):
-            person = Person(
-                tenant_id=tenant.id,
-                name=f"Author {i}",
-                person_category="photo_author"
-            )
-            test_db.add(person)
-        for i in range(2):
-            person = Person(
-                tenant_id=tenant.id,
-                name=f"Scene {i}",
-                person_category="people_in_scene"
-            )
-            test_db.add(person)
-        test_db.commit()
-
-        # Filter by photo_author
-        authors = test_db.query(Person).filter(
-            Person.tenant_id == tenant.id,
-            Person.person_category == "photo_author"
-        ).all()
-
-        assert len(authors) == 3
 
     def test_list_people_tenant_isolation(self, test_db: Session, tenant: Tenant):
         """Test that people are isolated by tenant."""
@@ -247,8 +202,7 @@ class TestUpdatePerson:
         # Create person
         person = Person(
             tenant_id=tenant.id,
-            name="Frank",
-            person_category="photo_author"
+            name="Frank"
         )
         test_db.add(person)
         test_db.commit()
@@ -277,24 +231,6 @@ class TestUpdatePerson:
         test_db.refresh(person)
 
         assert person.instagram_url == "https://instagram.com/new"
-
-    def test_update_person_category(self, test_db: Session, tenant: Tenant):
-        """Test updating person category."""
-        # Create person
-        person = Person(
-            tenant_id=tenant.id,
-            name="Henry",
-            person_category="people_in_scene"
-        )
-        test_db.add(person)
-        test_db.commit()
-
-        # Update category
-        person.person_category = "photo_author"
-        test_db.commit()
-        test_db.refresh(person)
-
-        assert person.person_category == "photo_author"
 
     def test_update_person_with_keyword_sync(self, test_db: Session, tenant: Tenant):
         """Test that person name update syncs with keyword."""

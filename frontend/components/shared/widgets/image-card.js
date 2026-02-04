@@ -1,6 +1,7 @@
 import { LitElement, html } from 'lit';
 import { enqueueCommand } from '../../../services/command-queue.js';
 import './image-card.css';
+import './keyword-dropdown.js';
 
 class ImageCard extends LitElement {
   // Use Light DOM to access Tailwind CSS classes
@@ -18,6 +19,7 @@ class ImageCard extends LitElement {
     keywords: { type: Array },
     listMode: { type: Boolean },
     metadataOpen: { type: Boolean },
+    selectedKeywordValue: { type: String },
   };
 
   constructor() {
@@ -30,6 +32,7 @@ class ImageCard extends LitElement {
     this.keywords = [];
     this.listMode = false;
     this.metadataOpen = false;
+    this.selectedKeywordValue = '';
     this._handleQueueComplete = (event) => {
       const detail = event?.detail;
       if (detail?.type === 'retag' && detail.imageId === this.image.id) {
@@ -112,21 +115,25 @@ class ImageCard extends LitElement {
 
   _handleAddTag(e) {
     e.stopPropagation();
-    const input = this.shadowRoot.getElementById(`add-tag-${this.image.id}`);
-    const value = input ? input.value.trim() : '';
-    if (!value) return;
-    const keywordEntry = this.keywords.find((kw) => kw.keyword === value);
-    if (!keywordEntry) {
-      return;
-    }
+    const value = this.selectedKeywordValue || '';
+    if (!value || value === '__untagged__') return;
+    const [rawCategory, rawKeyword] = value.split('::');
+    if (!rawCategory || !rawKeyword) return;
+    const category = decodeURIComponent(rawCategory);
+    const keyword = decodeURIComponent(rawKeyword);
+    const keywordEntry = this.keywords.find((kw) => {
+      const kwCategory = kw.category || 'Uncategorized';
+      return kwCategory === category && kw.keyword === keyword;
+    });
+    if (!keywordEntry) return;
     enqueueCommand({
       type: 'add-positive-permatag',
       tenantId: this.tenant,
       imageId: this.image.id,
-      keyword: value,
+      keyword,
       category: keywordEntry.category,
     });
-    if (input) input.value = '';
+    this.selectedKeywordValue = '';
     window.dispatchEvent(new CustomEvent('permatags-changed', {
       detail: { imageId: this.image.id }
     }));
@@ -399,15 +406,20 @@ class ImageCard extends LitElement {
             ${tagsText}
           </div>
           <div class="flex items-center gap-2">
-            <label class="text-xs font-semibold text-gray-700" for="add-tag-${this.image.id}">Add tag:</label>
-            <input
-              id="add-tag-${this.image.id}"
-              list="keyword-list"
-              class="flex-1 min-w-[120px] border rounded px-2 py-1 text-xs"
-              type="text"
-              placeholder="Start typing..."
-              @click=${(e) => e.stopPropagation()}
-            >
+            <label class="text-xs font-semibold text-gray-700">Add tag:</label>
+            <div class="flex-1 min-w-[180px]" @click=${(e) => e.stopPropagation()}>
+              <keyword-dropdown
+                .value=${this.selectedKeywordValue}
+                .placeholder=${'Select a keyword...'}
+                .keywords=${this.keywords}
+                .includeUntagged=${false}
+                .compact=${true}
+                @keyword-selected=${(event) => {
+                  event?.stopPropagation?.();
+                  this.selectedKeywordValue = event?.detail?.value || '';
+                }}
+              ></keyword-dropdown>
+            </div>
             <button
               type="button"
               class="text-xs text-blue-600 hover:text-blue-700"
@@ -418,9 +430,6 @@ class ImageCard extends LitElement {
           </div>
         </div>
       </div>
-      <datalist id="keyword-list">
-        ${this.keywords.map((kw) => html`<option value=${kw.keyword}></option>`)}
-      </datalist>
     `;
   }
 
