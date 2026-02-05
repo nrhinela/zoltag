@@ -33,6 +33,23 @@ export function formatDropboxPath(path) {
   return path.replace(/_/g, '_\u200b');
 }
 
+export function formatDropboxTag(keyword) {
+  if (!keyword) return '';
+  const normalized = String(keyword)
+    .toLowerCase()
+    .replace(/[^a-z0-9_]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  if (!normalized) return '';
+  return `gmm_${normalized}`;
+}
+
+export function formatDropboxRatingTag(rating) {
+  if (rating === null || rating === undefined || rating === '') return '';
+  const normalized = Number.parseInt(rating, 10);
+  if (!Number.isFinite(normalized)) return '';
+  return `gmm_rating_${normalized}`;
+}
+
 export function formatQueueItem(item) {
   if (!item) return '';
   if (item.description) return item.description;

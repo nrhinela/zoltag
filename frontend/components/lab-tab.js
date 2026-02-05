@@ -23,6 +23,7 @@ export class LabTab extends LitElement {
     nlOptions: { type: Array },
     nlFilterState: { type: Object },
     nlResponse: { type: Object },
+    nlShowResults: { type: Boolean },
     searchFilterPanel: { type: Object },
     searchImages: { type: Array },
     searchTotal: { type: Number },
@@ -48,6 +49,7 @@ export class LabTab extends LitElement {
     this.nlOptions = [];
     this.nlFilterState = null;
     this.nlResponse = null;
+    this.nlShowResults = false;
     this.searchFilterPanel = new ImageFilterPanel('lab');
     this.searchImages = [];
     this.searchTotal = 0;
@@ -112,6 +114,10 @@ export class LabTab extends LitElement {
     this.nlQuery = event.target.value;
   }
 
+  _handleQueryFocus() {
+    this.nlShowResults = false;
+  }
+
   _handleQueryKeydown(event) {
     if (event.key === 'Enter') {
       event.preventDefault();
@@ -164,6 +170,7 @@ export class LabTab extends LitElement {
       return;
     }
     const previousOptions = this.nlOptions;
+    this.nlShowResults = false;
     this.nlLoading = true;
     this.nlError = '';
     this.nlQuestion = '';
@@ -190,6 +197,7 @@ export class LabTab extends LitElement {
         this.searchFilterPanel.updateFilters(this.nlFilterState);
         this.searchFilterPanel.fetchImages();
       }
+      this.nlShowResults = true;
     } catch (error) {
       console.error('LabTab: NL search failed', error);
       this.nlError = error?.message || 'Search failed.';
@@ -277,7 +285,7 @@ export class LabTab extends LitElement {
         <div class="container">
           <div class="border border-gray-200 rounded-xl bg-white shadow-sm p-4 mb-6">
             <div class="flex flex-wrap items-center gap-3">
-              <div class="text-lg font-semibold text-gray-900">Lab: natural language search</div>
+              <div class="text-lg font-semibold text-gray-900">Natural search</div>
               <span class="text-xs text-gray-500">Experimental. Results use permatags only.</span>
             </div>
           <div class="mt-3 flex flex-wrap gap-3 items-center">
@@ -286,6 +294,7 @@ export class LabTab extends LitElement {
               placeholder="e.g. red costume juggling, top rated"
               .value=${this.nlQuery}
               @input=${this._handleQueryInput}
+              @focus=${this._handleQueryFocus}
               @keydown=${this._handleQueryKeydown}
             >
             <button
@@ -321,25 +330,27 @@ export class LabTab extends LitElement {
           ` : ''}
         </div>
       </div>
-        <search-tab
-          .tenant=${this.tenant}
-          .searchFilterPanel=${this.searchFilterPanel}
-          .searchImages=${this.searchImages}
-          .searchTotal=${this.searchTotal}
-          .curateThumbSize=${this.curateThumbSize}
-          .tagStatsBySource=${this.tagStatsBySource}
-          .activeCurateTagSource=${this.activeCurateTagSource}
-          .keywords=${this.keywords}
-          .imageStats=${this.imageStats}
-          .curateOrderBy=${this.curateOrderBy}
-          .curateDateOrder=${this.curateDateOrder}
-          .hideSubtabs=${true}
-          .renderCurateRatingWidget=${this.renderCurateRatingWidget}
-          .renderCurateRatingStatic=${this.renderCurateRatingStatic}
-          .formatCurateDate=${this.formatCurateDate}
-          @sort-changed=${this._handleSortChanged}
-          @thumb-size-changed=${this._handleThumbSizeChanged}
-        ></search-tab>
+        ${this.nlShowResults ? html`
+          <search-tab
+            .tenant=${this.tenant}
+            .searchFilterPanel=${this.searchFilterPanel}
+            .searchImages=${this.searchImages}
+            .searchTotal=${this.searchTotal}
+            .curateThumbSize=${this.curateThumbSize}
+            .tagStatsBySource=${this.tagStatsBySource}
+            .activeCurateTagSource=${this.activeCurateTagSource}
+            .keywords=${this.keywords}
+            .imageStats=${this.imageStats}
+            .curateOrderBy=${this.curateOrderBy}
+            .curateDateOrder=${this.curateDateOrder}
+            .hideSubtabs=${true}
+            .renderCurateRatingWidget=${this.renderCurateRatingWidget}
+            .renderCurateRatingStatic=${this.renderCurateRatingStatic}
+            .formatCurateDate=${this.formatCurateDate}
+            @sort-changed=${this._handleSortChanged}
+            @thumb-size-changed=${this._handleThumbSizeChanged}
+          ></search-tab>
+        ` : html``}
       </div>
     `;
   }

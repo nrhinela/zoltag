@@ -119,7 +119,7 @@ export class AuthCallback extends LitElement {
       // Registration successful - redirect to home
       this.message = 'Login successful! Redirecting...';
       setTimeout(() => {
-        window.location.href = '/';
+        window.location.href = '/app';
       }, 1500);
     } catch (error) {
       console.error('❌ OAuth callback error:', error.message);

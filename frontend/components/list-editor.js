@@ -249,6 +249,7 @@ class ListEditor extends LitElement {
       if (this.selectedList && this.selectedList.id === list.id) {
         this.selectedList = null;
         this.listItems = [];
+        this.editingSelectedList = false;
       }
       this.requestUpdate();
       this.dispatchEvent(new CustomEvent('lists-updated', { bubbles: true, composed: true }));
@@ -682,7 +683,6 @@ class ListEditor extends LitElement {
                     <td class="py-2 px-4 text-xs text-gray-600">${list.notebox || '—'}</td>
                     <td class="py-2 px-4 text-left">
                       <button @click=${() => this._selectList(list)} class="bg-slate-900 text-white px-3 py-1 rounded text-xs hover:bg-slate-800 mr-2">View</button>
-                      <button @click=${() => this._deleteList(list)} class="bg-red-600 text-white px-3 py-1 rounded text-xs hover:bg-red-700">Delete</button>
                     </td>
                   </tr>
                 `)}
@@ -732,9 +732,17 @@ class ListEditor extends LitElement {
               </div>
             </div>
 
-            <div class="flex justify-end gap-2">
-              <button @click=${this._cancelEditingSelectedList} class="border border-gray-400 text-gray-700 px-4 py-2 rounded text-sm hover:bg-gray-100">Cancel</button>
-              <button @click=${this._saveSelectedListChanges} class="bg-blue-600 text-white px-4 py-2 rounded text-sm hover:bg-blue-700">Save</button>
+            <div class="flex items-center justify-between gap-2">
+              <button
+                @click=${() => this._deleteList(this.selectedList)}
+                class="border border-red-300 text-red-700 px-4 py-2 rounded text-sm hover:bg-red-50"
+              >
+                Delete list
+              </button>
+              <div class="flex gap-2">
+                <button @click=${this._cancelEditingSelectedList} class="border border-gray-400 text-gray-700 px-4 py-2 rounded text-sm hover:bg-gray-100">Cancel</button>
+                <button @click=${this._saveSelectedListChanges} class="bg-blue-600 text-white px-4 py-2 rounded text-sm hover:bg-blue-700">Save</button>
+              </div>
             </div>
           </div>
         </div>

@@ -85,7 +85,9 @@ class AppHeader extends LitElement {
 
   _handleUserMenuChange(e) {
       const value = e.target.value;
-      if (value === 'admin') {
+      if (value === 'public-site') {
+          window.location.href = '/';
+      } else if (value === 'admin') {
           this._openAdmin();
       } else if (value === 'logout') {
           this._handleLogout();
@@ -135,6 +137,7 @@ class AppHeader extends LitElement {
                             @change=${this._handleUserMenuChange}
                         >
                             <option value="">${this.currentUser?.user?.display_name || 'User Menu'}</option>
+                            <option value="public-site">Back to public site</option>
                             ${this._isAdmin() ? html`<option value="admin">System Administration</option>` : ''}
                             <option value="logout">Sign Out</option>
                         </select>

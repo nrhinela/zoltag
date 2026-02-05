@@ -181,7 +181,7 @@ export class LoginPage extends LitElement {
     try {
       await signIn(this.email, this.password);
       // Redirect to main app
-      window.location.href = '/';
+      window.location.href = '/app';
     } catch (err) {
       this.error = err.message;
       this.loading = false;

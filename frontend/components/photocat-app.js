@@ -54,7 +54,6 @@ import {
 import './home-tab.js';
 import './home-chips-tab.js';
 import './home-insights-tab.js';
-import './home-story-tab.js';
 import './lab-tab.js';
 import './curate-home-tab.js';
 import './curate-explore-tab.js';
@@ -3761,7 +3760,7 @@ class PhotoCatApp extends LitElement {
                     class="curate-subtab ${this.homeSubTab === 'lab' ? 'active' : ''}"
                     @click=${() => { this.homeSubTab = 'lab'; }}
                   >
-                    Lab
+                    Natural Search
                   </button>
                   <button
                     class="curate-subtab ${this.homeSubTab === 'chips' ? 'active' : ''}"
@@ -3773,13 +3772,7 @@ class PhotoCatApp extends LitElement {
                     class="curate-subtab ${this.homeSubTab === 'insights' ? 'active' : ''}"
                     @click=${() => { this.homeSubTab = 'insights'; }}
                   >
-                    Insights
-                  </button>
-                  <button
-                    class="curate-subtab ${this.homeSubTab === 'story' ? 'active' : ''}"
-                    @click=${() => { this.homeSubTab = 'story'; }}
-                  >
-                    Story
+                    Insights (mock)
                   </button>
                 </div>
               </div>
@@ -3825,9 +3818,6 @@ class PhotoCatApp extends LitElement {
                   .mlTrainingStats=${this.mlTrainingStats}
                   .keywords=${this.keywords}
                 ></home-insights-tab>
-              ` : html``}
-              ${this.homeSubTab === 'story' ? html`
-                <home-story-tab></home-story-tab>
               ` : html``}
             </div>
             ` : ''}

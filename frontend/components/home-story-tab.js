@@ -1,5 +1,7 @@
 import { LitElement, html } from 'lit';
 
+const HERO_IMAGE = new URL('../assets/chaos-to-organized.png', import.meta.url).href;
+
 export class HomeStoryTab extends LitElement {
   createRenderRoot() {
     return this;
@@ -7,11 +9,10 @@ export class HomeStoryTab extends LitElement {
 
   render() {
     return html`
-      <div class="container space-y-10">
+      <div class="w-full max-w-6xl mx-auto px-6 space-y-10">
         <section class="bg-white border border-gray-200 rounded-2xl p-8 shadow-sm">
           <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 items-center">
             <div>
-              <div class="text-xs font-semibold uppercase tracking-widest text-blue-600">PhotoCat</div>
               <h1 class="text-3xl sm:text-4xl font-semibold text-gray-900 mt-2">
                 Make the most of your photo library.
               </h1>
@@ -23,7 +24,7 @@ export class HomeStoryTab extends LitElement {
             </div>
             <figure class="w-full flex justify-center lg:justify-end">
               <img
-                src="/static/chaos-to-organized.png"
+                src=${HERO_IMAGE}
                 alt="Illustration showing a chaotic workspace becoming organized"
                 class="w-full max-w-[360px] rounded-2xl border border-gray-200 shadow-sm"
                 loading="lazy"
