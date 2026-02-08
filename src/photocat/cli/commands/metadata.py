@@ -14,10 +14,31 @@ from photocat.exif import (
     parse_exif_str,
 )
 from photocat.image import ImageProcessor
-from photocat.metadata import ImageMetadata, Tenant as TenantModel
+from photocat.metadata import Asset, ImageMetadata, Tenant as TenantModel
 from photocat.dependencies import get_secret
 from photocat.dropbox import DropboxClient
 from photocat.cli.base import CliCommand
+
+
+def _dropbox_refs_for_image(image: ImageMetadata, asset: Optional[Asset]) -> list[str]:
+    """Build candidate Dropbox refs with asset-first priority."""
+    refs: list[str] = []
+
+    if asset and asset.source_provider == "dropbox":
+        source_key = (asset.source_key or "").strip()
+        if source_key and not source_key.startswith("/local/"):
+            refs.append(source_key)
+
+    legacy_dropbox_id = (getattr(image, "dropbox_id", None) or "").strip()
+    if legacy_dropbox_id and not legacy_dropbox_id.startswith("local_"):
+        refs.append(legacy_dropbox_id if legacy_dropbox_id.startswith("id:") else f"id:{legacy_dropbox_id}")
+
+    legacy_dropbox_path = (getattr(image, "dropbox_path", None) or "").strip()
+    if legacy_dropbox_path and not legacy_dropbox_path.startswith("/local/"):
+        refs.append(legacy_dropbox_path)
+
+    # Preserve order while removing duplicates.
+    return list(dict.fromkeys(refs))
 
 
 @click.command(name='refresh-metadata')
@@ -172,16 +193,16 @@ class RefreshMetadataCommand(CliCommand):
             batch = query.limit(self.batch_size).all()
             if not batch:
                 break
+            asset_ids = [img.asset_id for img in batch if img.asset_id is not None]
+            assets_by_id = {}
+            if asset_ids:
+                assets = self.db.query(Asset).filter(Asset.id.in_(asset_ids)).all()
+                assets_by_id = {str(asset.id): asset for asset in assets}
             for image in batch:
                 processed += 1
                 last_id = image.id
-                dropbox_refs = []
-                if image.dropbox_id and not image.dropbox_id.startswith("local_"):
-                    dropbox_refs.append(
-                        image.dropbox_id if image.dropbox_id.startswith("id:") else f"id:{image.dropbox_id}"
-                    )
-                if image.dropbox_path and not image.dropbox_path.startswith("/local/"):
-                    dropbox_refs.append(image.dropbox_path)
+                asset = assets_by_id.get(str(image.asset_id)) if image.asset_id is not None else None
+                dropbox_refs = _dropbox_refs_for_image(image, asset)
 
                 if not dropbox_refs:
                     skipped += 1
@@ -234,7 +255,7 @@ class RefreshMetadataCommand(CliCommand):
                 extracted_exif = {}
                 if self.download_exif:
                     try:
-                        _, response = dbx.files_download(image.dropbox_path)
+                        _, response = dbx.files_download(dropbox_refs[0])
                         img = processor.load_image(response.content)
                         extracted_exif = processor.extract_exif(img)
                     except Exception as exc:
@@ -418,17 +439,17 @@ class BackfillCaptureTimestampCommand(CliCommand):
             batch = query.limit(batch_size).all()
             if not batch:
                 break
+            asset_ids = [img.asset_id for img in batch if img.asset_id is not None]
+            assets_by_id = {}
+            if asset_ids:
+                assets = self.db.query(Asset).filter(Asset.id.in_(asset_ids)).all()
+                assets_by_id = {str(asset.id): asset for asset in assets}
 
             for image in batch:
                 processed += 1
                 last_id = image.id
-                dropbox_refs = []
-                if image.dropbox_id and not image.dropbox_id.startswith("local_"):
-                    dropbox_refs.append(
-                        image.dropbox_id if image.dropbox_id.startswith("id:") else f"id:{image.dropbox_id}"
-                    )
-                if image.dropbox_path and not image.dropbox_path.startswith("/local/"):
-                    dropbox_refs.append(image.dropbox_path)
+                asset = assets_by_id.get(str(image.asset_id)) if image.asset_id is not None else None
+                dropbox_refs = _dropbox_refs_for_image(image, asset)
 
                 if not dropbox_refs:
                     skipped += 1

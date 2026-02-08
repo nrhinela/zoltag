@@ -11,6 +11,7 @@ from photocat.config.db_config import ConfigManager
 from photocat.tagging import get_tagger
 from photocat.metadata import ImageMetadata, MachineTag, ImageEmbedding
 from photocat.learning import ensure_image_embedding
+from photocat.asset_helpers import load_assets_for_images, resolve_image_storage
 from photocat.config.db_utils import load_keyword_info_by_name
 from photocat.tenant import Tenant, TenantContext
 from photocat.cli.base import CliCommand
@@ -115,18 +116,19 @@ class RecomputeSiglipTagsCommand(CliCommand):
         if self.older_than_days is not None:
             cutoff = datetime.utcnow() - timedelta(days=self.older_than_days)
             last_tagged_subquery = self.db.query(
-                MachineTag.image_id.label('image_id'),
+                MachineTag.asset_id.label('asset_id'),
                 func.max(MachineTag.created_at).label('last_tagged_at')
             ).filter(
                 MachineTag.tenant_id == self.tenant_id,
                 MachineTag.tag_type == 'siglip',
-                MachineTag.model_name == model_name
+                MachineTag.model_name == model_name,
+                MachineTag.asset_id.is_not(None),
             ).group_by(
-                MachineTag.image_id
+                MachineTag.asset_id
             ).subquery()
             base_query = base_query.outerjoin(
                 last_tagged_subquery,
-                ImageMetadata.id == last_tagged_subquery.c.image_id
+                ImageMetadata.asset_id == last_tagged_subquery.c.asset_id
             ).filter(
                 (last_tagged_subquery.c.last_tagged_at.is_(None)) |
                 (last_tagged_subquery.c.last_tagged_at < cutoff)
@@ -158,20 +160,29 @@ class RecomputeSiglipTagsCommand(CliCommand):
                 batch = base_query.offset(current_offset).limit(self.batch_size).all()
                 if not batch:
                     break
+                assets_by_id = load_assets_for_images(self.db, batch)
                 reached_limit = False
                 for image in batch:
                     if self.limit is not None and processed >= self.limit:
                         reached_limit = True
                         break
                     try:
-                        if not image.thumbnail_path:
+                        storage_info = resolve_image_storage(
+                            image=image,
+                            tenant=tenant,
+                            db=None,
+                            assets_by_id=assets_by_id,
+                            strict=False,
+                        )
+                        thumbnail_key = storage_info.thumbnail_key
+                        if not thumbnail_key:
                             skipped += 1
                             bar.update(1)
                             continue
                         if not self.replace:
                             existing = self.db.query(MachineTag.id).filter(
                                 MachineTag.tenant_id == self.tenant_id,
-                                MachineTag.image_id == image.id,
+                                MachineTag.asset_id == image.asset_id,
                                 MachineTag.tag_type == 'siglip',
                                 MachineTag.model_name == model_name
                             ).first()
@@ -181,20 +192,21 @@ class RecomputeSiglipTagsCommand(CliCommand):
                                 continue
                         # Delete existing SigLIP tags
                         self.db.query(MachineTag).filter(
-                            MachineTag.image_id == image.id,
+                            MachineTag.tenant_id == self.tenant_id,
+                            MachineTag.asset_id == image.asset_id,
                             MachineTag.tag_type == 'siglip',
                             MachineTag.model_name == model_name
                         ).delete()
 
                         embedding_row = self.db.query(ImageEmbedding).filter(
                             ImageEmbedding.tenant_id == self.tenant_id,
-                            ImageEmbedding.image_id == image.id
+                            ImageEmbedding.asset_id == image.asset_id
                         ).first()
                         if embedding_row:
                             image_embedding = embedding_row.embedding
                         else:
                             # Download thumbnail from Cloud Storage only if needed for embedding
-                            blob = thumbnail_bucket.blob(image.thumbnail_path)
+                            blob = thumbnail_bucket.blob(thumbnail_key)
                             if not blob.exists():
                                 skipped += 1
                                 bar.update(1)
@@ -207,7 +219,8 @@ class RecomputeSiglipTagsCommand(CliCommand):
                                 image.id,
                                 image_data,
                                 model_name,
-                                model_version
+                                model_version,
+                                asset_id=image.asset_id,
                             )
                             image_embedding = embedding_record.embedding
 
@@ -232,7 +245,7 @@ class RecomputeSiglipTagsCommand(CliCommand):
                                 click.echo(f"\n  Skipping tag '{keyword}': keyword not found in DB")
                                 continue
                             tag = MachineTag(
-                                image_id=image.id,
+                                asset_id=image.asset_id,
                                 tenant_id=self.tenant_id,
                                 keyword_id=keyword_info["id"],
                                 confidence=confidence,

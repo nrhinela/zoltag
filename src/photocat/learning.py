@@ -20,24 +20,40 @@ def ensure_image_embedding(
     image_id: int,
     image_data: bytes,
     model_name: str,
-    model_version: str
+    model_version: str,
+    asset_id=None,
 ) -> ImageEmbedding:
     """Persist an image embedding if missing and return it.
 
     Handles concurrent inserts gracefully by catching unique constraint violations
     and re-querying for the existing record.
     """
+    image = db.query(ImageMetadata).filter(
+        ImageMetadata.id == image_id,
+        ImageMetadata.tenant_id == tenant_id
+    ).first()
+    resolved_asset_id = asset_id if asset_id is not None else (image.asset_id if image else None)
+    if resolved_asset_id is None:
+        raise ValueError(
+            f"Image {image_id} for tenant {tenant_id} has no asset_id; "
+            "run asset bridge backfills before generating embeddings."
+        )
+
     # Try to fetch existing embedding first
     existing = db.query(ImageEmbedding).filter(
         ImageEmbedding.tenant_id == tenant_id,
-        ImageEmbedding.image_id == image_id
+        ImageEmbedding.asset_id == resolved_asset_id
     ).first()
     if existing:
+        if existing.asset_id is None and resolved_asset_id is not None:
+            existing.asset_id = resolved_asset_id
+        if image:
+            image.embedding_generated = True
         return existing
 
     embedding = get_image_embedding(image_data, model_type=settings.tagging_model)
     record = ImageEmbedding(
-        image_id=image_id,
+        asset_id=resolved_asset_id,
         tenant_id=tenant_id,
         embedding=embedding,
         model_name=model_name,
@@ -54,17 +70,15 @@ def ensure_image_embedding(
             db.rollback()
             existing = db.query(ImageEmbedding).filter(
                 ImageEmbedding.tenant_id == tenant_id,
-                ImageEmbedding.image_id == image_id
+                ImageEmbedding.asset_id == resolved_asset_id
             ).first()
             if existing:
+                if existing.asset_id is None and resolved_asset_id is not None:
+                    existing.asset_id = resolved_asset_id
                 return existing
         # Re-raise if it's a different error
         raise
 
-    image = db.query(ImageMetadata).filter(
-        ImageMetadata.id == image_id,
-        ImageMetadata.tenant_id == tenant_id
-    ).first()
     if image:
         image.embedding_generated = True
 
@@ -147,7 +161,8 @@ def recompute_trained_tags_for_image(
     threshold: float,
     model_weight: float,
     embedding: Optional[List[float]] = None,
-    keyword_id_map: Optional[Dict[str, int]] = None
+    keyword_id_map: Optional[Dict[str, int]] = None,
+    asset_id=None,
 ) -> List[dict]:
     """Compute and persist trained tags for a single image."""
     if not keyword_models:
@@ -162,7 +177,8 @@ def recompute_trained_tags_for_image(
             image_id,
             image_data,
             model_name,
-            model_version
+            model_version,
+            asset_id=asset_id,
         )
         embedding = embedding_record.embedding
     model_scores = score_image_with_models(embedding, keyword_models)
@@ -180,10 +196,17 @@ def recompute_trained_tags_for_image(
 
     db.query(MachineTag).filter(
         MachineTag.tenant_id == tenant_id,
-        MachineTag.image_id == image_id,
+        MachineTag.asset_id == asset_id,
         MachineTag.tag_type == 'trained',
         MachineTag.model_name == model_name
     ).delete()
+
+    if asset_id is None:
+        image_row = db.query(ImageMetadata.asset_id).filter(
+            ImageMetadata.tenant_id == tenant_id,
+            ImageMetadata.id == image_id,
+        ).first()
+        asset_id = image_row[0] if image_row else None
 
     for tag in trained_tags:
         # Look up keyword_id for this keyword
@@ -202,7 +225,7 @@ def recompute_trained_tags_for_image(
 
         db.add(MachineTag(
             tenant_id=tenant_id,
-            image_id=image_id,
+            asset_id=asset_id,
             keyword_id=keyword_id,
             confidence=tag["confidence"],
             tag_type='trained',
@@ -253,9 +276,8 @@ def build_keyword_models(
 ) -> Dict[str, int]:
     """Create or update keyword models using permatag labels."""
     permatags = db.query(Permatag).filter(
-        Permatag.image_id.in_(
-            db.query(ImageMetadata.id).filter(ImageMetadata.tenant_id == tenant_id)
-        )
+        Permatag.tenant_id == tenant_id,
+        Permatag.asset_id.is_not(None),
     ).all()
 
     # Map keyword_id to keyword name and organize by name
@@ -265,14 +287,14 @@ def build_keyword_models(
         keywords = db.query(Keyword).filter(Keyword.id.in_(keyword_ids)).all()
         keyword_map = {kw.id: kw.keyword for kw in keywords}
 
-    positive_ids: Dict[str, List[int]] = {}
-    negative_ids: Dict[str, List[int]] = {}
+    positive_ids: Dict[str, List[str]] = {}
+    negative_ids: Dict[str, List[str]] = {}
     for tag in permatags:
         keyword_name = keyword_map.get(tag.keyword_id)
         if not keyword_name:
             continue
         bucket = positive_ids if tag.signum == 1 else negative_ids
-        bucket.setdefault(keyword_name, []).append(tag.image_id)
+        bucket.setdefault(keyword_name, []).append(str(tag.asset_id))
 
     trained = 0
     skipped = 0
@@ -333,11 +355,11 @@ def build_keyword_models(
 def _fetch_embeddings(
     db: Session,
     tenant_id: str,
-    image_ids: List[int]
+    asset_ids: List[str]
 ) -> List[List[float]]:
     rows = db.query(ImageEmbedding).filter(
         ImageEmbedding.tenant_id == tenant_id,
-        ImageEmbedding.image_id.in_(image_ids)
+        ImageEmbedding.asset_id.in_(asset_ids)
     ).all()
     return [row.embedding for row in rows]
 

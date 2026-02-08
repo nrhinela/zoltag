@@ -69,6 +69,52 @@ class Tenant:
             return f"{base.rstrip('/')}/{thumbnail_path}"
         return f"https://storage.googleapis.com/{self.get_thumbnail_bucket(settings)}/{thumbnail_path}"
 
+    @staticmethod
+    def _sanitize_storage_filename(filename: str, fallback: str = "file") -> str:
+        """Keep only the basename segment for object-key safety."""
+        safe_name = (filename or "").strip().split("/")[-1]
+        return safe_name or fallback
+
+    def get_asset_source_key(self, asset_id: str, original_filename: str) -> str:
+        """
+        Build the canonical source object key.
+
+        Format:
+        tenants/{tenant_id}/assets/{asset_id}/{original_filename}
+        """
+        safe_name = self._sanitize_storage_filename(original_filename, fallback="file")
+        return f"tenants/{self.id}/assets/{asset_id}/{safe_name}"
+
+    def get_asset_derivative_key(self, derivative_id: str, filename: str) -> str:
+        """
+        Build a derivative object key.
+
+        Format:
+        tenants/{tenant_id}/derivatives/{derivative_id}/{filename}
+        """
+        safe_name = self._sanitize_storage_filename(filename, fallback="derivative")
+        return f"tenants/{self.id}/derivatives/{derivative_id}/{safe_name}"
+
+    def get_asset_thumbnail_key(self, asset_id: str, filename: str = "default-256.jpg") -> str:
+        """
+        Build a thumbnail object key for a specific asset.
+
+        Format:
+        tenants/{tenant_id}/assets/{asset_id}/thumbnails/{filename}
+        """
+        safe_name = self._sanitize_storage_filename(filename, fallback="default-256.jpg")
+        return f"tenants/{self.id}/assets/{asset_id}/thumbnails/{safe_name}"
+
+    def get_asset_file_path(self, asset_id: str, asset_file_id: str, original_filename: str) -> str:
+        """
+        Backward-compatible alias for the old helper signature.
+
+        asset_file_id is intentionally ignored now that source keys are:
+        tenants/{tenant_id}/assets/{asset_id}/{original_filename}
+        """
+        _ = asset_file_id
+        return self.get_asset_source_key(asset_id=asset_id, original_filename=original_filename)
+
 
 class TenantContext:
     """Thread-local tenant context for request isolation."""

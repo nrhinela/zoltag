@@ -13,6 +13,7 @@ from photocat.learning import (
     load_keyword_models,
     recompute_trained_tags_for_image,
 )
+from photocat.asset_helpers import load_assets_for_images, resolve_image_storage
 from photocat.metadata import ImageMetadata, KeywordModel, MachineTag, ImageEmbedding
 from photocat.models.config import Keyword
 from photocat.config.db_config import ConfigManager
@@ -166,18 +167,19 @@ class RecomputeTrainedTagsCommand(CliCommand):
         if self.older_than_days is not None:
             cutoff = datetime.utcnow() - timedelta(days=self.older_than_days)
             last_tagged_subquery = self.db.query(
-                MachineTag.image_id.label('image_id'),
+                MachineTag.asset_id.label('asset_id'),
                 func.max(MachineTag.created_at).label('last_tagged_at')
             ).filter(
                 MachineTag.tenant_id == self.tenant.id,
                 MachineTag.tag_type == 'trained',
-                MachineTag.model_name == model_name
+                MachineTag.model_name == model_name,
+                MachineTag.asset_id.is_not(None),
             ).group_by(
-                MachineTag.image_id
+                MachineTag.asset_id
             ).subquery()
             base_query = base_query.outerjoin(
                 last_tagged_subquery,
-                ImageMetadata.id == last_tagged_subquery.c.image_id
+                ImageMetadata.asset_id == last_tagged_subquery.c.asset_id
             ).filter(
                 (last_tagged_subquery.c.last_tagged_at.is_(None)) |
                 (last_tagged_subquery.c.last_tagged_at < cutoff)
@@ -209,19 +211,28 @@ class RecomputeTrainedTagsCommand(CliCommand):
                 batch = base_query.offset(current_offset).limit(self.batch_size).all()
                 if not batch:
                     break
+                assets_by_id = load_assets_for_images(self.db, batch)
 
                 reached_limit = False
                 for image in batch:
                     if self.limit is not None and processed >= self.limit:
                         reached_limit = True
                         break
-                    if not image.thumbnail_path:
+                    storage_info = resolve_image_storage(
+                        image=image,
+                        tenant=self.tenant,
+                        db=None,
+                        assets_by_id=assets_by_id,
+                        strict=False,
+                    )
+                    thumbnail_key = storage_info.thumbnail_key
+                    if not thumbnail_key:
                         skipped += 1
                         continue
                     if not self.replace:
                         existing = self.db.query(MachineTag.id).filter(
                             MachineTag.tenant_id == self.tenant.id,
-                            MachineTag.image_id == image.id,
+                            MachineTag.asset_id == image.asset_id,
                             MachineTag.tag_type == 'trained',
                             MachineTag.model_name == model_name
                         ).first()
@@ -230,13 +241,14 @@ class RecomputeTrainedTagsCommand(CliCommand):
                             continue
                     embedding_row = self.db.query(ImageEmbedding).filter(
                         ImageEmbedding.tenant_id == self.tenant.id,
-                        ImageEmbedding.image_id == image.id
+                        ImageEmbedding.asset_id == image.asset_id
                     ).first()
                     if embedding_row:
                         recompute_trained_tags_for_image(
                             db=self.db,
                             tenant_id=self.tenant.id,
                             image_id=image.id,
+                            asset_id=image.asset_id,
                             image_data=None,
                             keywords_by_category=by_category,
                             keyword_models=keyword_models,
@@ -250,7 +262,7 @@ class RecomputeTrainedTagsCommand(CliCommand):
                             keyword_id_map=keyword_id_map
                         )
                     else:
-                        blob = thumbnail_bucket.blob(image.thumbnail_path)
+                        blob = thumbnail_bucket.blob(thumbnail_key)
                         if not blob.exists():
                             skipped += 1
                             continue
@@ -259,6 +271,7 @@ class RecomputeTrainedTagsCommand(CliCommand):
                             db=self.db,
                             tenant_id=self.tenant.id,
                             image_id=image.id,
+                            asset_id=image.asset_id,
                             image_data=image_data,
                             keywords_by_category=by_category,
                             keyword_models=keyword_models,

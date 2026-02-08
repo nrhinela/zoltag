@@ -1,6 +1,6 @@
 import { LitElement, html, css } from 'lit';
 import { onAuthStateChange, getSession } from '../services/supabase.js';
-import { isVerified } from '../services/auth.js';
+import { isVerified, ensureRegistration } from '../services/auth.js';
 
 /**
  * Authentication guard component
@@ -147,6 +147,7 @@ export class AuthGuard extends LitElement {
     this.authenticated = !!session;
 
     if (this.authenticated) {
+      await ensureRegistration(session?.user?.user_metadata?.display_name || '');
       // Check if user is approved
       this.verified = await isVerified();
     }
@@ -162,9 +163,11 @@ export class AuthGuard extends LitElement {
         window.location.href = '/login';
       } else if (event === 'SIGNED_IN') {
         // Verify approval status on signin
-        isVerified().then((verified) => {
-          this.verified = verified;
-        });
+        ensureRegistration(session?.user?.user_metadata?.display_name || '')
+          .then(() => isVerified())
+          .then((verified) => {
+            this.verified = verified;
+          });
       }
     });
 

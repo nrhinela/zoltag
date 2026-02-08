@@ -14,6 +14,7 @@ from PIL import Image
 from photocat.settings import settings
 from photocat.tenant import Tenant, TenantContext
 from photocat.config.db_config import ConfigManager
+from photocat.asset_helpers import load_assets_for_images, resolve_image_storage
 from photocat.image import ImageProcessor
 from photocat.exif import (
     get_exif_value,
@@ -22,7 +23,7 @@ from photocat.exif import (
     parse_exif_int,
     parse_exif_str,
 )
-from photocat.metadata import ImageMetadata, KeywordModel, MachineTag, Tenant as TenantModel
+from photocat.metadata import Asset, ImageMetadata, KeywordModel, MachineTag, Tenant as TenantModel
 from photocat.models.config import Keyword
 from photocat.learning import (
     build_keyword_models,
@@ -33,7 +34,6 @@ from photocat.learning import (
     score_image_with_models
 )
 from photocat.tagging import get_tagger
-from photocat.config.db_config import ConfigManager
 from photocat.dependencies import get_secret
 from photocat.dropbox import DropboxClient
 
@@ -159,6 +159,29 @@ def _load_tenant(session, tenant_id: str) -> Tenant:
     )
 
 
+def _dropbox_refs_for_image(
+    image: ImageMetadata,
+    source_provider: Optional[str],
+    source_key: Optional[str],
+) -> list[str]:
+    """Build candidate Dropbox refs with asset-first priority."""
+    refs: list[str] = []
+
+    resolved_source_key = (source_key or "").strip()
+    if source_provider == "dropbox" and resolved_source_key and not resolved_source_key.startswith("/local/"):
+        refs.append(resolved_source_key)
+
+    legacy_dropbox_id = (getattr(image, "dropbox_id", None) or "").strip()
+    if legacy_dropbox_id and not legacy_dropbox_id.startswith("local_"):
+        refs.append(legacy_dropbox_id if legacy_dropbox_id.startswith("id:") else f"id:{legacy_dropbox_id}")
+
+    legacy_dropbox_path = (getattr(image, "dropbox_path", None) or "").strip()
+    if legacy_dropbox_path and not legacy_dropbox_path.startswith("/local/"):
+        refs.append(legacy_dropbox_path)
+
+    return list(dict.fromkeys(refs))
+
+
 @cli.command()
 @click.option('--tenant-id', required=True, help='Tenant ID for which to refresh metadata')
 @click.option('--limit', default=None, type=int, help='Maximum number of images to process (unlimited if not specified)')
@@ -194,6 +217,7 @@ def refresh_metadata(
     tenant_row = session.query(TenantModel).filter(TenantModel.id == tenant_id).first()
     if not tenant_row:
         raise click.ClickException(f"Tenant {tenant_id} not found in database")
+    tenant = _load_tenant(session, tenant_id)
     if not tenant_row.dropbox_app_key:
         raise click.ClickException("Dropbox app key not configured for tenant")
 
@@ -258,16 +282,17 @@ def refresh_metadata(
         batch = query.limit(batch_size).all()
         if not batch:
             break
+        assets_by_id = load_assets_for_images(session, batch)
         for image in batch:
             processed += 1
             last_id = image.id
-            dropbox_refs = []
-            if image.dropbox_id and not image.dropbox_id.startswith("local_"):
-                dropbox_refs.append(
-                    image.dropbox_id if image.dropbox_id.startswith("id:") else f"id:{image.dropbox_id}"
-                )
-            if image.dropbox_path and not image.dropbox_path.startswith("/local/"):
-                dropbox_refs.append(image.dropbox_path)
+            storage_info = resolve_image_storage(
+                image=image,
+                tenant=tenant,
+                assets_by_id=assets_by_id,
+                strict=False,
+            )
+            dropbox_refs = _dropbox_refs_for_image(image, storage_info.source_provider, storage_info.source_key)
 
             if not dropbox_refs:
                 skipped += 1
@@ -291,9 +316,11 @@ def refresh_metadata(
 
             metadata_result = None
             last_exc = None
+            selected_ref = None
             for ref in dropbox_refs:
                 try:
                     metadata_result = dbx.files_get_metadata(ref, **metadata_kwargs)
+                    selected_ref = ref
                     break
                 except Exception as exc:
                     last_exc = exc
@@ -320,9 +347,11 @@ def refresh_metadata(
             extracted_exif = {}
             if download_exif:
                 try:
-                    _, response = dbx.files_download(dropbox_path)
-                    img = processor.load_image(response.content)
-                    extracted_exif = processor.extract_exif(img)
+                    download_ref = selected_ref or (dropbox_refs[0] if dropbox_refs else None)
+                    if download_ref:
+                        _, response = dbx.files_download(download_ref)
+                        img = processor.load_image(response.content)
+                        extracted_exif = processor.extract_exif(img)
                 except Exception as exc:
                     click.echo(f"\nEXIF download failed for {image.id}: {exc}")
 
@@ -438,10 +467,28 @@ def process_image(
     # Extract features
     features = processor.extract_features(image_data)
     
-    # Upload thumbnail to Cloud Storage
-    thumbnail_path = f"{tenant.id}/thumbnails/{image_path.stem}_thumb.jpg"
-    blob = thumbnail_bucket.blob(thumbnail_path)
+    local_source_key = f"/local/{image_path.relative_to(image_path.parent.parent)}"
+
+    # Create canonical asset first so thumbnail key follows the new naming scheme.
+    asset = Asset(
+        tenant_id=tenant.id,
+        filename=image_path.name,
+        source_provider="local",
+        source_key=local_source_key,
+        source_rev=None,
+        thumbnail_key="pending",
+        mime_type=f"image/{str(features['format']).lower()}" if features.get('format') else None,
+        width=features.get('width'),
+        height=features.get('height'),
+        duration_ms=None,
+    )
+    session.add(asset)
+    session.flush()
+
+    thumbnail_key = tenant.get_asset_thumbnail_key(str(asset.id), f"{image_path.stem}_thumb.jpg")
+    blob = thumbnail_bucket.blob(thumbnail_key)
     blob.upload_from_string(features['thumbnail'], content_type='image/jpeg')
+    asset.thumbnail_key = thumbnail_key
     
     # Create metadata record
     exif = features['exif']
@@ -453,34 +500,39 @@ def process_image(
     shutter_speed = parse_exif_str(get_exif_value(exif, "ExposureTime", "ShutterSpeedValue"))
     focal_length = parse_exif_float(get_exif_value(exif, "FocalLength"))
     
-    metadata = ImageMetadata(
-        tenant_id=tenant.id,
-        dropbox_path=f"/local/{image_path.relative_to(image_path.parent.parent)}",
-        dropbox_id=f"local_{image_path.stem}",
-        filename=image_path.name,
-        file_size=image_path.stat().st_size,
-        content_hash=None,  # Could add hash computation
-        width=features['width'],
-        height=features['height'],
-        format=features['format'],
-        perceptual_hash=features['perceptual_hash'],
-        color_histogram=features['color_histogram'],
-        exif_data=exif,
-        camera_make=exif.get('Make'),
-        camera_model=exif.get('Model'),
-        lens_model=exif.get('LensModel'),
-        capture_timestamp=capture_timestamp,
-        gps_latitude=gps_latitude,
-        gps_longitude=gps_longitude,
-        iso=iso,
-        aperture=aperture,
-        shutter_speed=shutter_speed,
-        focal_length=focal_length,
-        thumbnail_path=thumbnail_path,
-        embedding_generated=False,
-        faces_detected=False,
-        tags_applied=False,
-    )
+    metadata_kwargs = {
+        "asset_id": asset.id,
+        "tenant_id": tenant.id,
+        "filename": image_path.name,
+        "file_size": image_path.stat().st_size,
+        "content_hash": None,  # Could add hash computation
+        "width": features['width'],
+        "height": features['height'],
+        "format": features['format'],
+        "perceptual_hash": features['perceptual_hash'],
+        "color_histogram": features['color_histogram'],
+        "exif_data": exif,
+        "camera_make": exif.get('Make'),
+        "camera_model": exif.get('Model'),
+        "lens_model": exif.get('LensModel'),
+        "capture_timestamp": capture_timestamp,
+        "gps_latitude": gps_latitude,
+        "gps_longitude": gps_longitude,
+        "iso": iso,
+        "aperture": aperture,
+        "shutter_speed": shutter_speed,
+        "focal_length": focal_length,
+        "embedding_generated": False,
+        "faces_detected": False,
+        "tags_applied": False,
+    }
+    if hasattr(ImageMetadata, "dropbox_path"):
+        metadata_kwargs["dropbox_path"] = local_source_key
+    if hasattr(ImageMetadata, "dropbox_id"):
+        metadata_kwargs["dropbox_id"] = f"local_{image_path.stem}"
+    if hasattr(ImageMetadata, "thumbnail_path"):
+        metadata_kwargs["thumbnail_path"] = thumbnail_key
+    metadata = ImageMetadata(**metadata_kwargs)
     
     session.add(metadata)
 
@@ -533,15 +585,31 @@ def build_embeddings(tenant_id: str, limit: Optional[int], force: bool):
         return
 
     click.echo(f"Computing embeddings for {len(images)} images...")
+    assets_by_id = load_assets_for_images(session, images)
     with click.progressbar(images, label='Embedding images') as bar:
         for image in bar:
-            if not image.thumbnail_path:
+            storage_info = resolve_image_storage(
+                image=image,
+                tenant=tenant,
+                assets_by_id=assets_by_id,
+                strict=False,
+            )
+            thumbnail_key = (storage_info.thumbnail_key or "").strip()
+            if not thumbnail_key:
                 continue
-            blob = thumbnail_bucket.blob(image.thumbnail_path)
+            blob = thumbnail_bucket.blob(thumbnail_key)
             if not blob.exists():
                 continue
             image_data = blob.download_as_bytes()
-            ensure_image_embedding(session, tenant.id, image.id, image_data, model_name, model_version)
+            ensure_image_embedding(
+                session,
+                tenant.id,
+                image.id,
+                image_data,
+                model_name,
+                model_version,
+                asset_id=image.asset_id,
+            )
 
     session.commit()
     click.echo("✓ Embeddings stored")
@@ -653,18 +721,19 @@ def recompute_trained_tags(tenant_id: str, batch_size: int, limit: Optional[int]
     if older_than_days is not None:
         cutoff = datetime.utcnow() - timedelta(days=older_than_days)
         last_tagged_subquery = session.query(
-            MachineTag.image_id.label('image_id'),
+            MachineTag.asset_id.label('asset_id'),
             func.max(MachineTag.created_at).label('last_tagged_at')
         ).filter(
             MachineTag.tenant_id == tenant.id,
             MachineTag.tag_type == 'trained',
-            MachineTag.model_name == model_name
+            MachineTag.model_name == model_name,
+            MachineTag.asset_id.is_not(None),
         ).group_by(
-            MachineTag.image_id
+            MachineTag.asset_id
         ).subquery()
         base_query = base_query.outerjoin(
             last_tagged_subquery,
-            ImageMetadata.id == last_tagged_subquery.c.image_id
+            ImageMetadata.asset_id == last_tagged_subquery.c.asset_id
         ).filter(
             (last_tagged_subquery.c.last_tagged_at.is_(None)) |
             (last_tagged_subquery.c.last_tagged_at < cutoff)
@@ -679,44 +748,53 @@ def recompute_trained_tags(tenant_id: str, batch_size: int, limit: Optional[int]
         batch = base_query.offset(current_offset).limit(batch_size).all()
         if not batch:
             break
+        assets_by_id = load_assets_for_images(session, batch)
 
         reached_limit = False
         for image in batch:
             if limit is not None and processed >= limit:
                 reached_limit = True
                 break
-            if not image.thumbnail_path:
+            storage_info = resolve_image_storage(
+                image=image,
+                tenant=tenant,
+                assets_by_id=assets_by_id,
+                strict=False,
+            )
+            thumbnail_key = (storage_info.thumbnail_key or "").strip()
+            if not thumbnail_key:
                 skipped += 1
                 continue
             if not replace:
                 existing = session.query(MachineTag.id).filter(
                     MachineTag.tenant_id == tenant.id,
-                    MachineTag.image_id == image.id,
+                    MachineTag.asset_id == image.asset_id,
                     MachineTag.tag_type == 'trained',
                     MachineTag.model_name == model_name
                 ).first()
                 if existing:
                     skipped += 1
                     continue
-            blob = thumbnail_bucket.blob(image.thumbnail_path)
+            blob = thumbnail_bucket.blob(thumbnail_key)
             if not blob.exists():
                 skipped += 1
                 continue
             image_data = blob.download_as_bytes()
-                recompute_trained_tags_for_image(
-                    db=session,
-                    tenant_id=tenant.id,
-                    image_id=image.id,
-                    image_data=image_data,
-                    keywords_by_category=by_category,
-                    keyword_models=keyword_models,
-                    keyword_to_category=keyword_to_category,
-                    model_name=model_name,
-                    model_version=model_version,
-                    model_type=settings.tagging_model,
-                    threshold=settings.keyword_model_threshold,
-                    model_weight=settings.keyword_model_weight
-                )
+            recompute_trained_tags_for_image(
+                db=session,
+                tenant_id=tenant.id,
+                image_id=image.id,
+                asset_id=image.asset_id,
+                image_data=image_data,
+                keywords_by_category=by_category,
+                keyword_models=keyword_models,
+                keyword_to_category=keyword_to_category,
+                model_name=model_name,
+                model_version=model_version,
+                model_type=settings.tagging_model,
+                threshold=settings.keyword_model_threshold,
+                model_weight=settings.keyword_model_weight
+            )
             processed += 1
             if limit is not None and processed >= limit:
                 reached_limit = True
@@ -887,12 +965,13 @@ def sync_dropbox(tenant_id: str, count: int):
             click.echo(f"Error: Tenant {tenant_id} not found", err=True)
             return
 
-        TenantContext.set(Tenant(
+        tenant_ctx = Tenant(
             id=tenant.id,
             name=tenant.name,
             storage_bucket=tenant.storage_bucket,
             thumbnail_bucket=tenant.thumbnail_bucket
-        ))
+        )
+        TenantContext.set(tenant_ctx)
 
         click.echo(f"Syncing from Dropbox for tenant: {tenant.name}")
 
@@ -951,6 +1030,8 @@ def sync_dropbox(tenant_id: str, count: int):
         tagger = get_tagger(model_type=settings.tagging_model)
         model_name = getattr(tagger, "model_name", settings.tagging_model)
         model_version = getattr(tagger, "model_version", model_name)
+        storage_client = storage.Client(project=settings.gcp_project_id)
+        thumbnail_bucket = storage_client.bucket(tenant_ctx.get_thumbnail_bucket(settings))
 
         # Process images
         processed = 0
@@ -973,11 +1054,20 @@ def sync_dropbox(tenant_id: str, count: int):
             for entry in entries:
                 if entry.get('tag') == 'file' and processor.is_supported(entry.get('name', '')):
                     # Check if already processed
-                    dropbox_id = entry.get('id')
-                    existing = db.query(ImageMetadata).filter(
-                        ImageMetadata.tenant_id == tenant_id,
-                        ImageMetadata.dropbox_id == dropbox_id
+                    dropbox_path = entry.get('path_display') or entry.get('path_lower')
+                    if not dropbox_path:
+                        continue
+                    existing = db.query(Asset.id).filter(
+                        Asset.tenant_id == tenant_id,
+                        Asset.source_provider == 'dropbox',
+                        Asset.source_key == dropbox_path
                     ).first()
+                    legacy_dropbox_path_col = getattr(ImageMetadata, "dropbox_path", None)
+                    if not existing and legacy_dropbox_path_col is not None:
+                        existing = db.query(ImageMetadata.id).filter(
+                            ImageMetadata.tenant_id == tenant_id,
+                            legacy_dropbox_path_col == dropbox_path
+                        ).first()
 
                     if not existing:
                         unprocessed.append(entry)
@@ -1025,22 +1115,49 @@ def sync_dropbox(tenant_id: str, count: int):
                         pass
 
                     # Create metadata record
-                    metadata = ImageMetadata(
+                    asset = Asset(
                         tenant_id=tenant_id,
                         filename=entry.get('name', ''),
-                        dropbox_id=entry.get('id'),
-                        dropbox_path=dropbox_path,
+                        source_provider='dropbox',
+                        source_key=dropbox_path,
+                        source_rev=entry.get('rev'),
+                        thumbnail_key='pending',
+                        mime_type=None,
                         width=features['width'],
                         height=features['height'],
-                        format=features['format'],
-                        perceptual_hash=features['perceptual_hash'],
-                        color_histogram=features['color_histogram'],
-                        exif_data=exif,
-                        thumbnail_path='',
-                        embedding_generated=False,
-                        faces_detected=False,
-                        tags_applied=False,
+                        duration_ms=None,
                     )
+                    db.add(asset)
+                    db.flush()
+
+                    thumbnail_key = tenant_ctx.get_asset_thumbnail_key(str(asset.id), "default-640.jpg")
+                    thumbnail_bucket.blob(thumbnail_key).upload_from_string(
+                        thumbnail_data,
+                        content_type='image/jpeg',
+                    )
+                    asset.thumbnail_key = thumbnail_key
+
+                    metadata_kwargs = {
+                        "asset_id": asset.id,
+                        "tenant_id": tenant_id,
+                        "filename": entry.get('name', ''),
+                        "width": features['width'],
+                        "height": features['height'],
+                        "format": features['format'],
+                        "perceptual_hash": features['perceptual_hash'],
+                        "color_histogram": features['color_histogram'],
+                        "exif_data": exif,
+                        "embedding_generated": False,
+                        "faces_detected": False,
+                        "tags_applied": False,
+                    }
+                    if hasattr(ImageMetadata, "dropbox_id"):
+                        metadata_kwargs["dropbox_id"] = entry.get('id')
+                    if hasattr(ImageMetadata, "dropbox_path"):
+                        metadata_kwargs["dropbox_path"] = dropbox_path
+                    if hasattr(ImageMetadata, "thumbnail_path"):
+                        metadata_kwargs["thumbnail_path"] = thumbnail_key
+                    metadata = ImageMetadata(**metadata_kwargs)
                     db.add(metadata)
                     db.commit()
                     db.refresh(metadata)
@@ -1054,7 +1171,8 @@ def sync_dropbox(tenant_id: str, count: int):
                             metadata.id,
                             thumbnail_data,
                             model_name,
-                            model_version
+                            model_version,
+                            asset_id=metadata.asset_id,
                         )
                         db.commit()
                     except Exception as embed_error:
@@ -1065,7 +1183,8 @@ def sync_dropbox(tenant_id: str, count: int):
 
                     # Delete existing tags
                     db.query(MachineTag).filter(
-                        MachineTag.image_id == metadata.id,
+                        MachineTag.tenant_id == tenant_id,
+                        MachineTag.asset_id == metadata.asset_id,
                         MachineTag.tag_type == 'siglip'
                     ).delete()
 
@@ -1090,7 +1209,7 @@ def sync_dropbox(tenant_id: str, count: int):
                             continue
 
                         tag = MachineTag(
-                            image_id=metadata.id,
+                            asset_id=metadata.asset_id,
                             tenant_id=tenant_id,
                             keyword_id=keyword_record.id,
                             confidence=confidence,

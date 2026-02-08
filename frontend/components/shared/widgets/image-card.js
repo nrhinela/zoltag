@@ -20,6 +20,7 @@ class ImageCard extends LitElement {
     listMode: { type: Boolean },
     metadataOpen: { type: Boolean },
     selectedKeywordValue: { type: String },
+    canEditTags: { type: Boolean },
   };
 
   constructor() {
@@ -33,6 +34,7 @@ class ImageCard extends LitElement {
     this.listMode = false;
     this.metadataOpen = false;
     this.selectedKeywordValue = '';
+    this.canEditTags = true;
     this._handleQueueComplete = (event) => {
       const detail = event?.detail;
       if (detail?.type === 'retag' && detail.imageId === this.image.id) {
@@ -189,19 +191,22 @@ class ImageCard extends LitElement {
       return html`<span class="text-xs text-gray-500">No tags yet.</span>`;
     }
     const sortedTags = [...tags].sort((a, b) => a.keyword.localeCompare(b.keyword));
+    const canEdit = this.canEditTags;
     return html`
       <span class="inline-flex flex-wrap items-center gap-1 flex-1 min-w-0">
         ${sortedTags.map(tag => html`
           <span class="inline-flex items-center gap-1 bg-gray-100 text-gray-700 px-2 py-1 rounded text-sm">
             ${tag.keyword}
-            <button
-              type="button"
-              class="text-red-600 hover:text-red-700 text-base leading-none"
-              title="Remove tag"
-              @click=${(e) => this._handleRemoveTag(e, tag)}
-            >
-              ❌
-            </button>
+            ${canEdit ? html`
+              <button
+                type="button"
+                class="text-red-600 hover:text-red-700 text-base leading-none"
+                title="Remove tag"
+                @click=${(e) => this._handleRemoveTag(e, tag)}
+              >
+                ❌
+              </button>
+            ` : html``}
           </span>
         `)}
       </span>
@@ -395,39 +400,43 @@ class ImageCard extends LitElement {
           </div>
           <div class="flex flex-wrap items-center gap-2">
             <span class="font-semibold text-gray-700">tags:</span>
-            <button
-              type="button"
-              class="text-purple-600 hover:text-purple-700 text-sm"
-              @click=${this._handleRetag}
-              title="Retag"
-            >
-              ${this.isRetagging ? '⟳' : '↻'}
-            </button>
+            ${this.canEditTags ? html`
+              <button
+                type="button"
+                class="text-purple-600 hover:text-purple-700 text-sm"
+                @click=${this._handleRetag}
+                title="Retag"
+              >
+                ${this.isRetagging ? '⟳' : '↻'}
+              </button>
+            ` : html``}
             ${tagsText}
           </div>
-          <div class="flex items-center gap-2">
-            <label class="text-xs font-semibold text-gray-700">Add tag:</label>
-            <div class="flex-1 min-w-[180px]" @click=${(e) => e.stopPropagation()}>
-              <keyword-dropdown
-                .value=${this.selectedKeywordValue}
-                .placeholder=${'Select a keyword...'}
-                .keywords=${this.keywords}
-                .includeUntagged=${false}
-                .compact=${true}
-                @keyword-selected=${(event) => {
-                  event?.stopPropagation?.();
-                  this.selectedKeywordValue = event?.detail?.value || '';
-                }}
-              ></keyword-dropdown>
+          ${this.canEditTags ? html`
+            <div class="flex items-center gap-2">
+              <label class="text-xs font-semibold text-gray-700">Add tag:</label>
+              <div class="flex-1 min-w-[180px]" @click=${(e) => e.stopPropagation()}>
+                <keyword-dropdown
+                  .value=${this.selectedKeywordValue}
+                  .placeholder=${'Select a keyword...'}
+                  .keywords=${this.keywords}
+                  .includeUntagged=${false}
+                  .compact=${true}
+                  @keyword-selected=${(event) => {
+                    event?.stopPropagation?.();
+                    this.selectedKeywordValue = event?.detail?.value || '';
+                  }}
+                ></keyword-dropdown>
+              </div>
+              <button
+                type="button"
+                class="text-xs text-blue-600 hover:text-blue-700"
+                @click=${this._handleAddTag}
+              >
+                Add
+              </button>
             </div>
-            <button
-              type="button"
-              class="text-xs text-blue-600 hover:text-blue-700"
-              @click=${this._handleAddTag}
-            >
-              Add
-            </button>
-          </div>
+          ` : html``}
         </div>
       </div>
     `;

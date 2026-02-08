@@ -1178,24 +1178,29 @@ export class SearchTab extends LitElement {
   // ========================================
 
   _handleSearchDropboxInput(event) {
-    const query = event.detail?.query || '';
+    const query = event.detail?.query ?? '';
+    const limit = event.detail?.limit;
     this._searchDropboxQuery = query;
     if (this._searchDropboxFetchTimer) {
       clearTimeout(this._searchDropboxFetchTimer);
+    }
+    if (query.trim().length === 0) {
+      this._fetchDropboxFolders('', limit);
+      return;
     }
     if (query.length < 2) {
       this.searchDropboxOptions = [];
       return;
     }
     this._searchDropboxFetchTimer = setTimeout(() => {
-      this._fetchDropboxFolders(query);
+      this._fetchDropboxFolders(query, limit);
     }, 500);
   }
 
-  async _fetchDropboxFolders(query) {
+  async _fetchDropboxFolders(query, limit) {
     if (!this.tenant) return;
     try {
-      const response = await getDropboxFolders(this.tenant, { query });
+      const response = await getDropboxFolders(this.tenant, { query, limit });
       this.searchDropboxOptions = response?.folders || [];
     } catch (error) {
       console.error('Error fetching Dropbox folders:', error);
@@ -1701,7 +1706,9 @@ export class SearchTab extends LitElement {
       hideZeroRating: true,
       keywords: {},
       operators: {},
+      categoryFilterOperator: undefined,
       categoryFilterSource: 'permatags',
+      dropboxPathPrefix: '',
       listId: undefined,
       listExcludeId: undefined,
     };
@@ -1709,17 +1716,27 @@ export class SearchTab extends LitElement {
     // Apply each chip filter to the filter object
     chips.forEach(chip => {
       switch (chip.type) {
-        case 'keyword':
-          if (chip.value === '__untagged__') {
+        case 'keyword': {
+          if (chip.untagged || chip.value === '__untagged__') {
             searchFilters.permatagPositiveMissing = true;
-          } else {
-            // Merge into keywords object instead of replacing it
-            if (!searchFilters.keywords[chip.category]) {
-              searchFilters.keywords[chip.category] = new Set();
-            }
-            searchFilters.keywords[chip.category].add(chip.value);
+            break;
           }
+          const keywordsByCategory = chip.keywordsByCategory && typeof chip.keywordsByCategory === 'object'
+            ? chip.keywordsByCategory
+            : (chip.category && chip.value ? { [chip.category]: [chip.value] } : {});
+          const operator = chip.operator || 'OR';
+          searchFilters.categoryFilterOperator = operator;
+          Object.entries(keywordsByCategory).forEach(([category, values]) => {
+            const list = Array.isArray(values) ? values : Array.from(values || []);
+            if (!list.length) return;
+            if (!searchFilters.keywords[category]) {
+              searchFilters.keywords[category] = new Set();
+            }
+            list.forEach((value) => searchFilters.keywords[category].add(value));
+            searchFilters.operators[category] = operator;
+          });
           break;
+        }
         case 'rating':
           if (chip.value === 'unrated') {
             searchFilters.rating = undefined;
@@ -1732,7 +1749,7 @@ export class SearchTab extends LitElement {
           }
           break;
         case 'folder':
-          searchFilters.dropboxPathPrefix = chip.value;
+          searchFilters.dropboxPathPrefix = chip.value || '';
           break;
         case 'list':
           if (chip.mode === 'exclude') {

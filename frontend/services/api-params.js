@@ -88,6 +88,7 @@ export function addCategoryFilterParams(params, filters = {}) {
       params.append('category_filters', JSON.stringify(categoryFilters));
     }
     appendIf(params, 'category_filter_source', filters.categoryFilterSource, filters.categoryFilterSource !== undefined && filters.categoryFilterSource !== null && filters.categoryFilterSource !== '');
+    appendIf(params, 'category_filter_operator', filters.categoryFilterOperator, filters.categoryFilterOperator !== undefined && filters.categoryFilterOperator !== null && filters.categoryFilterOperator !== '');
   }
 }
 

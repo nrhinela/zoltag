@@ -24,6 +24,8 @@ class FilterChips extends LitElement {
     renderFiltersActions: { type: Object },
     lists: { type: Array },
     listFilterMode: { type: String },
+    keywordMultiSelect: { type: Boolean },
+    keywordSearchQuery: { type: String },
   };
 
   constructor() {
@@ -43,6 +45,76 @@ class FilterChips extends LitElement {
     this.renderFiltersActions = null;
     this.lists = [];
     this.listFilterMode = 'include';
+    this.keywordMultiSelect = true;
+    this.keywordSearchQuery = '';
+  }
+
+  _getKeywordFilter() {
+    return (this.activeFilters || []).find((filter) => filter.type === 'keyword') || null;
+  }
+
+  _normalizeKeywordFilter(filter) {
+    const keywordsByCategory = {};
+    let operator = 'OR';
+    let untagged = false;
+
+    if (!filter) {
+      return { keywordsByCategory, operator, untagged };
+    }
+
+    if (filter.untagged || filter.value === '__untagged__') {
+      return { keywordsByCategory, operator, untagged: true };
+    }
+
+    if (filter.keywordsByCategory && typeof filter.keywordsByCategory === 'object') {
+      Object.entries(filter.keywordsByCategory).forEach(([category, values]) => {
+        const list = Array.isArray(values) ? values : Array.from(values || []);
+        if (list.length) {
+          keywordsByCategory[category] = new Set(list);
+        }
+      });
+    } else if (filter.category && filter.value) {
+      keywordsByCategory[filter.category] = new Set([filter.value]);
+    }
+
+    if (filter.operator) {
+      operator = filter.operator;
+    } else if (filter.operatorsByCategory && typeof filter.operatorsByCategory === 'object') {
+      const values = Object.values(filter.operatorsByCategory).filter(Boolean);
+      const unique = Array.from(new Set(values));
+      if (unique.length === 1) {
+        operator = unique[0];
+      }
+    }
+
+    return { keywordsByCategory, operator, untagged };
+  }
+
+  _buildKeywordFilterPayload({ keywordsByCategory, operator, untagged }) {
+    if (untagged) {
+      return {
+        type: 'keyword',
+        untagged: true,
+        displayLabel: 'Keywords',
+        displayValue: 'Untagged',
+      };
+    }
+
+    const normalizedKeywords = {};
+    Object.entries(keywordsByCategory || {}).forEach(([category, keywordSet]) => {
+      const list = Array.from(keywordSet || []).filter(Boolean);
+      if (list.length) {
+        normalizedKeywords[category] = list;
+      }
+    });
+
+    return {
+      type: 'keyword',
+      keywordsByCategory: normalizedKeywords,
+      operator: operator || 'OR',
+      displayLabel: 'Keywords',
+      displayValue: Object.keys(normalizedKeywords).length ? 'Multiple' : '',
+    };
   }
 
   _getAvailableFilterTypes() {
@@ -79,6 +151,10 @@ class FilterChips extends LitElement {
         this._requestLists();
       }
     }
+    if (type === 'folder') {
+      this.searchDropboxQuery = '';
+      this._requestFolders({ query: '', limit: 500 });
+    }
   }
 
   _handleEditFilter(type, index) {
@@ -92,18 +168,100 @@ class FilterChips extends LitElement {
         this._requestLists();
       }
     }
+    if (type === 'folder') {
+      this._requestFolders({ query: this.searchDropboxQuery || '', limit: 500 });
+    }
   }
 
   _handleKeywordSelect(category, keyword) {
-    this.valueSelectorOpen = null;
-    const filter = {
-      type: 'keyword',
-      category,
-      value: keyword,
-      displayLabel: 'Keywords',
-      displayValue: keyword,
-    };
-    this._addFilter(filter);
+    const keywordFilter = this._getKeywordFilter();
+    const state = this._normalizeKeywordFilter(keywordFilter);
+
+    if (!this.keywordMultiSelect) {
+      this.valueSelectorOpen = null;
+      if (keyword === '__untagged__') {
+        this._addFilter(this._buildKeywordFilterPayload({ keywordsByCategory: {}, operator: state.operator, untagged: true }));
+        return;
+      }
+      const keywordsByCategory = { [category]: new Set([keyword]) };
+      this._addFilter(this._buildKeywordFilterPayload({ keywordsByCategory, operator: state.operator, untagged: false }));
+      return;
+    }
+
+    if (keyword === '__untagged__') {
+      if (state.untagged) {
+        this._removeKeywordFilter();
+      } else {
+        this._addFilter(this._buildKeywordFilterPayload({ keywordsByCategory: {}, operator: state.operator, untagged: true }));
+      }
+      return;
+    }
+
+    if (state.untagged) {
+      state.untagged = false;
+    }
+
+    const keywordsByCategory = { ...state.keywordsByCategory };
+    const set = keywordsByCategory[category] ? new Set(keywordsByCategory[category]) : new Set();
+    if (set.has(keyword)) {
+      set.delete(keyword);
+    } else {
+      set.add(keyword);
+    }
+    if (set.size) {
+      keywordsByCategory[category] = set;
+    } else {
+      delete keywordsByCategory[category];
+    }
+
+    if (!Object.keys(keywordsByCategory).length) {
+      this._removeKeywordFilter();
+      return;
+    }
+
+    this._addFilter(this._buildKeywordFilterPayload({ keywordsByCategory, operator: state.operator, untagged: false }));
+  }
+
+  _removeKeywordFilter() {
+    const nextFilters = (this.activeFilters || []).filter((filter) => filter.type !== 'keyword');
+    this.activeFilters = nextFilters;
+    this.dispatchEvent(new CustomEvent('filters-changed', {
+      detail: { filters: this.activeFilters },
+      bubbles: true,
+      composed: true,
+    }));
+  }
+
+  _handleKeywordRemove(category, keyword) {
+    const keywordFilter = this._getKeywordFilter();
+    const state = this._normalizeKeywordFilter(keywordFilter);
+    const keywordsByCategory = { ...state.keywordsByCategory };
+    const set = keywordsByCategory[category] ? new Set(keywordsByCategory[category]) : new Set();
+    set.delete(keyword);
+    if (set.size) {
+      keywordsByCategory[category] = set;
+    } else {
+      delete keywordsByCategory[category];
+    }
+
+    if (!Object.keys(keywordsByCategory).length) {
+      this._removeKeywordFilter();
+      return;
+    }
+
+    this._addFilter(this._buildKeywordFilterPayload({ keywordsByCategory, operator: state.operator, untagged: false }));
+  }
+
+  _toggleKeywordOperator() {
+    const keywordFilter = this._getKeywordFilter();
+    const state = this._normalizeKeywordFilter(keywordFilter);
+    const current = state.operator || 'OR';
+    const nextOperator = current === 'OR' ? 'AND' : 'OR';
+    this._addFilter(this._buildKeywordFilterPayload({
+      keywordsByCategory: state.keywordsByCategory,
+      operator: nextOperator,
+      untagged: false,
+    }));
   }
 
   _handleRatingSelect(rating) {
@@ -236,28 +394,116 @@ class FilterChips extends LitElement {
   _renderKeywordSelector() {
     const categories = this._getKeywordsByCategory();
     const untaggedCount = this.imageStats?.untagged_positive_count || 0;
+    const keywordFilter = this._getKeywordFilter();
+    const keywordState = this._normalizeKeywordFilter(keywordFilter);
+    const selectedCount = Object.values(keywordState.keywordsByCategory || {}).reduce((total, set) => total + set.size, 0);
+    const selectedLabel = keywordState.untagged
+      ? 'Untagged'
+      : (selectedCount ? `${selectedCount} selected` : 'None selected');
+    const keywordOperator = keywordState.operator || 'OR';
+    const query = (this.keywordSearchQuery || '').trim().toLowerCase();
+    const showUntagged = untaggedCount > 0 && (!query || 'untagged'.includes(query));
+    const filteredCategories = query
+      ? categories
+        .map(([category, keywords]) => {
+          const categoryMatch = category.toLowerCase().includes(query);
+          const filteredKeywords = categoryMatch
+            ? keywords
+            : (keywords || []).filter((kw) => kw.keyword?.toLowerCase().includes(query));
+          return [category, filteredKeywords];
+        })
+        .filter(([, keywords]) => keywords && keywords.length)
+      : categories;
 
     return html`
       <div class="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-50 min-w-[520px] max-w-[640px] max-h-[400px] overflow-y-auto">
-        ${untaggedCount > 0 ? html`
+        <div class="sticky top-0 bg-white border-b border-gray-100 px-4 py-2 text-xs">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-3">
+              <span class="font-semibold text-gray-700">Keywords</span>
+              ${this.keywordMultiSelect && !keywordState.untagged && selectedCount > 0 ? html`
+                <div class="inline-flex items-center gap-1">
+                  <button
+                    class=${`px-2 py-0.5 border rounded-full text-[10px] ${keywordOperator === 'OR' ? 'bg-gray-900 text-white border-gray-900' : 'text-gray-600 border-gray-300'}`}
+                    @click=${(e) => { e.stopPropagation(); if (keywordOperator !== 'OR') this._toggleKeywordOperator(); }}
+                  >
+                    Any
+                  </button>
+                  <button
+                    class=${`px-2 py-0.5 border rounded-full text-[10px] ${keywordOperator === 'AND' ? 'bg-gray-900 text-white border-gray-900' : 'text-gray-600 border-gray-300'}`}
+                    @click=${(e) => { e.stopPropagation(); if (keywordOperator !== 'AND') this._toggleKeywordOperator(); }}
+                  >
+                    All
+                  </button>
+                </div>
+              ` : html``}
+            </div>
+            <div class="flex items-center gap-2">
+              <span class="text-gray-500">${selectedLabel}</span>
+              ${keywordFilter ? html`
+                <button
+                  class="px-2 py-1 border rounded-full text-gray-600 hover:bg-gray-50"
+                  @click=${(e) => { e.stopPropagation(); this._removeKeywordFilter(); }}
+                >
+                  Clear
+                </button>
+              ` : html``}
+              <button
+                class="px-2 py-1 border rounded-full text-gray-600 hover:bg-gray-50"
+                @click=${(e) => { e.stopPropagation(); this.valueSelectorOpen = null; }}
+              >
+                Done
+              </button>
+            </div>
+          </div>
+          <div class="mt-2">
+            <input
+              type="text"
+              class="w-full px-3 py-2 border rounded-lg text-sm"
+              placeholder="Search keywords..."
+              .value=${this.keywordSearchQuery}
+              @input=${(e) => {
+                e.stopPropagation();
+                this.keywordSearchQuery = e.target.value;
+              }}
+            >
+          </div>
+        </div>
+        ${showUntagged ? html`
           <div
-            class="px-4 py-2 cursor-pointer border-b border-gray-50 last:border-b-0 hover:bg-gray-100 transition-colors"
+            class=${`px-4 py-2 cursor-pointer border-b border-gray-50 last:border-b-0 transition-colors ${keywordState.untagged ? 'bg-blue-50' : 'hover:bg-gray-100'}`}
             @click=${() => this._handleKeywordSelect('Untagged', '__untagged__')}
           >
-            <strong>Untagged</strong> (${untaggedCount})
+            <span class="inline-flex items-center gap-2">
+              <span class=${`inline-flex h-4 w-4 items-center justify-center rounded border text-xs ${keywordState.untagged ? 'border-blue-500 bg-blue-500 text-white' : 'border-gray-300 text-gray-300'}`}>
+                ${keywordState.untagged ? '✓' : ''}
+              </span>
+              <strong>Untagged</strong> (${untaggedCount})
+            </span>
           </div>
         ` : ''}
-        ${categories.map(([category, keywords]) => html`
-          <div class="px-4 py-2 font-semibold text-gray-600 bg-gray-50 text-xs uppercase tracking-wide">${category}</div>
+        ${filteredCategories.map(([category, keywords]) => html`
+          <div class="px-4 py-2 font-semibold text-gray-600 bg-gray-50 text-xs uppercase tracking-wide flex items-center justify-between">
+            <span>${category}</span>
+          </div>
           ${keywords.map(kw => html`
             <div
-              class="px-4 py-2 cursor-pointer border-b border-gray-50 last:border-b-0 hover:bg-gray-100 transition-colors"
+              class=${`px-4 py-2 cursor-pointer border-b border-gray-50 last:border-b-0 transition-colors ${keywordState.keywordsByCategory?.[category]?.has?.(kw.keyword) ? 'bg-blue-50' : 'hover:bg-gray-100'}`}
               @click=${() => this._handleKeywordSelect(category, kw.keyword)}
             >
-              ${kw.keyword} <span class="text-gray-500 text-sm">(${kw.count || 0})</span>
+              <span class="inline-flex items-center gap-2">
+                <span class=${`inline-flex h-4 w-4 items-center justify-center rounded border text-xs ${keywordState.keywordsByCategory?.[category]?.has?.(kw.keyword) ? 'border-blue-500 bg-blue-500 text-white' : 'border-gray-300 text-gray-300'}`}>
+                  ${keywordState.keywordsByCategory?.[category]?.has?.(kw.keyword) ? '✓' : ''}
+                </span>
+                <span>${kw.keyword}</span>
+                <span class="text-gray-500 text-sm">(${kw.count || 0})</span>
+              </span>
             </div>
           `)}
         `)}
+        ${query && !filteredCategories.length && !showUntagged ? html`
+          <div class="px-4 py-3 text-sm text-gray-500">No keywords found.</div>
+        ` : ''}
       </div>
     `;
   }
@@ -301,7 +547,7 @@ class FilterChips extends LitElement {
 
   _renderFolderSelector() {
     return html`
-      <div class="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-50 w-full">
+      <div class="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-50 w-full max-w-none">
         <div class="p-4">
           <div class="text-sm font-semibold text-gray-700 mb-2">Dropbox Folder</div>
           <input
@@ -312,11 +558,7 @@ class FilterChips extends LitElement {
             @input=${(e) => {
               this.searchDropboxQuery = e.target.value;
               // Trigger folder search
-              this.dispatchEvent(new CustomEvent('folder-search', {
-                detail: { query: e.target.value },
-                bubbles: true,
-                composed: true,
-              }));
+              this._requestFolders({ query: e.target.value, limit: 500 });
             }}
           >
           ${this.dropboxFolders && this.dropboxFolders.length > 0 ? html`
@@ -330,14 +572,22 @@ class FilterChips extends LitElement {
                 </div>
               `)}
             </div>
-          ` : this.searchDropboxQuery.trim() ? html`
+          ` : html`
             <div class="mt-2 text-xs text-gray-500 p-2">
-              No folders found. Type to search...
+              ${this.searchDropboxQuery.trim() ? 'No folders found. Type to search...' : 'Loading folders…'}
             </div>
-          ` : ''}
+          `}
         </div>
       </div>
     `;
+  }
+
+  _requestFolders({ query, limit } = {}) {
+    this.dispatchEvent(new CustomEvent('folder-search', {
+      detail: { query, limit },
+      bubbles: true,
+      composed: true,
+    }));
   }
 
   _renderListSelector() {
@@ -428,26 +678,8 @@ class FilterChips extends LitElement {
         <div class="mb-4">
           <div class="flex flex-wrap items-center gap-2">
             <span class="text-sm font-semibold text-gray-700">Filters:</span>
-            <!-- Active filter chips -->
-            ${this.activeFilters.map((filter, index) => html`
-              <div class="inline-flex items-center gap-2 px-3 py-1.5 bg-blue-50 border border-blue-200 rounded-full text-sm cursor-pointer hover:bg-blue-100"
-                   @click=${() => this._handleEditFilter(filter.type, index)}>
-                <span class="font-medium text-blue-900">${filter.displayLabel}:</span>
-                <span class="text-blue-700">${filter.displayValue}</span>
-                <button
-                  @click=${(e) => { e.stopPropagation(); this._removeFilter(index); }}
-                  class="ml-1 text-blue-600 hover:text-blue-800"
-                  aria-label="Remove filter"
-                >
-                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-                  </svg>
-                </button>
-              </div>
-            `)}
-
-            <!-- Add filter button -->
-            <div class="relative flex-1 min-w-[220px]">
+            <!-- Add filter button (kept first for layout stability) -->
+            <div class="relative flex-none">
               <button
                 @click=${this._handleAddFilterClick}
                 class="inline-flex items-center gap-2 px-3 py-1.5 border border-gray-300 rounded-full text-sm text-gray-700 hover:bg-gray-50"
@@ -460,14 +692,92 @@ class FilterChips extends LitElement {
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
                 </svg>
               </button>
-              ${this.filterMenuOpen ? this._renderFilterMenu() : ''}
-              ${this._renderValueSelector()}
             </div>
+            <!-- Active filter chips -->
+            ${this.activeFilters.map((filter, index) => {
+              if (filter.type === 'keyword') {
+                const keywordState = this._normalizeKeywordFilter(filter);
+                const totalKeywords = Object.values(keywordState.keywordsByCategory || {}).reduce((total, set) => total + set.size, 0);
+                const keywordOperator = keywordState.operator || 'OR';
+                return html`
+                  <div class="inline-flex items-center gap-2 px-3 py-1.5 bg-blue-50 border border-blue-200 rounded-full text-sm cursor-pointer hover:bg-blue-100 flex-wrap"
+                       @click=${() => this._handleEditFilter(filter.type, index)}>
+                    <span class="font-medium text-blue-900">${filter.displayLabel}:</span>
+                    ${!keywordState.untagged && totalKeywords > 1 ? html`
+                      <button
+                        class="px-2 py-0.5 border border-blue-200 rounded-full text-[10px] text-blue-700 hover:bg-blue-100"
+                        @click=${(e) => { e.stopPropagation(); this._toggleKeywordOperator(); }}
+                        title="Toggle match mode"
+                      >
+                        ${keywordOperator === 'AND' ? 'All' : 'Any'}
+                      </button>
+                    ` : html``}
+                    ${keywordState.untagged ? html`
+                      <span class="text-blue-700">Untagged</span>
+                    ` : html`
+                      <span class="inline-flex flex-wrap items-center gap-2 text-blue-700">
+                        ${Object.entries(keywordState.keywordsByCategory || {}).map(([category, keywords]) => {
+                          return html`
+                            <span class="inline-flex items-center gap-2">
+                              <span class="text-blue-900 font-medium">${category}</span>
+                              <span class="inline-flex flex-wrap items-center gap-1">
+                                ${Array.from(keywords).map((keyword) => html`
+                                  <span class="inline-flex items-center gap-1 px-2 py-0.5 bg-white/70 border border-blue-200 rounded-full text-xs">
+                                    ${keyword}
+                                    <button
+                                      class="text-blue-600 hover:text-blue-800"
+                                      @click=${(e) => { e.stopPropagation(); this._handleKeywordRemove(category, keyword); }}
+                                      aria-label="Remove keyword"
+                                    >
+                                      ×
+                                    </button>
+                                  </span>
+                                `)}
+                              </span>
+                            </span>
+                          `;
+                        })}
+                      </span>
+                    `}
+                    <button
+                      @click=${(e) => { e.stopPropagation(); this._removeFilter(index); }}
+                      class="ml-1 text-blue-600 hover:text-blue-800"
+                      aria-label="Remove filter"
+                    >
+                      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                      </svg>
+                    </button>
+                  </div>
+                `;
+              }
+
+              return html`
+                <div class="inline-flex items-center gap-2 px-3 py-1.5 bg-blue-50 border border-blue-200 rounded-full text-sm cursor-pointer hover:bg-blue-100"
+                     @click=${() => this._handleEditFilter(filter.type, index)}>
+                  <span class="font-medium text-blue-900">${filter.displayLabel}:</span>
+                  <span class="text-blue-700">${filter.displayValue}</span>
+                  <button
+                    @click=${(e) => { e.stopPropagation(); this._removeFilter(index); }}
+                    class="ml-1 text-blue-600 hover:text-blue-800"
+                    aria-label="Remove filter"
+                  >
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                    </svg>
+                  </button>
+                </div>
+              `;
+            })}
             ${this.renderFiltersActions ? html`
               <div class="ml-auto flex items-center">
                 ${this.renderFiltersActions()}
               </div>
             ` : ''}
+          </div>
+          <div class="relative w-full">
+            ${this.filterMenuOpen ? this._renderFilterMenu() : ''}
+            ${this._renderValueSelector()}
           </div>
         </div>
 

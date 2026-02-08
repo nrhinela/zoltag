@@ -40,7 +40,7 @@ export async function signUp(email, password, displayName = null) {
         data: {
           display_name: displayName,
         },
-        // emailRedirectTo: `${window.location.origin}/auth/verify-email`,
+        emailRedirectTo: `${window.location.origin}/auth/callback`,
       },
     });
 
@@ -56,8 +56,8 @@ export async function signUp(email, password, displayName = null) {
       console.log('Token available:', !!token);
 
       if (!token) {
-        console.error('❌ No access token in session - cannot complete registration');
-        throw new Error('No access token - Supabase session not established');
+        console.warn('⚠️ No access token in session - likely waiting for email verification');
+        return { ...data, needsEmailVerification: true };
       }
 
       try {
@@ -118,9 +118,57 @@ export async function signIn(email, password) {
       throw new Error(error.message);
     }
 
+    if (data?.session?.access_token) {
+      try {
+        const response = await fetch('/api/v1/auth/register', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${data.session.access_token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ display_name: data.user?.user_metadata?.display_name || '' }),
+        });
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({ detail: 'Registration failed' }));
+          throw new Error(errorData.detail || 'Registration failed');
+        }
+      } catch (registerError) {
+        throw new Error(`Registration failed: ${registerError.message}`);
+      }
+    }
+
     return data;
   } catch (error) {
     throw new Error(`Sign in failed: ${error.message}`);
+  }
+}
+
+/**
+ * Ensure a user_profile exists for the current Supabase session.
+ * Safe to call multiple times.
+ */
+export async function ensureRegistration(displayName = '') {
+  try {
+    const token = await getAccessToken();
+    if (!token) {
+      return false;
+    }
+    const response = await fetch('/api/v1/auth/register', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ display_name: displayName || '' }),
+    });
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ detail: 'Registration failed' }));
+      throw new Error(errorData.detail || 'Registration failed');
+    }
+    return true;
+  } catch (error) {
+    console.error('Registration ensure failed:', error.message);
+    return false;
   }
 }
 

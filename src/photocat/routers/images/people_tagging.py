@@ -84,8 +84,9 @@ async def tag_person_on_image(
 
         # Check if tag already exists (avoid duplicates)
         existing_tag = db.query(MachineTag).filter(
-            MachineTag.image_id == image.id,
+            MachineTag.asset_id == image.asset_id,
             MachineTag.keyword_id == keyword.id,
+            MachineTag.tenant_id == tenant.id,
             MachineTag.tag_type == 'manual_person'
         ).first()
 
@@ -98,7 +99,7 @@ async def tag_person_on_image(
         else:
             # Create new tag
             tag = MachineTag(
-                image_id=image.id,
+                asset_id=image.asset_id,
                 tenant_id=tenant.id,
                 keyword_id=keyword.id,
                 confidence=request.confidence,
@@ -163,8 +164,9 @@ async def remove_person_tag(
 
         # Delete the tag
         deleted_count = db.query(MachineTag).filter(
-            MachineTag.image_id == image.id,
+            MachineTag.asset_id == image.asset_id,
             MachineTag.keyword_id == keyword.id,
+            MachineTag.tenant_id == tenant.id,
             MachineTag.tag_type == 'manual_person'
         ).delete()
 
@@ -209,7 +211,7 @@ async def get_image_people_tags(
     ).join(
         Person, Keyword.person_id == Person.id
     ).filter(
-        MachineTag.image_id == image.id,
+        MachineTag.asset_id == image.asset_id,
         MachineTag.tag_type == 'manual_person',
         MachineTag.tenant_id == tenant.id
     ).all()
@@ -269,8 +271,9 @@ async def update_person_tag_confidence(
 
         # Get the tag
         tag = db.query(MachineTag).filter(
-            MachineTag.image_id == image.id,
+            MachineTag.asset_id == image.asset_id,
             MachineTag.keyword_id == keyword.id,
+            MachineTag.tenant_id == tenant.id,
             MachineTag.tag_type == 'manual_person'
         ).first()
 

@@ -1,9 +1,10 @@
 """Metadata storage and management."""
 
 from datetime import datetime
+import uuid
 from typing import Optional
 
-from sqlalchemy import Column, String, Integer, Float, DateTime, Boolean, Text, ForeignKey, Index
+from sqlalchemy import Column, String, Integer, Float, DateTime, Boolean, Text, ForeignKey, Index, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, ARRAY, UUID
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
@@ -83,12 +84,11 @@ class ImageMetadata(Base):
     __tablename__ = "image_metadata"
     
     id = Column(Integer, primary_key=True)
+    asset_id = Column(UUID(as_uuid=True), ForeignKey("assets.id", ondelete="SET NULL"), nullable=False)
     tenant_id = Column(String(255), nullable=False, index=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     
     # File information
-    dropbox_path = Column(String(1024), nullable=False)
-    dropbox_id = Column(String(255), unique=True, index=True)
     filename = Column(String(512), nullable=False)
     file_size = Column(Integer)
     content_hash = Column(String(64), index=True)  # For change detection
@@ -122,7 +122,6 @@ class ImageMetadata(Base):
     # Processing state
     last_processed = Column(DateTime, default=datetime.utcnow)
     processing_version = Column(String(50))  # Model version for reprocessing
-    thumbnail_path = Column(String(1024))  # Cloud Storage path
     embedding_generated = Column(Boolean, default=False)
     faces_detected = Column(Boolean, default=False)
     tags_applied = Column(Boolean, default=False)
@@ -132,9 +131,7 @@ class ImageMetadata(Base):
     
     # Relationships
     tags = relationship("ImageTag", back_populates="image", cascade="all, delete-orphan")
-    machine_tags = relationship("MachineTag", back_populates="image", cascade="all, delete-orphan")
     trained_tags = relationship("TrainedImageTag", back_populates="image", cascade="all, delete-orphan")
-    permatags = relationship("Permatag", back_populates="image", cascade="all, delete-orphan")
     faces = relationship("DetectedFace", back_populates="image", cascade="all, delete-orphan")
     
     # Indexes for common queries
@@ -143,7 +140,7 @@ class ImageMetadata(Base):
         Index("idx_tenant_capture", "tenant_id", "capture_timestamp"),
         Index("idx_tenant_location", "tenant_id", "gps_latitude", "gps_longitude"),
         Index("idx_image_metadata_tenant_rating", "tenant_id", "rating"),
-        Index("idx_image_metadata_tenant_dropbox_path", "tenant_id", "dropbox_path"),
+        Index("uq_image_metadata_asset_id", "asset_id", unique=True),
     )
 
 
@@ -178,7 +175,7 @@ class Permatag(Base):
     __tablename__ = "permatags"
 
     id = Column(Integer, primary_key=True)
-    image_id = Column(Integer, ForeignKey("image_metadata.id", ondelete="CASCADE"), nullable=False)
+    asset_id = Column(UUID(as_uuid=True), ForeignKey("assets.id", ondelete="SET NULL"), nullable=False)
     tenant_id = Column(String(255), nullable=False, index=True)
     # Note: keyword_id FK not declared here (keywords table is in different declarative base)
     # Database enforces FK constraint; use db.query(Keyword).filter(Keyword.id == permatag.keyword_id)
@@ -189,17 +186,16 @@ class Permatag(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     created_by = Column(UUID(as_uuid=True), ForeignKey("user_profiles.supabase_uid", ondelete="SET NULL"), nullable=True)
 
-    # Relationships
-    image = relationship("ImageMetadata", back_populates="permatags")
     # Note: keyword relationship not defined to avoid cross-module coupling
     # Use: db.query(Keyword).filter(Keyword.id == permatag.keyword_id)
 
     __table_args__ = (
-        Index("idx_permatag_image_id", "image_id"),
+        Index("idx_permatag_asset_id", "asset_id"),
         Index("idx_permatag_keyword_id", "keyword_id"),
-        Index("idx_permatag_image_keyword_signum", "image_id", "keyword_id", "signum"),
-        Index("idx_permatag_tenant_keyword_signum_image", "tenant_id", "keyword_id", "signum", "image_id"),
+        Index("idx_permatag_asset_keyword_signum", "asset_id", "keyword_id", "signum"),
+        Index("idx_permatag_tenant_keyword_signum_asset", "tenant_id", "keyword_id", "signum", "asset_id"),
         Index("idx_permatag_created_by", "created_by"),
+        UniqueConstraint("asset_id", "keyword_id", name="uq_permatags_asset_keyword"),
     )
 
 
@@ -253,7 +249,7 @@ class ImageEmbedding(Base):
     __tablename__ = "image_embeddings"
     
     id = Column(Integer, primary_key=True)
-    image_id = Column(Integer, ForeignKey("image_metadata.id"), nullable=False, unique=True)
+    asset_id = Column(UUID(as_uuid=True), ForeignKey("assets.id", ondelete="SET NULL"), nullable=False)
     tenant_id = Column(String(255), nullable=False, index=True)
     
     embedding = Column(ARRAY(Float), nullable=False)  # Vector embedding
@@ -261,6 +257,11 @@ class ImageEmbedding(Base):
     model_version = Column(String(50))
     
     created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("uq_image_embeddings_asset_id", "asset_id", unique=True),
+        Index("idx_image_embeddings_tenant_asset_model", "tenant_id", "asset_id", "model_name"),
+    )
 
 
 class KeywordModel(Base):
@@ -335,13 +336,13 @@ class MachineTag(Base):
     - confidence: Algorithm's confidence score [0-1]
 
     The unique constraint prevents duplicate outputs from the same algorithm
-    for the same image/keyword/model combination.
+    for the same asset/keyword/model combination.
     """
 
     __tablename__ = "machine_tags"
 
     id = Column(Integer, primary_key=True)
-    image_id = Column(Integer, ForeignKey("image_metadata.id", ondelete="CASCADE"), nullable=False)
+    asset_id = Column(UUID(as_uuid=True), ForeignKey("assets.id", ondelete="SET NULL"), nullable=False)
     tenant_id = Column(String(255), nullable=False, index=True)
 
     # Tag content (normalized via keyword_id)
@@ -370,18 +371,66 @@ class MachineTag(Base):
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
     # updated_at tracks when tags are refreshed (used with ON CONFLICT upsert)
 
-    # Relationships
-    image = relationship("ImageMetadata", back_populates="machine_tags")
     # Note: keyword relationship not defined to avoid cross-module coupling
     # Use: db.query(Keyword).filter(Keyword.id == machine_tag.keyword_id)
 
     __table_args__ = (
-        # Per-image lookup with algorithm filter
-        Index("idx_machine_tags_per_image", "tenant_id", "image_id", "tag_type"),
-        Index("idx_machine_tags_tenant_type_keyword", "tenant_id", "tag_type", "keyword_id", "image_id"),
+        # Per-asset lookup with algorithm filter
+        Index("idx_machine_tags_per_asset", "tenant_id", "asset_id", "tag_type"),
+        Index("idx_machine_tags_asset_id", "asset_id"),
+        Index("idx_machine_tags_tenant_type_keyword_asset", "tenant_id", "tag_type", "keyword_id", "asset_id"),
 
-        # Prevent duplicate outputs from same algorithm for same image/keyword/model
+        # Prevent duplicate outputs from same algorithm for same asset/keyword/model
         Index("idx_machine_tags_unique",
-              "image_id", "keyword_id", "tag_type", "model_name",
+              "asset_id", "keyword_id", "tag_type", "model_name",
               unique=True),
+    )
+
+
+class Asset(Base):
+    """Canonical asset representing a photo/video and its primary thumbnail."""
+
+    __tablename__ = "assets"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(String(255), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
+    filename = Column(String(1024), nullable=False)
+
+    source_provider = Column(String(64), nullable=False)
+    source_key = Column(String(1024), nullable=False)
+    source_rev = Column(String(255))
+
+    thumbnail_key = Column(String(1024), nullable=False)
+
+    mime_type = Column(String(255))
+    width = Column(Integer)
+    height = Column(Integer)
+    duration_ms = Column(Integer)
+
+    created_by = Column(UUID(as_uuid=True), ForeignKey("user_profiles.supabase_uid", ondelete="SET NULL"))
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("idx_assets_source_key", "source_provider", "source_key"),
+    )
+
+
+class AssetDerivative(Base):
+    """Derivative file (crop/resize/export) stored in local/GCP."""
+
+    __tablename__ = "asset_derivatives"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    asset_id = Column(UUID(as_uuid=True), ForeignKey("assets.id", ondelete="CASCADE"), nullable=False, index=True)
+    storage_key = Column(String(1024), nullable=False)
+    filename = Column(String(1024), nullable=False)
+    variant = Column(String(128))
+    created_by = Column(UUID(as_uuid=True), ForeignKey("user_profiles.supabase_uid", ondelete="SET NULL"))
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    deleted_at = Column(DateTime)
+
+    __table_args__ = (
+        Index("idx_asset_derivatives_variant", "variant"),
     )

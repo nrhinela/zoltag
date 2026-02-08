@@ -14,7 +14,7 @@ from photocat.exif import (
     parse_exif_int,
     parse_exif_str,
 )
-from photocat.metadata import ImageMetadata
+from photocat.metadata import Asset, ImageMetadata
 from photocat.cli.base import CliCommand
 
 
@@ -111,12 +111,39 @@ class IngestCommand(CliCommand):
         # Extract features
         features = self.processor.extract_features(image_data)
 
-        # Use perceptual hash as unique ID to prevent collisions
-        # (prevents overwriting when files have same name but different extensions)
-        unique_id = features.get('perceptual_hash', image_path.stem)
-        thumbnail_path = f"{self.tenant.id}/thumbnails/{unique_id}_thumb.jpg"
+        source_provider = "local"
+        source_key = f"/local/{image_path.relative_to(image_path.parent.parent)}"
+        asset = (
+            self.db.query(Asset)
+            .filter(
+                Asset.tenant_id == self.tenant.id,
+                Asset.source_provider == source_provider,
+                Asset.source_key == source_key,
+            )
+            .order_by(Asset.created_at.asc(), Asset.id.asc())
+            .first()
+        )
+        if asset is None:
+            mime_type = f"image/{str(features.get('format', '')).lower()}" if features.get("format") else None
+            asset = Asset(
+                tenant_id=self.tenant.id,
+                filename=image_path.name,
+                source_provider=source_provider,
+                source_key=source_key,
+                source_rev=None,
+                thumbnail_key=f"legacy:{self.tenant.id}:{image_path.name}:thumbnail",
+                mime_type=mime_type,
+                width=features.get("width"),
+                height=features.get("height"),
+                duration_ms=None,
+            )
+            self.db.add(asset)
+            self.db.flush()
+
+        thumbnail_path = self.tenant.get_asset_thumbnail_key(str(asset.id), "default-256.jpg")
         blob = self.thumbnail_bucket.blob(thumbnail_path)
         blob.upload_from_string(features['thumbnail'], content_type='image/jpeg')
+        asset.thumbnail_key = thumbnail_path
 
         # Create metadata record
         exif = features['exif']
@@ -128,30 +155,36 @@ class IngestCommand(CliCommand):
         shutter_speed = parse_exif_str(get_exif_value(exif, "ExposureTime", "ShutterSpeedValue"))
         focal_length = parse_exif_float(get_exif_value(exif, "FocalLength"))
 
-        metadata = ImageMetadata(
-            tenant_id=self.tenant.id,
-            dropbox_path=f"/local/{image_path.relative_to(image_path.parent.parent)}",
-            dropbox_id=f"local_{image_path.stem}",
-            filename=image_path.name,
-            file_size=image_path.stat().st_size,
-            content_hash=None,
-            width=features['width'],
-            height=features['height'],
-            format=features['format'],
-            perceptual_hash=features['perceptual_hash'],
-            color_histogram=features['color_histogram'],
-            exif_data=exif,
-            camera_make=exif.get('Make'),
-            camera_model=exif.get('Model'),
-            lens_model=exif.get('LensModel'),
-            capture_timestamp=capture_timestamp,
-            gps_latitude=gps_latitude,
-            gps_longitude=gps_longitude,
-            iso=iso,
-            aperture=aperture,
-            shutter_speed=shutter_speed,
-            focal_length=focal_length,
-            thumbnail_path=thumbnail_path,
-        )
+        metadata_kwargs = {
+            "asset_id": asset.id,
+            "tenant_id": self.tenant.id,
+            "filename": image_path.name,
+            "file_size": image_path.stat().st_size,
+            "content_hash": None,
+            "width": features["width"],
+            "height": features["height"],
+            "format": features["format"],
+            "perceptual_hash": features["perceptual_hash"],
+            "color_histogram": features["color_histogram"],
+            "exif_data": exif,
+            "camera_make": exif.get("Make"),
+            "camera_model": exif.get("Model"),
+            "lens_model": exif.get("LensModel"),
+            "capture_timestamp": capture_timestamp,
+            "gps_latitude": gps_latitude,
+            "gps_longitude": gps_longitude,
+            "iso": iso,
+            "aperture": aperture,
+            "shutter_speed": shutter_speed,
+            "focal_length": focal_length,
+        }
+        if hasattr(ImageMetadata, "dropbox_path"):
+            metadata_kwargs["dropbox_path"] = source_key
+        if hasattr(ImageMetadata, "dropbox_id"):
+            metadata_kwargs["dropbox_id"] = f"local_{image_path.stem}"
+        if hasattr(ImageMetadata, "thumbnail_path"):
+            metadata_kwargs["thumbnail_path"] = thumbnail_path
+
+        metadata = ImageMetadata(**metadata_kwargs)
 
         self.db.add(metadata)

@@ -53,6 +53,8 @@ class Settings(BaseSettings):
     thumbnail_size: int = 256
     batch_size: int = 10
     max_workers: int = 4
+    asset_strict_reads: bool = False
+    asset_write_legacy_fields: bool = False
     
     # Models
     face_detection_model: str = "hog"  # 'hog' or 'cnn'

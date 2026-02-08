@@ -608,6 +608,7 @@ class ImageEditor extends LitElement {
     currentImageIndex: { type: Number },
     fullscreenZoom: { type: Number },
     fullscreenFitMode: { type: Boolean },
+    canEditTags: { type: Boolean },
   };
 
   constructor() {
@@ -643,6 +644,7 @@ class ImageEditor extends LitElement {
     this.currentImageIndex = -1;
     this.fullscreenZoom = 50;
     this.fullscreenFitMode = false;
+    this.canEditTags = true;
     this._ratingBurstActive = false;
     this._ratingBurstTimer = null;
     this._suppressPermatagRefresh = false;
@@ -1114,37 +1116,43 @@ class ImageEditor extends LitElement {
               ${permatags.map((tag) => html`
                 <span class="tag-chip">
                   <span>${tag.keyword}</span>
-                  <button class="tag-remove" title="Remove tag" @click=${() => this._handleRemoveTag(tag)}>❌</button>
+                  ${this.canEditTags ? html`
+                    <button class="tag-remove" title="Remove tag" @click=${() => this._handleRemoveTag(tag)}>❌</button>
+                  ` : html``}
                 </span>
               `)}
             </div>
           ` : html`<div class="empty-text">No active tags.</div>`}
-          <div class="mt-2">
-            <button
-              class="text-xs text-blue-600 hover:text-blue-700"
-              ?disabled=${this.tagsPropagating}
-              @click=${this._handlePropagateDropboxTags}
-              title="Write GMM tags to Dropbox for this image"
-            >
-              ${this.tagsPropagating ? 'Propagating...' : 'Propagate tags'}
-            </button>
-          </div>
+          ${this.canEditTags ? html`
+            <div class="mt-2">
+              <button
+                class="text-xs text-blue-600 hover:text-blue-700"
+                ?disabled=${this.tagsPropagating}
+                @click=${this._handlePropagateDropboxTags}
+                title="Write GMM tags to Dropbox for this image"
+              >
+                ${this.tagsPropagating ? 'Propagating...' : 'Propagate tags'}
+              </button>
+            </div>
+          ` : html``}
         </div>
-        <div class="right-pane">
-          <div class="text-xs font-semibold text-gray-600 uppercase mb-2">Add Tag</div>
-          <div class="tag-form">
-            <keyword-dropdown
-              class="tag-dropdown"
-              .value=${selectedValue}
-              .keywords=${flatKeywords}
-              .includeUntagged=${false}
-              .compact=${true}
-              @keyword-selected=${this._handleTagSelectChange}
-              @change=${this._handleTagSelectChange}
-            ></keyword-dropdown>
-            <button class="tag-add" @click=${this._handleAddTag}>Add Tag</button>
+        ${this.canEditTags ? html`
+          <div class="right-pane">
+            <div class="text-xs font-semibold text-gray-600 uppercase mb-2">Add Tag</div>
+            <div class="tag-form">
+              <keyword-dropdown
+                class="tag-dropdown"
+                .value=${selectedValue}
+                .keywords=${flatKeywords}
+                .includeUntagged=${false}
+                .compact=${true}
+                @keyword-selected=${this._handleTagSelectChange}
+                @change=${this._handleTagSelectChange}
+              ></keyword-dropdown>
+              <button class="tag-add" @click=${this._handleAddTag}>Add Tag</button>
+            </div>
           </div>
-        </div>
+        ` : html``}
       </div>
     `;
   }

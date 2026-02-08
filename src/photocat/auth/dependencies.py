@@ -234,3 +234,36 @@ def require_tenant_role(tenant_id: str, required_role: str = "user") -> Callable
         return user
 
     return check_role
+
+
+def require_tenant_role_from_header(required_role: str = "admin") -> Callable:
+    """Dependency factory to check tenant role using X-Tenant-ID header."""
+    async def check_role(
+        x_tenant_id: str = Header(..., alias="X-Tenant-ID"),
+        user: UserProfile = Depends(get_current_user),
+        db: Session = Depends(get_db)
+    ) -> UserProfile:
+        if user.is_super_admin:
+            return user
+
+        membership = db.query(UserTenant).filter(
+            UserTenant.supabase_uid == user.supabase_uid,
+            UserTenant.tenant_id == x_tenant_id,
+            UserTenant.accepted_at.isnot(None)
+        ).first()
+
+        if not membership:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"No access to tenant {x_tenant_id}"
+            )
+
+        if required_role == "admin" and membership.role != "admin":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Admin role required in this tenant"
+            )
+
+        return user
+
+    return check_role

@@ -99,6 +99,7 @@ export class CurateBrowseFolderTab extends LitElement {
       hideZeroRating: true,
       keywords: {},
       operators: {},
+      categoryFilterOperator: undefined,
       categoryFilterSource: 'permatags',
     };
     this.listExcludeId = '';
@@ -786,16 +787,27 @@ export class CurateBrowseFolderTab extends LitElement {
 
     chips.forEach((chip) => {
       switch (chip.type) {
-        case 'keyword':
-          if (chip.value === '__untagged__') {
+        case 'keyword': {
+          if (chip.untagged || chip.value === '__untagged__') {
             nextFilters.permatagPositiveMissing = true;
-          } else {
-            if (!nextFilters.keywords[chip.category]) {
-              nextFilters.keywords[chip.category] = new Set();
-            }
-            nextFilters.keywords[chip.category].add(chip.value);
+            break;
           }
+          const keywordsByCategory = chip.keywordsByCategory && typeof chip.keywordsByCategory === 'object'
+            ? chip.keywordsByCategory
+            : (chip.category && chip.value ? { [chip.category]: [chip.value] } : {});
+          const operator = chip.operator || 'OR';
+          nextFilters.categoryFilterOperator = operator;
+          Object.entries(keywordsByCategory).forEach(([category, values]) => {
+            const list = Array.isArray(values) ? values : Array.from(values || []);
+            if (!list.length) return;
+            if (!nextFilters.keywords[category]) {
+              nextFilters.keywords[category] = new Set();
+            }
+            list.forEach((value) => nextFilters.keywords[category].add(value));
+            nextFilters.operators[category] = operator;
+          });
           break;
+        }
         case 'rating':
           if (chip.value === 'unrated') {
             nextFilters.ratingOperator = 'is_null';

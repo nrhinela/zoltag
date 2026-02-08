@@ -17,6 +17,7 @@ class AppHeader extends LitElement {
         lastSyncCount: { type: Number },
         queueCount: { type: Number },
         currentUser: { type: Object },
+        canCurate: { type: Boolean },
     }
 
     constructor() {
@@ -32,6 +33,7 @@ class AppHeader extends LitElement {
         this.lastSyncCount = 0;
         this.queueCount = 0;
         this.currentUser = null;
+        this.canCurate = null;
     }
 
   createRenderRoot() {
@@ -100,6 +102,22 @@ class AppHeader extends LitElement {
       return this.currentUser?.user?.is_super_admin || false;
   }
 
+  _getTenantRole() {
+      const tenantId = this.tenant;
+      if (!tenantId) return null;
+      const memberships = this.currentUser?.tenants || [];
+      const match = memberships.find((membership) => String(membership.tenant_id) === String(tenantId));
+      return match?.role || null;
+  }
+
+  _canCurateFromUser() {
+      const role = this._getTenantRole();
+      if (!role) {
+          return true;
+      }
+      return role !== 'user';
+  }
+
   async _handleLogout() {
       try {
           await supabase.auth.signOut();
@@ -115,6 +133,7 @@ class AppHeader extends LitElement {
   }
 
   render() {
+    const canCurate = this.canCurate ?? this._canCurateFromUser();
     return html`
         <nav class="bg-white shadow-lg">
             <div class="max-w-7xl mx-auto px-4 py-4">
@@ -159,12 +178,14 @@ class AppHeader extends LitElement {
                     >
                         <i class="fas fa-magnifying-glass mr-2"></i>Search
                     </button>
+                    ${canCurate ? html`
                     <button
                         @click=${() => this._handleTabChange('curate')}
                         class="py-3 px-6 text-base font-semibold ${this.activeTab === 'curate' ? 'border-b-4 border-blue-600 text-blue-800 bg-blue-50' : 'text-gray-600 hover:text-gray-800 hover:bg-gray-100'} transition-all duration-200"
                     >
                         <i class="fas fa-star mr-2"></i>Curate
                     </button>
+                    ` : html``}
                     <button
                         @click=${() => this._handleTabChange('lists')}
                         class="py-3 px-6 text-base font-semibold ${this.activeTab === 'lists' ? 'border-b-4 border-blue-600 text-blue-800 bg-blue-50' : 'text-gray-600 hover:text-gray-800 hover:bg-gray-100'} transition-all duration-200"
@@ -175,7 +196,7 @@ class AppHeader extends LitElement {
                         @click=${() => this._handleTabChange('admin')}
                         class="py-3 px-6 text-base font-semibold ${this.activeTab === 'admin' ? 'border-b-4 border-blue-600 text-blue-800 bg-blue-50' : 'text-gray-600 hover:text-gray-800 hover:bg-gray-100'} transition-all duration-200"
                     >
-                        <i class="fas fa-cog mr-2"></i>Admin
+                        <i class="fas fa-cog mr-2"></i>Keywords
                     </button>
                     <button
                         @click=${() => this._handleTabChange('system')}

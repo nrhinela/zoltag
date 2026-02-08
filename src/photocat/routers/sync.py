@@ -8,15 +8,10 @@ from google.cloud import storage
 
 from photocat.dependencies import get_db, get_tenant, get_secret
 from photocat.tenant import Tenant
-from photocat.metadata import Tenant as TenantModel, ImageMetadata
+from photocat.metadata import Tenant as TenantModel, Asset
 from photocat.settings import settings
 from photocat.image import ImageProcessor
-from photocat.config.db_config import ConfigManager
-from photocat.learning import (
-    load_keyword_models,
-)
 from photocat.sync_pipeline import process_dropbox_entry
-from photocat.tagging import get_tagger
 
 router = APIRouter(
     prefix="/api/v1",
@@ -28,10 +23,12 @@ router = APIRouter(
 async def trigger_sync(
     tenant: Tenant = Depends(get_tenant),
     db: Session = Depends(get_db),
-    model: str = Query("siglip", description="'clip' or 'siglip'")
+    model: str = Query("siglip", description="'clip' or 'siglip'"),
+    reprocess_existing: bool = Query(False, description="Reprocess entries even if already ingested"),
 ):
     """Trigger Dropbox sync for tenant."""
     try:
+        _ = model  # Legacy query param retained for backward compatibility.
         # Check if Dropbox credentials are configured
         if not tenant.dropbox_app_key:
             raise HTTPException(
@@ -75,12 +72,19 @@ async def trigger_sync(
         # Only fetch unprocessed files by checking what's already in DB
         from dropbox.files import FileMetadata
 
-        # Get already processed dropbox IDs
-        processed_ids = set(
-            row[0] for row in db.query(ImageMetadata.dropbox_id)
-            .filter(ImageMetadata.tenant_id == tenant.id)
-            .all()
-        )
+        # Get already processed dropbox source paths
+        processed_paths = set()
+        if not reprocess_existing:
+            processed_paths = set(
+                row[0]
+                for row in db.query(Asset.source_key)
+                .filter(
+                    Asset.tenant_id == tenant.id,
+                    Asset.source_provider == "dropbox",
+                )
+                .all()
+                if row[0]
+            )
 
         # Find next unprocessed image
         file_entry = None
@@ -110,7 +114,7 @@ async def trigger_sync(
                     file_entries.sort(key=lambda e: e.server_modified, reverse=True)
 
                     for entry in file_entries:
-                        if entry.id not in processed_ids:
+                        if reprocess_existing or entry.path_display not in processed_paths:
                             processor = ImageProcessor()
                             if processor.is_supported(entry.name):
                                 file_entry = entry
@@ -142,7 +146,7 @@ async def trigger_sync(
                 file_entries.sort(key=lambda e: e.server_modified, reverse=True)
 
                 for entry in file_entries:
-                    if entry.id not in processed_ids:
+                    if reprocess_existing or entry.path_display not in processed_paths:
                         processor = ImageProcessor()
                         if processor.is_supported(entry.name):
                             file_entry = entry
@@ -170,26 +174,6 @@ async def trigger_sync(
         storage_client = storage.Client(project=settings.gcp_project_id)
         thumbnail_bucket = storage_client.bucket(tenant.get_thumbnail_bucket(settings))
 
-        # Load config for tagging
-        config_mgr = ConfigManager(db, tenant.id)
-        all_keywords = config_mgr.get_all_keywords()
-
-        # Group keywords by category
-        by_category = {}
-        keyword_to_category = {}
-        for kw in all_keywords:
-            cat = kw['category']
-            keyword_to_category[kw['keyword']] = cat
-            if cat not in by_category:
-                by_category[cat] = []
-            by_category[cat].append(kw)
-
-        tagger = get_tagger(model_type=model)
-        model_name = getattr(tagger, "model_name", model)
-        keyword_models = None
-        if settings.use_keyword_models:
-            keyword_models = load_keyword_models(db, tenant.id, model_name)
-
         processed = 0
         max_per_sync = 1  # Process one at a time for real-time UI updates
         status_messages = []
@@ -209,15 +193,12 @@ async def trigger_sync(
                     entry=entry,
                     dropbox_client=dbx,
                     thumbnail_bucket=thumbnail_bucket,
-                    keywords_by_category=by_category,
-                    keyword_to_category=keyword_to_category,
-                    keyword_models=keyword_models,
-                    model_type=model,
+                    reprocess_existing=reprocess_existing,
                     log=print,
                 )
                 if result.status == "processed":
                     processed += 1
-                    status_messages.append(f"{entry.name}: {result.tags_count} tags")
+                    status_messages.append(f"{entry.name}: metadata + thumbnail stored")
                 elif result.status == "skipped":
                     status_messages.append(f"{entry.name}: already synced")
             except Exception as e:

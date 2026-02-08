@@ -222,7 +222,12 @@ export class SignupPage extends LitElement {
     }
 
     try {
-      await signUp(this.email, this.password, this.displayName);
+      const result = await signUp(this.email, this.password, this.displayName);
+      if (result?.needsEmailVerification) {
+        this.success = 'Check your email to verify your account, then sign in. Approval may still be required.';
+        this.loading = false;
+        return;
+      }
       this.success = 'Account created! Awaiting admin approval.';
       this.email = '';
       this.password = '';

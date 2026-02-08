@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
+import mimetypes
 from typing import Any, Callable, Dict, Optional
 
 from sqlalchemy.orm import Session
@@ -17,14 +17,8 @@ from photocat.exif import (
     parse_exif_str,
 )
 from photocat.image import ImageProcessor
-from photocat.learning import (
-    ensure_image_embedding,
-    recompute_trained_tags_for_image,
-    score_keywords_for_categories,
-)
-from photocat.metadata import ImageMetadata, MachineTag
+from photocat.metadata import Asset, ImageMetadata
 from photocat.settings import settings
-from photocat.tagging import get_tagger
 from photocat.tenant import Tenant
 
 
@@ -49,6 +43,7 @@ class DropboxAdapter:
         if hasattr(self._client, "get_thumbnail"):
             return self._client.get_thumbnail(path, size=size)
         if hasattr(self._client, "files_get_thumbnail_v2"):
+            from dropbox.files import ThumbnailSize
             target_size = getattr(ThumbnailSize, size, None)
             if target_size is None:
                 raise ValueError(f"Unsupported thumbnail size: {size}")
@@ -93,13 +88,14 @@ def process_dropbox_entry(
     entry: Any,
     dropbox_client: Any,
     thumbnail_bucket: Any,
-    keywords_by_category: Dict[str, list[dict]],
-    keyword_to_category: Dict[str, str],
-    model_type: str,
+    keywords_by_category: Optional[Dict[str, list[dict]]] = None,
+    keyword_to_category: Optional[Dict[str, str]] = None,
+    model_type: str = "siglip",
     keyword_models: Optional[Dict[str, Any]] = None,
+    reprocess_existing: bool = False,
     log: Optional[Callable[[str], None]] = None,
 ) -> ProcessResult:
-    """Process a Dropbox FileMetadata entry into ImageMetadata + tags."""
+    """Process a Dropbox FileMetadata entry into Asset + ImageMetadata."""
     adapter = DropboxAdapter(dropbox_client)
     processor = ImageProcessor()
     dropbox_exif: Dict[str, Any] = {}
@@ -174,127 +170,116 @@ def process_dropbox_entry(
     camera_model = parse_exif_str(get_exif_value(exif, "Model"))
     lens_model = parse_exif_str(get_exif_value(exif, "LensModel", "Lens"))
 
-    existing = db.query(ImageMetadata).filter(
-        ImageMetadata.tenant_id == tenant.id,
-        ImageMetadata.dropbox_id == entry.id
-    ).first()
-    if existing:
+    existing = (
+        db.query(ImageMetadata)
+        .join(Asset, Asset.id == ImageMetadata.asset_id)
+        .filter(
+            ImageMetadata.tenant_id == tenant.id,
+            Asset.tenant_id == tenant.id,
+            Asset.source_provider == "dropbox",
+            Asset.source_key == entry.path_display,
+        )
+        .order_by(ImageMetadata.id.asc())
+        .first()
+    )
+    if existing and not reprocess_existing:
         return ProcessResult(status="skipped", image_id=existing.id)
 
-    # Use Dropbox file ID to ensure unique thumbnail paths
-    # (prevents collisions when files have same name but different extensions)
-    thumbnail_filename = f"{entry.id}_thumb.jpg"
-    thumbnail_path = tenant.get_storage_path(thumbnail_filename, "thumbnails")
-    blob = thumbnail_bucket.blob(thumbnail_path)
+    source_provider = "dropbox"
+    source_key = entry.path_display
+    source_rev = getattr(entry, "rev", None)
+    guessed_mime_type = mimetypes.guess_type(entry.name)[0]
+    mime_type = guessed_mime_type
+    if not mime_type and features.get("format"):
+        mime_type = f"image/{str(features.get('format')).lower()}"
+
+    asset = (
+        db.query(Asset)
+        .filter(
+            Asset.tenant_id == tenant.id,
+            Asset.source_provider == source_provider,
+            Asset.source_key == source_key,
+        )
+        .order_by(Asset.created_at.asc(), Asset.id.asc())
+        .first()
+    )
+    if asset is None:
+        asset = Asset(
+            tenant_id=tenant.id,
+            filename=entry.name,
+            source_provider=source_provider,
+            source_key=source_key,
+            source_rev=source_rev,
+            thumbnail_key=f"legacy:{tenant.id}:{entry.id}:thumbnail",
+            mime_type=mime_type,
+            width=features.get("width"),
+            height=features.get("height"),
+            duration_ms=None,
+        )
+        db.add(asset)
+        db.flush()
+    else:
+        asset.filename = entry.name or asset.filename
+        if source_rev:
+            asset.source_rev = source_rev
+        if asset.mime_type is None:
+            asset.mime_type = mime_type
+        if asset.width is None:
+            asset.width = features.get("width")
+        if asset.height is None:
+            asset.height = features.get("height")
+
+    thumbnail_key = tenant.get_asset_thumbnail_key(str(asset.id), "default-256.jpg")
+    blob = thumbnail_bucket.blob(thumbnail_key)
     blob.cache_control = "public, max-age=31536000, immutable"
     blob.upload_from_string(features["thumbnail"], content_type="image/jpeg")
+    asset.thumbnail_key = thumbnail_key
 
-    metadata = ImageMetadata(
-        tenant_id=tenant.id,
-        dropbox_path=entry.path_display,
-        dropbox_id=entry.id,
-        filename=entry.name,
-        file_size=getattr(entry, "size", None),
-        content_hash=getattr(entry, "content_hash", None),
-        modified_time=getattr(entry, "server_modified", None),
-        width=features.get("width"),
-        height=features.get("height"),
-        format=features.get("format"),
-        perceptual_hash=features.get("perceptual_hash"),
-        color_histogram=features.get("color_histogram"),
-        exif_data=exif,
-        dropbox_properties=dropbox_props or None,
-        camera_make=camera_make,
-        camera_model=camera_model,
-        lens_model=lens_model,
-        capture_timestamp=capture_timestamp,
-        gps_latitude=gps_latitude,
-        gps_longitude=gps_longitude,
-        iso=iso,
-        aperture=aperture,
-        shutter_speed=shutter_speed,
-        focal_length=focal_length,
-        thumbnail_path=thumbnail_path,
-        embedding_generated=False,
-        faces_detected=False,
-        tags_applied=False,
-    )
-    db.add(metadata)
+    metadata = existing or ImageMetadata(tenant_id=tenant.id)
+    metadata.asset_id = asset.id
+    metadata.tenant_id = tenant.id
+    if hasattr(ImageMetadata, "dropbox_path"):
+        legacy_dropbox_path = getattr(metadata, "dropbox_path", None)
+        if settings.asset_write_legacy_fields or not legacy_dropbox_path:
+            setattr(metadata, "dropbox_path", entry.path_display)
+    if hasattr(ImageMetadata, "dropbox_id"):
+        setattr(metadata, "dropbox_id", entry.id)
+    metadata.filename = entry.name
+    metadata.file_size = getattr(entry, "size", None)
+    metadata.content_hash = getattr(entry, "content_hash", None)
+    metadata.modified_time = getattr(entry, "server_modified", None)
+    metadata.width = features.get("width")
+    metadata.height = features.get("height")
+    metadata.format = features.get("format")
+    metadata.perceptual_hash = features.get("perceptual_hash")
+    metadata.color_histogram = features.get("color_histogram")
+    metadata.exif_data = exif
+    metadata.dropbox_properties = dropbox_props or None
+    metadata.camera_make = camera_make
+    metadata.camera_model = camera_model
+    metadata.lens_model = lens_model
+    metadata.capture_timestamp = capture_timestamp
+    metadata.gps_latitude = gps_latitude
+    metadata.gps_longitude = gps_longitude
+    metadata.iso = iso
+    metadata.aperture = aperture
+    metadata.shutter_speed = shutter_speed
+    metadata.focal_length = focal_length
+    if settings.asset_write_legacy_fields and hasattr(ImageMetadata, "thumbnail_path"):
+        setattr(metadata, "thumbnail_path", thumbnail_key)
+    metadata.embedding_generated = False
+    metadata.faces_detected = False
+    metadata.tags_applied = False
+    if existing is None:
+        db.add(metadata)
     db.commit()
     db.refresh(metadata)
-
-    tagger = get_tagger(model_type=model_type)
-    model_name = getattr(tagger, "model_name", model_type)
-    model_version = getattr(tagger, "model_version", model_name)
-
-    db.query(MachineTag).filter(
-        MachineTag.image_id == metadata.id,
-        MachineTag.tag_type == 'siglip'
-    ).delete()
-
-    embedding_record = ensure_image_embedding(
-        db,
-        tenant.id,
-        metadata.id,
-        image_data,
-        model_name,
-        model_version
-    )
-
-    trained_tags = []
-    if settings.use_keyword_models and keyword_models:
-        _log(log, f"[Sync] Keyword-model: scoring {len(keyword_models)} models")
-        trained_tags = recompute_trained_tags_for_image(
-            db=db,
-            tenant_id=tenant.id,
-            image_id=metadata.id,
-            image_data=image_data,
-            keywords_by_category=keywords_by_category,
-            keyword_models=keyword_models,
-            keyword_to_category=keyword_to_category,
-            model_name=model_name,
-            model_version=model_version,
-            model_type=model_type,
-            threshold=settings.keyword_model_threshold,
-            model_weight=settings.keyword_model_weight
-        )
-        _log(log, f"[Sync] Keyword-model: {len(trained_tags)} trained tags")
-
-    _log(log, "[Sync] SigLIP: scoring categories")
-    all_tags = score_keywords_for_categories(
-        image_data=image_data,
-        keywords_by_category=keywords_by_category,
-        model_type=model_type,
-        threshold=settings.keyword_model_threshold
-    )
-    _log(log, f"[Sync] SigLIP: {len(all_tags)} tags")
-
-    from photocat.models.config import Keyword
-    for keyword_str, confidence in all_tags:
-        keyword_record = db.query(Keyword).filter(
-            Keyword.tenant_id == tenant.id,
-            Keyword.keyword == keyword_str
-        ).first()
-        if not keyword_record:
-            continue
-        db.add(MachineTag(
-            image_id=metadata.id,
-            tenant_id=tenant.id,
-            keyword_id=keyword_record.id,
-            confidence=confidence,
-            tag_type='siglip',
-            model_name=model_name,
-            model_version=model_version
-        ))
-
-    metadata.tags_applied = len(all_tags) > 0
-    db.commit()
 
     return ProcessResult(
         status="processed",
         image_id=metadata.id,
-        tags_count=len(all_tags),
-        trained_tags_count=len(trained_tags),
+        tags_count=0,
+        trained_tags_count=0,
         width=metadata.width,
         height=metadata.height,
         capture_timestamp=capture_timestamp,

@@ -500,7 +500,7 @@ class ListEditor extends LitElement {
       <div class="p-4">
         <div class="flex justify-between items-center mb-6">
             <h2 class="text-lg font-semibold text-gray-900">Lists</h2>
-            <div class="ml-auto flex items-center gap-4 text-xs text-gray-600">
+            <div class="ml-auto flex items-center gap-4 text-sm text-gray-600">
               ${this.selectedList ? html`
                 <label class="font-semibold text-gray-600">Thumb</label>
                 <input
@@ -512,19 +512,19 @@ class ListEditor extends LitElement {
                   @input=${this._handleThumbSizeChange}
                   class="w-24"
                 >
-                <span class="w-12 text-right text-xs">${this.thumbSize}px</span>
+                <span class="w-12 text-right text-sm">${this.thumbSize}px</span>
               ` : html``}
               <div class="flex items-center gap-2">
                 <button
                   @click=${this._createList}
-                  class="inline-flex items-center gap-2 border rounded-lg px-4 py-2 text-xs text-gray-600 hover:bg-gray-50"
+                  class="inline-flex items-center gap-2 border rounded-lg px-4 py-2 text-sm text-gray-600 hover:bg-gray-50"
                 >
                   <span aria-hidden="true">+</span>
                   Add New List
                 </button>
                 <button
                   @click=${() => this.fetchLists({ force: true })}
-                  class="inline-flex items-center gap-2 border rounded-lg px-4 py-2 text-xs text-gray-600 hover:bg-gray-50 disabled:opacity-60 disabled:cursor-not-allowed"
+                  class="inline-flex items-center gap-2 border rounded-lg px-4 py-2 text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-60 disabled:cursor-not-allowed"
                   title="Refresh"
                   ?disabled=${this.isLoadingLists}
                   aria-busy=${this.isLoadingLists ? 'true' : 'false'}
@@ -537,7 +537,7 @@ class ListEditor extends LitElement {
         </div>
         ${this.selectedList ? html`
           <div class="mb-6">
-            <button @click=${this._closeListView} class="text-xs text-blue-600 hover:underline mb-4">← Back to lists</button>
+            <button @click=${this._closeListView} class="text-sm text-blue-600 hover:underline mb-4">← Back to lists</button>
             ${this.isLoadingItems ? html`
               <div class="flex justify-between items-start mb-6">
                 <div class="flex-1">
@@ -557,7 +557,7 @@ class ListEditor extends LitElement {
               <div class="flex justify-between items-start mb-6">
                 <div class="flex-1">
                   <h3 class="text-2xl font-bold text-gray-900 mb-1">${this.selectedList.title}</h3>
-                  <div class="flex gap-4 text-xs text-gray-600 mb-2">
+                  <div class="flex gap-4 text-sm text-gray-600 mb-2">
                     <div>
                       <span class="font-semibold">Author:</span> ${this.selectedList.created_by_name || 'Unknown'}
                     </div>
@@ -570,15 +570,15 @@ class ListEditor extends LitElement {
                   ` : html``}
                 </div>
                 <div class="flex gap-2">
-                  <button @click=${this._downloadListImages} ?disabled=${this.isDownloading} class="bg-blue-600 text-white px-3 py-1 rounded text-xs hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1">
+                  <button @click=${this._downloadListImages} ?disabled=${this.isDownloading} class="bg-blue-600 text-white px-3 py-1 rounded text-sm hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1">
                     ${this.isDownloading ? html`<span class="inline-block w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></span>` : ''}
                     Download
                   </button>
-                  <button @click=${this._startEditingSelectedList} class="bg-green-600 text-white px-3 py-1 rounded text-xs hover:bg-green-700">Edit</button>
+                  <button @click=${this._startEditingSelectedList} class="bg-green-600 text-white px-3 py-1 rounded text-sm hover:bg-green-700">Edit</button>
                 </div>
               </div>
 
-              <div class="text-xs font-semibold text-gray-700 mb-3">List Items (${this.listItems.length})</div>
+              <div class="text-sm font-semibold text-gray-700 mb-3">List Items (${this.listItems.length})</div>
               ${this.listItems.length === 0 ? html`
                 <p class="text-base text-gray-500">No items in this list yet.</p>
               ` : (() => {
@@ -617,11 +617,11 @@ class ListEditor extends LitElement {
                           const item = itemByImageId.get(Number(image.id));
                           const addedAt = item?.added_at ? new Date(item.added_at).toLocaleString() : '';
                           return html`
-                            <div class="text-xs font-semibold text-gray-900 truncate">${image.filename || `#${image.id}`}</div>
+                            <div class="text-sm font-semibold text-gray-900 truncate">${image.filename || `#${image.id}`}</div>
                             <div class="list-item-meta">
                               <div class="text-[11px] text-gray-500">${addedAt ? `Added: ${addedAt}` : ''}</div>
                               ${item ? html`
-                                <button @click=${() => this._removeListItem(item.id)} class="text-xs text-red-600 border border-red-200 rounded-lg px-2 py-1 hover:bg-red-50">Remove</button>
+                                <button @click=${() => this._removeListItem(item.id)} class="text-sm text-red-600 border border-red-200 rounded-lg px-2 py-1 hover:bg-red-50">Remove</button>
                               ` : ''}
                             </div>
                           `;
@@ -639,50 +639,50 @@ class ListEditor extends LitElement {
             <table class="min-w-full bg-white border border-gray-300">
               <thead>
                 <tr class="bg-gray-50">
-                  <th class="py-2 px-4 border-b left-justified-header text-xs font-semibold text-gray-700">
-                    <button class="hover:underline" @click=${() => this._handleListSort('id')}>
+                  <th class="py-2 px-4 border-b left-justified-header text-sm font-semibold text-gray-700">
+                    <button class="hover:underline text-left w-full" @click=${() => this._handleListSort('id')}>
                       ${this._renderSortLabel('ID', 'id')}
                     </button>
                   </th>
-                  <th class="py-2 px-4 border-b left-justified-header text-xs font-semibold text-gray-700">
-                    <button class="hover:underline" @click=${() => this._handleListSort('title')}>
+                  <th class="py-2 px-4 border-b left-justified-header text-sm font-semibold text-gray-700">
+                    <button class="hover:underline text-left w-full" @click=${() => this._handleListSort('title')}>
                       ${this._renderSortLabel('Title', 'title')}
                     </button>
                   </th>
-                  <th class="py-2 px-4 border-b left-justified-header text-xs font-semibold text-gray-700">
-                    <button class="hover:underline" @click=${() => this._handleListSort('item_count')}>
+                  <th class="py-2 px-4 border-b left-justified-header text-sm font-semibold text-gray-700">
+                    <button class="hover:underline text-left w-full" @click=${() => this._handleListSort('item_count')}>
                       ${this._renderSortLabel('Item Count', 'item_count')}
                     </button>
                   </th>
-                  <th class="py-2 px-4 border-b left-justified-header text-xs font-semibold text-gray-700">
-                    <button class="hover:underline" @click=${() => this._handleListSort('created_at')}>
+                  <th class="py-2 px-4 border-b left-justified-header text-sm font-semibold text-gray-700">
+                    <button class="hover:underline text-left w-full" @click=${() => this._handleListSort('created_at')}>
                       ${this._renderSortLabel('Created At', 'created_at')}
                     </button>
                   </th>
-                  <th class="py-2 px-4 border-b left-justified-header text-xs font-semibold text-gray-700">
-                    <button class="hover:underline" @click=${() => this._handleListSort('created_by_name')}>
+                  <th class="py-2 px-4 border-b left-justified-header text-sm font-semibold text-gray-700">
+                    <button class="hover:underline text-left w-full" @click=${() => this._handleListSort('created_by_name')}>
                       ${this._renderSortLabel('Author', 'created_by_name')}
                     </button>
                   </th>
-                  <th class="py-2 px-4 border-b left-justified-header text-xs font-semibold text-gray-700">
-                    <button class="hover:underline" @click=${() => this._handleListSort('notebox')}>
+                  <th class="py-2 px-4 border-b left-justified-header text-sm font-semibold text-gray-700">
+                    <button class="hover:underline text-left w-full" @click=${() => this._handleListSort('notebox')}>
                       ${this._renderSortLabel('Notes', 'notebox')}
                     </button>
                   </th>
-                  <th class="py-2 px-4 border-b left-justified-header text-xs font-semibold text-gray-700">Actions</th>
+                  <th class="py-2 px-4 border-b left-justified-header text-sm font-semibold text-gray-700">Actions</th>
                 </tr>
               </thead>
               <tbody>
                 ${sortedLists.map(list => html`
                   <tr class="hover:bg-gray-50 border-b">
-                    <td class="py-2 px-4 text-xs text-gray-700">${list.id}</td>
-                    <td class="py-2 px-4 text-xs text-gray-900">${list.title}</td>
-                    <td class="py-2 px-4 text-center text-xs text-gray-700">${list.item_count}</td>
-                    <td class="py-2 px-4 text-xs text-gray-700">${new Date(list.created_at).toLocaleDateString()}</td>
-                    <td class="py-2 px-4 text-xs text-gray-600">${list.created_by_name || '—'}</td>
-                    <td class="py-2 px-4 text-xs text-gray-600">${list.notebox || '—'}</td>
+                    <td class="py-2 px-4 text-sm text-gray-700">${list.id}</td>
+                    <td class="py-2 px-4 text-sm text-gray-900">${list.title}</td>
+                    <td class="py-2 px-4 text-sm text-gray-700">${list.item_count}</td>
+                    <td class="py-2 px-4 text-sm text-gray-700">${new Date(list.created_at).toLocaleDateString()}</td>
+                    <td class="py-2 px-4 text-sm text-gray-600">${list.created_by_name || '—'}</td>
+                    <td class="py-2 px-4 text-sm text-gray-600">${list.notebox || '—'}</td>
                     <td class="py-2 px-4 text-left">
-                      <button @click=${() => this._selectList(list)} class="bg-slate-900 text-white px-3 py-1 rounded text-xs hover:bg-slate-800 mr-2">View</button>
+                      <button @click=${() => this._selectList(list)} class="bg-slate-900 text-white px-3 py-1 rounded text-sm hover:bg-slate-800 mr-2">View</button>
                     </td>
                   </tr>
                 `)}
@@ -702,17 +702,17 @@ class ListEditor extends LitElement {
             <div class="mb-6">
               <div class="grid grid-cols-2 gap-4 mb-6 pb-6 border-b border-gray-200">
                 <div>
-                  <p class="text-xs font-semibold text-gray-700 mb-1">Author</p>
+                  <p class="text-sm font-semibold text-gray-700 mb-1">Author</p>
                   <p class="text-sm text-gray-900">${this.selectedList.created_by_name || 'Unknown'}</p>
                 </div>
                 <div>
-                  <p class="text-xs font-semibold text-gray-700 mb-1">Created</p>
+                  <p class="text-sm font-semibold text-gray-700 mb-1">Created</p>
                   <p class="text-sm text-gray-900">${new Date(this.selectedList.created_at).toLocaleDateString()}</p>
                 </div>
               </div>
 
               <div class="mb-4">
-                <label class="block text-xs font-semibold text-gray-700 mb-2">Title</label>
+                <label class="block text-sm font-semibold text-gray-700 mb-2">Title</label>
                 <input
                   id="edit-list-title"
                   type="text"
@@ -722,7 +722,7 @@ class ListEditor extends LitElement {
               </div>
 
               <div class="mb-4">
-                <label class="block text-xs font-semibold text-gray-700 mb-2">Notes</label>
+                <label class="block text-sm font-semibold text-gray-700 mb-2">Notes</label>
                 <textarea
                   id="edit-list-notes"
                   .value=${this.selectedList.notebox || ''}

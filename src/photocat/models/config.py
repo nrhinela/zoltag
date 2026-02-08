@@ -104,7 +104,7 @@ class PhotoListItem(Base):
 
     id = Column(Integer, primary_key=True)
     list_id = Column(Integer, ForeignKey('photo_lists.id', ondelete='CASCADE'), nullable=False, index=True)
-    photo_id = Column(Integer, nullable=False, index=True)
+    asset_id = Column(sa.UUID, nullable=False, index=True)
     added_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     # Relationships
@@ -113,7 +113,7 @@ class PhotoListItem(Base):
     updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
 
     __table_args__ = (
-        Index("idx_photo_list_items_list_photo", "list_id", "photo_id"),
+        Index("idx_photo_list_items_list_asset", "list_id", "asset_id"),
     )
     
     def to_dict(self):

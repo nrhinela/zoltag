@@ -8,6 +8,7 @@ from google.cloud import storage
 from photocat.settings import settings
 from photocat.tagging import get_tagger
 from photocat.learning import ensure_image_embedding
+from photocat.asset_helpers import load_assets_for_images, resolve_image_storage
 from photocat.metadata import ImageMetadata
 from photocat.cli.base import CliCommand
 
@@ -78,19 +79,28 @@ class BuildEmbeddingsCommand(CliCommand):
         if not images:
             click.echo("No images need embeddings.")
             return
+        assets_by_id = load_assets_for_images(self.db, images)
 
         click.echo(f"Computing embeddings for {len(images)} images...")
         with click.progressbar(images, label='Embedding images') as bar:
             for image in bar:
-                if not image.thumbnail_path:
+                storage_info = resolve_image_storage(
+                    image=image,
+                    tenant=self.tenant,
+                    db=None,
+                    assets_by_id=assets_by_id,
+                    strict=False,
+                )
+                thumbnail_key = storage_info.thumbnail_key
+                if not thumbnail_key:
                     continue
-                blob = thumbnail_bucket.blob(image.thumbnail_path)
+                blob = thumbnail_bucket.blob(thumbnail_key)
                 if not blob.exists():
                     continue
                 image_data = blob.download_as_bytes()
                 ensure_image_embedding(
                     self.db, self.tenant.id, image.id, image_data,
-                    model_name, model_version
+                    model_name, model_version, asset_id=image.asset_id
                 )
 
         self.db.commit()

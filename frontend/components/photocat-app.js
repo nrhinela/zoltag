@@ -26,6 +26,7 @@ import {
   getDropboxFolders,
   addToList,
 } from '../services/api.js';
+import { getCurrentUser } from '../services/auth.js';
 import { enqueueCommand, subscribeQueue, retryFailedCommand } from '../services/command-queue.js';
 import { createSelectionHandlers } from './shared/selection-handlers.js';
 import { createPaginationHandlers } from './shared/pagination-controls.js';
@@ -1289,6 +1290,7 @@ class PhotoCatApp extends LitElement {
       curateMinRating: { type: [Number, String] },
       curateKeywordFilters: { type: Object },
       curateKeywordOperators: { type: Object },
+      curateCategoryFilterOperator: { type: String },
       curateDropboxPathPrefix: { type: String },
       curateListId: { type: [Number, String] },
       curateListExcludeId: { type: [Number, String] },
@@ -1343,6 +1345,7 @@ class PhotoCatApp extends LitElement {
       curateAuditRatingEnabled: { type: Boolean },
       searchImages: { type: Array },
       searchTotal: { type: Number },
+      currentUser: { type: Object },
   }
 
   constructor() {
@@ -1376,6 +1379,7 @@ class PhotoCatApp extends LitElement {
       this.curateMinRating = null;
       this.curateKeywordFilters = {};
       this.curateKeywordOperators = {};
+      this.curateCategoryFilterOperator = undefined;
       this.curateDropboxPathPrefix = '';
       this.curateListId = '';
       this.curateListExcludeId = '';
@@ -1426,6 +1430,7 @@ class PhotoCatApp extends LitElement {
       this.curateCategoryCards = [];
       this.searchImages = [];
       this.searchTotal = 0;
+      this.currentUser = null;
       this.curateExploreTargets = [
         { id: 1, category: '', keyword: '', action: 'add', count: 0 },
       ];
@@ -2077,6 +2082,7 @@ class PhotoCatApp extends LitElement {
 
   connectedCallback() {
       super.connectedCallback();
+      this._loadCurrentUser();
       this._initializeTab(this.activeTab);
       this._unsubscribeQueue = subscribeQueue((state) => {
         this.queueState = state;
@@ -2087,6 +2093,47 @@ class PhotoCatApp extends LitElement {
       window.addEventListener('pointerup', this._handleCurateSelectionEnd);
       window.addEventListener('keyup', this._handleCurateSelectionEnd);
       window.addEventListener('keydown', (e) => this._handleEscapeKey(e));
+  }
+
+  async _loadCurrentUser() {
+      try {
+          this.currentUser = await getCurrentUser();
+      } catch (error) {
+          console.error('Error fetching current user:', error);
+          this.currentUser = null;
+      }
+  }
+
+  _getTenantRole() {
+      const tenantId = this.tenant;
+      if (!tenantId) return null;
+      const memberships = this.currentUser?.tenants || [];
+      const match = memberships.find((membership) => String(membership.tenant_id) === String(tenantId));
+      return match?.role || null;
+  }
+
+  _canCurate() {
+      const role = this._getTenantRole();
+      if (!role) {
+          return true;
+      }
+      return role !== 'user';
+  }
+
+  _setActiveTab(tabName) {
+      if (tabName === 'curate' && !this._canCurate()) {
+          this.activeTab = 'home';
+          return;
+      }
+      this.activeTab = tabName;
+  }
+
+  _handleTabChange(event) {
+      this._setActiveTab(event.detail);
+  }
+
+  _handleHomeNavigate(event) {
+      this._setActiveTab(event.detail.tab);
   }
 
   _getTabBootstrapKey(tab) {
@@ -2691,21 +2738,31 @@ class PhotoCatApp extends LitElement {
       let nextHideDeleted = true;
       let nextListId = '';
       let nextListExcludeId = '';
+      let nextCategoryFilterOperator = undefined;
 
       chips.forEach((chip) => {
           switch (chip.type) {
-              case 'keyword':
-                  if (chip.value === '__untagged__') {
+              case 'keyword': {
+                  if (chip.untagged || chip.value === '__untagged__') {
                       nextNoPositivePermatags = true;
-                  } else if (chip.value) {
-                      const category = chip.category || 'Uncategorized';
+                      break;
+                  }
+                  const keywordsByCategory = chip.keywordsByCategory && typeof chip.keywordsByCategory === 'object'
+                      ? chip.keywordsByCategory
+                      : (chip.category && chip.value ? { [chip.category]: [chip.value] } : {});
+                  const operator = chip.operator || 'OR';
+                  nextCategoryFilterOperator = operator;
+                  Object.entries(keywordsByCategory).forEach(([category, values]) => {
+                      const list = Array.isArray(values) ? values : Array.from(values || []);
+                      if (!list.length) return;
                       if (!nextKeywords[category]) {
                           nextKeywords[category] = new Set();
                       }
-                      nextKeywords[category].add(chip.value);
-                      nextOperators[category] = 'OR';
-                  }
+                      list.forEach((value) => nextKeywords[category].add(value));
+                      nextOperators[category] = operator;
+                  });
                   break;
+              }
               case 'rating':
                   if (chip.value === 'unrated') {
                       nextMinRating = 'unrated';
@@ -2731,6 +2788,7 @@ class PhotoCatApp extends LitElement {
       if (nextNoPositivePermatags) {
           Object.keys(nextKeywords).forEach((key) => delete nextKeywords[key]);
           Object.keys(nextOperators).forEach((key) => delete nextOperators[key]);
+          nextCategoryFilterOperator = undefined;
       }
 
       this.curateKeywordFilters = nextKeywords;
@@ -2741,6 +2799,7 @@ class PhotoCatApp extends LitElement {
       this.curateDropboxPathPrefix = nextDropboxPathPrefix;
       this.curateListId = nextListId;
       this.curateListExcludeId = nextListExcludeId;
+      this.curateCategoryFilterOperator = nextCategoryFilterOperator;
 
       this._applyCurateFilters({ resetOffset: true });
   }
@@ -2756,8 +2815,27 @@ class PhotoCatApp extends LitElement {
   _handleCurateAuditChipFiltersChanged(event) {
       const chips = event.detail?.filters || [];
       const keywordChip = chips.find((chip) => chip.type === 'keyword');
-      const nextKeyword = keywordChip?.value || '';
-      let nextCategory = keywordChip?.category || '';
+      let nextKeyword = '';
+      let nextCategory = '';
+      if (keywordChip) {
+          if (keywordChip.untagged || keywordChip.value === '__untagged__') {
+              nextKeyword = '';
+              nextCategory = '';
+          } else if (keywordChip.keywordsByCategory && typeof keywordChip.keywordsByCategory === 'object') {
+              const entries = Object.entries(keywordChip.keywordsByCategory);
+              if (entries.length) {
+                  const [category, values] = entries[0];
+                  const list = Array.isArray(values) ? values : Array.from(values || []);
+                  if (list.length) {
+                      nextCategory = category;
+                      nextKeyword = list[0];
+                  }
+              }
+          } else if (keywordChip.value) {
+              nextKeyword = keywordChip.value;
+              nextCategory = keywordChip.category || '';
+          }
+      }
       let nextMinRating = null;
       let nextHideDeleted = true;
       let nextDropboxPathPrefix = '';
@@ -3640,13 +3718,14 @@ class PhotoCatApp extends LitElement {
 
   render() {
     const showCurateStatsOverlay = this.curateStatsLoading || this.curateHomeRefreshing;
+    const canCurate = this._canCurate();
     const navCards = [
       { key: 'search', label: 'Search', subtitle: 'Explore and save results', icon: 'fa-magnifying-glass' },
       { key: 'curate', label: 'Curate', subtitle: 'Build stories and sets', icon: 'fa-star' },
       { key: 'lists', label: 'Lists', subtitle: 'Organize saved sets', icon: 'fa-list' },
-      { key: 'admin', label: 'Admin', subtitle: 'Manage configuration', icon: 'fa-cog' },
+      { key: 'admin', label: 'Keywords', subtitle: 'Manage configuration', icon: 'fa-cog' },
       { key: 'system', label: 'System', subtitle: 'Manage pipelines and tasks', icon: 'fa-sliders' },
-    ];
+    ].filter((card) => canCurate || card.key !== 'curate');
     const leftImages = this.curateImages;
     this._curateLeftOrder = leftImages.map((img) => img.id);
     this._curateRightOrder = [];
@@ -3738,8 +3817,9 @@ class PhotoCatApp extends LitElement {
             @tenant-change=${this._handleTenantChange}
             @open-upload-modal=${this._handleOpenUploadModal}
             .activeTab=${this.activeTab}
+            .canCurate=${canCurate}
             .queueCount=${(this.queueState?.queuedCount || 0) + (this.queueState?.inProgressCount || 0) + (this.queueState?.failedCount || 0)}
-            @tab-change=${(e) => this.activeTab = e.detail}
+            @tab-change=${this._handleTabChange}
             @sync-progress=${this._handleSyncProgress}
             @sync-complete=${this._handleSyncComplete}
             @sync-error=${this._handleSyncError}
@@ -3777,12 +3857,12 @@ class PhotoCatApp extends LitElement {
                 </div>
               </div>
               ${this.homeSubTab === 'overview' ? html`
-                <home-tab
+              <home-tab
                   .imageStats=${this.imageStats}
                   .mlTrainingStats=${this.mlTrainingStats}
                   .navCards=${navCards}
-                  @navigate=${(e) => { this.activeTab = e.detail.tab; }}
-                ></home-tab>
+                  @navigate=${this._handleHomeNavigate}
+              ></home-tab>
               ` : html``}
               ${this.homeSubTab === 'lab' ? html`
                 <lab-tab
@@ -4272,6 +4352,7 @@ class PhotoCatApp extends LitElement {
             .open=${this.curateEditorOpen}
             .imageSet=${this.curateEditorImageSet}
             .currentImageIndex=${this.curateEditorImageIndex}
+            .canEditTags=${canCurate}
             @close=${this._handleCurateEditorClose}
             @image-rating-updated=${this._handleImageRatingUpdated}
             @zoom-to-photo=${this._handleZoomToPhoto}
@@ -4505,6 +4586,9 @@ class PhotoCatApp extends LitElement {
       }
       if (changedProperties.has('activeTab')) {
           this._initializeTab(this.activeTab);
+      }
+      if ((changedProperties.has('currentUser') || changedProperties.has('tenant')) && this.activeTab === 'curate' && !this._canCurate()) {
+          this.activeTab = 'home';
       }
       if (changedProperties.has('homeSubTab') && this.activeTab === 'home') {
           if (this.homeSubTab === 'chips' || this.homeSubTab === 'insights') {

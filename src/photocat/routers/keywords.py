@@ -36,40 +36,43 @@ async def get_available_keywords(
     config_mgr = ConfigManager(db, tenant.id)
     all_keywords = config_mgr.get_all_keywords(include_people=include_people)
 
-    image_ids_query = db.query(ImageMetadata.id).filter(ImageMetadata.tenant_id == tenant.id)
+    image_assets_query = db.query(ImageMetadata.asset_id).filter(
+        ImageMetadata.tenant_id == tenant.id,
+        ImageMetadata.asset_id.is_not(None),
+    )
 
     if list_id is not None:
         lst = db.query(PhotoList).filter_by(id=list_id, tenant_id=tenant.id).first()
         if not lst:
             return {"tenant_id": tenant.id, "keywords_by_category": {}, "all_keywords": []}
-        list_ids_subq = db.query(PhotoListItem.photo_id).filter(
-            PhotoListItem.list_id == list_id
+        list_assets_subq = db.query(PhotoListItem.asset_id).filter(
+            PhotoListItem.list_id == list_id,
+            PhotoListItem.asset_id.is_not(None),
         )
-        image_ids_query = image_ids_query.filter(ImageMetadata.id.in_(list_ids_subq))
+        image_assets_query = image_assets_query.filter(ImageMetadata.asset_id.in_(list_assets_subq))
 
     if rating is not None:
         if rating_operator == "gte":
-            image_ids_query = image_ids_query.filter(ImageMetadata.rating >= rating)
+            image_assets_query = image_assets_query.filter(ImageMetadata.rating >= rating)
         elif rating_operator == "gt":
-            image_ids_query = image_ids_query.filter(ImageMetadata.rating > rating)
+            image_assets_query = image_assets_query.filter(ImageMetadata.rating > rating)
         else:
-            image_ids_query = image_ids_query.filter(ImageMetadata.rating == rating)
+            image_assets_query = image_assets_query.filter(ImageMetadata.rating == rating)
 
     if hide_zero_rating:
-        image_ids_query = image_ids_query.filter(ImageMetadata.rating != 0)
+        image_assets_query = image_assets_query.filter(ImageMetadata.rating != 0)
 
     if reviewed is not None:
-        reviewed_subq = db.query(distinct(Permatag.image_id)).join(
-            ImageMetadata, ImageMetadata.id == Permatag.image_id
-        ).filter(
-            ImageMetadata.tenant_id == tenant.id
+        reviewed_subq = db.query(distinct(Permatag.asset_id)).filter(
+            Permatag.tenant_id == tenant.id,
+            Permatag.asset_id.is_not(None),
         )
         if reviewed:
-            image_ids_query = image_ids_query.filter(ImageMetadata.id.in_(reviewed_subq))
+            image_assets_query = image_assets_query.filter(ImageMetadata.asset_id.in_(reviewed_subq))
         else:
-            image_ids_query = image_ids_query.filter(ImageMetadata.id.notin_(reviewed_subq))
+            image_assets_query = image_assets_query.filter(ImageMetadata.asset_id.notin_(reviewed_subq))
 
-    image_ids_subq = image_ids_query.subquery()
+    image_assets_subq = image_assets_query.subquery()
 
     source_mode = (source or "current").lower()
     active_tag_type = get_tenant_setting(db, tenant.id, 'active_machine_tag_type', default='siglip')
@@ -79,14 +82,15 @@ async def get_available_keywords(
         counts_query = db.query(
             Keyword.keyword,
             KeywordCategory.name.label("category"),
-            func.count(distinct(Permatag.image_id)).label("count")
+            func.count(distinct(Permatag.asset_id)).label("count")
         ).join(
             Keyword, Keyword.id == Permatag.keyword_id
         ).join(
             KeywordCategory, Keyword.category_id == KeywordCategory.id
         ).join(
-            image_ids_subq, image_ids_subq.c.id == Permatag.image_id
+            image_assets_subq, image_assets_subq.c.asset_id == Permatag.asset_id
         ).filter(
+            Permatag.tenant_id == tenant.id,
             Permatag.signum == 1
         ).group_by(
             Keyword.keyword, KeywordCategory.name
@@ -94,26 +98,29 @@ async def get_available_keywords(
     else:
         machine_base = db.query(
             MachineTag.keyword_id.label("keyword_id"),
-            MachineTag.image_id.label("image_id")
+            MachineTag.asset_id.label("asset_id")
         ).join(
-            image_ids_subq, image_ids_subq.c.id == MachineTag.image_id
+            image_assets_subq, image_assets_subq.c.asset_id == MachineTag.asset_id
         ).outerjoin(
             Permatag,
-            (Permatag.image_id == MachineTag.image_id)
+            (Permatag.asset_id == MachineTag.asset_id)
             & (Permatag.keyword_id == MachineTag.keyword_id)
             & (Permatag.signum == -1)
         ).filter(
             MachineTag.tenant_id == tenant.id,
             MachineTag.tag_type == active_tag_type,
+            MachineTag.asset_id.is_not(None),
             Permatag.id.is_(None)
         )
 
         permatag_base = db.query(
             Permatag.keyword_id.label("keyword_id"),
-            Permatag.image_id.label("image_id")
+            Permatag.asset_id.label("asset_id")
         ).join(
-            image_ids_subq, image_ids_subq.c.id == Permatag.image_id
+            image_assets_subq, image_assets_subq.c.asset_id == Permatag.asset_id
         ).filter(
+            Permatag.tenant_id == tenant.id,
+            Permatag.asset_id.is_not(None),
             Permatag.signum == 1
         )
 
@@ -121,7 +128,7 @@ async def get_available_keywords(
         counts_query = db.query(
             Keyword.keyword,
             KeywordCategory.name.label("category"),
-            func.count(distinct(union_tags.c.image_id)).label("count")
+            func.count(distinct(union_tags.c.asset_id)).label("count")
         ).join(
             Keyword, Keyword.id == union_tags.c.keyword_id
         ).join(
@@ -183,10 +190,11 @@ async def get_tag_stats(
     # Get zero-shot (SigLIP) tags from machine_tags
     zero_shot_rows = db.query(
         MachineTag.keyword_id,
-        func.count(distinct(MachineTag.image_id)).label("count")
+        func.count(distinct(MachineTag.asset_id)).label("count")
     ).filter(
         MachineTag.tenant_id == tenant.id,
-        MachineTag.tag_type == 'siglip'
+        MachineTag.tag_type == 'siglip',
+        MachineTag.asset_id.is_not(None),
     ).group_by(
         MachineTag.keyword_id
     ).all()
@@ -203,22 +211,22 @@ async def get_tag_stats(
     if model_row:
         keyword_model_rows = db.query(
             MachineTag.keyword_id,
-            func.count(distinct(MachineTag.image_id)).label("count")
+            func.count(distinct(MachineTag.asset_id)).label("count")
         ).filter(
             MachineTag.tenant_id == tenant.id,
             MachineTag.tag_type == 'trained',
-            MachineTag.model_name == model_row.model_name
+            MachineTag.model_name == model_row.model_name,
+            MachineTag.asset_id.is_not(None),
         ).group_by(
             MachineTag.keyword_id
         ).all()
 
     permatag_rows = db.query(
         Permatag.keyword_id,
-        func.count(distinct(Permatag.image_id)).label("count")
-    ).join(
-        ImageMetadata, ImageMetadata.id == Permatag.image_id
+        func.count(distinct(Permatag.asset_id)).label("count")
     ).filter(
-        ImageMetadata.tenant_id == tenant.id,
+        Permatag.tenant_id == tenant.id,
+        Permatag.asset_id.is_not(None),
         Permatag.signum == 1
     ).group_by(
         Permatag.keyword_id

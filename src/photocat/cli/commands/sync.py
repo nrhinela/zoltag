@@ -6,22 +6,20 @@ from google.cloud import storage
 
 from photocat.settings import settings
 from photocat.dependencies import get_secret
-from photocat.metadata import Tenant as TenantModel, ImageMetadata
+from photocat.metadata import Tenant as TenantModel, Asset
 from photocat.tenant import Tenant, TenantContext
 from photocat.dropbox import DropboxClient
-from photocat.config.db_config import ConfigManager
 from photocat.image import ImageProcessor
-from photocat.learning import load_keyword_models
 from photocat.sync_pipeline import process_dropbox_entry
-from photocat.tagging import get_tagger
 from photocat.cli.base import CliCommand
 
 
 @click.command(name='sync-dropbox')
 @click.option('--tenant-id', default='demo', help='Tenant ID to sync from Dropbox')
 @click.option('--count', default=500, type=int, help='Number of sync iterations to perform (useful for incremental syncs)')
-def sync_dropbox_command(tenant_id: str, count: int):
-    """Sync images from Dropbox to GCP Cloud Storage with full processing pipeline.
+@click.option('--reprocess-existing/--no-reprocess-existing', default=False, help='Reprocess images even if already ingested')
+def sync_dropbox_command(tenant_id: str, count: int, reprocess_existing: bool):
+    """Sync images from Dropbox to GCP Cloud Storage with ingestion-only processing.
 
     Equivalent to clicking the sync button in the web UI. This command:
 
@@ -29,24 +27,22 @@ def sync_dropbox_command(tenant_id: str, count: int):
     2. Lists new/changed files from configured sync folders
     3. Downloads images and creates thumbnails (stored in GCP Cloud Storage)
     4. Extracts image metadata (dimensions, format, embedded EXIF)
-    5. Computes image embeddings using ML models for visual search
-    6. Applies configured keywords to images based on ML tagging models
-    7. Stores all metadata and tags in PostgreSQL database
+    5. Creates/updates Asset records and links ImageMetadata rows
 
-    Artifacts stored: Image files and thumbnails → GCP Cloud Storage (tenant bucket)
+    Artifacts stored: Thumbnails → GCP Cloud Storage (tenant bucket)
     Metadata stored: Database records → PostgreSQL"""
-    cmd = SyncDropboxCommand(tenant_id, count)
+    cmd = SyncDropboxCommand(tenant_id, count, reprocess_existing)
     cmd.run()
 
 
 class SyncDropboxCommand(CliCommand):
     """Command to sync with Dropbox."""
 
-    def __init__(self, tenant_id: str, count: int):
+    def __init__(self, tenant_id: str, count: int, reprocess_existing: bool):
         super().__init__()
         self.tenant_id = tenant_id
         self.count = count
-        self.model = settings.tagging_model
+        self.reprocess_existing = reprocess_existing
 
     def run(self):
         """Execute sync dropbox command."""
@@ -97,7 +93,6 @@ class SyncDropboxCommand(CliCommand):
         )
 
         # Get sync folders from tenant config or use root
-        config_mgr = ConfigManager(self.db, self.tenant_id)
         sync_folders = (tenant.settings or {}).get('dropbox_sync_folders', [])
 
         if not sync_folders:
@@ -105,41 +100,21 @@ class SyncDropboxCommand(CliCommand):
 
         click.echo(f"Sync folders: {sync_folders}")
 
-        # Get all keywords
-        all_keywords = config_mgr.get_all_keywords()
-        if not all_keywords:
-            click.echo("Error: No keywords configured", err=True)
-            return
-
-        # Group keywords by category
-        by_category = {}
-        keyword_to_category = {}
-        for kw in all_keywords:
-            cat = kw['category']
-            keyword_to_category[kw['keyword']] = cat
-            if cat not in by_category:
-                by_category[cat] = []
-            by_category[cat].append(kw)
-
-        click.echo(f"Keywords: {len(all_keywords)} in {len(by_category)} categories")
-
-        # Get tagger
-        tagger = get_tagger(model_type=self.model)
-        model_name = getattr(tagger, "model_name", self.model)
-
-        processed_ids = set(
-            row[0]
-            for row in self.db.query(ImageMetadata.dropbox_id)
-            .filter(ImageMetadata.tenant_id == self.tenant_id)
-            .all()
-            if row[0]
-        )
+        processed_paths = set()
+        if not self.reprocess_existing:
+            processed_paths = set(
+                row[0]
+                for row in self.db.query(Asset.source_key)
+                .filter(
+                    Asset.tenant_id == self.tenant_id,
+                    Asset.source_provider == "dropbox",
+                )
+                .all()
+                if row[0]
+            )
 
         storage_client = storage.Client(project=settings.gcp_project_id)
         thumbnail_bucket = storage_client.bucket(tenant_context.get_thumbnail_bucket(settings))
-        keyword_models = None
-        if settings.use_keyword_models:
-            keyword_models = load_keyword_models(self.db, self.tenant_id, model_name)
 
         # Process images
         processed = 0
@@ -165,8 +140,10 @@ class SyncDropboxCommand(CliCommand):
                     click.echo(f"  Scanned {index}/{total_entries} entries...")
                 if not processor.is_supported(entry.name):
                     continue
-                dropbox_id = entry.id
-                if not dropbox_id or dropbox_id in processed_ids:
+                dropbox_path = entry.path_display
+                if not dropbox_path:
+                    continue
+                if not self.reprocess_existing and dropbox_path in processed_paths:
                     continue
                 unprocessed.append(entry)
                 if len(unprocessed) >= remaining:
@@ -189,17 +166,14 @@ class SyncDropboxCommand(CliCommand):
                         entry=entry,
                         dropbox_client=dropbox_client,
                         thumbnail_bucket=thumbnail_bucket,
-                        keywords_by_category=by_category,
-                        keyword_to_category=keyword_to_category,
-                        keyword_models=keyword_models,
-                        model_type=self.model,
+                        reprocess_existing=self.reprocess_existing,
                         log=lambda message: click.echo(f"  {message}"),
                     )
 
                     if result.status == "processed":
-                        processed_ids.add(entry.id)
-                        click.echo(f"  ✓ Metadata recorded (ID: {result.image_id})")
-                        click.echo(f"  ✓ Complete: {result.tags_count} tags applied")
+                        if entry.path_display:
+                            processed_paths.add(entry.path_display)
+                        click.echo(f"  ✓ Metadata + asset recorded (ID: {result.image_id})")
                         processed += 1
                     elif result.status == "skipped":
                         click.echo("  ↪ Already synced, skipping")

@@ -437,17 +437,22 @@ export class CurateExploreTab extends LitElement {
   }
 
   _handleCurateDropboxInput(event) {
-    const query = event.detail?.query || '';
+    const query = event.detail?.query ?? '';
+    const limit = event.detail?.limit;
     this._curateDropboxQuery = query;
     if (this._curateDropboxFetchTimer) {
       clearTimeout(this._curateDropboxFetchTimer);
+    }
+    if (query.trim().length === 0) {
+      this._fetchDropboxFolders('', limit);
+      return;
     }
     if (query.length < 2) {
       this.dropboxFolders = [];
       return;
     }
     this._curateDropboxFetchTimer = setTimeout(() => {
-      this._fetchDropboxFolders(query);
+      this._fetchDropboxFolders(query, limit);
     }, 500);
   }
 
@@ -491,10 +496,10 @@ export class CurateExploreTab extends LitElement {
     }
   }
 
-  async _fetchDropboxFolders(query) {
+  async _fetchDropboxFolders(query, limit) {
     if (!this.tenant) return;
     try {
-      const response = await getDropboxFolders(this.tenant, { query });
+      const response = await getDropboxFolders(this.tenant, { query, limit });
       this.dropboxFolders = response?.folders || [];
     } catch (error) {
       console.error('Error fetching Dropbox folders:', error);

@@ -9,7 +9,7 @@ from google.cloud import storage
 
 from photocat.settings import settings
 from photocat.dependencies import get_secret
-from photocat.metadata import ImageMetadata, Tenant as TenantModel
+from photocat.metadata import Asset, ImageMetadata, Tenant as TenantModel
 from photocat.tenant import Tenant, TenantContext
 from photocat.dropbox import DropboxClient
 from photocat.image import ImageProcessor
@@ -39,7 +39,7 @@ def backfill_thumbnails_command(
     2. Download each image from Dropbox
     3. Generate thumbnail file (configurable size, default 300x300px)
     4. Upload thumbnail to GCP Cloud Storage (tenant's thumbnail bucket)
-    5. Store thumbnail_path in database for later retrieval
+    5. Update assets.thumbnail_key (and legacy image_metadata.thumbnail_path when enabled)
 
     By default, only regenerates missing thumbnails. Use --regenerate-all to regenerate all thumbnails
     (useful after fixing thumbnail path collision bug).
@@ -113,19 +113,19 @@ class BackfillThumbnailsCommand(CliCommand):
         storage_client = storage.Client(project=settings.gcp_project_id)
         thumbnail_bucket = storage_client.bucket(tenant_context.get_thumbnail_bucket(settings))
 
-        if self.regenerate_all:
-            query = self.db.query(ImageMetadata).filter(
-                ImageMetadata.tenant_id == self.tenant_id
-            ).order_by(ImageMetadata.id.asc())
-        else:
+        query = (
+            self.db.query(ImageMetadata, Asset)
+            .join(Asset, Asset.id == ImageMetadata.asset_id)
+            .filter(ImageMetadata.tenant_id == self.tenant_id)
+            .order_by(ImageMetadata.id.asc())
+        )
+        if not self.regenerate_all:
             missing_filter = or_(
-                ImageMetadata.thumbnail_path.is_(None),
-                ImageMetadata.thumbnail_path == ''
+                Asset.thumbnail_key.is_(None),
+                Asset.thumbnail_key == '',
+                Asset.thumbnail_key.like('legacy:%'),
             )
-            query = self.db.query(ImageMetadata).filter(
-                ImageMetadata.tenant_id == self.tenant_id,
-                missing_filter
-            ).order_by(ImageMetadata.id.asc())
+            query = query.filter(missing_filter)
 
         if self.offset:
             query = query.offset(self.offset)
@@ -144,18 +144,28 @@ class BackfillThumbnailsCommand(CliCommand):
         skipped = 0
         failures = 0
 
-        for index, image in enumerate(images, start=1):
+        for index, (image, asset) in enumerate(images, start=1):
             filename = image.filename or f"image_{image.id}"
             if not processor.is_supported(filename):
                 click.echo(f"[{index}/{total}] Skip unsupported: {filename}")
                 skipped += 1
                 continue
 
-            dropbox_ref = image.dropbox_path
-            if not dropbox_ref and image.dropbox_id:
-                dropbox_ref = image.dropbox_id if image.dropbox_id.startswith("id:") else f"id:{image.dropbox_id}"
+            dropbox_ref = None
+            if asset.source_provider == "dropbox":
+                source_key = (asset.source_key or "").strip()
+                if source_key:
+                    dropbox_ref = source_key
+            if not dropbox_ref:
+                legacy_dropbox_path = (getattr(image, "dropbox_path", None) or "").strip()
+                if legacy_dropbox_path:
+                    dropbox_ref = legacy_dropbox_path
+            if not dropbox_ref:
+                legacy_dropbox_id = (getattr(image, "dropbox_id", None) or "").strip()
+                if legacy_dropbox_id and not legacy_dropbox_id.startswith("local_"):
+                    dropbox_ref = legacy_dropbox_id if legacy_dropbox_id.startswith("id:") else f"id:{legacy_dropbox_id}"
 
-            if not dropbox_ref or (image.dropbox_path and image.dropbox_path.startswith("/local/")):
+            if not dropbox_ref or dropbox_ref.startswith("/local/"):
                 click.echo(f"[{index}/{total}] Skip missing Dropbox path: {filename}")
                 skipped += 1
                 continue
@@ -170,17 +180,15 @@ class BackfillThumbnailsCommand(CliCommand):
                 pil_image = processor.load_image(image_data)
                 thumbnail_bytes = processor.create_thumbnail(pil_image)
 
-                # Use Dropbox file ID to ensure unique thumbnail paths
-                # (prevents collisions when files have same name but different extensions)
-                dropbox_id = image.dropbox_id or f"image_{image.id}"
-                thumbnail_filename = f"{dropbox_id}_thumb.jpg"
-                thumbnail_path = tenant_context.get_storage_path(thumbnail_filename, "thumbnails")
+                thumbnail_path = tenant_context.get_asset_thumbnail_key(str(asset.id), "default-256.jpg")
 
                 if not self.dry_run:
                     blob = thumbnail_bucket.blob(thumbnail_path)
                     blob.cache_control = "public, max-age=31536000, immutable"
                     blob.upload_from_string(thumbnail_bytes, content_type='image/jpeg')
-                    image.thumbnail_path = thumbnail_path
+                    asset.thumbnail_key = thumbnail_path
+                    if settings.asset_write_legacy_fields and hasattr(ImageMetadata, "thumbnail_path"):
+                        setattr(image, "thumbnail_path", thumbnail_path)
                 updated += 1
 
                 if not self.dry_run and updated % self.batch_size == 0:

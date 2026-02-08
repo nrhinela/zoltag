@@ -7,6 +7,9 @@ export function buildCurateFilterObject(state, overrides = {}) {
     hideZeroRating: state.curateHideDeleted,
     keywords: overrides.keywords !== undefined ? overrides.keywords : state.curateKeywordFilters,
     operators: overrides.operators !== undefined ? overrides.operators : state.curateKeywordOperators || {},
+    categoryFilterOperator: overrides.categoryFilterOperator !== undefined
+      ? overrides.categoryFilterOperator
+      : state.curateCategoryFilterOperator,
     categoryFilterSource: 'permatags',
     dropboxPathPrefix: overrides.dropboxPathPrefix !== undefined ? overrides.dropboxPathPrefix : state.curateDropboxPathPrefix,
     listId: overrides.listId !== undefined ? overrides.listId : state.curateListId,

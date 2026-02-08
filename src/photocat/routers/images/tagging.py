@@ -3,25 +3,44 @@
 import base64
 import traceback
 from typing import List
-from fastapi import APIRouter, Depends, HTTPException, Request, File, UploadFile, Body, Query
+from fastapi import APIRouter, Depends, HTTPException, File, UploadFile, Query
 from sqlalchemy.orm import Session
 from google.cloud import storage
 
-from photocat.dependencies import get_db, get_tenant, get_tenant_setting
+from photocat.asset_helpers import AssetReadinessError, load_assets_for_images, resolve_image_storage
+from photocat.dependencies import get_db, get_tenant
 from photocat.tenant import Tenant
-from photocat.metadata import ImageMetadata, MachineTag, Permatag, ImageEmbedding
+from photocat.metadata import ImageMetadata, MachineTag
 from photocat.models.config import Keyword
 from photocat.settings import settings
 from photocat.image import ImageProcessor
 from photocat.config.db_config import ConfigManager
-from photocat.tagging import calculate_tags, get_tagger
-from photocat.learning import (
-    score_keywords_for_categories,
-    recompute_trained_tags_for_image,
-)
+from photocat.tagging import get_tagger
+from photocat.learning import score_keywords_for_categories
 
 # Sub-router with no prefix/tags (inherits from parent)
 router = APIRouter()
+
+
+def _resolve_storage_or_409(
+    *,
+    image: ImageMetadata,
+    tenant: Tenant,
+    db: Session,
+    require_thumbnail: bool = False,
+    assets_by_id=None,
+):
+    try:
+        return resolve_image_storage(
+            image=image,
+            tenant=tenant,
+            db=None if assets_by_id is not None else db,
+            assets_by_id=assets_by_id,
+            strict=settings.asset_strict_reads,
+            require_thumbnail=require_thumbnail,
+        )
+    except AssetReadinessError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
 
 
 @router.post("/images/upload", response_model=dict, operation_id="upload_images")
@@ -150,8 +169,17 @@ async def analyze_image_keywords(
     thumbnail_bucket = storage_client.bucket(tenant.get_thumbnail_bucket(settings))
 
     try:
+        storage_info = _resolve_storage_or_409(
+            image=image,
+            tenant=tenant,
+            db=db,
+            require_thumbnail=True,
+        )
+        if not storage_info.thumbnail_key:
+            raise HTTPException(status_code=404, detail="Thumbnail path not set")
+
         # Download thumbnail
-        blob = thumbnail_bucket.blob(image.thumbnail_path)
+        blob = thumbnail_bucket.blob(storage_info.thumbnail_key)
         if not blob.exists():
             raise HTTPException(status_code=404, detail="Thumbnail not found in storage")
 
@@ -224,14 +252,24 @@ async def retag_single_image(
     thumbnail_bucket = storage_client.bucket(tenant.get_thumbnail_bucket(settings))
 
     try:
+        storage_info = _resolve_storage_or_409(
+            image=image,
+            tenant=tenant,
+            db=db,
+            require_thumbnail=True,
+        )
+        if not storage_info.thumbnail_key:
+            raise HTTPException(status_code=404, detail="Thumbnail path not set")
+
         # Delete existing tags
         db.query(MachineTag).filter(
-            MachineTag.image_id == image.id,
+            MachineTag.asset_id == image.asset_id,
+            MachineTag.tenant_id == tenant.id,
             MachineTag.tag_type == 'siglip'
         ).delete()
 
         # Download thumbnail
-        blob = thumbnail_bucket.blob(image.thumbnail_path)
+        blob = thumbnail_bucket.blob(storage_info.thumbnail_key)
         if not blob.exists():
             raise HTTPException(status_code=404, detail="Thumbnail not found in storage")
 
@@ -257,7 +295,7 @@ async def retag_single_image(
                 continue
 
             tag = MachineTag(
-                image_id=image.id,
+                asset_id=image.asset_id,
                 tenant_id=tenant.id,
                 keyword_id=keyword_id,
                 confidence=confidence,
@@ -311,6 +349,7 @@ async def retag_all_images(
     images = db.query(ImageMetadata).filter(
         ImageMetadata.tenant_id == tenant.id
     ).all()
+    assets_by_id = load_assets_for_images(db, images)
 
     # Setup CLIP tagger and storage
     model_type = model or settings.tagging_model
@@ -331,14 +370,26 @@ async def retag_all_images(
 
     for image in images:
         try:
+            storage_info = _resolve_storage_or_409(
+                image=image,
+                tenant=tenant,
+                db=db,
+                require_thumbnail=True,
+                assets_by_id=assets_by_id,
+            )
+            if not storage_info.thumbnail_key:
+                failed += 1
+                continue
+
             # Delete existing tags
             db.query(MachineTag).filter(
-                MachineTag.image_id == image.id,
+                MachineTag.asset_id == image.asset_id,
+                MachineTag.tenant_id == tenant.id,
                 MachineTag.tag_type == 'siglip'
             ).delete()
 
             # Download thumbnail
-            blob = thumbnail_bucket.blob(image.thumbnail_path)
+            blob = thumbnail_bucket.blob(storage_info.thumbnail_key)
             if not blob.exists():
                 failed += 1
                 continue
@@ -359,7 +410,7 @@ async def retag_all_images(
                     continue
 
                 tag = MachineTag(
-                    image_id=image.id,
+                    asset_id=image.asset_id,
                     tenant_id=tenant.id,
                     keyword_id=keyword_id,
                     confidence=confidence,

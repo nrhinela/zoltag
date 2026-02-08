@@ -5,13 +5,14 @@ from sqlalchemy import func, distinct
 from sqlalchemy.orm import Session
 from google.cloud import storage
 
+from photocat.asset_helpers import AssetReadinessError, load_assets_for_images, resolve_image_storage
 from photocat.dependencies import get_db, get_tenant, get_tenant_setting
 from photocat.tenant import Tenant
 from photocat.metadata import ImageMetadata, MachineTag, Permatag, KeywordModel, ImageEmbedding
 from photocat.models.config import Keyword, KeywordCategory
 from photocat.settings import settings
 from photocat.config.db_config import ConfigManager
-from photocat.tagging import calculate_tags, get_tagger
+from photocat.tagging import get_tagger
 from photocat.learning import (
     load_keyword_models,
     recompute_trained_tags_for_image,
@@ -19,6 +20,27 @@ from photocat.learning import (
 
 # Sub-router with no prefix/tags (inherits from parent)
 router = APIRouter()
+
+
+def _resolve_storage_or_409(
+    *,
+    image: ImageMetadata,
+    tenant: Tenant,
+    db: Session,
+    require_thumbnail: bool = False,
+    assets_by_id=None,
+):
+    try:
+        return resolve_image_storage(
+            image=image,
+            tenant=tenant,
+            db=None if assets_by_id is not None else db,
+            assets_by_id=assets_by_id,
+            strict=settings.asset_strict_reads,
+            require_thumbnail=require_thumbnail,
+        )
+    except AssetReadinessError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
 
 
 @router.get("/ml-training/images", response_model=dict, operation_id="list_ml_training_images")
@@ -33,8 +55,11 @@ async def list_ml_training_images(
     images_query = db.query(ImageMetadata).filter_by(tenant_id=tenant.id)
     total = images_query.count()
     images = images_query.order_by(ImageMetadata.id.desc()).limit(limit).offset(offset).all()
+    assets_by_id = load_assets_for_images(db, images)
 
     image_ids = [img.id for img in images]
+    asset_id_to_image_id = {img.asset_id: img.id for img in images if img.asset_id is not None}
+    asset_ids = list(asset_id_to_image_id.keys())
     if not image_ids:
         return {"tenant_id": tenant.id, "images": [], "total": total, "limit": limit, "offset": offset}
 
@@ -43,13 +68,14 @@ async def list_ml_training_images(
 
     tags = db.query(MachineTag).filter(
         MachineTag.tenant_id == tenant.id,
-        MachineTag.image_id.in_(image_ids),
+        MachineTag.asset_id.in_(asset_ids),
         MachineTag.tag_type == active_tag_type
-    ).all()
+    ).all() if asset_ids else []
 
     permatags = db.query(Permatag).filter(
-        Permatag.image_id.in_(image_ids)
-    ).all()
+        Permatag.asset_id.in_(asset_ids),
+        Permatag.tenant_id == tenant.id,
+    ).all() if asset_ids else []
 
     # Get latest keyword model name
     model_row = db.query(KeywordModel.model_name).filter(
@@ -62,7 +88,7 @@ async def list_ml_training_images(
     if model_row:
         cached_trained = db.query(MachineTag).filter(
             MachineTag.tenant_id == tenant.id,
-            MachineTag.image_id.in_(image_ids),
+            MachineTag.asset_id.in_(asset_ids),
             MachineTag.tag_type == 'trained',
             MachineTag.model_name == model_row.model_name
         ).all()
@@ -93,8 +119,11 @@ async def list_ml_training_images(
 
     tags_by_image = {}
     for tag in tags:
+        image_id = asset_id_to_image_id.get(tag.asset_id)
+        if image_id is None:
+            continue
         kw_info = keywords_map.get(tag.keyword_id, {"keyword": "unknown", "category": "unknown"})
-        tags_by_image.setdefault(tag.image_id, []).append({
+        tags_by_image.setdefault(image_id, []).append({
             "keyword": kw_info["keyword"],
             "category": kw_info["category"],
             "confidence": round(tag.confidence, 2)
@@ -102,12 +131,18 @@ async def list_ml_training_images(
 
     permatags_by_image = {}
     for tag in permatags:
-        permatags_by_image.setdefault(tag.image_id, []).append(tag)
+        image_id = asset_id_to_image_id.get(tag.asset_id)
+        if image_id is None:
+            continue
+        permatags_by_image.setdefault(image_id, []).append(tag)
 
     trained_by_image = {}
     for tag in cached_trained:
+        image_id = asset_id_to_image_id.get(tag.asset_id)
+        if image_id is None:
+            continue
         kw_info = keywords_map.get(tag.keyword_id, {"keyword": "unknown", "category": "unknown"})
-        trained_by_image.setdefault(tag.image_id, []).append({
+        trained_by_image.setdefault(image_id, []).append({
             "keyword": kw_info["keyword"],
             "category": kw_info["category"],
             "confidence": round(tag.confidence or 0, 2)
@@ -136,13 +171,20 @@ async def list_ml_training_images(
     storage_client = storage.Client(project=settings.gcp_project_id)
     thumbnail_bucket = storage_client.bucket(tenant.get_thumbnail_bucket(settings))
     trained_by_model = {
-        tag.image_id
+        asset_id_to_image_id[tag.asset_id]
         for tag in cached_trained
-        if tag.model_name == model_name
+        if tag.model_name == model_name and tag.asset_id in asset_id_to_image_id
     }
 
     images_list = []
     for image in images:
+        storage_info = _resolve_storage_or_409(
+            image=image,
+            tenant=tenant,
+            db=db,
+            require_thumbnail=refresh,
+            assets_by_id=assets_by_id,
+        )
         positive_permatags = sorted(
             [keywords_map.get(tag.keyword_id, {}).get("keyword", "unknown")
              for tag in permatags_by_image.get(image.id, []) if tag.signum == 1]
@@ -154,14 +196,15 @@ async def list_ml_training_images(
         )
 
         trained_tags = trained_by_image.get(image.id, [])
-        if refresh and keyword_models and image.thumbnail_path and image.id not in trained_by_model:
-            blob = thumbnail_bucket.blob(image.thumbnail_path)
+        if refresh and keyword_models and storage_info.thumbnail_key and image.id not in trained_by_model:
+            blob = thumbnail_bucket.blob(storage_info.thumbnail_key)
             if blob.exists():
                 image_data = blob.download_as_bytes()
                 trained_tags = recompute_trained_tags_for_image(
                     db=db,
                     tenant_id=tenant.id,
                     image_id=image.id,
+                    asset_id=image.asset_id,
                     image_data=image_data,
                     keywords_by_category=by_category,
                     keyword_models=keyword_models,
@@ -177,7 +220,8 @@ async def list_ml_training_images(
         images_list.append({
             "id": image.id,
             "filename": image.filename,
-            "thumbnail_url": tenant.get_thumbnail_url(settings, image.thumbnail_path),
+            "asset_id": storage_info.asset_id,
+            "thumbnail_url": storage_info.thumbnail_url,
             "embedding_generated": bool(image.embedding_generated),
             "positive_permatags": positive_permatags,
             "ml_tags": machine_tags,
@@ -210,9 +254,10 @@ async def get_ml_training_stats(
         ImageEmbedding.tenant_id == tenant.id
     ).scalar() or 0
 
-    zero_shot_image_count = db.query(func.count(distinct(MachineTag.image_id))).filter(
+    zero_shot_image_count = db.query(func.count(distinct(MachineTag.asset_id))).filter(
         MachineTag.tenant_id == tenant.id,
-        MachineTag.tag_type == 'siglip'
+        MachineTag.tag_type == 'siglip',
+        MachineTag.asset_id.is_not(None),
     ).scalar() or 0
 
     model_count = db.query(func.count(KeywordModel.id)).filter(
@@ -228,12 +273,13 @@ async def get_ml_training_stats(
 
     trained_count, trained_image_count, trained_oldest, trained_newest = db.query(
         func.count(MachineTag.id),
-        func.count(distinct(MachineTag.image_id)),
+        func.count(distinct(MachineTag.asset_id)),
         func.min(MachineTag.created_at),
         func.max(MachineTag.created_at)
     ).filter(
         MachineTag.tenant_id == tenant.id,
-        MachineTag.tag_type == 'trained'
+        MachineTag.tag_type == 'trained',
+        MachineTag.asset_id.is_not(None),
     ).one()
 
     return {

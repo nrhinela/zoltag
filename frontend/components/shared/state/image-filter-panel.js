@@ -50,6 +50,7 @@ export class ImageFilterPanel {
       hideZeroRating: true,
       keywords: {},
       operators: {},
+      categoryFilterOperator: undefined,
       rating: undefined,
       ratingOperator: undefined,
       dropboxPathPrefix: '',
@@ -213,6 +214,7 @@ export class ImageFilterPanel {
       hideZeroRating: true,
       keywords: {},
       operators: {},
+      categoryFilterOperator: undefined,
       rating: undefined,
       ratingOperator: undefined,
       dropboxPathPrefix: '',
@@ -259,6 +261,9 @@ export class ImageFilterPanel {
             arr instanceof Set ? arr : new Set(arr || []),
           ])
         );
+      }
+      if (Array.isArray(filters.dropboxPathPrefix)) {
+        filters.dropboxPathPrefix = filters.dropboxPathPrefix[0] || '';
       }
       this.updateFilters(filters);
     } catch (error) {

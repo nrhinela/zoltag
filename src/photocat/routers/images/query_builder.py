@@ -178,21 +178,22 @@ class QueryBuilder:
             if model_row:
                 model_name = model_row[0]
 
-        # Build ML scores subquery (max confidence for this keyword)
+        # Build ML scores subquery (max confidence for this keyword) keyed by asset_id.
         ml_scores = self.db.query(
-            MachineTag.image_id.label('image_id'),
+            MachineTag.asset_id.label('asset_id'),
             func.max(MachineTag.confidence).label('ml_score')
         ).filter(
             MachineTag.keyword_id == ml_keyword_id,
             MachineTag.tenant_id == self.tenant.id,
             MachineTag.tag_type == ml_tag_type,
+            MachineTag.asset_id.is_not(None),
             *([MachineTag.model_name == model_name] if model_name else [])
         ).group_by(
-            MachineTag.image_id
+            MachineTag.asset_id
         ).subquery()
 
         # Outer join with ML scores
-        query = query.outerjoin(ml_scores, ml_scores.c.image_id == ImageMetadata.id)
+        query = query.outerjoin(ml_scores, ml_scores.c.asset_id == ImageMetadata.asset_id)
 
         return query, ml_scores
 

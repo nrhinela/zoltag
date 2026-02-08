@@ -535,24 +535,29 @@ export class CurateAuditTab extends LitElement {
   }
 
   _handleAuditDropboxInput(event) {
-    const query = event.detail?.query || '';
+    const query = event.detail?.query ?? '';
+    const limit = event.detail?.limit;
     this._auditDropboxQuery = query;
     if (this._auditDropboxFetchTimer) {
       clearTimeout(this._auditDropboxFetchTimer);
+    }
+    if (query.trim().length === 0) {
+      this._fetchDropboxFolders('', limit);
+      return;
     }
     if (query.length < 2) {
       this.dropboxFolders = [];
       return;
     }
     this._auditDropboxFetchTimer = setTimeout(() => {
-      this._fetchDropboxFolders(query);
+      this._fetchDropboxFolders(query, limit);
     }, 500);
   }
 
-  async _fetchDropboxFolders(query) {
+  async _fetchDropboxFolders(query, limit) {
     if (!this.tenant) return;
     try {
-      const response = await getDropboxFolders(this.tenant, { query });
+      const response = await getDropboxFolders(this.tenant, { query, limit });
       this.dropboxFolders = response?.folders || [];
     } catch (error) {
       console.error('Error fetching Dropbox folders:', error);
@@ -665,6 +670,7 @@ export class CurateAuditTab extends LitElement {
               .activeFilters=${activeFilters}
               .dropboxFolders=${this.dropboxFolders || []}
               .availableFilterTypes=${['keyword', 'rating', 'folder']}
+              .keywordMultiSelect=${false}
               @filters-changed=${this._handleAuditChipFiltersChanged}
               @folder-search=${this._handleAuditDropboxInput}
             ></filter-chips>
