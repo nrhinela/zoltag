@@ -94,6 +94,9 @@ export class CurateExploreTab extends LitElement {
     imageStats: { type: Object },
     curateCategoryCards: { type: Array },
     selectedKeywordValueMain: { type: String },
+    curateKeywordFilters: { type: Object },
+    curateKeywordOperators: { type: Object },
+    curateNoPositivePermatags: { type: Boolean },
     minRating: { type: Object },
     dropboxPathPrefix: { type: String },
     listFilterId: { type: [String, Number] },
@@ -150,6 +153,9 @@ export class CurateExploreTab extends LitElement {
     this.imageStats = null;
     this.curateCategoryCards = [];
     this.selectedKeywordValueMain = '';
+    this.curateKeywordFilters = {};
+    this.curateKeywordOperators = {};
+    this.curateNoPositivePermatags = false;
     this.minRating = null;
     this.dropboxPathPrefix = '';
     this.listFilterId = '';
@@ -866,29 +872,37 @@ export class CurateExploreTab extends LitElement {
 
   _buildActiveFiltersFromSelection() {
     const filters = [];
-    const selected = this.selectedKeywordValueMain || '';
-    if (selected) {
-      if (selected === '__untagged__') {
+
+    // Build keyword filter from modern curateKeywordFilters (multi-select support)
+    if (this.curateNoPositivePermatags) {
+      filters.push({
+        type: 'keyword',
+        untagged: true,
+        displayLabel: 'Keywords',
+        displayValue: 'Untagged',
+      });
+    } else if (this.curateKeywordFilters && Object.keys(this.curateKeywordFilters).length > 0) {
+      // Convert Map<category, Set<keyword>> to filter format
+      const keywordsByCategory = {};
+      Object.entries(this.curateKeywordFilters).forEach(([category, keywords]) => {
+        const keywordArray = Array.isArray(keywords) ? keywords : Array.from(keywords || []);
+        if (keywordArray.length > 0) {
+          keywordsByCategory[category] = keywordArray;
+        }
+      });
+
+      if (Object.keys(keywordsByCategory).length > 0) {
+        // Get operator - use first category's operator or default to 'OR'
+        const firstCategory = Object.keys(keywordsByCategory)[0];
+        const operator = this.curateKeywordOperators?.[firstCategory] || 'OR';
+
         filters.push({
           type: 'keyword',
-          category: 'Untagged',
-          value: '__untagged__',
+          keywordsByCategory,
+          operator,
           displayLabel: 'Keywords',
-          displayValue: 'Untagged',
+          displayValue: 'Multiple',
         });
-      } else {
-        const [encodedCategory, ...encodedKeywordParts] = selected.split('::');
-        const category = decodeURIComponent(encodedCategory || '');
-        const keyword = decodeURIComponent(encodedKeywordParts.join('::') || '');
-        if (keyword) {
-          filters.push({
-            type: 'keyword',
-            category,
-            value: keyword,
-            displayLabel: 'Keywords',
-            displayValue: keyword,
-          });
-        }
       }
     }
 
@@ -994,12 +1008,15 @@ export class CurateExploreTab extends LitElement {
       .split(',')
       .map((value) => Number.parseInt(value.trim(), 10))
       .filter((value) => Number.isFinite(value) && value > 0);
-    if (ids.length && (rating !== '' || rating === 'prompt')) {
+
+    if (ids.length && rating !== '') {
+      // Update count for this target
       this.curateExploreRatingTargets = (this.curateExploreRatingTargets || []).map((entry) => (
         entry.id === targetId ? { ...entry, count: (entry.count || 0) + ids.length } : entry
       ));
     }
 
+    // Only dispatch event to parent - parent will handle whether to show dialog or apply directly
     this.dispatchEvent(new CustomEvent('rating-drop', {
       detail: { event, rating },
       bubbles: true,
@@ -1294,7 +1311,10 @@ export class CurateExploreTab extends LitElement {
               @rating-remove=${(event) => this._handleCurateExploreRatingRemoveTarget(event.detail.targetId)}
               @rating-dragover=${(event) => this._handleCurateExploreRatingDragOver(event.detail.event, event.detail.targetId)}
               @rating-dragleave=${(event) => this._handleCurateExploreRatingDragLeave(event.detail.event)}
-              @rating-drop=${(event) => this._handleCurateExploreRatingDrop(event.detail.event, event.detail.targetId)}
+              @rating-drop=${(event) => {
+                event.stopPropagation(); // Prevent original event from bubbling to parent
+                this._handleCurateExploreRatingDrop(event.detail.event, event.detail.targetId);
+              }}
             ></rating-target-panel>
           </right-panel>
         </div>

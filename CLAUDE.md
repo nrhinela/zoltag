@@ -170,3 +170,123 @@ ${this.searchImages.map((image, index) => html`
 6. ❌ Forgetting to emit 'image-clicked' event for modal
 
 **When creating ANY new component that displays images**, copy the pattern from search-tab.js exactly. Don't reinvent - reuse!
+
+### State Controller Architecture
+
+**IMPORTANT**: Complex state management in PhotoCat uses Lit's `ReactiveController` pattern to extract state logic from large components.
+
+**When to use State Controllers**:
+- ✅ Complex state with 10+ related methods
+- ✅ State shared across multiple tabs/views
+- ✅ State requiring coordination between multiple subsystems
+- ✅ State that benefits from isolation for testing
+
+**When NOT to use State Controllers**:
+- ❌ Simple state already well-encapsulated in a component
+- ❌ State managed by factory patterns (hotspot handlers, rating handlers)
+- ❌ Minimal state (< 50 lines, < 5 methods)
+
+**State Controller Pattern**:
+```javascript
+import { BaseStateController } from './base-state-controller.js';
+
+export class MyStateController extends BaseStateController {
+  constructor(host) {
+    super(host);
+  }
+
+  // State manipulation methods
+  updateFilter(value) {
+    this.setHostProperty('myFilter', value);
+    this.fetchData();
+  }
+
+  // Async operations
+  async fetchData() {
+    const data = await fetchWithAuth('/api/data', {
+      tenantId: this.getHostProperty('tenant'),
+    });
+    this.setHostProperty('myData', data);
+  }
+
+  // State management
+  getDefaultState() {
+    return {
+      myFilter: null,
+      myData: [],
+      myLoading: false,
+    };
+  }
+
+  snapshotState() {
+    return {
+      myFilter: this.host.myFilter,
+      myData: [...this.host.myData],
+      myLoading: this.host.myLoading,
+    };
+  }
+
+  restoreState(snapshot) {
+    if (!snapshot) return;
+    Object.entries(snapshot).forEach(([key, value]) => {
+      this.host[key] = Array.isArray(value) ? [...value] : value;
+    });
+    this.requestUpdate();
+  }
+}
+```
+
+**Integration in host component**:
+```javascript
+import { MyStateController } from './state/my-state-controller.js';
+
+export class PhotocatApp extends LitElement {
+  constructor() {
+    super();
+    this._myState = new MyStateController(this);
+  }
+
+  // Delegate to state controller (2-3 line wrapper)
+  _updateFilter(value) {
+    return this._myState.updateFilter(value);
+  }
+
+  async _fetchData() {
+    return await this._myState.fetchData();
+  }
+}
+```
+
+**Existing State Controllers**:
+- `CurateHomeStateController` (522 lines) - Curate home/explore tab state
+- `CurateAuditStateController` (511 lines) - Curate audit tab state
+- `RatingModalStateController` (204 lines) - Shared rating modal logic
+
+**File Organization**:
+```
+frontend/components/
+├── state/                    # State controllers (complex state extraction)
+│   ├── base-state-controller.js
+│   ├── curate-home-state.js
+│   ├── curate-audit-state.js
+│   └── rating-modal-state.js
+├── shared/                   # Shared utilities and factories
+│   ├── selection-handlers.js (factory pattern)
+│   ├── hotspot-handlers.js   (factory pattern)
+│   └── rating-drag-handlers.js (factory pattern)
+└── photocat-app.js          # Main component (delegates to state controllers)
+```
+
+**Ownership Rules**:
+- State controllers (`components/state/`) = complex state requiring extraction
+- Shared factories (`components/shared/`) = simple, reusable handler creation
+- Never extract well-factored code just to reduce line count
+- Keep render logic and business coordination in main component
+
+**Benefits**:
+- ✅ Improved testability (state logic isolated)
+- ✅ Better code organization (related methods grouped)
+- ✅ Easier maintenance (clear ownership boundaries)
+- ✅ Preserved behavior (delegation pattern maintains API)
+
+**Reference**: See [docs/MODULARIZATION_PLAN.md](../docs/MODULARIZATION_PLAN.md) for Phase 1 extraction details.

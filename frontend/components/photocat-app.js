@@ -15,38 +15,32 @@ import './shared/widgets/filter-chips.js';
 import './shared/widgets/keyword-dropdown.js';
 
 import ImageFilterPanel from './shared/state/image-filter-panel.js';
+import { CurateHomeStateController } from './state/curate-home-state.js';
+import { CurateAuditStateController } from './state/curate-audit-state.js';
+import { CurateExploreStateController } from './state/curate-explore-state.js';
+import { RatingModalStateController } from './state/rating-modal-state.js';
+import { SearchStateController } from './state/search-state.js';
 import { tailwind } from './tailwind-lit.js';
 import {
-  fetchWithAuth,
   getKeywords,
   getImageStats,
   getMlTrainingStats,
   getTagStats,
-  getImages,
-  getDropboxFolders,
   addToList,
 } from '../services/api.js';
 import { getCurrentUser } from '../services/auth.js';
-import { enqueueCommand, subscribeQueue, retryFailedCommand } from '../services/command-queue.js';
+import { subscribeQueue, retryFailedCommand } from '../services/command-queue.js';
 import { createSelectionHandlers } from './shared/selection-handlers.js';
 import { createPaginationHandlers } from './shared/pagination-controls.js';
 import { createRatingDragHandlers } from './shared/rating-drag-handlers.js';
 import { createHotspotHandlers, parseUtilityKeywordValue } from './shared/hotspot-controls.js';
 import {
-  buildCurateAuditFilterObject,
   buildCurateFilterObject,
   getCurateAuditFetchKey,
   getCurateHomeFetchKey,
   shouldIncludeRatingStats,
 } from './shared/curate-filters.js';
 import { scheduleStatsRefresh, shouldAutoRefreshCurateStats } from './shared/curate-stats.js';
-import {
-  buildCategoryCards,
-  getCategoryCount,
-  getKeywordsByCategory,
-  mergePermatags,
-  resolveKeywordCategory,
-} from './shared/keyword-utils.js';
 import {
   formatCurateDate,
   formatQueueItem,
@@ -1365,6 +1359,18 @@ class PhotoCatApp extends LitElement {
       this.curateAuditFilterPanel = new ImageFilterPanel('curate-audit');
       this.curateAuditFilterPanel.setTenant(this.tenant);
 
+      // Initialize state controllers
+      // Milestone 1: Curate Home State (Complete)
+      this._curateHomeState = new CurateHomeStateController(this);
+      // Milestone 2: Curate Audit State (In Progress)
+      this._curateAuditState = new CurateAuditStateController(this);
+      this._curateExploreState = new CurateExploreStateController(this);
+      this._searchState = new SearchStateController(this);
+      this._ratingModalState = new RatingModalStateController(this);
+
+      this._handleSearchSortChanged = (e) =>
+        this._searchState.handleSortChanged(e.detail || {});
+
       this.keywords = [];
       this.queueState = { queuedCount: 0, inProgressCount: 0, failedCount: 0 };
       this._unsubscribeQueue = null;
@@ -1494,7 +1500,7 @@ class PhotoCatApp extends LitElement {
         nextIdProperty: '_curateAuditHotspotNextId',
         parseKeywordValue: parseUtilityKeywordValue,
         applyRating: (ids, rating) => this._applyAuditRating(ids, rating),
-        processTagDrop: (ids, target) => this._processAuditTagDrop(ids, target),
+        processTagDrop: (ids, target) => this._curateAuditState.processTagDrop(ids, target),
         removeImages: (ids) => this._removeAuditImagesByIds(ids),
       });
 
@@ -1644,436 +1650,81 @@ class PhotoCatApp extends LitElement {
   }
 
   _getCurateDefaultState() {
-      return {
-          curateLimit: 100,
-          curateOrderBy: 'photo_creation',
-          curateOrderDirection: 'desc',
-          curateHideDeleted: true,
-          curateMinRating: null,
-          curateKeywordFilters: {},
-          curateKeywordOperators: {},
-          curateDropboxPathPrefix: '',
-          curateListId: '',
-          curateListExcludeId: '',
-          curateFilters: buildCurateFilterObject(this),
-          curateImages: [],
-          curatePageOffset: 0,
-          curateTotal: null,
-          curateLoading: false,
-          curateDragSelection: [],
-          curateDragSelecting: false,
-          curateDragStartIndex: null,
-          curateDragEndIndex: null,
-          curateNoPositivePermatags: false,
-          _curateLeftOrder: [],
-          _curateRightOrder: [],
-          _curateFlashSelectionIds: null,
-      };
+      return this._curateHomeState.getDefaultState();
   }
 
   _snapshotCurateState() {
-      return {
-          curateLimit: this.curateLimit,
-          curateOrderBy: this.curateOrderBy,
-          curateOrderDirection: this.curateOrderDirection,
-          curateHideDeleted: this.curateHideDeleted,
-          curateMinRating: this.curateMinRating,
-          curateKeywordFilters: { ...(this.curateKeywordFilters || {}) },
-          curateKeywordOperators: { ...(this.curateKeywordOperators || {}) },
-          curateDropboxPathPrefix: this.curateDropboxPathPrefix,
-          curateListId: this.curateListId,
-          curateListExcludeId: this.curateListExcludeId,
-          curateFilters: { ...(this.curateFilters || {}) },
-          curateImages: Array.isArray(this.curateImages) ? [...this.curateImages] : [],
-          curatePageOffset: this.curatePageOffset,
-          curateTotal: this.curateTotal,
-          curateLoading: this.curateLoading,
-          curateDragSelection: Array.isArray(this.curateDragSelection) ? [...this.curateDragSelection] : [],
-          curateDragSelecting: this.curateDragSelecting,
-          curateDragStartIndex: this.curateDragStartIndex,
-          curateDragEndIndex: this.curateDragEndIndex,
-          curateNoPositivePermatags: this.curateNoPositivePermatags,
-          _curateLeftOrder: Array.isArray(this._curateLeftOrder) ? [...this._curateLeftOrder] : [],
-          _curateRightOrder: Array.isArray(this._curateRightOrder) ? [...this._curateRightOrder] : [],
-          _curateFlashSelectionIds: this._curateFlashSelectionIds ? new Set(this._curateFlashSelectionIds) : null,
-      };
+      return this._curateHomeState.snapshotState();
   }
 
   _restoreCurateState(state) {
-      const next = state || this._getCurateDefaultState();
-      this.curateLimit = next.curateLimit;
-      this.curateOrderBy = next.curateOrderBy;
-      this.curateOrderDirection = next.curateOrderDirection;
-      this.curateHideDeleted = next.curateHideDeleted;
-      this.curateMinRating = next.curateMinRating;
-      this.curateKeywordFilters = { ...(next.curateKeywordFilters || {}) };
-      this.curateKeywordOperators = { ...(next.curateKeywordOperators || {}) };
-      this.curateDropboxPathPrefix = next.curateDropboxPathPrefix || '';
-      this.curateListId = next.curateListId || '';
-      this.curateListExcludeId = next.curateListExcludeId || '';
-      this.curateFilters = { ...(next.curateFilters || buildCurateFilterObject(this)) };
-      this.curateImages = Array.isArray(next.curateImages) ? [...next.curateImages] : [];
-      this.curatePageOffset = next.curatePageOffset;
-      this.curateTotal = next.curateTotal;
-      this.curateLoading = next.curateLoading;
-      this.curateDragSelection = Array.isArray(next.curateDragSelection) ? [...next.curateDragSelection] : [];
-      this.curateDragSelecting = next.curateDragSelecting;
-      this.curateDragStartIndex = next.curateDragStartIndex;
-      this.curateDragEndIndex = next.curateDragEndIndex;
-      this.curateNoPositivePermatags = next.curateNoPositivePermatags || false;
-      this._curateLeftOrder = Array.isArray(next._curateLeftOrder) ? [...next._curateLeftOrder] : [];
-      this._curateRightOrder = Array.isArray(next._curateRightOrder) ? [...next._curateRightOrder] : [];
-      this._curateFlashSelectionIds = next._curateFlashSelectionIds ? new Set(next._curateFlashSelectionIds) : null;
+      this._curateHomeState.restoreState(state || this._getCurateDefaultState());
       this._curateDragOrder = null;
       this._cancelCuratePressState();
   }
 
   // Explore hotspot handlers - now using factory to eliminate duplication
   _handleCurateExploreHotspotKeywordChange(event, targetId) {
-      return this._exploreHotspotHandlers.handleKeywordChange(event, targetId);
+      return this._curateExploreState.handleHotspotKeywordChange(event, targetId);
   }
 
   _handleCurateExploreHotspotActionChange(event, targetId) {
-      return this._exploreHotspotHandlers.handleActionChange(event, targetId);
+      return this._curateExploreState.handleHotspotActionChange(event, targetId);
   }
 
   _handleCurateExploreHotspotTypeChange(event, targetId) {
-      return this._exploreHotspotHandlers.handleTypeChange(event, targetId);
+      return this._curateExploreState.handleHotspotTypeChange(event, targetId);
   }
 
   _handleCurateExploreHotspotRatingChange(event, targetId) {
-      return this._exploreHotspotHandlers.handleRatingChange(event, targetId);
+      return this._curateExploreState.handleHotspotRatingChange(event, targetId);
   }
 
   _handleCurateExploreHotspotAddTarget() {
-      return this._exploreHotspotHandlers.handleAddTarget();
+      return this._curateExploreState.handleHotspotAddTarget();
   }
 
   _handleCurateExploreHotspotRemoveTarget(targetId) {
-      return this._exploreHotspotHandlers.handleRemoveTarget(targetId);
+      return this._curateExploreState.handleHotspotRemoveTarget(targetId);
   }
 
   _handleCurateExploreHotspotDrop(event, targetId) {
-      return this._exploreHotspotHandlers.handleDrop(event, targetId);
+      return this._curateExploreState.handleHotspotDrop(event, targetId);
   }
 
   _handleCurateHotspotChanged(event) {
-      const { type, targetId, value } = event.detail;
-      switch (type) {
-          case 'keyword-change':
-              return this._handleCurateExploreHotspotKeywordChange({ target: { value } }, targetId);
-          case 'action-change':
-              return this._handleCurateExploreHotspotActionChange({ target: { value } }, targetId);
-          case 'type-change':
-              return this._handleCurateExploreHotspotTypeChange({ target: { value } }, targetId);
-          case 'rating-change':
-              return this._handleCurateExploreHotspotRatingChange({ target: { value } }, targetId);
-          case 'add-target':
-              return this._handleCurateExploreHotspotAddTarget();
-          case 'remove-target':
-              return this._handleCurateExploreHotspotRemoveTarget(targetId);
-          case 'rating-toggle':
-              return this._handleCurateExploreRatingToggle({ target: { checked: event.detail.enabled } });
-          case 'hotspot-drop':
-              return this._handleCurateExploreHotspotDrop(event.detail.event, targetId);
-          default:
-              console.warn('Unknown hotspot event type:', type);
-      }
+      return this._curateExploreState.handleHotspotChanged(event);
   }
 
   _handleCurateAuditHotspotChanged(event) {
-      const { type, targetId, value } = event.detail;
-      switch (type) {
-          case 'keyword-change':
-              return this._handleCurateAuditHotspotKeywordChange({ target: { value } }, targetId);
-          case 'action-change':
-              return this._handleCurateAuditHotspotActionChange({ target: { value } }, targetId);
-          case 'type-change':
-              return this._handleCurateAuditHotspotTypeChange({ target: { value } }, targetId);
-          case 'rating-change':
-              return this._handleCurateAuditHotspotRatingChange({ target: { value } }, targetId);
-          case 'add-target':
-              return this._handleCurateAuditHotspotAddTarget();
-          case 'remove-target':
-              return this._handleCurateAuditHotspotRemoveTarget(targetId);
-          case 'hotspot-drop':
-              return this._handleCurateAuditHotspotDrop(event.detail.event, targetId);
-          default:
-              console.warn('Unknown audit hotspot event type:', type);
-      }
+      // Transform event detail to match state controller expectations
+      const detail = {
+          changeType: event.detail.type?.replace('-change', '').replace('-target', '').replace('hotspot-drop', 'drop'),
+          targetId: event.detail.targetId,
+          value: event.detail.value,
+          event: event.detail.event,
+      };
+      return this._curateAuditState.handleHotspotChanged({ detail });
   }
 
   _removeCurateImagesByIds(ids) {
-      if (!ids?.length) return;
-      const removeSet = new Set(ids);
-      const keep = (image) => !removeSet.has(image.id);
-      this.curateImages = this.curateImages.filter(keep);
-      this.curateDragSelection = this.curateDragSelection.filter((id) => !removeSet.has(id));
+      return this._curateHomeState.removeImagesByIds(ids);
   }
 
   _removeAuditImagesByIds(ids) {
-      if (!ids?.length) return;
-      const removeSet = new Set(ids);
-      const keep = (image) => !removeSet.has(image.id);
-      this.curateAuditImages = this.curateAuditImages.filter(keep);
-      this.curateAuditDragSelection = this.curateAuditDragSelection.filter((id) => !removeSet.has(id));
+      return this._curateAuditState.removeImagesByIds(ids);
   }
 
   _processExploreTagDrop(ids, target) {
-      const signum = target.action === 'remove' ? -1 : 1;
-      const category = target.category || 'Uncategorized';
-      const operations = ids.map((imageId) => ({
-          image_id: imageId,
-          keyword: target.keyword,
-          category,
-          signum,
-      }));
-      enqueueCommand({
-          type: 'bulk-permatags',
-          tenantId: this.tenant,
-          operations,
-          description: `hotspot · ${operations.length} updates`,
-      });
-      const tags = [{ keyword: target.keyword, category }];
-      if (signum === 1) {
-          this._updateCuratePermatags(ids, tags);
-      } else {
-          this._updateCuratePermatagRemovals(ids, tags);
-      }
-      this._removeCurateImagesByIds(ids);
-  }
-
-  _processAuditTagDrop(ids, target) {
-      const idSet = new Set(ids);
-      const additions = this.curateAuditImages.filter((img) => idSet.has(img.id));
-      if (!additions.length) {
-          return;
-      }
-      const signum = target.action === 'remove' ? -1 : 1;
-      const category = target.category || 'Uncategorized';
-      const operations = additions.map((image) => ({
-          image_id: image.id,
-          keyword: target.keyword,
-          category,
-          signum,
-      }));
-      enqueueCommand({
-          type: 'bulk-permatags',
-          tenantId: this.tenant,
-          operations,
-          description: `tag audit · ${operations.length} updates`,
-      });
-      additions.forEach((image) => {
-          this._applyAuditPermatagChange(image, signum, target.keyword, category);
-      });
-      this.curateAuditImages = this.curateAuditImages.filter((img) => !idSet.has(img.id));
-      this.curateAuditDragSelection = this.curateAuditDragSelection.filter((id) => !idSet.has(id));
+      return this._curateExploreState.processTagDrop(ids, target);
   }
 
   _syncAuditHotspotPrimary() {
-      const defaultAction = this.curateAuditMode === 'existing' ? 'remove' : 'add';
-      const keyword = this.curateAuditKeyword || '';
-      let category = '';
-      if (keyword) {
-          category = this.curateAuditCategory || '';
-          if (!category) {
-              const match = (this.keywords || []).find((kw) => kw?.keyword === keyword);
-              category = match?.category || '';
-          }
-          if (!category) {
-              category = 'Uncategorized';
-          }
-      }
-      if (keyword && category && this.curateAuditCategory !== category) {
-          this.curateAuditCategory = category;
-      }
-      if (!this.curateAuditTargets || !this.curateAuditTargets.length) {
-          this.curateAuditTargets = [
-              { id: 1, type: 'keyword', category, keyword, action: defaultAction, count: 0 },
-          ];
-          this._curateAuditHotspotNextId = 2;
-          return;
-      }
-      const [first, ...rest] = this.curateAuditTargets;
-      const nextFirst = {
-          ...first,
-          type: first?.type || 'keyword',
-          category,
-          keyword,
-          action: defaultAction,
-      };
-      if (!keyword || first.keyword !== keyword || first.action !== defaultAction) {
-          nextFirst.count = 0;
-      }
-      this.curateAuditTargets = [nextFirst, ...rest];
-  }
-
-  _handleCurateAuditHotspotKeywordChange(event, targetId) {
-      const value = event.target.value;
-      const { category, keyword } = parseUtilityKeywordValue(value);
-      this.curateAuditTargets = (this.curateAuditTargets || []).map((target) => (
-          target.id === targetId ? { ...target, category, keyword, count: 0 } : target
-      ));
-  }
-
-  _handleCurateAuditHotspotActionChange(event, targetId) {
-      const action = event.target.value === 'remove' ? 'remove' : 'add';
-      this.curateAuditTargets = (this.curateAuditTargets || []).map((target) => (
-          target.id === targetId ? { ...target, action, count: 0 } : target
-      ));
-  }
-
-  _handleCurateAuditHotspotTypeChange(event, targetId) {
-      const type = event.target.value;
-      this.curateAuditTargets = (this.curateAuditTargets || []).map((target) => (
-          target.id === targetId ? { ...target, type, keyword: '', category: '', rating: '', action: 'add', count: 0 } : target
-      ));
-  }
-
-  _handleCurateAuditHotspotRatingChange(event, targetId) {
-      const rating = Number.parseInt(event.target.value, 10);
-      this.curateAuditTargets = (this.curateAuditTargets || []).map((target) => (
-          target.id === targetId ? { ...target, rating, count: 0 } : target
-      ));
-  }
-
-  _handleCurateAuditHotspotAddTarget() {
-      const nextId = this._curateAuditHotspotNextId || 1;
-      this._curateAuditHotspotNextId = nextId + 1;
-      this.curateAuditTargets = [
-          ...(this.curateAuditTargets || []),
-          { id: nextId, category: '', keyword: '', action: 'add', count: 0 },
-      ];
-  }
-
-  _handleCurateAuditHotspotRemoveTarget(targetId) {
-      if (!this.curateAuditTargets || this.curateAuditTargets.length <= 1) {
-          return;
-      }
-      const firstId = this.curateAuditTargets[0]?.id;
-      if (targetId === firstId) {
-          return;
-      }
-      this.curateAuditTargets = this.curateAuditTargets.filter((target) => target.id !== targetId);
-      if (this._curateAuditHotspotDragTarget === targetId) {
-          this._curateAuditHotspotDragTarget = null;
-      }
-  }
-
-  _handleCurateAuditHotspotDragOver(event, targetId) {
-      event.preventDefault();
-      if (this._curateAuditHotspotDragTarget !== targetId) {
-          this._curateAuditHotspotDragTarget = targetId;
-          this.requestUpdate();
-      }
-  }
-
-  _handleCurateAuditHotspotDragLeave() {
-      if (this._curateAuditHotspotDragTarget !== null) {
-          this._curateAuditHotspotDragTarget = null;
-          this.requestUpdate();
-      }
-  }
-
-  _handleCurateAuditHotspotDrop(event, targetId) {
-      event.preventDefault();
-      const raw = event.dataTransfer?.getData('text/plain') || '';
-      const ids = raw
-          .split(',')
-          .map((value) => Number.parseInt(value.trim(), 10))
-          .filter((value) => Number.isFinite(value) && value > 0);
-      if (!ids.length) {
-          this._handleCurateAuditHotspotDragLeave();
-          return;
-      }
-      const target = (this.curateAuditTargets || []).find((entry) => entry.id === targetId);
-      if (!target) {
-          this._handleCurateAuditHotspotDragLeave();
-          return;
-      }
-
-      if (target.type === 'rating') {
-          if (typeof target.rating !== 'number' || target.rating < 0 || target.rating > 3) {
-              this._handleCurateAuditHotspotDragLeave();
-              return;
-          }
-          this._applyAuditRating(ids, target.rating);
-          this.curateAuditTargets = this.curateAuditTargets.map((entry) => (
-              entry.id === targetId ? { ...entry, count: (entry.count || 0) + ids.length } : entry
-          ));
-      } else {
-          if (!target.keyword) {
-              this._handleCurateAuditHotspotDragLeave();
-              return;
-          }
-          const idSet = new Set(ids);
-          const additions = this.curateAuditImages.filter((img) => idSet.has(img.id));
-          if (!additions.length) {
-              this._handleCurateAuditHotspotDragLeave();
-              return;
-          }
-          const signum = target.action === 'remove' ? -1 : 1;
-          const category = target.category || 'Uncategorized';
-          const operations = additions.map((image) => ({
-              image_id: image.id,
-              keyword: target.keyword,
-              category,
-              signum,
-          }));
-          enqueueCommand({
-              type: 'bulk-permatags',
-              tenantId: this.tenant,
-              operations,
-              description: `tag audit · ${operations.length} updates`,
-          });
-          additions.forEach((image) => {
-              this._applyAuditPermatagChange(image, signum, target.keyword, category);
-          });
-          this.curateAuditImages = this.curateAuditImages.filter((img) => !idSet.has(img.id));
-          this.curateAuditDragSelection = this.curateAuditDragSelection.filter((id) => !idSet.has(id));
-          this.curateAuditTargets = this.curateAuditTargets.map((entry) => (
-              entry.id === targetId ? { ...entry, count: (entry.count || 0) + additions.length } : entry
-          ));
-      }
-      this._handleCurateAuditHotspotDragLeave();
-  }
-
-  // Explore rating drag handlers - now using factory to eliminate duplication
-  _handleCurateExploreRatingToggle(event) {
-      if (event && typeof event.target?.checked === 'boolean') {
-          this.curateExploreRatingEnabled = event.target.checked;
-          return;
-      }
-      return this._exploreRatingHandlers.handleToggle();
+      return this._curateAuditState.syncHotspotPrimary();
   }
 
   _handleCurateExploreRatingDrop(event, ratingValue = null) {
-      const rating = Number.parseInt(ratingValue, 10);
-      if (Number.isFinite(rating)) {
-          const raw = event?.dataTransfer?.getData('text/plain') || '';
-          const ids = raw
-            .split(',')
-            .map((value) => Number.parseInt(value.trim(), 10))
-            .filter((value) => Number.isFinite(value) && value > 0);
-          if (ids.length) {
-              this._applyExploreRating(ids, rating);
-              return;
-          }
-      }
-      return this._exploreRatingHandlers.handleDrop(event);
-  }
-
-  // Audit rating drag handlers - now using factory to eliminate duplication
-  _handleCurateAuditRatingToggle() {
-      return this._auditRatingHandlers.handleToggle();
-  }
-
-  _handleCurateAuditRatingDragOver(event) {
-      return this._auditRatingHandlers.handleDragOver(event);
-  }
-
-  _handleCurateAuditRatingDragLeave() {
-      return this._auditRatingHandlers.handleDragLeave();
+      return this._curateExploreState.handleRatingDrop(event, ratingValue);
   }
 
   _handleCurateAuditRatingDrop(event) {
@@ -2188,40 +1839,11 @@ class PhotoCatApp extends LitElement {
 
       switch (tab) {
           case 'search': {
-              this.fetchKeywords();
-              this.fetchStats({
-                  includeRatings: this.searchSubTab === 'explore-by-tag',
-                  includeMlStats: false,
-                  includeTagStats: false,
-              });
-              if (this.searchSubTab === 'home') {
-                  if (!this.searchImages?.length) {
-                      const searchFilters = this.searchFilterPanel.getState();
-                      this.searchFilterPanel.updateFilters(searchFilters);
-                      this.searchFilterPanel.fetchImages();
-                  }
-              } else if (this.searchSubTab === 'explore-by-tag') {
-                  this._loadExploreByTagData();
-              }
+              this._searchState.initializeSearchTab();
               break;
           }
           case 'curate': {
-              this.fetchKeywords();
-              this.fetchStats({ includeTagStats: this.curateSubTab === 'home' }).finally(() => {
-                  this._curateHomeLastFetchKey = getCurateHomeFetchKey(this);
-              });
-              if (this.curateSubTab === 'main') {
-                  const curateFilters = buildCurateFilterObject(this);
-                  this.curateHomeFilterPanel.updateFilters(curateFilters);
-                  if (!this.curateImages?.length && !this.curateLoading) {
-                      this._fetchCurateHomeImages();
-                  }
-              } else if (this.curateSubTab === 'tag-audit' && this.curateAuditKeyword) {
-                  const fetchKey = getCurateAuditFetchKey(this, { loadAll: this.curateAuditLoadAll, offset: this.curateAuditPageOffset || 0 });
-                  if (!this._curateAuditLastFetchKey || this._curateAuditLastFetchKey !== fetchKey) {
-                      this._fetchCurateAuditImages();
-                  }
-              }
+              this._curateExploreState.initializeCurateTab();
               break;
           }
           case 'system': {
@@ -2241,97 +1863,31 @@ class PhotoCatApp extends LitElement {
   }
 
   _showExploreRatingDialog(imageIds) {
-      console.log('[Rating] _showExploreRatingDialog called with ids:', imageIds);
-      this._curateRatingModalImageIds = imageIds;
-      this._curateRatingModalSource = 'explore';
-      this._curateRatingModalActive = true;
-      console.log('[Rating] Modal state set, active:', this._curateRatingModalActive);
-      this.requestUpdate();
+      return this._ratingModalState.showExploreRatingDialog(imageIds);
   }
 
   _showAuditRatingDialog(imageIds) {
-      console.log('[Rating] _showAuditRatingDialog called with ids:', imageIds);
-      this._curateRatingModalImageIds = imageIds;
-      this._curateRatingModalSource = 'audit';
-      this._curateRatingModalActive = true;
-      console.log('[Rating] Modal state set, active:', this._curateRatingModalActive);
-      this.requestUpdate();
+      return this._ratingModalState.showAuditRatingDialog(imageIds);
   }
 
   _handleRatingModalClick(rating) {
-      if (!this._curateRatingModalImageIds?.length) {
-          console.log('[Rating] No image IDs found');
-          return;
-      }
-      const ids = this._curateRatingModalImageIds;
-      const source = this._curateRatingModalSource;
-      console.log('[Rating] Modal clicked, rating:', rating, 'ids:', ids, 'source:', source);
-      this._closeRatingModal();
-      if (source === 'explore') {
-          console.log('[Rating] Applying explore rating');
-          this._applyExploreRating(ids, rating);
-      } else if (source === 'audit') {
-          console.log('[Rating] Applying audit rating');
-          this._applyAuditRating(ids, rating);
-      }
+      return this._ratingModalState.handleRatingModalClick(rating);
   }
 
   _closeRatingModal() {
-      this._curateRatingModalActive = false;
-      this._curateRatingModalImageIds = null;
-      this._curateRatingModalSource = null;
-      this.requestUpdate();
+      return this._ratingModalState.closeRatingModal();
   }
 
   _handleEscapeKey(e) {
-      if (e.key === 'Escape' && this._curateRatingModalActive) {
-          this._closeRatingModal();
-      }
+      return this._ratingModalState.handleEscapeKey(e);
   }
 
   async _applyExploreRating(imageIds, rating) {
-      console.log('[Rating] _applyExploreRating called with ids:', imageIds, 'rating:', rating);
-      try {
-          const promises = imageIds.map((imageId) => {
-              console.log('[Rating] Sending PATCH for image:', imageId);
-              return fetchWithAuth(`/images/${imageId}/rating`, {
-                  method: 'PATCH',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ rating }),
-                  tenantId: this.tenant,
-              });
-          });
-          const results = await Promise.all(promises);
-          console.log('[Rating] All requests completed, results:', results);
-          this.curateExploreRatingCount += imageIds.length;
-          console.log('[Rating] Updated count to:', this.curateExploreRatingCount);
-          this._removeCurateImagesByIds(imageIds);
-          console.log('[Rating] Images removed from list');
-          this.requestUpdate();
-          console.log('[Rating] RequestUpdate called');
-      } catch (err) {
-          console.error('[Rating] Failed to apply explore rating:', err);
-      }
+      return await this._ratingModalState.applyExploreRating(imageIds, rating);
   }
 
   async _applyAuditRating(imageIds, rating) {
-      const idSet = new Set(imageIds);
-      try {
-          await Promise.all(imageIds.map((imageId) =>
-              fetchWithAuth(`/images/${imageId}/rating`, {
-                  method: 'PATCH',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ rating }),
-                  tenantId: this.tenant,
-              })
-          ));
-          this.curateAuditRatingCount += imageIds.length;
-          this.curateAuditImages = this.curateAuditImages.filter((img) => !idSet.has(img.id));
-          this.curateAuditDragSelection = this.curateAuditDragSelection.filter((id) => !idSet.has(id));
-          this.requestUpdate();
-      } catch (err) {
-          console.error('Failed to apply audit rating:', err);
-      }
+      return await this._ratingModalState.applyAuditRating(imageIds, rating);
   }
 
   disconnectedCallback() {
@@ -2351,69 +1907,7 @@ class PhotoCatApp extends LitElement {
   }
 
   _applyCurateFilters({ resetOffset = false } = {}) {
-      // NEW: Use filter panel for Curate Home
-      const curateFilters = buildCurateFilterObject(this, { resetOffset });
-
-      // Check special case before fetching
-      if (this.curateMinRating === 0 && this.curateHideDeleted) {
-          this.curateImages = [];
-          this.curateTotal = 0;
-          return;
-      }
-
-      // Update filter panel and fetch
-      this.curateHomeFilterPanel.updateFilters(curateFilters);
-      this._fetchCurateHomeImages();
-
-      // Keep local mirror for UI state (no deprecated builder)
-      if (resetOffset) {
-          this.curatePageOffset = 0;
-      }
-      this.curateFilters = { ...curateFilters };
-  }
-
-  _handleCurateOrderByChange(e) {
-      this.curateOrderBy = e.target.value;
-
-      // Refresh the currently active tab only
-      if (this.curateSubTab === 'main') {
-          const curateFilters = buildCurateFilterObject(this, { resetOffset: true });
-          this.curateHomeFilterPanel.updateFilters(curateFilters);
-          this._fetchCurateHomeImages();
-      } else if (this.curateSubTab === 'tag-audit' && this.curateAuditKeyword) {
-          this._fetchCurateAuditImages();
-      }
-  }
-
-  _handleCurateOrderDirectionChange(e) {
-      this.curateOrderDirection = e.target.value;
-
-      // Refresh the currently active tab only
-      if (this.curateSubTab === 'main') {
-          const curateFilters = buildCurateFilterObject(this, { resetOffset: true });
-          this.curateHomeFilterPanel.updateFilters(curateFilters);
-          this._fetchCurateHomeImages();
-      } else if (this.curateSubTab === 'tag-audit' && this.curateAuditKeyword) {
-          this._fetchCurateAuditImages();
-      }
-  }
-
-  _handleCurateQuickSort(orderBy) {
-      if (this.curateOrderBy === orderBy) {
-          this.curateOrderDirection = this.curateOrderDirection === 'desc' ? 'asc' : 'desc';
-      } else {
-          this.curateOrderBy = orderBy;
-          this.curateOrderDirection = 'desc';
-      }
-
-      // Refresh the currently active tab only
-      if (this.curateSubTab === 'main') {
-          const curateFilters = buildCurateFilterObject(this, { resetOffset: true });
-          this.curateHomeFilterPanel.updateFilters(curateFilters);
-          this._fetchCurateHomeImages();
-      } else if (this.curateSubTab === 'tag-audit' && this.curateAuditKeyword) {
-          this._fetchCurateAuditImages();
-      }
+      return this._curateHomeState.applyCurateFilters({ resetOffset });
   }
 
   // Explore selection handlers - now using factory to eliminate duplication
@@ -2426,230 +1920,30 @@ class PhotoCatApp extends LitElement {
       return this._auditSelectionHandlers.cancelPressState();
   }
 
-  _startCurateSelection(index, imageId) {
-      return this._exploreSelectionHandlers.startSelection(index, imageId);
-  }
-
-  _startCurateAuditSelection(index, imageId) {
-      return this._auditSelectionHandlers.startSelection(index, imageId);
-  }
-
   _handleCuratePointerDown(event, index, imageId) {
       return this._exploreSelectionHandlers.handlePointerDown(event, index, imageId);
   }
 
   _handleCurateKeywordSelect(event, mode) {
-      const rawValue = event.target.value || '';
-      if (!rawValue) {
-          if (mode === 'tag-audit') {
-              this.curateAuditKeyword = '';
-              this.curateAuditCategory = '';
-              this.curateAuditSelection = [];
-              this.curateAuditDragSelection = [];
-              this.curateAuditDragTarget = null;
-              this.curateAuditOffset = 0;
-              this.curateAuditTotal = null;
-              this.curateAuditLoadAll = false;
-              this.curateAuditPageOffset = 0;
-              this.curateAuditImages = [];
-          } else {
-              this.curateKeywordFilters = {};
-              this.curateKeywordOperators = {};
-              this.curateNoPositivePermatags = false;
-              this._applyCurateFilters();
-          }
-          return;
-      }
-
-      if (mode !== 'tag-audit' && rawValue === '__untagged__') {
-          this.curateKeywordFilters = {};
-          this.curateKeywordOperators = {};
-          this.curateNoPositivePermatags = true;
-          this._applyCurateFilters({ resetOffset: true });
-          return;
-      }
-
-      const [encodedCategory, ...encodedKeywordParts] = rawValue.split('::');
-      const category = decodeURIComponent(encodedCategory || '');
-      const keyword = decodeURIComponent(encodedKeywordParts.join('::') || '');
-
-      if (mode === 'tag-audit') {
-          this.curateAuditKeyword = keyword;
-          this.curateAuditCategory = category;
-          this.curateAuditSelection = [];
-          this.curateAuditDragSelection = [];
-          this.curateAuditDragTarget = null;
-          this.curateAuditOffset = 0;
-          this.curateAuditTotal = null;
-          this.curateAuditLoadAll = false;
-          this.curateAuditPageOffset = 0;
-          if (!keyword) {
-              this.curateAuditImages = [];
-              return;
-          }
-          // Only fetch audit images, don't update Explore tab
-          this._fetchCurateAuditImages();
-          return;
-      }
-
-      const nextKeywords = {};
-      if (keyword) {
-          nextKeywords[category || 'Uncategorized'] = new Set([keyword]);
-      }
-      this.curateKeywordFilters = nextKeywords;
-      this.curateKeywordOperators = keyword ? { [category || 'Uncategorized']: 'OR' } : {};
-      this.curateNoPositivePermatags = false;
-      this._applyCurateFilters({ resetOffset: true });
-  }
-
-  _handleCurateTagSourceChange(e) {
-      this.activeCurateTagSource = e.detail?.source || 'permatags';
-      this._updateCurateCategoryCards();
+      return this._curateHomeState.handleKeywordSelect(event, mode);
   }
 
   _updateCurateCategoryCards() {
-      const sourceStats = this.tagStatsBySource?.[this.activeCurateTagSource] || {};
-      this.curateCategoryCards = buildCategoryCards(sourceStats, true);
-  }
-
-  _getKeywordsByCategory() {
-      return getKeywordsByCategory(this.tagStatsBySource, this.activeCurateTagSource);
-  }
-
-  _getCategoryCount(category) {
-      return getCategoryCount(this.tagStatsBySource, category, this.activeCurateTagSource);
-  }
-
-  _handleCurateHideDeletedChange(e) {
-      this.curateHideDeleted = e.target.checked;
-      this._applyCurateFilters({ resetOffset: true });
-  }
-
-  _handleCurateNoPositivePermatagsChange(e) {
-      this.curateNoPositivePermatags = e.target.checked;
-
-      // Refresh the currently active tab only
-      if (this.curateSubTab === 'main') {
-          const curateFilters = buildCurateFilterObject(this, { resetOffset: true });
-          this.curateHomeFilterPanel.updateFilters(curateFilters);
-          this._fetchCurateHomeImages();
-      } else if (this.curateSubTab === 'tag-audit' && this.curateAuditKeyword) {
-          this._fetchCurateAuditImages();
-      }
-  }
-
-  _handleCurateAuditNoPositivePermatagsChange(e) {
-      this.curateAuditNoPositivePermatags = e.target.checked;
-      if (this.curateAuditKeyword) {
-          this._fetchCurateAuditImages();
-      }
-  }
-
-  _handleCurateMinRating(value) {
-      // Toggle rating filter - if same value clicked, clear it
-      const newRating = (this.curateMinRating === value) ? null : value;
-
-      // Update state variable for UI styling
-      this.curateMinRating = newRating;
-
-      // Refresh the currently active tab only
-      if (this.curateSubTab === 'main') {
-          // Update Explore tab
-          const curateFilters = buildCurateFilterObject(this, {
-              rating: newRating,
-              resetOffset: true
-          });
-          this.curateHomeFilterPanel.updateFilters(curateFilters);
-          this._fetchCurateHomeImages();
-      } else if (this.curateSubTab === 'tag-audit' && this.curateAuditKeyword) {
-          // Update Audit tab (both existing and missing share same settings)
-          this._fetchCurateAuditImages();
-      }
-  }
-
-  _handleCurateAuditMinRating(value) {
-      const newRating = (this.curateAuditMinRating === value) ? null : value;
-      this.curateAuditMinRating = newRating;
-      if (this.curateAuditKeyword) {
-          this._fetchCurateAuditImages();
-      }
-  }
-
-  _handleCurateAuditHideDeletedChange(e) {
-      this.curateAuditHideDeleted = e.target.checked;
-      if (this.curateAuditKeyword) {
-          this._fetchCurateAuditImages();
-      }
-  }
-
-  _startCurateLoading() {
-      this._curateLoadCount = (this._curateLoadCount || 0) + 1;
-      this.curateLoading = true;
-  }
-
-  _finishCurateLoading() {
-      this._curateLoadCount = Math.max(0, (this._curateLoadCount || 1) - 1);
-      this.curateLoading = this._curateLoadCount > 0;
+      return this._curateHomeState.updateCurateCategoryCards();
   }
 
   async _fetchCurateHomeImages() {
-      if (!this.curateHomeFilterPanel) return;
-      this._startCurateLoading();
-      try {
-          return await this.curateHomeFilterPanel.fetchImages();
-      } finally {
-          this._finishCurateLoading();
-      }
-  }
-
-  _getDefaultNewListTitle() {
-      const now = new Date();
-      const pad = (value) => String(value).padStart(2, '0');
-      const date = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
-      const time = `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
-      return `${date}:${time} new list`;
-  }
-
-  _getUniqueNewListTitle() {
-      const base = this._getDefaultNewListTitle();
-      if (!this._isDuplicateListTitle(base)) {
-          return base;
-      }
-      let suffix = 2;
-      let candidate = `${base} (${suffix})`;
-      while (this._isDuplicateListTitle(candidate)) {
-          suffix += 1;
-          candidate = `${base} (${suffix})`;
-      }
-      return candidate;
+      return await this._curateHomeState.fetchCurateHomeImages();
   }
 
   _resetSearchListDraft() {
-      this.searchListId = null;
-      this.searchListTitle = this._getUniqueNewListTitle();
-      this.searchSavedItems = [];
-      this.searchListPromptNewTitle = false;
+      return this._searchState.resetSearchListDraft();
   }
 
   async _refreshCurateHome() {
-      if (this.curateHomeRefreshing) return;
-      this.curateHomeRefreshing = true;
-      try {
-          await this.fetchStats({ force: true, includeTagStats: true });
-          this._curateHomeLastFetchKey = getCurateHomeFetchKey(this);
-      } finally {
-          this.curateHomeRefreshing = false;
-      }
+      return await this._curateHomeState.refreshCurateHome();
   }
 
-  _isDuplicateListTitle(title, excludeId = null) {
-      const normalized = (title || '').trim().toLowerCase();
-      if (!normalized) return false;
-      return (this.searchLists || []).some((list) => {
-          if (excludeId && list.id === excludeId) return false;
-          return (list.title || '').trim().toLowerCase() === normalized;
-      });
-  }
 
   _handleTenantChange(e) {
       this.tenant = e.detail;
@@ -2658,44 +1952,13 @@ class PhotoCatApp extends LitElement {
       this.curateHomeFilterPanel.setTenant(this.tenant);
       this.curateAuditFilterPanel.setTenant(this.tenant);
 
-      this.curateHideDeleted = true;
-      this.curateMinRating = null;
-      this.curateNoPositivePermatags = false;
-      this.curateKeywordFilters = {};
-      this.curateKeywordOperators = {};
-      this.curateDropboxPathPrefix = '';
-      this.curateListId = '';
-      this.curateListExcludeId = '';
-      this.curateFilters = buildCurateFilterObject(this, { resetOffset: true });
-      this.curatePageOffset = 0;
-      this.curateTotal = null;
-      this.curateImages = [];
-      const curateFilters = buildCurateFilterObject(this, { resetOffset: true });
-      this.curateHomeFilterPanel.updateFilters(curateFilters);
-      this.curateDragSelection = [];
+      this._curateHomeState.resetForTenantChange();
       this.curateSubTab = 'main';
-      this.curateAuditMode = 'existing';
-      this.curateAuditKeyword = '';
-      this.curateAuditCategory = '';
-      this.curateAuditImages = [];
-      this.curateAuditSelection = [];
-      this.curateAuditDragTarget = null;
-      this.curateAuditDragSelection = [];
-      this.curateAuditDragSelecting = false;
-      this.curateAuditDragStartIndex = null;
-      this.curateAuditDragEndIndex = null;
-      this.curateAuditOffset = 0;
-      this.curateAuditTotal = null;
-      this.curateAuditLoading = false;
-      this.curateAuditLoadAll = false;
-      this.curateAuditPageOffset = 0;
-      this.curateAuditAiEnabled = false;
-      this.curateAuditAiModel = '';
-      this.curateAuditDropboxPathPrefix = '';
+      this._curateAuditState.resetForTenantChange();
       this._curateAuditLastFetchKey = null;
       this._curateHomeLastFetchKey = null;
       this._curateStatsAutoRefreshDone = false;
-      this._resetSearchListDraft();
+      this._searchState.resetForTenantChange();
       this._tabBootstrapped = new Set();
       this._initializeTab(this.activeTab, { force: true });
   }
@@ -2729,219 +1992,19 @@ class PhotoCatApp extends LitElement {
     }
 
   _handleCurateChipFiltersChanged(event) {
-      const chips = event.detail?.filters || [];
-      const nextKeywords = {};
-      const nextOperators = {};
-      let nextMinRating = null;
-      let nextNoPositivePermatags = false;
-      let nextDropboxPathPrefix = '';
-      let nextHideDeleted = true;
-      let nextListId = '';
-      let nextListExcludeId = '';
-      let nextCategoryFilterOperator = undefined;
-
-      chips.forEach((chip) => {
-          switch (chip.type) {
-              case 'keyword': {
-                  if (chip.untagged || chip.value === '__untagged__') {
-                      nextNoPositivePermatags = true;
-                      break;
-                  }
-                  const keywordsByCategory = chip.keywordsByCategory && typeof chip.keywordsByCategory === 'object'
-                      ? chip.keywordsByCategory
-                      : (chip.category && chip.value ? { [chip.category]: [chip.value] } : {});
-                  const operator = chip.operator || 'OR';
-                  nextCategoryFilterOperator = operator;
-                  Object.entries(keywordsByCategory).forEach(([category, values]) => {
-                      const list = Array.isArray(values) ? values : Array.from(values || []);
-                      if (!list.length) return;
-                      if (!nextKeywords[category]) {
-                          nextKeywords[category] = new Set();
-                      }
-                      list.forEach((value) => nextKeywords[category].add(value));
-                      nextOperators[category] = operator;
-                  });
-                  break;
-              }
-              case 'rating':
-                  if (chip.value === 'unrated') {
-                      nextMinRating = 'unrated';
-                      nextHideDeleted = true;
-                  } else {
-                      nextMinRating = chip.value;
-                      nextHideDeleted = false;
-                  }
-                  break;
-              case 'folder':
-                  nextDropboxPathPrefix = chip.value || '';
-                  break;
-              case 'list':
-                  if (chip.mode === 'exclude') {
-                      nextListExcludeId = chip.value || '';
-                  } else {
-                      nextListId = chip.value || '';
-                  }
-                  break;
-          }
-      });
-
-      if (nextNoPositivePermatags) {
-          Object.keys(nextKeywords).forEach((key) => delete nextKeywords[key]);
-          Object.keys(nextOperators).forEach((key) => delete nextOperators[key]);
-          nextCategoryFilterOperator = undefined;
-      }
-
-      this.curateKeywordFilters = nextKeywords;
-      this.curateKeywordOperators = nextOperators;
-      this.curateNoPositivePermatags = nextNoPositivePermatags;
-      this.curateMinRating = nextMinRating;
-      this.curateHideDeleted = nextHideDeleted;
-      this.curateDropboxPathPrefix = nextDropboxPathPrefix;
-      this.curateListId = nextListId;
-      this.curateListExcludeId = nextListExcludeId;
-      this.curateCategoryFilterOperator = nextCategoryFilterOperator;
-
-      this._applyCurateFilters({ resetOffset: true });
+      return this._curateHomeState.handleChipFiltersChanged(event);
   }
 
   _handleCurateListExcludeFromRightPanel(event) {
-      const listId = event?.detail?.listId ? String(event.detail.listId) : '';
-      if (!listId) return;
-      this.curateListId = '';
-      this.curateListExcludeId = listId;
-      this._applyCurateFilters({ resetOffset: true });
+      return this._curateHomeState.handleListExcludeFromRightPanel(event);
   }
 
   _handleCurateAuditChipFiltersChanged(event) {
-      const chips = event.detail?.filters || [];
-      const keywordChip = chips.find((chip) => chip.type === 'keyword');
-      let nextKeyword = '';
-      let nextCategory = '';
-      if (keywordChip) {
-          if (keywordChip.untagged || keywordChip.value === '__untagged__') {
-              nextKeyword = '';
-              nextCategory = '';
-          } else if (keywordChip.keywordsByCategory && typeof keywordChip.keywordsByCategory === 'object') {
-              const entries = Object.entries(keywordChip.keywordsByCategory);
-              if (entries.length) {
-                  const [category, values] = entries[0];
-                  const list = Array.isArray(values) ? values : Array.from(values || []);
-                  if (list.length) {
-                      nextCategory = category;
-                      nextKeyword = list[0];
-                  }
-              }
-          } else if (keywordChip.value) {
-              nextKeyword = keywordChip.value;
-              nextCategory = keywordChip.category || '';
-          }
-      }
-      let nextMinRating = null;
-      let nextHideDeleted = true;
-      let nextDropboxPathPrefix = '';
-
-      chips.forEach((chip) => {
-          switch (chip.type) {
-              case 'rating':
-                  if (chip.value === 'unrated') {
-                      nextMinRating = 'unrated';
-                      nextHideDeleted = true;
-                  } else {
-                      nextMinRating = chip.value;
-                      nextHideDeleted = false;
-                  }
-                  break;
-              case 'folder':
-                  nextDropboxPathPrefix = chip.value || '';
-                  break;
-          }
-      });
-
-      nextCategory = resolveKeywordCategory(nextKeyword, {
-          fallbackCategory: nextCategory,
-          keywords: this.keywords,
-          tagStatsBySource: this.tagStatsBySource,
-          activeTagSource: this.activeCurateTagSource,
-      });
-      const keywordChanged = nextKeyword !== this.curateAuditKeyword
-          || nextCategory !== this.curateAuditCategory;
-
-      this.curateAuditKeyword = nextKeyword;
-      this.curateAuditCategory = nextCategory;
-      this.curateAuditMinRating = nextMinRating;
-      this.curateAuditHideDeleted = nextHideDeleted;
-      this.curateAuditDropboxPathPrefix = nextDropboxPathPrefix;
-      this.curateAuditPageOffset = 0;
-      this.curateAuditOffset = 0;
-      this.curateAuditLoadAll = false;
-
-      const defaultAction = this.curateAuditMode === 'existing' ? 'remove' : 'add';
-      const [firstTarget, ...restTargets] = this.curateAuditTargets || [];
-      const primaryType = firstTarget?.type || 'keyword';
-      const primaryId = firstTarget?.id || 1;
-      this.curateAuditTargets = [
-          {
-              ...firstTarget,
-              id: primaryId,
-              type: primaryType,
-              category: nextKeyword ? nextCategory : '',
-              keyword: nextKeyword,
-              action: defaultAction,
-              count: 0,
-          },
-          ...restTargets,
-      ];
-
-      if (keywordChanged) {
-          this.curateAuditSelection = [];
-          this.curateAuditDragSelection = [];
-          this.curateAuditDragTarget = null;
-          this.curateAuditDragSelecting = false;
-          this.curateAuditDragStartIndex = null;
-          this.curateAuditDragEndIndex = null;
-      }
-      this._syncAuditHotspotPrimary();
-
-      if (!this.curateAuditKeyword) {
-          this.curateAuditImages = [];
-          this.curateAuditTotal = null;
-          return;
-      }
-
-      this._fetchCurateAuditImages();
+      return this._curateAuditState.handleChipFiltersChanged(event);
   }
 
   async _fetchDropboxFolders(query) {
-      if (!this.tenant) return;
-      this.searchDropboxLoading = true;
-      try {
-          const response = await getDropboxFolders(this.tenant, { query });
-          this.searchDropboxOptions = response.folders || [];
-      } catch (error) {
-          console.error('Failed to fetch Dropbox folders:', error);
-          this.searchDropboxOptions = [];
-      } finally {
-          this.searchDropboxLoading = false;
-      }
-  }
-
-  _handleCurateDragStart(event, image) {
-      if (this.curateDragSelecting) {
-          event.preventDefault();
-          return;
-      }
-      if (this._curatePressActive) {
-          this._cancelCuratePressState();
-      }
-      let ids = [image.id];
-      if (this.curateDragSelection.length && this.curateDragSelection.includes(image.id)) {
-          ids = this.curateDragSelection;
-      } else if (this.curateDragSelection.length) {
-          this.curateDragSelection = [image.id];
-      }
-      event.dataTransfer.setData('text/plain', ids.join(','));
-      event.dataTransfer.setData('application/x-photocat-source', 'available');
-      event.dataTransfer.effectAllowed = 'move';
+      return await this._searchState.fetchDropboxFolders(query);
   }
 
   _handleCurateThumbSizeChange(event) {
@@ -2949,428 +2012,60 @@ class PhotoCatApp extends LitElement {
   }
 
   _handleCurateSubTabChange(nextTab) {
-      if (!nextTab || this.curateSubTab === nextTab) {
-          return;
-      }
-      const prevTab = this.curateSubTab;
-      if (prevTab === 'main') {
-          this._curateSubTabState[prevTab] = this._snapshotCurateState();
-          this._curateActiveWorkingTab = prevTab;
-      }
-      this.curateSubTab = nextTab;
-      if (nextTab === 'main') {
-          const saved = this._curateSubTabState[nextTab];
-          if (saved) {
-              this._restoreCurateState(saved);
-          } else {
-              this._restoreCurateState(this._getCurateDefaultState());
-              this._curateSubTabState[nextTab] = this._snapshotCurateState();
-          }
-          if (!this.curateImages.length && !this.curateLoading) {
-              // Use filter panel instead of deprecated method
-              const curateFilters = buildCurateFilterObject(this);
-              this.curateHomeFilterPanel.updateFilters(curateFilters);
-              this._fetchCurateHomeImages();
-          }
-      }
-      if (nextTab === 'home') {
-          const fetchKey = getCurateHomeFetchKey(this);
-          if (!this._curateHomeLastFetchKey || this._curateHomeLastFetchKey !== fetchKey) {
-              this.fetchStats({ includeRatings: true }).finally(() => {
-                  this._curateHomeLastFetchKey = fetchKey;
-              });
-          }
-          if (shouldAutoRefreshCurateStats(this)) {
-              this._curateStatsAutoRefreshDone = true;
-              this._refreshCurateHome();
-          }
-      }
-      if (nextTab === 'tag-audit' && this.curateAuditKeyword) {
-          const fetchKey = getCurateAuditFetchKey(this, { loadAll: this.curateAuditLoadAll, offset: this.curateAuditPageOffset || 0 });
-          if (!this._curateAuditLastFetchKey || this._curateAuditLastFetchKey !== fetchKey) {
-              this._fetchCurateAuditImages();
-          }
-      }
+      return this._curateExploreState.handleSubTabChange(nextTab);
+  }
+
+  _buildCurateFilters(options = {}) {
+      return buildCurateFilterObject(this, options);
+  }
+
+  _getCurateHomeFetchKey() {
+      return getCurateHomeFetchKey(this);
+  }
+
+  _getCurateAuditFetchKey(options = {}) {
+      return getCurateAuditFetchKey(this, options);
+  }
+
+  _shouldAutoRefreshCurateStats() {
+      return shouldAutoRefreshCurateStats(this);
   }
 
   async _loadExploreByTagData(forceRefresh = false) {
-      if (!this.tenant) return;
-      this.exploreByTagLoading = true;
-      if (!this.imageStats?.rating_by_category || !Object.keys(this.imageStats.rating_by_category || {}).length) {
-          if (!this._exploreByTagStatsPromise) {
-              this._exploreByTagStatsPromise = this.fetchStats({
-                  includeRatings: true,
-                  includeMlStats: false,
-                  includeTagStats: false,
-              }).catch((error) => {
-                  console.error('Error fetching explore-by-tag stats:', error);
-              }).finally(() => {
-                  this._exploreByTagStatsPromise = null;
-              });
-              this._exploreByTagStatsPromise.then(() => {
-                  if (!this.imageStats?.rating_by_category || !Object.keys(this.imageStats.rating_by_category || {}).length) {
-                      this.exploreByTagLoading = false;
-                      return;
-                  }
-                  this._loadExploreByTagData(forceRefresh);
-              });
-          }
-          return;
-      }
-      try {
-          // Get all keywords with 2+ star ratings
-          const keywordsByRating = {};
-          const imageStats = this.imageStats;
-
-          if (imageStats?.rating_by_category) {
-              Object.entries(imageStats.rating_by_category).forEach(([category, categoryData]) => {
-                  Object.entries(categoryData.keywords || {}).forEach(([keyword, keywordData]) => {
-                      const twoStarPlus = (keywordData.stars_2 || 0) + (keywordData.stars_3 || 0);
-                      if (twoStarPlus > 0) {
-                          // Use category - keyword format to match template rendering
-                          const keywordName = `${category} - ${keyword}`;
-                          keywordsByRating[keywordName] = { category, keyword, twoStarPlus };
-                      }
-                  });
-              });
-          }
-
-          // Fetch images for each keyword, sorted alphabetically
-          const sortedKeywords = Object.entries(keywordsByRating).sort(([a], [b]) => a.localeCompare(b));
-          const exploreByTagData = {};
-          const exploreByTagKeywords = [];
-          for (const [keywordName, data] of sortedKeywords) {
-              const cacheKey = `exploreByTag_${keywordName}`;
-              let cachedImages = this[cacheKey];
-              if (forceRefresh || !Array.isArray(cachedImages)) {
-                  try {
-                      const result = await getImages(this.tenant, {
-                          permatagKeyword: data.keyword,
-                          permatagCategory: data.category,
-                          permatagSignum: 1,
-                          rating: 2,
-                          ratingOperator: 'gte',
-                          limit: 10,
-                          orderBy: 'rating',
-                          sortOrder: 'desc'
-                      });
-                      const images = Array.isArray(result) ? result : (result?.images || []);
-                      // Filter out any invalid images before caching
-                      cachedImages = images.filter(img => img && img.id);
-                      this[cacheKey] = cachedImages;
-                  } catch (error) {
-                      console.error(`Error loading images for keyword "${keywordName}":`, error);
-                      cachedImages = [];
-                  }
-              }
-              exploreByTagData[keywordName] = cachedImages || [];
-              exploreByTagKeywords.push(keywordName);
-          }
-          this.exploreByTagData = exploreByTagData;
-          this.exploreByTagKeywords = exploreByTagKeywords;
-      } finally {
-          this.exploreByTagLoading = false;
-      }
+      return await this._curateExploreState.loadExploreByTagData(forceRefresh);
   }
 
   _handleCurateAuditModeChange(valueOrEvent) {
-      const nextValue = typeof valueOrEvent === 'string'
+      const mode = typeof valueOrEvent === 'string'
           ? valueOrEvent
           : valueOrEvent.target.value;
-      this.curateAuditMode = nextValue;
-      this.curateAuditSelection = [];
-      this.curateAuditDragSelection = [];
-      this.curateAuditDragTarget = null;
-      this.curateAuditOffset = 0;
-      this.curateAuditTotal = null;
-      this.curateAuditLoadAll = false;
-      this.curateAuditPageOffset = 0;
-      if (this.curateAuditKeyword) {
-          this._fetchCurateAuditImages();
-      }
+      return this._curateAuditState.handleModeChange(mode);
   }
 
   _handleCurateAuditAiEnabledChange(event) {
-      this.curateAuditAiEnabled = event.target.checked;
-      if (!this.curateAuditAiEnabled) {
-          this.curateAuditAiModel = '';
-      }
-      this.curateAuditOffset = 0;
-      this.curateAuditTotal = null;
-      this.curateAuditLoadAll = false;
-      this.curateAuditPageOffset = 0;
-      if (this.curateAuditKeyword && this.curateAuditMode === 'missing') {
-          this._fetchCurateAuditImages();
-      }
+      return this._curateAuditState.handleAiEnabledChange(event.target.checked);
   }
 
   _handleCurateAuditAiModelChange(nextModel) {
-      this.curateAuditAiModel = this.curateAuditAiModel === nextModel ? '' : nextModel;
-      this.curateAuditOffset = 0;
-      this.curateAuditTotal = null;
-      this.curateAuditLoadAll = false;
-      this.curateAuditPageOffset = 0;
-      if (this.curateAuditKeyword && this.curateAuditMode === 'missing') {
-          this._fetchCurateAuditImages();
-      }
-  }
-
-  _handleCurateAuditKeywordChange(e) {
-      const detail = e.detail || {};
-      let nextKeyword = '';
-      let nextCategory = '';
-      for (const [category, keywordsSet] of Object.entries(detail.keywords || {})) {
-          if (keywordsSet && keywordsSet.size > 0) {
-              const [keyword] = Array.from(keywordsSet);
-              if (keyword) {
-                  nextKeyword = keyword.trim();
-                  nextCategory = category;
-                  break;
-              }
-          }
-      }
-      this.curateAuditKeyword = nextKeyword;
-      this.curateAuditCategory = nextCategory;
-      this.curateAuditSelection = [];
-      this.curateAuditDragSelection = [];
-      this.curateAuditDragTarget = null;
-      this.curateAuditOffset = 0;
-      this.curateAuditTotal = null;
-      this.curateAuditLoadAll = false;
-      this.curateAuditPageOffset = 0;
-      if (!nextKeyword) {
-          this.curateAuditImages = [];
-          return;
-      }
-      this._fetchCurateAuditImages();
+      return this._curateAuditState.handleAiModelChange(nextModel);
   }
 
   // Audit pagination handlers - now using factory to eliminate duplication
-  async _fetchCurateAuditImages({ append = false, loadAll = false, offset = null } = {}) {
-      if (!this.tenant || !this.curateAuditKeyword) return;
-
-      const useLoadAll = loadAll || this.curateAuditLoadAll;
-      const resolvedOffset = offset !== null && offset !== undefined
-          ? offset
-          : append
-            ? this.curateAuditOffset
-            : (this.curateAuditPageOffset || 0);
-      const fetchKey = getCurateAuditFetchKey(this, { loadAll: useLoadAll, offset: resolvedOffset });
-
-      // Check special case
-      if (this.curateAuditMinRating === 0 && this.curateAuditHideDeleted) {
-          this.curateAuditImages = [];
-          this.curateAuditOffset = 0;
-          this.curateAuditTotal = 0;
-          this.curateAuditPageOffset = 0;
-          this._curateAuditLastFetchKey = fetchKey;
-          return;
-      }
-
-      this.curateAuditLoading = true;
-      const existingImages = append ? [...(this.curateAuditImages || [])] : null;
-      try {
-          // Build filter object using helper
-          const filters = buildCurateAuditFilterObject(this, {
-              loadAll: useLoadAll,
-              offset: resolvedOffset
-          });
-
-          // Fetch using filter panel
-          this.curateAuditFilterPanel.updateFilters(filters);
-          const result = await this.curateAuditFilterPanel.fetchImages();
-
-          const images = Array.isArray(result) ? result : (result.images || []);
-          const total = Array.isArray(result)
-              ? null
-              : Number.isFinite(result.total)
-                ? result.total
-                : null;
-
-          if (append) {
-              this.curateAuditImages = [...(existingImages || []), ...images];
-          } else {
-              this.curateAuditImages = images;
-          }
-
-          if (!useLoadAll) {
-              this.curateAuditPageOffset = resolvedOffset;
-              this.curateAuditOffset = resolvedOffset + images.length;
-              this.curateAuditTotal = total;
-          } else {
-              this.curateAuditOffset = images.length;
-              this.curateAuditTotal = images.length;
-          }
-          this._curateAuditLastFetchKey = fetchKey;
-      } catch (error) {
-          console.error('Error fetching curate audit images:', error);
-      } finally {
-          this.curateAuditLoading = false;
-      }
-  }
-
-  _handleCurateAuditSelectHover(index) {
-      return this._auditSelectionHandlers.handleSelectHover(index);
+  async _fetchCurateAuditImages(options = {}) {
+      return await this._curateAuditState.fetchCurateAuditImages(options);
   }
 
   _refreshCurateAudit() {
-      if (this.curateAuditLoadAll) {
-          this._fetchCurateAuditImages({ loadAll: true });
-          return;
-      }
-      const offset = this.curateAuditPageOffset || 0;
-      this._fetchCurateAuditImages({ offset });
+      return this._curateAuditState.refreshAudit();
   }
 
-  _updateCurateAuditDragSelection() {
-      return this._auditSelectionHandlers.updateSelection();
-  }
-
-  _applyAuditPermatagChange(image, signum, keyword, category) {
-      const permatags = Array.isArray(image?.permatags) ? image.permatags : [];
-      if (signum === 1) {
-          return { ...image, permatags: mergePermatags(permatags, [{ keyword, category }]) };
-      }
-      const matches = (tag) => tag.keyword === keyword && (tag.category || 'Uncategorized') === (category || 'Uncategorized');
-      const next = permatags.filter((tag) => !(tag.signum === 1 && matches(tag)));
-      return { ...image, permatags: next };
-  }
 
   _handleCurateImageClick(event, image, imageSet) {
-      if (this.curateDragSelecting || this.curateAuditDragSelecting) {
-          return;
-      }
-      if (event && event.defaultPrevented) {
-          return;
-      }
-      if (this._curateSuppressClick || this.curateDragSelection.length) {
-          this._curateSuppressClick = false;
-          return;
-      }
-      const nextSet = Array.isArray(imageSet) && imageSet.length
-          ? [...imageSet]
-          : (Array.isArray(this.curateImages) ? [...this.curateImages] : []);
-      this.curateEditorImage = image;
-      this.curateEditorImageSet = nextSet;
-      this.curateEditorImageIndex = this.curateEditorImageSet.findIndex(img => img.id === image.id);
-      this.curateEditorOpen = true;
+      return this._curateHomeState.handleCurateImageClick(event, image, imageSet);
   }
 
   async _handleZoomToPhoto(e) {
-      const imageId = e?.detail?.imageId;
-      if (!imageId) return;
-      this.activeTab = 'curate';
-      this.curateSubTab = 'main';
-      this.curateOrderBy = 'photo_creation';
-      this.curateOrderDirection = 'desc';
-      this.curatePageOffset = 0;
-      this.curateDragSelection = [];
-      this.curateKeywordFilters = {};
-      this.curateKeywordOperators = {};
-      this.curateNoPositivePermatags = false;
-      this.curateMinRating = null;
-      this.curateDropboxPathPrefix = '';
-      this.curateListId = '';
-      this.curateListExcludeId = '';
-      this.curateFilters = buildCurateFilterObject(this);
-      const curateFilters = {
-          ...buildCurateFilterObject(this, { resetOffset: true }),
-          anchorId: imageId,
-      };
-      this.curateHomeFilterPanel.updateFilters(curateFilters);
-      await this._fetchCurateHomeImages();
-      await this.updateComplete;
-      this._scrollCurateThumbIntoView(imageId);
-  }
-
-  _scrollCurateThumbIntoView(imageId) {
-      const selector = `[data-image-id="${imageId}"]`;
-      const target = this.shadowRoot?.querySelector(selector);
-      if (target && typeof target.scrollIntoView === 'function') {
-          target.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
-      }
-  }
-
-  _applyCurateRating(imageId, rating) {
-      const update = (image) => (image.id === imageId ? { ...image, rating } : image);
-      const hideZero = this.curateHideDeleted && rating === 0;
-      if (hideZero) {
-          const keep = (image) => image.id !== imageId;
-          this.curateImages = this.curateImages.filter(keep);
-          this.curateAuditImages = this.curateAuditImages.filter(keep);
-          this.curateAuditSelection = this.curateAuditSelection.filter(keep);
-          this.curateDragSelection = this.curateDragSelection.filter((id) => id !== imageId);
-          this.curateAuditDragSelection = this.curateAuditDragSelection.filter((id) => id !== imageId);
-      } else {
-          this.curateImages = this.curateImages.map(update);
-          this.curateAuditImages = this.curateAuditImages.map(update);
-          this.curateAuditSelection = this.curateAuditSelection.map(update);
-      }
-      if (Array.isArray(this.searchImages)) {
-          this.searchImages = this.searchImages.map(update);
-      }
-      if (this.exploreByTagData && typeof this.exploreByTagData === 'object') {
-          const nextExplore = {};
-          let updated = false;
-          Object.entries(this.exploreByTagData).forEach(([keyword, images]) => {
-              if (!Array.isArray(images)) {
-                  nextExplore[keyword] = images;
-                  return;
-              }
-              let keywordUpdated = false;
-              const nextImages = images.map((image) => {
-                  if (image?.id === imageId && image.rating !== rating) {
-                      keywordUpdated = true;
-                      updated = true;
-                      return { ...image, rating };
-                  }
-                  return image;
-              });
-              nextExplore[keyword] = keywordUpdated ? nextImages : images;
-          });
-          if (updated) {
-              this.exploreByTagData = nextExplore;
-          }
-      }
-      const searchTab = this.shadowRoot?.querySelector('search-tab');
-      if (searchTab?.applyRatingUpdate) {
-          searchTab.applyRatingUpdate(imageId, rating);
-      }
-  }
-
-  _handleCurateRating(event, image, rating) {
-      event.preventDefault();
-      event.stopPropagation();
-      if (!image?.id) return;
-      this._triggerCurateRatingBurst(image.id);
-      this._applyCurateRating(image.id, rating);
-      enqueueCommand({
-          type: 'set-rating',
-          tenantId: this.tenant,
-          imageId: image.id,
-          rating,
-      });
-  }
-
-  _triggerCurateRatingBurst(imageId) {
-      if (!this._curateRatingBurstIds) {
-          this._curateRatingBurstIds = new Set();
-      }
-      if (!this._curateRatingBurstTimers) {
-          this._curateRatingBurstTimers = new Map();
-      }
-      const existing = this._curateRatingBurstTimers.get(imageId);
-      if (existing) {
-          clearTimeout(existing);
-      }
-      this._curateRatingBurstIds.add(imageId);
-      this.requestUpdate();
-      const timer = setTimeout(() => {
-          this._curateRatingBurstIds.delete(imageId);
-          this._curateRatingBurstTimers.delete(imageId);
-          this.requestUpdate();
-      }, 700);
-      this._curateRatingBurstTimers.set(imageId, timer);
+      return await this._curateExploreState.handleZoomToPhoto(e);
   }
 
   _renderCurateRatingWidget(image) {
@@ -3383,7 +2078,7 @@ class PhotoCatApp extends LitElement {
               type="button"
               class="curate-thumb-trash cursor-pointer mx-0.5 ${image.rating == 0 ? 'text-red-600' : 'text-gray-600 hover:text-gray-900'}"
               title="0 stars"
-              @click=${(e) => this._handleCurateRating(e, image, 0)}
+              @click=${(e) => this._curateExploreState.handleCurateRating(e, image, 0)}
             >
               ${image.rating == 0 ? '❌' : '🗑'}
             </button>
@@ -3393,7 +2088,7 @@ class PhotoCatApp extends LitElement {
                   type="button"
                   class="cursor-pointer mx-0.5 ${image.rating && image.rating >= star ? 'text-yellow-500' : 'text-gray-500 hover:text-gray-900'}"
                   title="${star} star${star > 1 ? 's' : ''}"
-                  @click=${(e) => this._handleCurateRating(e, image, star)}
+                  @click=${(e) => this._curateExploreState.handleCurateRating(e, image, star)}
                 >
                   ${image.rating && image.rating >= star ? '★' : '☆'}
                 </button>
@@ -3419,301 +2114,28 @@ class PhotoCatApp extends LitElement {
   }
 
   _handleCurateEditorClose() {
-      this.curateEditorOpen = false;
-      this.curateEditorImage = null;
-      // Clear any lingering drag selection that might block next click
-      this.curateDragSelection = [];
+      return this._curateHomeState.handleCurateEditorClose();
   }
 
   _handleImageNavigate(event) {
-      const { index } = event.detail;
-      if (index >= 0 && index < this.curateEditorImageSet.length) {
-          const nextImage = this.curateEditorImageSet[index];
-          this.curateEditorImage = nextImage;
-          this.curateEditorImageIndex = index;
-      }
-  }
-
-  _handleCurateSelectStart(event, index, imageId) {
-      return this._exploreSelectionHandlers.handleSelectStart(event, index, imageId);
+      return this._curateHomeState.handleImageNavigate(event);
   }
 
   _handleCurateSelectHover(index) {
       return this._exploreSelectionHandlers.handleSelectHover(index);
   }
 
-  _updateCurateDragSelection() {
-      return this._exploreSelectionHandlers.updateSelection();
-  }
-
   _handleExploreByTagPointerDown(event, index, imageId, keywordName, cachedImages) {
-      if (this.curateDragSelecting || this.curateAuditDragSelecting) {
-          return;
-      }
-      if (event.button !== 0) {
-          return;
-      }
-      if (this.curateDragSelection.length && this.curateDragSelection.includes(imageId)) {
-          this._curateSuppressClick = true;
-          return;
-      }
-      this._curateSuppressClick = false;
-      this._curatePressActive = true;
-      this._curatePressStart = { x: event.clientX, y: event.clientY };
-      this._curatePressIndex = index;
-      this._curatePressImageId = imageId;
-      this._exploreByTagCachedImages = cachedImages;
-      this._curatePressTimer = setTimeout(() => {
-          if (this._curatePressActive) {
-              this._startExploreByTagSelection(index, imageId, cachedImages);
-          }
-      }, 250);
+      return this._curateExploreState.handleExploreByTagPointerDown(event, index, imageId, cachedImages);
   }
 
   _handleExploreByTagSelectHover(index, cachedImages) {
-      if (!this.curateDragSelecting) return;
-      if (this.curateDragEndIndex !== index) {
-          this.curateDragEndIndex = index;
-          this._updateExploreByTagDragSelection(cachedImages);
-      }
+      return this._curateExploreState.handleExploreByTagSelectHover(index, cachedImages);
   }
 
-  _startExploreByTagSelection(index, imageId, cachedImages) {
-      if (this.curateDragSelection.includes(imageId)) {
-          return;
-      }
-      this._cancelCuratePressState();
-      this._curateLongPressTriggered = true;
-      this.curateDragSelecting = true;
-      this.curateDragStartIndex = index;
-      this.curateDragEndIndex = index;
-      this._curateSuppressClick = true;
-      this._flashCurateSelection(imageId);
-      this._updateExploreByTagDragSelection(cachedImages);
-  }
-
-  _updateExploreByTagDragSelection(cachedImages) {
-      if (!cachedImages || this.curateDragStartIndex === null || this.curateDragEndIndex === null) {
-          return;
-      }
-      const start = Math.min(this.curateDragStartIndex, this.curateDragEndIndex);
-      const end = Math.max(this.curateDragStartIndex, this.curateDragEndIndex);
-      const ids = cachedImages.slice(start, end + 1).map(img => img.id);
-      this.curateDragSelection = ids;
-  }
 
   _flashCurateSelection(imageId) {
-      if (!this._curateFlashSelectionIds) {
-          this._curateFlashSelectionIds = new Set();
-      }
-      if (!this._curateFlashSelectionTimers) {
-          this._curateFlashSelectionTimers = new Map();
-      }
-      const existing = this._curateFlashSelectionTimers.get(imageId);
-      if (existing) {
-          clearTimeout(existing);
-      }
-      this._curateFlashSelectionIds.add(imageId);
-      this.requestUpdate();
-      const timer = setTimeout(() => {
-          this._curateFlashSelectionIds.delete(imageId);
-          this._curateFlashSelectionTimers.delete(imageId);
-          this.requestUpdate();
-      }, 600);
-      this._curateFlashSelectionTimers.set(imageId, timer);
-  }
-
-  _renderCurateFilters({ mode = 'main', showHistogramOnly = false, showHistogram = true, showHeader = true, hideSortControls = false, hidePermatagMissing = false, hideRatingControls = false, renderDropboxFolder = false } = {}) {
-    // If showing only histogram (for home tab), render just that
-    if (showHistogramOnly) {
-      return html`
-        <tag-histogram
-          .categoryCards=${this.curateCategoryCards || []}
-          .activeTagSource=${this.activeCurateTagSource || 'permatags'}
-          .tagStatsBySource=${this.tagStatsBySource}
-          @tag-source-change=${this._handleCurateTagSourceChange}
-        ></tag-histogram>
-      `;
-    }
-
-    const selectedKeywordValue = (() => {
-      if (mode === 'tag-audit') {
-        if (!this.curateAuditKeyword) return '';
-        const category = this.curateAuditCategory || 'Uncategorized';
-        return `${encodeURIComponent(category)}::${encodeURIComponent(this.curateAuditKeyword)}`;
-      }
-      if (this.curateNoPositivePermatags) {
-        return '__untagged__';
-      }
-      const entries = Object.entries(this.curateKeywordFilters || {});
-      for (const [category, keywordsSet] of entries) {
-        if (keywordsSet && keywordsSet.size > 0) {
-          const [keyword] = Array.from(keywordsSet);
-          if (keyword) {
-            return `${encodeURIComponent(category)}::${encodeURIComponent(keyword)}`;
-          }
-        }
-      }
-      return '';
-    })();
-    const isAuditMode = mode === 'tag-audit';
-    const activeHideDeleted = isAuditMode ? this.curateAuditHideDeleted : this.curateHideDeleted;
-    const activeMinRating = isAuditMode ? this.curateAuditMinRating : this.curateMinRating;
-    const activeNoPositivePermatags = isAuditMode ? this.curateAuditNoPositivePermatags : this.curateNoPositivePermatags;
-    const handleHideDeletedChange = isAuditMode
-      ? (event) => this._handleCurateAuditHideDeletedChange(event)
-      : (event) => this._handleCurateHideDeletedChange(event);
-    const handleMinRatingChange = isAuditMode
-      ? (value) => this._handleCurateAuditMinRating(value)
-      : (value) => this._handleCurateMinRating(value);
-    const handleNoPositivePermatagsChange = isAuditMode
-      ? (event) => this._handleCurateAuditNoPositivePermatagsChange(event)
-      : (event) => this._handleCurateNoPositivePermatagsChange(event);
-
-    const advancedPanel = this.curateAdvancedOpen ? html`
-      <div class="border rounded-lg">
-        <div class="px-3 py-3 bg-gray-50 space-y-4 ${renderDropboxFolder ? 'search-accordion' : ''}">
-        <!-- Existing filter controls moved into accordion -->
-        <div class="flex flex-wrap md:flex-nowrap items-end gap-4">
-                ${hideRatingControls ? html`` : html`
-                <div class="flex-[2] min-w-[200px]">
-                  <label class="block text-xs font-semibold text-gray-600 mb-1">Rating</label>
-                  <div class="flex flex-wrap items-center gap-2">
-                    <label class="inline-flex items-center gap-2 text-xs text-gray-600">
-                      <input
-                        type="checkbox"
-                        class="h-4 w-4"
-                        .checked=${activeHideDeleted}
-                        @change=${handleHideDeletedChange}
-                      >
-                      <span class="inline-flex items-center gap-2">
-                        <i class="fas fa-trash"></i>
-                        hide deleted
-                      </span>
-                    </label>
-                    <div class="flex items-center gap-1">
-                      ${[0, 1, 2, 3].map((value) => {
-                        const label = value === 0 ? '0' : `${value}+`;
-                        const title = value === 0 ? 'Quality = 0' : `Quality >= ${value}`;
-                        return html`
-                          <button
-                            class="inline-flex items-center gap-1 px-2 py-1 rounded-lg border text-xs ${activeMinRating === value ? 'bg-yellow-100 text-yellow-800 border-yellow-200' : 'bg-gray-100 text-gray-500 border-gray-200'}"
-                            title=${title}
-                            @click=${() => handleMinRatingChange(value)}
-                          >
-                            <i class="fas fa-star"></i>
-                            <span>${label}</span>
-                          </button>
-                        `;
-                      })}
-                      <button
-                        class="inline-flex items-center gap-1 px-2 py-1 rounded-lg border text-xs ${activeMinRating === 'unrated' ? 'bg-yellow-100 text-yellow-800 border-yellow-200' : 'bg-gray-100 text-gray-500 border-gray-200'}"
-                        title="Unrated images"
-                        @click=${() => handleMinRatingChange('unrated')}
-                      >
-                        <i class="fas fa-circle-notch"></i>
-                        <span>unrated</span>
-                      </button>
-                    </div>
-                  </div>
-                </div>
-                `}
-                ${hidePermatagMissing ? html`` : html`
-                <div class="flex-[1.5] min-w-[180px]">
-                  <label class="block text-xs font-semibold text-gray-600 mb-1">Permatags</label>
-                  <label class="inline-flex items-center gap-2 text-xs text-gray-600">
-                    <input
-                      type="checkbox"
-                      class="h-4 w-4"
-                      .checked=${activeNoPositivePermatags}
-                      @change=${handleNoPositivePermatagsChange}
-                    >
-                    no positive permatags
-                  </label>
-                </div>
-                `}
-                ${renderDropboxFolder ? html`
-                <div class="flex-1 min-w-0 w-full">
-                  <label class="block text-xs font-semibold text-gray-600 mb-1">Dropbox folder</label>
-                  <div class="search-folder-field">
-                    <input
-                      class="search-folder-input px-3 py-2 border rounded-lg"
-                      placeholder="Search folders..."
-                      .value=${this.searchDropboxQuery}
-                      @input=${this._handleSearchDropboxInput}
-                      @change=${this._handleSearchDropboxSelect}
-                      @focus=${this._handleSearchDropboxFocus}
-                      @blur=${this._handleSearchDropboxBlur}
-                    >
-                    ${this.searchDropboxOpen && this.searchDropboxOptions.length ? html`
-                      <div class="search-folder-menu">
-                        ${this.searchDropboxOptions.map((folder) => html`
-                          <div
-                            class="search-folder-option"
-                            @mousedown=${() => this._handleSearchDropboxPick(folder)}
-                          >
-                            ${folder}
-                          </div>
-                        `)}
-                      </div>
-                    ` : html``}
-                  </div>
-                  ${this.searchDropboxPathPrefix ? html`
-                    <div class="text-xs text-gray-500 search-folder-selected flex items-center gap-2 mt-2">
-                      <span>Filtered: ${this.searchDropboxPathPrefix}</span>
-                      <button
-                        class="text-xs text-blue-600 hover:text-blue-700"
-                        @click=${this._handleSearchDropboxClear}
-                      >
-                        Clear filter
-                      </button>
-                    </div>
-                  ` : html``}
-                </div>
-                ` : html``}
-              </div>
-        </div>
-      </div>
-    ` : html``;
-
-    return showHeader ? html`
-      <!-- Compact Filter Section (Top) -->
-      <div class="bg-white rounded-lg shadow p-4 mb-4">
-        <div class="space-y-4">
-          <!-- Line 1: Keyword Dropdown + Page Size + Thumbnail Slider -->
-          <div class="flex gap-4 items-end">
-            <div class="w-1/2 min-w-[260px]">
-              <label class="block text-base font-semibold text-gray-700 mb-2">Keywords</label>
-              <keyword-dropdown
-                .value=${selectedKeywordValue}
-                .placeholder=${'Select a keyword...'}
-                .tagStatsBySource=${this.tagStatsBySource}
-                .activeCurateTagSource=${this.activeCurateTagSource || 'permatags'}
-                .keywords=${this.keywords}
-                .imageStats=${this.imageStats}
-                .includeUntagged=${mode !== 'tag-audit'}
-                .compact=${mode === 'tag-audit'}
-                @change=${(event) => this._handleCurateKeywordSelect(event, mode)}
-              ></keyword-dropdown>
-            </div>
-            
-            <button
-              class="h-10 w-10 flex items-center justify-center border rounded-lg text-gray-600 hover:bg-gray-50"
-              title="Advanced filters"
-              aria-pressed=${this.curateAdvancedOpen ? 'true' : 'false'}
-              @click=${() => { this.curateAdvancedOpen = !this.curateAdvancedOpen; }}
-            >
-              <svg viewBox="0 0 24 24" class="h-7 w-7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <circle cx="12" cy="12" r="3"></circle>
-                <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.02.02a2 2 0 1 1-2.83 2.83l-.02-.02a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.03a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.87.34l-.02.02a2 2 0 1 1-2.83-2.83l.02-.02a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.03a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.87l-.02-.02a2 2 0 1 1 2.83-2.83l.02.02a1.7 1.7 0 0 0 1.87.34H9a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.03a1.7 1.7 0 0 0 1 1.55 1.7 1.7 0 0 0 1.87-.34l.02-.02a2 2 0 1 1 2.83 2.83l-.02.02a1.7 1.7 0 0 0-.34 1.87V9c0 .68.4 1.3 1.02 1.58.24.11.5.17.77.17H21a2 2 0 1 1 0 4h-.03a1.7 1.7 0 0 0-1.55 1z"></path>
-              </svg>
-            </button>
-          </div>
-
-          ${advancedPanel}
-        </div>
-      </div>
-    ` : html`${advancedPanel}`;
+      return this._curateHomeState.flashSelection(imageId);
   }
 
   render() {
@@ -3749,7 +2171,8 @@ class PhotoCatApp extends LitElement {
     const leftPaneLabel = `${formatStatNumber(leftPaneCount, { placeholder: '--' })} Items`;
     const trimmedSearchListTitle = (this.searchListTitle || '').trim();
     const hasSearchListTitle = !!trimmedSearchListTitle;
-    const duplicateNewListTitle = !this.searchListId && this._isDuplicateListTitle(this.searchListTitle);
+    const duplicateNewListTitle =
+      !this.searchListId && this._searchState.isDuplicateListTitle(this.searchListTitle);
     const selectedKeywordValueMain = (() => {
       if (this.curateNoPositivePermatags) {
         return '__untagged__';
@@ -3918,20 +2341,7 @@ class PhotoCatApp extends LitElement {
               .renderCurateRatingWidget=${this._renderCurateRatingWidget.bind(this)}
               .renderCurateRatingStatic=${this._renderCurateRatingStatic.bind(this)}
               .formatCurateDate=${formatCurateDate}
-              @sort-changed=${(e) => {
-                this.curateOrderBy = e.detail.orderBy;
-                this.curateOrderDirection = e.detail.dateOrder;
-                if (this.searchFilterPanel) {
-                  const filters = this.searchFilterPanel.getState();
-                  this.searchFilterPanel.updateFilters({
-                    ...filters,
-                    orderBy: this.curateOrderBy,
-                    sortOrder: this.curateOrderDirection,
-                    offset: 0,
-                  });
-                  this.searchFilterPanel.fetchImages();
-                }
-              }}
+              @sort-changed=${this._handleSearchSortChanged}
               @thumb-size-changed=${(e) => this.curateThumbSize = e.detail.size}
               @image-clicked=${(e) => this._handleCurateImageClick(e.detail.event, e.detail.image, e.detail.imageSet)}
               @image-selected=${(e) => this._handleCurateImageClick(null, e.detail.image, e.detail.imageSet)}
@@ -4054,6 +2464,9 @@ class PhotoCatApp extends LitElement {
                     .imageStats=${this.imageStats}
                     .curateCategoryCards=${this.curateCategoryCards}
                     .selectedKeywordValueMain=${selectedKeywordValueMain}
+                    .curateKeywordFilters=${this.curateKeywordFilters}
+                    .curateKeywordOperators=${this.curateKeywordOperators}
+                    .curateNoPositivePermatags=${this.curateNoPositivePermatags}
                     .listFilterId=${this.curateListExcludeId || this.curateListId}
                     .listFilterMode=${this.curateListExcludeId ? 'exclude' : 'include'}
                     .tagStatsBySource=${this.tagStatsBySource}
@@ -4438,7 +2851,7 @@ class PhotoCatApp extends LitElement {
 
   _handleImageRatingUpdated(e) {
       if (e?.detail?.imageId !== undefined && e?.detail?.rating !== undefined) {
-          this._applyCurateRating(e.detail.imageId, e.detail.rating);
+          this._curateExploreState.applyCurateRating(e.detail.imageId, e.detail.rating);
       }
   }
 
@@ -4497,78 +2910,6 @@ class PhotoCatApp extends LitElement {
       return html`
         <div class="curate-thumb-rating">Tags: ${unique.join(', ')}</div>
       `;
-  }
-
-  _removeCuratePermatag(event, image, keyword, category) {
-      event.stopPropagation();
-      enqueueCommand({
-          type: 'add-negative-permatag',
-          tenantId: this.tenant,
-          imageId: image.id,
-          keyword,
-          category,
-      });
-      this._updateCuratePermatagRemoval(image.id, keyword, category);
-  }
-
-  _updateCuratePermatagRemoval(imageId, keyword, category) {
-      const matches = (tag) => tag.keyword === keyword && (tag.category || 'Uncategorized') === (category || 'Uncategorized');
-      const removePositive = (image) => {
-          const permatags = Array.isArray(image.permatags) ? image.permatags : [];
-          const next = permatags.filter((tag) => !(tag.signum === 1 && matches(tag)));
-          return { ...image, permatags: next };
-      };
-      this.curateImages = this.curateImages.map((image) => (
-          image.id === imageId ? removePositive(image) : image
-      ));
-  }
-
-  _updateCuratePermatagRemovals(imageIds, tags) {
-      if (!imageIds?.length || !tags?.length) return;
-      const targetIds = new Set(imageIds);
-      const removeSet = new Set(tags.map((tag) => `${tag.category || 'Uncategorized'}::${tag.keyword}`));
-      const prune = (image) => {
-          const permatags = Array.isArray(image.permatags) ? image.permatags : [];
-          const next = permatags.filter((tag) => {
-              if (tag.signum !== 1) return true;
-              const key = `${tag.category || 'Uncategorized'}::${tag.keyword}`;
-              return !removeSet.has(key);
-          });
-          return { ...image, permatags: next };
-      };
-      this.curateImages = this.curateImages.map((image) => (
-          targetIds.has(image.id) ? prune(image) : image
-      ));
-  }
-
-  _updateCuratePermatags(imageIds, tags) {
-      if (!imageIds?.length || !tags?.length) return;
-      const targetIds = new Set(imageIds);
-      this.curateImages = this.curateImages.map((image) => {
-          if (!targetIds.has(image.id)) return image;
-          const permatags = mergePermatags(image.permatags, tags);
-          return { ...image, permatags };
-      });
-  }
-
-  _updateAuditPermatags(imageIds, tags) {
-      if (!imageIds?.length || !tags?.length) return;
-      const targetIds = new Set(imageIds);
-      this.curateAuditImages = this.curateAuditImages.map((image) => {
-          if (!targetIds.has(image.id)) return image;
-          const permatags = mergePermatags(image.permatags, tags);
-          return { ...image, permatags };
-      });
-  }
-
-  _updateAuditPermatagRemovals(imageIds, tags) {
-      if (!imageIds?.length || !tags?.length) return;
-      const targetIds = new Set(imageIds);
-      this.curateAuditImages = this.curateAuditImages.map((image) => {
-          if (!targetIds.has(image.id)) return image;
-          const permatags = this._removePermatags(image.permatags, tags);
-          return { ...image, permatags };
-      });
   }
 
   updated(changedProperties) {
