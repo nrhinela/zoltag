@@ -1,11 +1,13 @@
 """ML training endpoints: list training images, get training stats."""
 
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import func, distinct
+from sqlalchemy import func, distinct, case
 from sqlalchemy.orm import Session
 from google.cloud import storage
 
 from photocat.asset_helpers import AssetReadinessError, load_assets_for_images, resolve_image_storage
+from photocat.database import SessionLocal
 from photocat.dependencies import get_db, get_tenant, get_tenant_setting
 from photocat.tenant import Tenant
 from photocat.metadata import ImageMetadata, MachineTag, Permatag, KeywordModel, ImageEmbedding
@@ -240,70 +242,86 @@ async def list_ml_training_images(
     }
 
 
+def _compute_ml_training_stats(tenant_id: str) -> dict:
+    """Synchronous ML training stats computation - runs in a thread via run_in_executor."""
+    db = SessionLocal()
+    try:
+        active_tag_type = get_tenant_setting(db, tenant_id, 'active_machine_tag_type', default='siglip')
+
+        # Single pass over image_metadata and embeddings
+        image_count = db.query(func.count(ImageMetadata.id)).filter(
+            ImageMetadata.tenant_id == tenant_id
+        ).scalar() or 0
+
+        embedding_count = db.query(func.count(ImageEmbedding.id)).filter(
+            ImageEmbedding.tenant_id == tenant_id
+        ).scalar() or 0
+
+        # Two targeted queries on machine_tags - kept separate to use (tenant_id, asset_id, tag_type) index
+        zs_row = db.query(
+            func.count(distinct(MachineTag.asset_id)),
+            func.min(MachineTag.created_at),
+            func.max(MachineTag.created_at),
+        ).filter(
+            MachineTag.tenant_id == tenant_id,
+            MachineTag.tag_type == active_tag_type,
+            MachineTag.asset_id.is_not(None),
+        ).one()
+
+        tr_row = db.query(
+            func.count(MachineTag.id),
+            func.count(distinct(MachineTag.asset_id)),
+            func.min(MachineTag.created_at),
+            func.max(MachineTag.created_at),
+        ).filter(
+            MachineTag.tenant_id == tenant_id,
+            MachineTag.tag_type == 'trained',
+            MachineTag.asset_id.is_not(None),
+        ).one()
+
+        zero_shot_image_count = int(zs_row[0] or 0)
+        zero_shot_tag_oldest = zs_row[1]
+        zero_shot_tag_newest = zs_row[2]
+        trained_count = int(tr_row[0] or 0)
+        trained_image_count = int(tr_row[1] or 0)
+        trained_oldest = tr_row[2]
+        trained_newest = tr_row[3]
+
+        # Single pass over keyword_models
+        km_row = db.query(
+            func.count(KeywordModel.id),
+            func.max(func.coalesce(KeywordModel.updated_at, KeywordModel.created_at)),
+        ).filter(
+            KeywordModel.tenant_id == tenant_id
+        ).one()
+
+        model_count = int(km_row[0] or 0)
+        last_trained = km_row[1]
+
+        return {
+            "tenant_id": tenant_id,
+            "image_count": int(image_count),
+            "embedding_count": int(embedding_count),
+            "zero_shot_image_count": zero_shot_image_count,
+            "zero_shot_tag_oldest": zero_shot_tag_oldest.isoformat() if zero_shot_tag_oldest else None,
+            "zero_shot_tag_newest": zero_shot_tag_newest.isoformat() if zero_shot_tag_newest else None,
+            "trained_image_count": trained_image_count,
+            "keyword_model_count": model_count,
+            "keyword_model_last_trained": last_trained.isoformat() if last_trained else None,
+            "trained_tag_count": trained_count,
+            "trained_tag_oldest": trained_oldest.isoformat() if trained_oldest else None,
+            "trained_tag_newest": trained_newest.isoformat() if trained_newest else None
+        }
+    finally:
+        db.close()
+
+
 @router.get("/ml-training/stats", response_model=dict, operation_id="get_ml_training_stats")
 async def get_ml_training_stats(
     tenant: Tenant = Depends(get_tenant),
-    db: Session = Depends(get_db)
 ):
     """Return ML training summary stats for a tenant."""
-    active_tag_type = get_tenant_setting(db, tenant.id, 'active_machine_tag_type', default='siglip')
-
-    image_count = db.query(func.count(ImageMetadata.id)).filter(
-        ImageMetadata.tenant_id == tenant.id
-    ).scalar() or 0
-
-    embedding_count = db.query(func.count(ImageEmbedding.id)).filter(
-        ImageEmbedding.tenant_id == tenant.id
-    ).scalar() or 0
-
-    zero_shot_image_count = db.query(func.count(distinct(MachineTag.asset_id))).filter(
-        MachineTag.tenant_id == tenant.id,
-        MachineTag.tag_type == active_tag_type,
-        MachineTag.asset_id.is_not(None),
-    ).scalar() or 0
-
-    zero_shot_tag_oldest, zero_shot_tag_newest = db.query(
-        func.min(MachineTag.created_at),
-        func.max(MachineTag.created_at),
-    ).filter(
-        MachineTag.tenant_id == tenant.id,
-        MachineTag.tag_type == active_tag_type,
-        MachineTag.asset_id.is_not(None),
-    ).one()
-
-    model_count = db.query(func.count(KeywordModel.id)).filter(
-        KeywordModel.tenant_id == tenant.id
-    ).scalar() or 0
-
-    last_trained = db.query(func.max(func.coalesce(
-        KeywordModel.updated_at,
-        KeywordModel.created_at
-    ))).filter(
-        KeywordModel.tenant_id == tenant.id
-    ).scalar()
-
-    trained_count, trained_image_count, trained_oldest, trained_newest = db.query(
-        func.count(MachineTag.id),
-        func.count(distinct(MachineTag.asset_id)),
-        func.min(MachineTag.created_at),
-        func.max(MachineTag.created_at)
-    ).filter(
-        MachineTag.tenant_id == tenant.id,
-        MachineTag.tag_type == 'trained',
-        MachineTag.asset_id.is_not(None),
-    ).one()
-
-    return {
-        "tenant_id": tenant.id,
-        "image_count": int(image_count),
-        "embedding_count": int(embedding_count),
-        "zero_shot_image_count": int(zero_shot_image_count),
-        "zero_shot_tag_oldest": zero_shot_tag_oldest.isoformat() if zero_shot_tag_oldest else None,
-        "zero_shot_tag_newest": zero_shot_tag_newest.isoformat() if zero_shot_tag_newest else None,
-        "trained_image_count": int(trained_image_count or 0),
-        "keyword_model_count": int(model_count),
-        "keyword_model_last_trained": last_trained.isoformat() if last_trained else None,
-        "trained_tag_count": int(trained_count or 0),
-        "trained_tag_oldest": trained_oldest.isoformat() if trained_oldest else None,
-        "trained_tag_newest": trained_newest.isoformat() if trained_newest else None
-    }
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        None, _compute_ml_training_stats, tenant.id
+    )

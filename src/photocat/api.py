@@ -38,6 +38,16 @@ app = FastAPI(
     version="0.1.0"
 )
 
+
+@app.on_event("startup")
+async def warm_jwks_cache():
+    """Pre-fetch JWKS on startup so the first real request isn't blocked."""
+    try:
+        from photocat.auth.jwt import get_jwks
+        await get_jwks()
+    except Exception:
+        pass  # Non-fatal: requests will fetch on demand if this fails
+
 # Add CORS middleware (single consolidated block)
 app.add_middleware(
     CORSMiddleware,
