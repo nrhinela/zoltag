@@ -54,7 +54,7 @@ async def get_current_user(
     token = authorization[7:]  # Remove "Bearer " prefix
 
     try:
-        supabase_uid = get_supabase_uid_from_token(token)
+        supabase_uid = await get_supabase_uid_from_token(token)
     except JWTError as e:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

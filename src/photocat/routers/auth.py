@@ -87,7 +87,7 @@ async def register(
     token = authorization[7:]  # Remove "Bearer " prefix
 
     try:
-        supabase_uid = get_supabase_uid_from_token(token)
+        supabase_uid = await get_supabase_uid_from_token(token)
     except JWTError as e:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -111,7 +111,7 @@ async def register(
     # The JWT token includes the email claim
     from photocat.auth.jwt import verify_supabase_jwt
     try:
-        decoded = verify_supabase_jwt(token)
+        decoded = await verify_supabase_jwt(token)
     except JWTError as e:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

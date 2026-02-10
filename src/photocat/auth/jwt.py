@@ -1,7 +1,7 @@
 """JWT token verification using Supabase JWKS endpoint."""
 
+import asyncio
 import httpx
-from functools import lru_cache
 from typing import Dict, Any
 from datetime import datetime, timedelta
 from jose import jwt, JWTError
@@ -9,45 +9,48 @@ from jose import jwt, JWTError
 from photocat.auth.config import get_auth_settings
 
 
-# Cache JWKS for performance (updated hourly)
+# Cache JWKS for performance - keys are refreshed every 24h (Supabase keys rarely rotate)
 _jwks_cache: Dict[str, Any] = {}
 _jwks_cache_time: datetime = datetime.min
+_jwks_inflight: Any = None  # shared asyncio.Task to deduplicate concurrent fetches
+_JWKS_TTL = timedelta(hours=24)
 
 
-@lru_cache(maxsize=1)
-def get_jwks() -> Dict:
-    """Fetch and cache JWKS (JSON Web Key Set) from Supabase.
-
-    The JWKS endpoint provides the public keys needed to verify JWT signatures.
-    Keys are cached to avoid repeated HTTP requests. Cache is invalidated after
-    1 hour, allowing key rotation without restarting the application.
-
-    Returns:
-        dict: JWKS structure with 'keys' array
-
-    Raises:
-        httpx.HTTPError: If the JWKS endpoint is unreachable
-        KeyError: If the response doesn't contain expected JWKS structure
-    """
-    global _jwks_cache, _jwks_cache_time
-
-    # Return cached JWKS if less than 1 hour old
-    if _jwks_cache and datetime.utcnow() - _jwks_cache_time < timedelta(hours=1):
-        return _jwks_cache
-
-    # Fetch fresh JWKS
+def _fetch_jwks_sync() -> Dict:
+    """Synchronous JWKS fetch - only called via run_in_executor to avoid blocking."""
     settings = get_auth_settings()
     try:
         response = httpx.get(settings.jwks_url, timeout=10.0)
         response.raise_for_status()
-        _jwks_cache = response.json()
-        _jwks_cache_time = datetime.utcnow()
-        return _jwks_cache
+        return response.json()
     except httpx.HTTPError as e:
         raise JWTError(f"Failed to fetch JWKS from {settings.jwks_url}: {str(e)}")
 
 
-def verify_supabase_jwt(token: str) -> Dict[str, Any]:
+async def get_jwks() -> Dict:
+    """Fetch and cache JWKS from Supabase. Concurrent callers share a single fetch."""
+    global _jwks_cache, _jwks_cache_time, _jwks_inflight
+
+    if _jwks_cache and datetime.utcnow() - _jwks_cache_time < _JWKS_TTL:
+        return _jwks_cache
+
+    # If a fetch is already in flight, wait for it rather than launching another
+    if _jwks_inflight is not None:
+        return await _jwks_inflight
+
+    loop = asyncio.get_event_loop()
+    _jwks_inflight = asyncio.ensure_future(
+        loop.run_in_executor(None, _fetch_jwks_sync)
+    )
+    try:
+        _jwks_cache = await _jwks_inflight
+        _jwks_cache_time = datetime.utcnow()
+        return _jwks_cache
+    finally:
+        _jwks_inflight = None
+
+
+async def verify_supabase_jwt(token: str) -> Dict[str, Any]:
     """Verify Supabase JWT token using JWKS endpoint.
 
     Verification checks:
@@ -76,7 +79,7 @@ def verify_supabase_jwt(token: str) -> Dict[str, Any]:
 
     try:
         # Fetch JWKS (cached)
-        jwks = get_jwks()
+        jwks = await get_jwks()
 
         # Decode and verify JWT
         # The python-jose library automatically selects the correct key from JWKS
@@ -98,7 +101,7 @@ def verify_supabase_jwt(token: str) -> Dict[str, Any]:
         raise JWTError(f"JWT verification failed: {str(e)}")
 
 
-def get_supabase_uid_from_token(token: str) -> str:
+async def get_supabase_uid_from_token(token: str) -> str:
     """Extract Supabase UID from JWT token.
 
     The 'sub' (subject) claim in Supabase JWT tokens contains the user's UUID
@@ -114,7 +117,7 @@ def get_supabase_uid_from_token(token: str) -> str:
     Raises:
         JWTError: If token is invalid or verification fails
     """
-    decoded = verify_supabase_jwt(token)
+    decoded = await verify_supabase_jwt(token)
     return decoded["sub"]  # 'sub' claim contains the UUID
 
 
