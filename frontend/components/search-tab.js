@@ -6,9 +6,7 @@ import {
   updateList,
   addToList,
   getListItems,
-  getDropboxFolders,
-  getImageStats,
-  getImages
+  getDropboxFolders
 } from '../services/api.js';
 import { createHotspotHandlers, parseUtilityKeywordValue } from './shared/hotspot-controls.js';
 import {
@@ -34,10 +32,10 @@ import FolderBrowserPanel from './folder-browser-panel.js';
  *
  * Provides search functionality with two modes:
  * - Search Home: Filter-based image search with list management
- * - Explore by Tag: Browse images grouped by keywords
+ * - Browse by Folder: Browse images grouped by folder
  *
  * @property {String} tenant - Current tenant ID
- * @property {String} searchSubTab - Active subtab ('home' or 'explore-by-tag')
+ * @property {String} searchSubTab - Active subtab ('home' or 'browse-by-folder')
  * @property {Array} searchChipFilters - Current filter chip selections
  * @property {Array} searchDropboxOptions - Dropbox folder options
  * @property {Array} searchImages - Images from filter panel
@@ -46,9 +44,6 @@ import FolderBrowserPanel from './folder-browser-panel.js';
  * @property {String} searchListId - Currently selected list ID
  * @property {String} searchListTitle - Draft list title
  * @property {Array} searchSavedImages - Images saved to current list
- * @property {Object} exploreByTagData - Tag exploration data
- * @property {Array} exploreByTagKeywords - Keywords for exploration
- * @property {Boolean} exploreByTagLoading - Loading state for explore
  * @property {Number} curateThumbSize - Thumbnail size
  * @property {Object} tagStatsBySource - Tag statistics
  * @property {Array} keywords - Flat keyword list for faster dropdowns
@@ -87,11 +82,6 @@ export class SearchTab extends LitElement {
     searchListError: { type: String, state: true },  // Internal state - not controlled by parent
     searchListExcludeId: { type: [String, Number], state: true },
     searchSavedImages: { type: Array },
-    exploreByTagData: { type: Object },
-    exploreByTagKeywords: { type: Array },
-    exploreByTagLoading: { type: Boolean },
-    exploreByTagOffset: { type: Number, state: true },
-    exploreByTagLimit: { type: Number, state: true },
     browseByFolderOptions: { type: Array, state: true },
     browseByFolderSelection: { type: Array, state: true },
     browseByFolderAppliedSelection: { type: Array, state: true },
@@ -150,13 +140,6 @@ export class SearchTab extends LitElement {
     this.searchListError = '';
     this.searchListExcludeId = '';
     this.searchSavedImages = [];
-    this.exploreByTagData = {};
-    this.exploreByTagKeywords = [];
-    this.exploreByTagLoading = false;
-    this.exploreByTagOffset = 0;
-    this.exploreByTagLimit = 100;
-    this._exploreByTagCache = new Map();
-    this._exploreByTagStatsPromise = null;
     this.browseByFolderOptions = [];
     this.browseByFolderSelection = [];
     this.browseByFolderAppliedSelection = [];
@@ -240,10 +223,6 @@ export class SearchTab extends LitElement {
     this._searchLongPressTriggered = false;
     this._searchInitialLoadComplete = false;
     this._searchInitialLoadPending = false;
-    this._exploreInitialLoadComplete = false;
-    this._exploreInitialLoadPending = false;
-    this._searchExploreOrder = null;
-    this._searchExploreGroupKey = null;
     this._searchBrowseOrder = null;
     this._searchBrowseGroupKey = null;
     this._searchFilterPanelHandlers = null;
@@ -277,9 +256,6 @@ export class SearchTab extends LitElement {
       suppressClickProperty: '_searchSuppressClick',
       dragSelectOnMove: true,
       getOrder: () => {
-        if (this.searchSubTab === 'explore-by-tag') {
-          return this._searchExploreOrder || [];
-        }
         if (this.searchSubTab === 'browse-by-folder') {
           return this._searchBrowseOrder || [];
         }
@@ -305,9 +281,6 @@ export class SearchTab extends LitElement {
         }
       }
       tasks.push(this._fetchSearchLists({ force: true }));
-      if (this.searchSubTab === 'explore-by-tag') {
-        tasks.push(this._loadExploreByTagData(true));
-      }
       await Promise.allSettled(tasks);
     } finally {
       this.searchRefreshing = false;
@@ -385,10 +358,6 @@ export class SearchTab extends LitElement {
       this.folderBrowserPanel.setTenant(this.tenant);
     }
     if (changedProps.has('tenant')) {
-      this._exploreByTagCache = new Map();
-      this._exploreByTagStatsPromise = null;
-      this.exploreByTagData = {};
-      this.exploreByTagKeywords = [];
       this.searchHotspotTargets = [{ id: 1, type: 'keyword', count: 0 }];
       this.searchHotspotRatingEnabled = false;
       this.searchHotspotRatingCount = 0;
@@ -437,17 +406,7 @@ export class SearchTab extends LitElement {
         this.searchSubTab = 'home';
         return;
       }
-      if (this.searchSubTab === 'explore-by-tag') {
-        this.exploreByTagOffset = 0;
-        if (this.exploreByTagLoading || (!this._exploreInitialLoadComplete && !(this.exploreByTagKeywords || []).length)) {
-          this._startExploreRefresh();
-        }
-      } else {
-        if (this._exploreInitialLoadPending) {
-          this._finishExploreRefresh();
-        }
-        this._maybeStartInitialRefresh();
-      }
+      this._maybeStartInitialRefresh();
       if (this.searchSubTab === 'browse-by-folder') {
         this.browseByFolderOffset = 0;
         this.folderBrowserPanel?.loadFolders();
@@ -472,32 +431,6 @@ export class SearchTab extends LitElement {
         this._finishInitialRefresh();
       } else if (!this._searchInitialLoadComplete && (this.searchImages || []).length > 0) {
         this._searchInitialLoadComplete = true;
-      }
-    }
-
-    if (changedProps.has('exploreByTagLoading') && this.searchSubTab === 'explore-by-tag') {
-      if (this.exploreByTagLoading) {
-        this._startExploreRefresh();
-      } else {
-        this._finishExploreRefresh();
-      }
-    }
-
-    if (changedProps.has('exploreByTagKeywords') && this.searchSubTab === 'explore-by-tag') {
-      if (this._exploreInitialLoadPending && !(this.exploreByTagKeywords || []).length) {
-        return;
-      }
-      if (this._exploreInitialLoadPending) {
-        this._finishExploreRefresh();
-      } else if (!this._exploreInitialLoadComplete && (this.exploreByTagKeywords || []).length > 0) {
-        this._exploreInitialLoadComplete = true;
-      }
-    }
-
-    if (changedProps.has('exploreByTagKeywords')) {
-      const total = (this.exploreByTagKeywords || []).length;
-      if (this.exploreByTagOffset >= total && total > 0) {
-        this.exploreByTagOffset = 0;
       }
     }
 
@@ -681,25 +614,6 @@ export class SearchTab extends LitElement {
     this.searchImages = (this.searchImages || []).map((image) => (
       uniqueIds.includes(image.id) ? { ...image, rating } : image
     ));
-    if (this.exploreByTagData && typeof this.exploreByTagData === 'object') {
-      const nextData = {};
-      Object.entries(this.exploreByTagData).forEach(([keyword, images]) => {
-        if (!Array.isArray(images)) {
-          nextData[keyword] = images;
-          return;
-        }
-        let updated = false;
-        const nextImages = images.map((image) => {
-          if (uniqueIds.includes(image.id)) {
-            updated = true;
-            return { ...image, rating };
-          }
-          return image;
-        });
-        nextData[keyword] = updated ? nextImages : images;
-      });
-      this.exploreByTagData = nextData;
-    }
     uniqueIds.forEach((id) => this.applyRatingUpdate(id, rating));
     this.searchHotspotRatingCount += uniqueIds.length;
   }
@@ -770,9 +684,6 @@ export class SearchTab extends LitElement {
     this._handleChipFiltersChanged({ detail: { filters: nextFilters } });
     if (this.searchSubTab === 'browse-by-folder') {
       this._refreshBrowseByFolderData({ force: true });
-    }
-    if (this.searchSubTab === 'explore-by-tag') {
-      this._loadExploreByTagData(true);
     }
   }
 
@@ -1110,15 +1021,10 @@ export class SearchTab extends LitElement {
     if (searchFound) {
       return searchFound;
     }
-    if (!this.exploreByTagData || typeof this.exploreByTagData !== 'object') {
-      if (!this.browseByFolderData || typeof this.browseByFolderData !== 'object') {
-        return null;
-      }
+    if (!this.browseByFolderData || typeof this.browseByFolderData !== 'object') {
+      return null;
     }
     const sources = [];
-    if (this.exploreByTagData && typeof this.exploreByTagData === 'object') {
-      sources.push(...Object.values(this.exploreByTagData));
-    }
     if (this.browseByFolderData && typeof this.browseByFolderData === 'object') {
       sources.push(...Object.values(this.browseByFolderData));
     }
@@ -1335,10 +1241,6 @@ export class SearchTab extends LitElement {
       bubbles: true,
       composed: true
     }));
-
-    if (nextTab === 'explore-by-tag') {
-      this._loadExploreByTagData(false);
-    }
   }
 
   _setupSearchFilterPanel(panel) {
@@ -1557,21 +1459,6 @@ export class SearchTab extends LitElement {
     this.searchRefreshing = false;
   }
 
-  _startExploreRefresh() {
-    if (this._exploreInitialLoadPending) return;
-    this._exploreInitialLoadPending = true;
-    this.searchRefreshing = true;
-  }
-
-  _finishExploreRefresh() {
-    if (!this._exploreInitialLoadPending) return;
-    this._exploreInitialLoadPending = false;
-    this._exploreInitialLoadComplete = true;
-    if (!this._searchInitialLoadPending) {
-      this.searchRefreshing = false;
-    }
-  }
-
   _refreshBrowseByFolderData({ force = false, orderBy, sortOrder } = {}) {
     if (!this.folderBrowserPanel) return;
     const resolvedOrderBy = orderBy || this.searchOrderBy || 'photo_creation';
@@ -1620,84 +1507,6 @@ export class SearchTab extends LitElement {
       this.browseByFolderData = nextData;
     }
     return updated;
-  }
-
-  async _loadExploreByTagData(force = false) {
-    if (!this.tenant) return;
-    this.exploreByTagLoading = true;
-    try {
-      const ratingByCategory = this.imageStats?.rating_by_category || {};
-      if (!Object.keys(ratingByCategory).length) {
-        if (!this._exploreByTagStatsPromise) {
-          this._exploreByTagStatsPromise = getImageStats(this.tenant, { force, includeRatings: true })
-            .catch((error) => {
-              console.error('Error fetching explore-by-tag stats:', error);
-              return null;
-            })
-            .finally(() => {
-              this._exploreByTagStatsPromise = null;
-            });
-        }
-        const stats = await this._exploreByTagStatsPromise;
-        if (stats && stats.rating_by_category) {
-          this.imageStats = stats;
-        }
-        if (!Object.keys(this.imageStats?.rating_by_category || {}).length) {
-          this.exploreByTagData = {};
-          this.exploreByTagKeywords = [];
-          return;
-        }
-      }
-
-      const keywordsByRating = {};
-      const imageStats = this.imageStats;
-      if (imageStats?.rating_by_category) {
-        Object.entries(imageStats.rating_by_category).forEach(([category, categoryData]) => {
-          Object.entries(categoryData.keywords || {}).forEach(([keyword, keywordData]) => {
-            const twoStarPlus = (keywordData.stars_2 || 0) + (keywordData.stars_3 || 0);
-            if (twoStarPlus > 0) {
-              const keywordName = `${category} - ${keyword}`;
-              keywordsByRating[keywordName] = { category, keyword, twoStarPlus };
-            }
-          });
-        });
-      }
-
-      const sortedKeywords = Object.entries(keywordsByRating).sort(([a], [b]) => a.localeCompare(b));
-      const exploreByTagData = {};
-      const exploreByTagKeywords = [];
-      for (const [keywordName, data] of sortedKeywords) {
-        const cacheKey = `${data.category}::${data.keyword}`;
-        let cachedImages = this._exploreByTagCache.get(cacheKey);
-        if (force || !Array.isArray(cachedImages)) {
-          try {
-            const result = await getImages(this.tenant, {
-              permatagKeyword: data.keyword,
-              permatagCategory: data.category,
-              permatagSignum: 1,
-              rating: 2,
-              ratingOperator: 'gte',
-              limit: 10,
-              orderBy: 'rating',
-              sortOrder: 'desc',
-              listExcludeId: this.searchListExcludeId || '',
-            });
-            const images = Array.isArray(result) ? result : (result?.images || []);
-            cachedImages = images.filter((img) => img && img.id);
-            this._exploreByTagCache.set(cacheKey, cachedImages);
-          } catch (error) {
-            console.error(`Error loading images for keyword "${keywordName}":`, error);
-            cachedImages = [];
-          }
-        }
-        exploreByTagData[keywordName] = cachedImages || [];
-        exploreByTagKeywords.push(keywordName);
-      }
-      this.exploreByTagData = exploreByTagData;
-      this.exploreByTagKeywords = exploreByTagKeywords;
-    } finally {
-      this.exploreByTagLoading = false;
-    }
   }
 
   // ========================================
@@ -1941,19 +1750,6 @@ export class SearchTab extends LitElement {
     return this._searchSelectionHandlers.handleSelectHover(index);
   }
 
-  _handleExploreByTagPointerDown(event, index, imageId, order, groupKey) {
-    this._searchExploreOrder = order;
-    this._searchExploreGroupKey = groupKey;
-    return this._handleSearchPointerDown(event, index, imageId);
-  }
-
-  _handleExploreByTagSelectHover(index, groupKey) {
-    if (this._searchExploreGroupKey !== groupKey) {
-      return;
-    }
-    return this._handleSearchSelectHover(index);
-  }
-
   _handleBrowseByFolderPointerDown(event, index, imageId, order, groupKey) {
     this._searchBrowseOrder = order;
     this._searchBrowseGroupKey = groupKey;
@@ -2008,14 +1804,6 @@ export class SearchTab extends LitElement {
     };
   }
 
-  _getExplorePaginationState() {
-    const total = (this.exploreByTagKeywords || []).length;
-    const offset = Number(this.exploreByTagOffset) || 0;
-    const limit = Number(this.exploreByTagLimit) || 100;
-    const count = Math.max(0, Math.min(limit, total - offset));
-    return { total, offset, limit, count };
-  }
-
   _getBrowseByFolderPaginationState() {
     const total = (this.browseByFolderAppliedSelection || []).length;
     const offset = Number(this.browseByFolderOffset) || 0;
@@ -2046,24 +1834,6 @@ export class SearchTab extends LitElement {
     if (!Number.isFinite(nextLimit)) return;
     this.searchFilterPanel.setLimit(nextLimit);
     this.searchFilterPanel.fetchImages();
-  }
-
-  _handleExploreByTagPagePrev() {
-    const { offset, limit } = this._getExplorePaginationState();
-    this.exploreByTagOffset = Math.max(0, offset - limit);
-  }
-
-  _handleExploreByTagPageNext() {
-    const { offset, limit, total } = this._getExplorePaginationState();
-    const nextOffset = offset + limit < total ? offset + limit : offset;
-    this.exploreByTagOffset = nextOffset;
-  }
-
-  _handleExploreByTagPageLimitChange(event) {
-    const nextLimit = parseInt(event.target.value, 10);
-    if (!Number.isFinite(nextLimit)) return;
-    this.exploreByTagLimit = nextLimit;
-    this.exploreByTagOffset = 0;
   }
 
   _handleBrowseByFolderPagePrev() {
@@ -2115,21 +1885,6 @@ export class SearchTab extends LitElement {
         });
       })()
       : html``;
-    const explorePagination = this.searchSubTab === 'explore-by-tag'
-      ? (() => {
-        const { offset, limit, total, count } = this._getExplorePaginationState();
-        return renderResultsPagination({
-          offset,
-          limit,
-          total,
-          count,
-          onPrev: () => this._handleExploreByTagPagePrev(),
-          onNext: () => this._handleExploreByTagPageNext(),
-          onLimitChange: (event) => this._handleExploreByTagPageLimitChange(event),
-          disabled: this.exploreByTagLoading,
-        });
-      })()
-      : html``;
     const browsePagination = this.searchSubTab === 'browse-by-folder'
       ? (() => {
         const { offset, limit, total, count } = this._getBrowseByFolderPaginationState();
@@ -2145,8 +1900,6 @@ export class SearchTab extends LitElement {
         });
       })()
       : html``;
-    const exploreKeywordsPage = (this.exploreByTagKeywords || [])
-      .slice(this.exploreByTagOffset, this.exploreByTagOffset + this.exploreByTagLimit);
     const browseFoldersPage = (appliedFolders || [])
       .slice(this.browseByFolderOffset, this.browseByFolderOffset + this.browseByFolderLimit);
     const browseByFolderBlurStyle = this.browseByFolderLoading
@@ -2232,12 +1985,6 @@ export class SearchTab extends LitElement {
                 @click=${() => this._handleSearchSubTabChange('browse-by-folder')}
               >
                 Browse by Folder
-              </button>
-              <button
-                class="curate-subtab ${this.searchSubTab === 'explore-by-tag' ? 'active' : ''}"
-                @click=${() => this._handleSearchSubTabChange('explore-by-tag')}
-              >
-                Explore by Tag
               </button>
             </div>
           `}
@@ -2371,88 +2118,6 @@ export class SearchTab extends LitElement {
                   <div class="p-2">
                     ${searchPagination}
                   </div>
-                </div>
-              </div>
-
-              ${savedPane}
-            </div>
-          </div>
-        ` : ''}
-
-        <!-- Explore by Tag Subtab -->
-        ${this.searchSubTab === 'explore-by-tag' ? html`
-          <div>
-            <div class="curate-layout search-layout mt-3" style="--curate-thumb-size: ${this.curateThumbSize}px;">
-              <div class="curate-pane" @dragover=${this._handleSearchAvailableDragOver} @drop=${this._handleSearchAvailableDrop}>
-                <div class="curate-pane-header">
-                  <div class="curate-pane-header-row">
-                    <span class="text-sm font-semibold">Explore by Tag</span>
-                  </div>
-                </div>
-                <div class="curate-pane-body">
-                  ${this.exploreByTagLoading && !(this.exploreByTagKeywords && this.exploreByTagKeywords.length) ? html`
-                    <div class="p-8"></div>
-                  ` : this.exploreByTagKeywords && this.exploreByTagKeywords.length > 0 ? html`
-                    <div class="p-2">
-                      ${explorePagination}
-                    </div>
-                    <div class="space-y-6">
-                      ${exploreKeywordsPage.map(keyword => {
-                        const images = this.exploreByTagData[keyword] || [];
-                        const order = images.map((image) => image.id);
-                        return html`
-                          <div>
-                            <div class="text-sm font-semibold text-gray-900 mb-3">
-                              ${keyword}
-                              <span class="text-xs text-gray-500 font-normal">(${images.length} images)</span>
-                            </div>
-                            <div class="curate-grid">
-                              ${images.length ? images.map((image, index) => html`
-                                <div
-                                  class="curate-thumb-wrapper ${this.searchDragSelection.includes(image.id) ? 'selected' : ''}"
-                                  data-image-id="${image.id}"
-                                  draggable="true"
-                                  @dragstart=${(event) => this._handleSearchDragStart(event, image)}
-                                  @click=${(event) => this._handleSearchImageClick(event, image, images)}
-                                >
-                                  <img
-                                    src=${image.thumbnail_url || `/api/v1/images/${image.id}/thumbnail`}
-                                    alt=${image.filename}
-                                    class="curate-thumb ${this.searchDragSelection.includes(image.id) ? 'selected' : ''} ${this._searchFlashSelectionIds?.has(image.id) ? 'flash' : ''}"
-                                    draggable="false"
-                                    @pointerdown=${(event) => this._handleExploreByTagPointerDown(event, index, image.id, order, keyword)}
-                                    @pointermove=${(event) => this._handleSearchPointerMove(event)}
-                                    @pointerenter=${() => this._handleExploreByTagSelectHover(index, keyword)}
-                                  >
-                                  ${this.renderCurateRatingWidget ? this.renderCurateRatingWidget(image) : ''}
-                                  ${this.renderCurateRatingStatic ? this.renderCurateRatingStatic(image) : ''}
-                                  ${this._renderSearchPermatagSummary(image)}
-                                  ${this.formatCurateDate && this.formatCurateDate(image) ? html`
-                                    <div class="curate-thumb-date">
-                                      <span class="curate-thumb-id">#${image.id}</span>
-                                      <span class="curate-thumb-icon" aria-hidden="true">📷</span>${this.formatCurateDate(image)}
-                                    </div>
-                                  ` : ''}
-                                </div>
-                              `) : html`
-                                <div class="col-span-full text-xs text-gray-400 py-4 text-center">
-                                  No images found.
-                                </div>
-                              `}
-                            </div>
-                          </div>
-                        `;
-                      })}
-                    </div>
-                    <div class="p-2">
-                      ${explorePagination}
-                    </div>
-                  ` : html`
-                    <div class="p-8 text-center text-gray-500">
-                      <p class="text-sm">No tagged images found.</p>
-                      <p class="text-xs mt-2">Tag some images first to explore by tag.</p>
-                    </div>
-                  `}
                 </div>
               </div>
 

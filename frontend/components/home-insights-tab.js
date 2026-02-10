@@ -120,9 +120,11 @@ export class HomeInsightsTab extends LitElement {
       : (this.imageStats?.tagged_image_count || 0);
     const coveragePct = imageCount ? Math.round((positiveTaggedAssetCount / imageCount) * 100) : 0;
 
-    const permatagRowsTotal = this._sumTagSourceCounts(this.tagStatsBySource?.permatags);
+    const positivePermatagCount = Number.isFinite(this.imageStats?.positive_permatag_count)
+      ? this.imageStats.positive_permatag_count
+      : this._sumTagSourceCounts(this.tagStatsBySource?.permatags);
     const avgPositivePermatagsPerAsset = imageCount
-      ? (permatagRowsTotal / imageCount)
+      ? (positivePermatagCount / imageCount)
       : 0;
 
     const modelLastTrained = this.mlTrainingStats?.keyword_model_last_trained;
@@ -138,18 +140,20 @@ export class HomeInsightsTab extends LitElement {
 
     const keywordCount = (this.keywords || []).length;
 
-    const photoAgeBins = this._buildMockBins(
-      imageCount,
-      ['0-6mo', '6-12mo', '1-2y', '2-5y', '5-10y', '10y+'],
-      [0.14, 0.2, 0.24, 0.22, 0.12, 0.08]
-    );
+    const photoAgeBins = Array.isArray(this.imageStats?.photo_age_bins) && this.imageStats.photo_age_bins.length
+      ? this.imageStats.photo_age_bins
+      : this._buildMockBins(
+        imageCount,
+        ['0-6mo', '6-12mo', '1-2y', '2-5y', '5-10y', '10y+'],
+        [0.14, 0.2, 0.24, 0.22, 0.12, 0.08]
+      );
 
     return html`
       <div class="container">
         <div class="mb-4 flex items-center justify-between">
           <div>
             <div class="text-lg font-semibold text-gray-900">Insights</div>
-            <div class="text-xs text-gray-500">Working mock. Date fields marked '--' need backend fields.</div>
+            <div class="text-xs text-gray-500">Live stats from image, permatag, and machine-tag data.</div>
           </div>
           <div class="text-xs text-gray-500">keywords: ${formatStatNumber(keywordCount)}</div>
         </div>

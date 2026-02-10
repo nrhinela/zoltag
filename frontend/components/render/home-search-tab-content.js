@@ -29,7 +29,7 @@ export function renderHomeTabContent(host, { navCards, formatCurateDate }) {
             class="curate-subtab ${host.homeSubTab === 'insights' ? 'active' : ''}"
             @click=${() => { host.homeSubTab = 'insights'; }}
           >
-            Insights (mock)
+            Insights
           </button>
         </div>
       </div>

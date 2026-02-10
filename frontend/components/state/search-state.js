@@ -99,19 +99,15 @@ export class SearchStateController extends BaseStateController {
 
     this.host.fetchKeywords();
     this.host.fetchStats({
-      includeRatings: this.host.searchSubTab === 'explore-by-tag',
+      includeRatings: false,
       includeMlStats: false,
       includeTagStats: false,
     });
 
-    if (this.host.searchSubTab === 'home') {
-      if (!this.host.searchImages?.length) {
-        const searchFilters = this.host.searchFilterPanel.getState();
-        this.host.searchFilterPanel.updateFilters(searchFilters);
-        this.host.searchFilterPanel.fetchImages();
-      }
-    } else if (this.host.searchSubTab === 'explore-by-tag') {
-      this.host._loadExploreByTagData();
+    if (!this.host.searchImages?.length) {
+      const searchFilters = this.host.searchFilterPanel.getState();
+      this.host.searchFilterPanel.updateFilters(searchFilters);
+      this.host.searchFilterPanel.fetchImages();
     }
   }
 }

@@ -4,14 +4,14 @@ import json
 import io
 import re
 import mimetypes
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 from urllib.parse import quote
 from uuid import UUID
 from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException, Body, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
-from sqlalchemy import func, distinct, and_
+from sqlalchemy import func, distinct, and_, case
 from sqlalchemy.orm import Session, load_only
 from google.cloud import storage
 from google.api_core.exceptions import NotFound
@@ -838,6 +838,19 @@ async def get_image_stats(
     include_ratings: bool = False
 ):
     """Return image summary stats for a tenant."""
+    now_utc = datetime.utcnow()
+    cutoff_6mo = now_utc - timedelta(days=183)
+    cutoff_12mo = now_utc - timedelta(days=365)
+    cutoff_2y = now_utc - timedelta(days=365 * 2)
+    cutoff_5y = now_utc - timedelta(days=365 * 5)
+    cutoff_10y = now_utc - timedelta(days=365 * 10)
+
+    photo_date_expr = func.coalesce(
+        ImageMetadata.capture_timestamp,
+        ImageMetadata.modified_time,
+        ImageMetadata.created_at,
+    )
+
     image_count = db.query(func.count(ImageMetadata.id)).filter(
         ImageMetadata.tenant_id == tenant.id
     ).scalar() or 0
@@ -852,6 +865,49 @@ async def get_image_stats(
         Permatag.asset_id.is_not(None),
         Permatag.signum == 1
     ).scalar() or 0
+
+    positive_permatag_count = db.query(func.count(Permatag.id)).filter(
+        Permatag.tenant_id == tenant.id,
+        Permatag.asset_id.is_not(None),
+        Permatag.signum == 1,
+    ).scalar() or 0
+
+    positive_permatag_oldest, positive_permatag_newest = db.query(
+        func.min(Permatag.created_at),
+        func.max(Permatag.created_at),
+    ).filter(
+        Permatag.tenant_id == tenant.id,
+        Permatag.asset_id.is_not(None),
+        Permatag.signum == 1,
+    ).one()
+
+    image_newest = db.query(func.max(photo_date_expr)).filter(
+        ImageMetadata.tenant_id == tenant.id
+    ).scalar()
+
+    asset_newest = db.query(func.max(Asset.created_at)).filter(
+        Asset.tenant_id == tenant.id
+    ).scalar()
+
+    age_bin_counts = db.query(
+        func.sum(case((photo_date_expr >= cutoff_6mo, 1), else_=0)),
+        func.sum(case((and_(photo_date_expr < cutoff_6mo, photo_date_expr >= cutoff_12mo), 1), else_=0)),
+        func.sum(case((and_(photo_date_expr < cutoff_12mo, photo_date_expr >= cutoff_2y), 1), else_=0)),
+        func.sum(case((and_(photo_date_expr < cutoff_2y, photo_date_expr >= cutoff_5y), 1), else_=0)),
+        func.sum(case((and_(photo_date_expr < cutoff_5y, photo_date_expr >= cutoff_10y), 1), else_=0)),
+        func.sum(case((photo_date_expr < cutoff_10y, 1), else_=0)),
+    ).filter(
+        ImageMetadata.tenant_id == tenant.id
+    ).one()
+
+    photo_age_bins = [
+        {"label": "0-6mo", "count": int(age_bin_counts[0] or 0)},
+        {"label": "6-12mo", "count": int(age_bin_counts[1] or 0)},
+        {"label": "1-2y", "count": int(age_bin_counts[2] or 0)},
+        {"label": "2-5y", "count": int(age_bin_counts[3] or 0)},
+        {"label": "5-10y", "count": int(age_bin_counts[4] or 0)},
+        {"label": "10y+", "count": int(age_bin_counts[5] or 0)},
+    ]
 
     # Get active tag type from tenant settings
     active_tag_type = get_tenant_setting(db, tenant.id, 'active_machine_tag_type', default='siglip')
@@ -1022,11 +1078,17 @@ async def get_image_stats(
         "tenant_id": tenant.id,
         "image_count": int(image_count),
         "reviewed_image_count": int(reviewed_image_count),
+        "asset_newest": asset_newest.isoformat() if asset_newest else None,
+        "image_newest": image_newest.isoformat() if image_newest else None,
         "positive_permatag_image_count": int(positive_permatag_image_count),
+        "positive_permatag_count": int(positive_permatag_count),
+        "positive_permatag_oldest": positive_permatag_oldest.isoformat() if positive_permatag_oldest else None,
+        "positive_permatag_newest": positive_permatag_newest.isoformat() if positive_permatag_newest else None,
         "untagged_positive_count": int(max(image_count - positive_permatag_image_count, 0)),
         "ml_tag_count": int(ml_tag_count),
         "rated_image_count": int(rated_image_count),
         "rating_counts": rating_counts,
+        "photo_age_bins": photo_age_bins,
         "rating_by_category": rating_by_category
     }
 
