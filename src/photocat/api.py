@@ -26,6 +26,7 @@ from photocat.routers import (
     admin_tenants,
     admin_keywords,
     dropbox,
+    gdrive,
     sync,
     config,
     nl_search
@@ -60,6 +61,7 @@ app.include_router(admin_people.router)
 app.include_router(admin_tenants.router)
 app.include_router(admin_keywords.router)
 app.include_router(dropbox.router)
+app.include_router(gdrive.router)
 app.include_router(sync.router)
 app.include_router(config.router)
 app.include_router(nl_search.router)

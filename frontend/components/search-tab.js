@@ -6,9 +6,7 @@ import {
   updateList,
   addToList,
   getListItems,
-  getDropboxFolders,
-  getImageStats,
-  getImages
+  getDropboxFolders
 } from '../services/api.js';
 import { createHotspotHandlers, parseUtilityKeywordValue } from './shared/hotspot-controls.js';
 import {
@@ -34,10 +32,12 @@ import FolderBrowserPanel from './folder-browser-panel.js';
  *
  * Provides search functionality with two modes:
  * - Search Home: Filter-based image search with list management
- * - Explore by Tag: Browse images grouped by keywords
+ * - Browse by Folder: Browse images grouped by folder
+ * - Natural Search: Experimental NL query flow
+ * - Explore: Tag chip based navigation
  *
  * @property {String} tenant - Current tenant ID
- * @property {String} searchSubTab - Active subtab ('home' or 'explore-by-tag')
+ * @property {String} searchSubTab - Active subtab ('home', 'browse-by-folder', 'natural-search', 'chips')
  * @property {Array} searchChipFilters - Current filter chip selections
  * @property {Array} searchDropboxOptions - Dropbox folder options
  * @property {Array} searchImages - Images from filter panel
@@ -46,16 +46,13 @@ import FolderBrowserPanel from './folder-browser-panel.js';
  * @property {String} searchListId - Currently selected list ID
  * @property {String} searchListTitle - Draft list title
  * @property {Array} searchSavedImages - Images saved to current list
- * @property {Object} exploreByTagData - Tag exploration data
- * @property {Array} exploreByTagKeywords - Keywords for exploration
- * @property {Boolean} exploreByTagLoading - Loading state for explore
  * @property {Number} curateThumbSize - Thumbnail size
  * @property {Object} tagStatsBySource - Tag statistics
  * @property {Array} keywords - Flat keyword list for faster dropdowns
  * @property {String} activeCurateTagSource - Active tag source
  * @property {Object} imageStats - Image statistics
- * @property {String} curateOrderBy - Sort field
- * @property {String} curateDateOrder - Date sort order
+ * @property {String} searchOrderBy - Sort field
+ * @property {String} searchDateOrder - Date sort order
  *
  * @fires search-subtab-changed - When user changes subtab
  * @fires search-filters-changed - When search filters change
@@ -87,11 +84,6 @@ export class SearchTab extends LitElement {
     searchListError: { type: String, state: true },  // Internal state - not controlled by parent
     searchListExcludeId: { type: [String, Number], state: true },
     searchSavedImages: { type: Array },
-    exploreByTagData: { type: Object },
-    exploreByTagKeywords: { type: Array },
-    exploreByTagLoading: { type: Boolean },
-    exploreByTagOffset: { type: Number, state: true },
-    exploreByTagLimit: { type: Number, state: true },
     browseByFolderOptions: { type: Array, state: true },
     browseByFolderSelection: { type: Array, state: true },
     browseByFolderAppliedSelection: { type: Array, state: true },
@@ -108,8 +100,8 @@ export class SearchTab extends LitElement {
     activeCurateTagSource: { type: String },
     keywords: { type: Array },
     imageStats: { type: Object },
-    curateOrderBy: { type: String },
-    curateDateOrder: { type: String },
+    searchOrderBy: { type: String },
+    searchDateOrder: { type: String },
     renderCurateRatingWidget: { type: Object },
     renderCurateRatingStatic: { type: Object },
     formatCurateDate: { type: Object },
@@ -150,13 +142,6 @@ export class SearchTab extends LitElement {
     this.searchListError = '';
     this.searchListExcludeId = '';
     this.searchSavedImages = [];
-    this.exploreByTagData = {};
-    this.exploreByTagKeywords = [];
-    this.exploreByTagLoading = false;
-    this.exploreByTagOffset = 0;
-    this.exploreByTagLimit = 100;
-    this._exploreByTagCache = new Map();
-    this._exploreByTagStatsPromise = null;
     this.browseByFolderOptions = [];
     this.browseByFolderSelection = [];
     this.browseByFolderAppliedSelection = [];
@@ -173,8 +158,8 @@ export class SearchTab extends LitElement {
     this.activeCurateTagSource = 'permatags';
     this.keywords = [];
     this.imageStats = null;
-    this.curateOrderBy = 'rating';
-    this.curateDateOrder = 'desc';
+    this.searchOrderBy = 'photo_creation';
+    this.searchDateOrder = 'desc';
     this.renderCurateRatingWidget = null;
     this.renderCurateRatingStatic = null;
     this.formatCurateDate = null;
@@ -240,10 +225,6 @@ export class SearchTab extends LitElement {
     this._searchLongPressTriggered = false;
     this._searchInitialLoadComplete = false;
     this._searchInitialLoadPending = false;
-    this._exploreInitialLoadComplete = false;
-    this._exploreInitialLoadPending = false;
-    this._searchExploreOrder = null;
-    this._searchExploreGroupKey = null;
     this._searchBrowseOrder = null;
     this._searchBrowseGroupKey = null;
     this._searchFilterPanelHandlers = null;
@@ -277,9 +258,6 @@ export class SearchTab extends LitElement {
       suppressClickProperty: '_searchSuppressClick',
       dragSelectOnMove: true,
       getOrder: () => {
-        if (this.searchSubTab === 'explore-by-tag') {
-          return this._searchExploreOrder || [];
-        }
         if (this.searchSubTab === 'browse-by-folder') {
           return this._searchBrowseOrder || [];
         }
@@ -305,9 +283,6 @@ export class SearchTab extends LitElement {
         }
       }
       tasks.push(this._fetchSearchLists({ force: true }));
-      if (this.searchSubTab === 'explore-by-tag') {
-        tasks.push(this._loadExploreByTagData(true));
-      }
       await Promise.allSettled(tasks);
     } finally {
       this.searchRefreshing = false;
@@ -325,6 +300,7 @@ export class SearchTab extends LitElement {
     }
     this._fetchSearchLists();
     this._setupSearchFilterPanel(this.searchFilterPanel);
+    this._syncChipFiltersFromFilterPanel();
     this._setupFolderBrowserPanel();
     this._maybeStartInitialRefresh();
 
@@ -384,10 +360,6 @@ export class SearchTab extends LitElement {
       this.folderBrowserPanel.setTenant(this.tenant);
     }
     if (changedProps.has('tenant')) {
-      this._exploreByTagCache = new Map();
-      this._exploreByTagStatsPromise = null;
-      this.exploreByTagData = {};
-      this.exploreByTagKeywords = [];
       this.searchHotspotTargets = [{ id: 1, type: 'keyword', count: 0 }];
       this.searchHotspotRatingEnabled = false;
       this.searchHotspotRatingCount = 0;
@@ -436,17 +408,7 @@ export class SearchTab extends LitElement {
         this.searchSubTab = 'home';
         return;
       }
-      if (this.searchSubTab === 'explore-by-tag') {
-        this.exploreByTagOffset = 0;
-        if (this.exploreByTagLoading || (!this._exploreInitialLoadComplete && !(this.exploreByTagKeywords || []).length)) {
-          this._startExploreRefresh();
-        }
-      } else {
-        if (this._exploreInitialLoadPending) {
-          this._finishExploreRefresh();
-        }
-        this._maybeStartInitialRefresh();
-      }
+      this._maybeStartInitialRefresh();
       if (this.searchSubTab === 'browse-by-folder') {
         this.browseByFolderOffset = 0;
         this.folderBrowserPanel?.loadFolders();
@@ -458,7 +420,7 @@ export class SearchTab extends LitElement {
 
     if (
       this.searchSubTab === 'browse-by-folder'
-      && (changedProps.has('curateOrderBy') || changedProps.has('curateDateOrder'))
+      && (changedProps.has('searchOrderBy') || changedProps.has('searchDateOrder'))
     ) {
       if (this.browseByFolderAppliedSelection?.length) {
         this._refreshBrowseByFolderData();
@@ -471,32 +433,6 @@ export class SearchTab extends LitElement {
         this._finishInitialRefresh();
       } else if (!this._searchInitialLoadComplete && (this.searchImages || []).length > 0) {
         this._searchInitialLoadComplete = true;
-      }
-    }
-
-    if (changedProps.has('exploreByTagLoading') && this.searchSubTab === 'explore-by-tag') {
-      if (this.exploreByTagLoading) {
-        this._startExploreRefresh();
-      } else {
-        this._finishExploreRefresh();
-      }
-    }
-
-    if (changedProps.has('exploreByTagKeywords') && this.searchSubTab === 'explore-by-tag') {
-      if (this._exploreInitialLoadPending && !(this.exploreByTagKeywords || []).length) {
-        return;
-      }
-      if (this._exploreInitialLoadPending) {
-        this._finishExploreRefresh();
-      } else if (!this._exploreInitialLoadComplete && (this.exploreByTagKeywords || []).length > 0) {
-        this._exploreInitialLoadComplete = true;
-      }
-    }
-
-    if (changedProps.has('exploreByTagKeywords')) {
-      const total = (this.exploreByTagKeywords || []).length;
-      if (this.exploreByTagOffset >= total && total > 0) {
-        this.exploreByTagOffset = 0;
       }
     }
 
@@ -525,6 +461,7 @@ export class SearchTab extends LitElement {
     this._listsLoading = true;
     try {
       this.searchLists = await getLists(this.tenant, { force });
+      this._syncChipFiltersFromFilterPanel();
     } catch (error) {
       console.error('Error fetching search lists:', error);
     } finally {
@@ -679,25 +616,6 @@ export class SearchTab extends LitElement {
     this.searchImages = (this.searchImages || []).map((image) => (
       uniqueIds.includes(image.id) ? { ...image, rating } : image
     ));
-    if (this.exploreByTagData && typeof this.exploreByTagData === 'object') {
-      const nextData = {};
-      Object.entries(this.exploreByTagData).forEach(([keyword, images]) => {
-        if (!Array.isArray(images)) {
-          nextData[keyword] = images;
-          return;
-        }
-        let updated = false;
-        const nextImages = images.map((image) => {
-          if (uniqueIds.includes(image.id)) {
-            updated = true;
-            return { ...image, rating };
-          }
-          return image;
-        });
-        nextData[keyword] = updated ? nextImages : images;
-      });
-      this.exploreByTagData = nextData;
-    }
     uniqueIds.forEach((id) => this.applyRatingUpdate(id, rating));
     this.searchHotspotRatingCount += uniqueIds.length;
   }
@@ -768,9 +686,6 @@ export class SearchTab extends LitElement {
     this._handleChipFiltersChanged({ detail: { filters: nextFilters } });
     if (this.searchSubTab === 'browse-by-folder') {
       this._refreshBrowseByFolderData({ force: true });
-    }
-    if (this.searchSubTab === 'explore-by-tag') {
-      this._loadExploreByTagData(true);
     }
   }
 
@@ -1108,15 +1023,10 @@ export class SearchTab extends LitElement {
     if (searchFound) {
       return searchFound;
     }
-    if (!this.exploreByTagData || typeof this.exploreByTagData !== 'object') {
-      if (!this.browseByFolderData || typeof this.browseByFolderData !== 'object') {
-        return null;
-      }
+    if (!this.browseByFolderData || typeof this.browseByFolderData !== 'object') {
+      return null;
     }
     const sources = [];
-    if (this.exploreByTagData && typeof this.exploreByTagData === 'object') {
-      sources.push(...Object.values(this.exploreByTagData));
-    }
     if (this.browseByFolderData && typeof this.browseByFolderData === 'object') {
       sources.push(...Object.values(this.browseByFolderData));
     }
@@ -1333,10 +1243,6 @@ export class SearchTab extends LitElement {
       bubbles: true,
       composed: true
     }));
-
-    if (nextTab === 'explore-by-tag') {
-      this._loadExploreByTagData(false);
-    }
   }
 
   _setupSearchFilterPanel(panel) {
@@ -1353,9 +1259,15 @@ export class SearchTab extends LitElement {
     const handleError = () => {
       this._finishInitialRefresh();
     };
-    this._searchFilterPanelHandlers = { panel, handleLoaded, handleError };
+    const handleFiltersChanged = (detail) => {
+      if (!detail?.filters) return;
+      this._syncChipFiltersFromFilterState(detail.filters);
+    };
+    this._searchFilterPanelHandlers = { panel, handleLoaded, handleError, handleFiltersChanged };
     panel.on('images-loaded', handleLoaded);
     panel.on('error', handleError);
+    panel.on('filters-changed', handleFiltersChanged);
+    this._syncChipFiltersFromFilterPanel();
   }
 
   _setupFolderBrowserPanel() {
@@ -1416,7 +1328,118 @@ export class SearchTab extends LitElement {
     if (!panel || !this._searchFilterPanelHandlers) return;
     panel.off('images-loaded', this._searchFilterPanelHandlers.handleLoaded);
     panel.off('error', this._searchFilterPanelHandlers.handleError);
+    panel.off('filters-changed', this._searchFilterPanelHandlers.handleFiltersChanged);
     this._searchFilterPanelHandlers = null;
+  }
+
+  _syncChipFiltersFromFilterPanel() {
+    const filters = this.searchFilterPanel?.getState?.() || this.searchFilterPanel?.filters;
+    if (!filters || typeof filters !== 'object') return;
+    this._syncChipFiltersFromFilterState(filters);
+  }
+
+  _syncChipFiltersFromFilterState(filters) {
+    const nextChips = [];
+
+    if (filters.permatagPositiveMissing) {
+      nextChips.push({
+        type: 'keyword',
+        untagged: true,
+        displayLabel: 'Keywords',
+        displayValue: 'Untagged',
+      });
+    } else if (filters.keywords && typeof filters.keywords === 'object' && Object.keys(filters.keywords).length > 0) {
+      const keywordsByCategory = {};
+      for (const [category, rawValues] of Object.entries(filters.keywords)) {
+        const values = Array.isArray(rawValues)
+          ? rawValues
+          : (rawValues instanceof Set ? [...rawValues] : Array.from(rawValues || []));
+        const normalizedValues = values.filter(Boolean);
+        if (normalizedValues.length) {
+          keywordsByCategory[category] = normalizedValues;
+        }
+      }
+      if (Object.keys(keywordsByCategory).length > 0) {
+        const operator = filters.categoryFilterOperator
+          || (() => {
+            const ops = Object.values(filters.operators || {}).filter(Boolean);
+            const unique = [...new Set(ops)];
+            return unique.length === 1 ? unique[0] : 'OR';
+          })();
+        nextChips.push({
+          type: 'keyword',
+          keywordsByCategory,
+          operator: operator || 'OR',
+          displayLabel: 'Keywords',
+          displayValue: 'Multiple',
+        });
+      }
+    }
+
+    if (filters.ratingOperator === 'is_null') {
+      nextChips.push({
+        type: 'rating',
+        value: 'unrated',
+        displayLabel: 'Rating',
+        displayValue: 'Unrated',
+      });
+    } else if (filters.rating !== undefined && filters.rating !== null && filters.rating !== '') {
+      const numericRating = Number(filters.rating);
+      nextChips.push({
+        type: 'rating',
+        value: Number.isFinite(numericRating) ? numericRating : filters.rating,
+        displayLabel: 'Rating',
+        displayValue: Number.isFinite(numericRating) && numericRating > 0 ? `${numericRating}+` : String(filters.rating),
+      });
+    }
+
+    const folder = (filters.dropboxPathPrefix || '').trim();
+    if (folder) {
+      nextChips.push({
+        type: 'folder',
+        value: folder,
+        displayLabel: 'Folder',
+        displayValue: folder,
+      });
+    }
+
+    const filenameQuery = (filters.filenameQuery || '').trim();
+    if (filenameQuery) {
+      nextChips.push({
+        type: 'filename',
+        value: filenameQuery,
+        displayLabel: 'Filename',
+        displayValue: filenameQuery,
+      });
+    }
+
+    if (filters.listExcludeId !== undefined && filters.listExcludeId !== null && filters.listExcludeId !== '') {
+      const listExcludeValue = Number(filters.listExcludeId);
+      const listId = Number.isFinite(listExcludeValue) ? listExcludeValue : filters.listExcludeId;
+      const list = (this.searchLists || []).find((entry) => String(entry.id) === String(listId));
+      const listTitle = list?.title || `List ${listId}`;
+      nextChips.push({
+        type: 'list',
+        value: listId,
+        mode: 'exclude',
+        displayLabel: 'List',
+        displayValue: `Not in ${listTitle}`,
+      });
+    } else if (filters.listId !== undefined && filters.listId !== null && filters.listId !== '') {
+      const listValue = Number(filters.listId);
+      const listId = Number.isFinite(listValue) ? listValue : filters.listId;
+      const list = (this.searchLists || []).find((entry) => String(entry.id) === String(listId));
+      const listTitle = list?.title || `List ${listId}`;
+      nextChips.push({
+        type: 'list',
+        value: listId,
+        mode: 'include',
+        displayLabel: 'List',
+        displayValue: listTitle,
+      });
+    }
+
+    this.searchChipFilters = nextChips;
   }
 
   _maybeStartInitialRefresh() {
@@ -1438,25 +1461,10 @@ export class SearchTab extends LitElement {
     this.searchRefreshing = false;
   }
 
-  _startExploreRefresh() {
-    if (this._exploreInitialLoadPending) return;
-    this._exploreInitialLoadPending = true;
-    this.searchRefreshing = true;
-  }
-
-  _finishExploreRefresh() {
-    if (!this._exploreInitialLoadPending) return;
-    this._exploreInitialLoadPending = false;
-    this._exploreInitialLoadComplete = true;
-    if (!this._searchInitialLoadPending) {
-      this.searchRefreshing = false;
-    }
-  }
-
   _refreshBrowseByFolderData({ force = false, orderBy, sortOrder } = {}) {
     if (!this.folderBrowserPanel) return;
-    const resolvedOrderBy = orderBy || this.curateOrderBy || 'photo_creation';
-    const resolvedSortOrder = sortOrder || this.curateDateOrder || 'desc';
+    const resolvedOrderBy = orderBy || this.searchOrderBy || 'photo_creation';
+    const resolvedSortOrder = sortOrder || this.searchDateOrder || 'desc';
     const appliedSelection = this.browseByFolderAppliedSelection || [];
     if (appliedSelection.length) {
       this.folderBrowserPanel.setSelection(appliedSelection);
@@ -1503,84 +1511,6 @@ export class SearchTab extends LitElement {
     return updated;
   }
 
-  async _loadExploreByTagData(force = false) {
-    if (!this.tenant) return;
-    this.exploreByTagLoading = true;
-    try {
-      const ratingByCategory = this.imageStats?.rating_by_category || {};
-      if (!Object.keys(ratingByCategory).length) {
-        if (!this._exploreByTagStatsPromise) {
-          this._exploreByTagStatsPromise = getImageStats(this.tenant, { force, includeRatings: true })
-            .catch((error) => {
-              console.error('Error fetching explore-by-tag stats:', error);
-              return null;
-            })
-            .finally(() => {
-              this._exploreByTagStatsPromise = null;
-            });
-        }
-        const stats = await this._exploreByTagStatsPromise;
-        if (stats && stats.rating_by_category) {
-          this.imageStats = stats;
-        }
-        if (!Object.keys(this.imageStats?.rating_by_category || {}).length) {
-          this.exploreByTagData = {};
-          this.exploreByTagKeywords = [];
-          return;
-        }
-      }
-
-      const keywordsByRating = {};
-      const imageStats = this.imageStats;
-      if (imageStats?.rating_by_category) {
-        Object.entries(imageStats.rating_by_category).forEach(([category, categoryData]) => {
-          Object.entries(categoryData.keywords || {}).forEach(([keyword, keywordData]) => {
-            const twoStarPlus = (keywordData.stars_2 || 0) + (keywordData.stars_3 || 0);
-            if (twoStarPlus > 0) {
-              const keywordName = `${category} - ${keyword}`;
-              keywordsByRating[keywordName] = { category, keyword, twoStarPlus };
-            }
-          });
-        });
-      }
-
-      const sortedKeywords = Object.entries(keywordsByRating).sort(([a], [b]) => a.localeCompare(b));
-      const exploreByTagData = {};
-      const exploreByTagKeywords = [];
-      for (const [keywordName, data] of sortedKeywords) {
-        const cacheKey = `${data.category}::${data.keyword}`;
-        let cachedImages = this._exploreByTagCache.get(cacheKey);
-        if (force || !Array.isArray(cachedImages)) {
-          try {
-            const result = await getImages(this.tenant, {
-              permatagKeyword: data.keyword,
-              permatagCategory: data.category,
-              permatagSignum: 1,
-              rating: 2,
-              ratingOperator: 'gte',
-              limit: 10,
-              orderBy: 'rating',
-              sortOrder: 'desc',
-              listExcludeId: this.searchListExcludeId || '',
-            });
-            const images = Array.isArray(result) ? result : (result?.images || []);
-            cachedImages = images.filter((img) => img && img.id);
-            this._exploreByTagCache.set(cacheKey, cachedImages);
-          } catch (error) {
-            console.error(`Error loading images for keyword "${keywordName}":`, error);
-            cachedImages = [];
-          }
-        }
-        exploreByTagData[keywordName] = cachedImages || [];
-        exploreByTagKeywords.push(keywordName);
-      }
-      this.exploreByTagData = exploreByTagData;
-      this.exploreByTagKeywords = exploreByTagKeywords;
-    } finally {
-      this.exploreByTagLoading = false;
-    }
-  }
-
   // ========================================
   // Event Handlers for Parent Communication
   // ========================================
@@ -1596,8 +1526,8 @@ export class SearchTab extends LitElement {
 
   _handleCurateQuickSort(field) {
     const nextOrderBy = field;
-    const nextDateOrder = this.curateOrderBy === field
-      ? (this.curateDateOrder === 'desc' ? 'asc' : 'desc')
+    const nextDateOrder = this.searchOrderBy === field
+      ? (this.searchDateOrder === 'desc' ? 'asc' : 'desc')
       : 'desc';
     this.dispatchEvent(new CustomEvent('sort-changed', {
       detail: { orderBy: nextOrderBy, dateOrder: nextDateOrder },
@@ -1614,8 +1544,8 @@ export class SearchTab extends LitElement {
   }
 
   _getCurateQuickSortArrow(field) {
-    if (this.curateOrderBy !== field) return '';
-    return this.curateDateOrder === 'desc' ? '↓' : '↑';
+    if (this.searchOrderBy !== field) return '';
+    return this.searchDateOrder === 'desc' ? '↓' : '↑';
   }
 
   _getBrowseByFolderSortValue(image, field) {
@@ -1650,8 +1580,8 @@ export class SearchTab extends LitElement {
     if (!Array.isArray(images) || images.length < 2) {
       return images || [];
     }
-    const field = this.curateOrderBy || 'photo_creation';
-    const direction = this.curateDateOrder === 'asc' ? 1 : -1;
+    const field = this.searchOrderBy || 'photo_creation';
+    const direction = this.searchDateOrder === 'asc' ? 1 : -1;
     const sorted = [...images];
     sorted.sort((a, b) => {
       const rawA = this._getBrowseByFolderSortValue(a, field);
@@ -1700,14 +1630,15 @@ export class SearchTab extends LitElement {
     const searchFilters = {
       limit: 100,
       offset: 0,
-      sortOrder: 'desc',
-      orderBy: 'photo_creation',
+      sortOrder: this.searchDateOrder || 'desc',
+      orderBy: this.searchOrderBy || 'photo_creation',
       hideZeroRating: true,
       keywords: {},
       operators: {},
       categoryFilterOperator: undefined,
       categoryFilterSource: 'permatags',
       dropboxPathPrefix: '',
+      filenameQuery: '',
       listId: undefined,
       listExcludeId: undefined,
     };
@@ -1756,6 +1687,9 @@ export class SearchTab extends LitElement {
           } else {
             searchFilters.listId = chip.value;
           }
+          break;
+        case 'filename':
+          searchFilters.filenameQuery = chip.value || '';
           break;
       }
     });
@@ -1818,19 +1752,6 @@ export class SearchTab extends LitElement {
     return this._searchSelectionHandlers.handleSelectHover(index);
   }
 
-  _handleExploreByTagPointerDown(event, index, imageId, order, groupKey) {
-    this._searchExploreOrder = order;
-    this._searchExploreGroupKey = groupKey;
-    return this._handleSearchPointerDown(event, index, imageId);
-  }
-
-  _handleExploreByTagSelectHover(index, groupKey) {
-    if (this._searchExploreGroupKey !== groupKey) {
-      return;
-    }
-    return this._handleSearchSelectHover(index);
-  }
-
   _handleBrowseByFolderPointerDown(event, index, imageId, order, groupKey) {
     this._searchBrowseOrder = order;
     this._searchBrowseGroupKey = groupKey;
@@ -1885,14 +1806,6 @@ export class SearchTab extends LitElement {
     };
   }
 
-  _getExplorePaginationState() {
-    const total = (this.exploreByTagKeywords || []).length;
-    const offset = Number(this.exploreByTagOffset) || 0;
-    const limit = Number(this.exploreByTagLimit) || 100;
-    const count = Math.max(0, Math.min(limit, total - offset));
-    return { total, offset, limit, count };
-  }
-
   _getBrowseByFolderPaginationState() {
     const total = (this.browseByFolderAppliedSelection || []).length;
     const offset = Number(this.browseByFolderOffset) || 0;
@@ -1923,24 +1836,6 @@ export class SearchTab extends LitElement {
     if (!Number.isFinite(nextLimit)) return;
     this.searchFilterPanel.setLimit(nextLimit);
     this.searchFilterPanel.fetchImages();
-  }
-
-  _handleExploreByTagPagePrev() {
-    const { offset, limit } = this._getExplorePaginationState();
-    this.exploreByTagOffset = Math.max(0, offset - limit);
-  }
-
-  _handleExploreByTagPageNext() {
-    const { offset, limit, total } = this._getExplorePaginationState();
-    const nextOffset = offset + limit < total ? offset + limit : offset;
-    this.exploreByTagOffset = nextOffset;
-  }
-
-  _handleExploreByTagPageLimitChange(event) {
-    const nextLimit = parseInt(event.target.value, 10);
-    if (!Number.isFinite(nextLimit)) return;
-    this.exploreByTagLimit = nextLimit;
-    this.exploreByTagOffset = 0;
   }
 
   _handleBrowseByFolderPagePrev() {
@@ -1992,21 +1887,6 @@ export class SearchTab extends LitElement {
         });
       })()
       : html``;
-    const explorePagination = this.searchSubTab === 'explore-by-tag'
-      ? (() => {
-        const { offset, limit, total, count } = this._getExplorePaginationState();
-        return renderResultsPagination({
-          offset,
-          limit,
-          total,
-          count,
-          onPrev: () => this._handleExploreByTagPagePrev(),
-          onNext: () => this._handleExploreByTagPageNext(),
-          onLimitChange: (event) => this._handleExploreByTagPageLimitChange(event),
-          disabled: this.exploreByTagLoading,
-        });
-      })()
-      : html``;
     const browsePagination = this.searchSubTab === 'browse-by-folder'
       ? (() => {
         const { offset, limit, total, count } = this._getBrowseByFolderPaginationState();
@@ -2022,8 +1902,6 @@ export class SearchTab extends LitElement {
         });
       })()
       : html``;
-    const exploreKeywordsPage = (this.exploreByTagKeywords || [])
-      .slice(this.exploreByTagOffset, this.exploreByTagOffset + this.exploreByTagLimit);
     const browseFoldersPage = (appliedFolders || [])
       .slice(this.browseByFolderOffset, this.browseByFolderOffset + this.browseByFolderLimit);
     const browseByFolderBlurStyle = this.browseByFolderLoading
@@ -2111,10 +1989,16 @@ export class SearchTab extends LitElement {
                 Browse by Folder
               </button>
               <button
-                class="curate-subtab ${this.searchSubTab === 'explore-by-tag' ? 'active' : ''}"
-                @click=${() => this._handleSearchSubTabChange('explore-by-tag')}
+                class="curate-subtab ${this.searchSubTab === 'natural-search' ? 'active' : ''}"
+                @click=${() => this._handleSearchSubTabChange('natural-search')}
               >
-                Explore by Tag
+                Natural Search
+              </button>
+              <button
+                class="curate-subtab ${this.searchSubTab === 'chips' ? 'active' : ''}"
+                @click=${() => this._handleSearchSubTabChange('chips')}
+              >
+                Explore
               </button>
             </div>
           `}
@@ -2168,19 +2052,19 @@ export class SearchTab extends LitElement {
                   <span class="text-sm font-semibold text-gray-700">Sort:</span>
                   <div class="curate-audit-toggle">
                     <button
-                      class=${this.curateOrderBy === 'rating' ? 'active' : ''}
+                      class=${this.searchOrderBy === 'rating' ? 'active' : ''}
                       @click=${() => this._handleCurateQuickSort('rating')}
                     >
                       Rating ${this._getCurateQuickSortArrow('rating')}
                     </button>
                     <button
-                      class=${this.curateOrderBy === 'photo_creation' ? 'active' : ''}
+                      class=${this.searchOrderBy === 'photo_creation' ? 'active' : ''}
                       @click=${() => this._handleCurateQuickSort('photo_creation')}
                     >
                       Photo Date ${this._getCurateQuickSortArrow('photo_creation')}
                     </button>
                     <button
-                      class=${this.curateOrderBy === 'processed' ? 'active' : ''}
+                      class=${this.searchOrderBy === 'processed' ? 'active' : ''}
                       @click=${() => this._handleCurateQuickSort('processed')}
                     >
                       Process Date ${this._getCurateQuickSortArrow('processed')}
@@ -2248,88 +2132,6 @@ export class SearchTab extends LitElement {
                   <div class="p-2">
                     ${searchPagination}
                   </div>
-                </div>
-              </div>
-
-              ${savedPane}
-            </div>
-          </div>
-        ` : ''}
-
-        <!-- Explore by Tag Subtab -->
-        ${this.searchSubTab === 'explore-by-tag' ? html`
-          <div>
-            <div class="curate-layout search-layout mt-3" style="--curate-thumb-size: ${this.curateThumbSize}px;">
-              <div class="curate-pane" @dragover=${this._handleSearchAvailableDragOver} @drop=${this._handleSearchAvailableDrop}>
-                <div class="curate-pane-header">
-                  <div class="curate-pane-header-row">
-                    <span class="text-sm font-semibold">Explore by Tag</span>
-                  </div>
-                </div>
-                <div class="curate-pane-body">
-                  ${this.exploreByTagLoading && !(this.exploreByTagKeywords && this.exploreByTagKeywords.length) ? html`
-                    <div class="p-8"></div>
-                  ` : this.exploreByTagKeywords && this.exploreByTagKeywords.length > 0 ? html`
-                    <div class="p-2">
-                      ${explorePagination}
-                    </div>
-                    <div class="space-y-6">
-                      ${exploreKeywordsPage.map(keyword => {
-                        const images = this.exploreByTagData[keyword] || [];
-                        const order = images.map((image) => image.id);
-                        return html`
-                          <div>
-                            <div class="text-sm font-semibold text-gray-900 mb-3">
-                              ${keyword}
-                              <span class="text-xs text-gray-500 font-normal">(${images.length} images)</span>
-                            </div>
-                            <div class="curate-grid">
-                              ${images.length ? images.map((image, index) => html`
-                                <div
-                                  class="curate-thumb-wrapper ${this.searchDragSelection.includes(image.id) ? 'selected' : ''}"
-                                  data-image-id="${image.id}"
-                                  draggable="true"
-                                  @dragstart=${(event) => this._handleSearchDragStart(event, image)}
-                                  @click=${(event) => this._handleSearchImageClick(event, image, images)}
-                                >
-                                  <img
-                                    src=${image.thumbnail_url || `/api/v1/images/${image.id}/thumbnail`}
-                                    alt=${image.filename}
-                                    class="curate-thumb ${this.searchDragSelection.includes(image.id) ? 'selected' : ''} ${this._searchFlashSelectionIds?.has(image.id) ? 'flash' : ''}"
-                                    draggable="false"
-                                    @pointerdown=${(event) => this._handleExploreByTagPointerDown(event, index, image.id, order, keyword)}
-                                    @pointermove=${(event) => this._handleSearchPointerMove(event)}
-                                    @pointerenter=${() => this._handleExploreByTagSelectHover(index, keyword)}
-                                  >
-                                  ${this.renderCurateRatingWidget ? this.renderCurateRatingWidget(image) : ''}
-                                  ${this.renderCurateRatingStatic ? this.renderCurateRatingStatic(image) : ''}
-                                  ${this._renderSearchPermatagSummary(image)}
-                                  ${this.formatCurateDate && this.formatCurateDate(image) ? html`
-                                    <div class="curate-thumb-date">
-                                      <span class="curate-thumb-id">#${image.id}</span>
-                                      <span class="curate-thumb-icon" aria-hidden="true">📷</span>${this.formatCurateDate(image)}
-                                    </div>
-                                  ` : ''}
-                                </div>
-                              `) : html`
-                                <div class="col-span-full text-xs text-gray-400 py-4 text-center">
-                                  No images found.
-                                </div>
-                              `}
-                            </div>
-                          </div>
-                        `;
-                      })}
-                    </div>
-                    <div class="p-2">
-                      ${explorePagination}
-                    </div>
-                  ` : html`
-                    <div class="p-8 text-center text-gray-500">
-                      <p class="text-sm">No tagged images found.</p>
-                      <p class="text-xs mt-2">Tag some images first to explore by tag.</p>
-                    </div>
-                  `}
                 </div>
               </div>
 
@@ -2423,19 +2225,19 @@ export class SearchTab extends LitElement {
                         <span class="text-sm font-semibold text-gray-700">Sort:</span>
                         <div class="curate-audit-toggle">
                           <button
-                            class=${this.curateOrderBy === 'rating' ? 'active' : ''}
+                            class=${this.searchOrderBy === 'rating' ? 'active' : ''}
                             @click=${() => this._handleCurateQuickSort('rating')}
                           >
                             Rating ${this._getCurateQuickSortArrow('rating')}
                           </button>
                           <button
-                            class=${this.curateOrderBy === 'photo_creation' ? 'active' : ''}
+                            class=${this.searchOrderBy === 'photo_creation' ? 'active' : ''}
                             @click=${() => this._handleCurateQuickSort('photo_creation')}
                           >
                             Photo Date ${this._getCurateQuickSortArrow('photo_creation')}
                           </button>
                           <button
-                            class=${this.curateOrderBy === 'processed' ? 'active' : ''}
+                            class=${this.searchOrderBy === 'processed' ? 'active' : ''}
                             @click=${() => this._handleCurateQuickSort('processed')}
                           >
                             Process Date ${this._getCurateQuickSortArrow('processed')}
@@ -2523,6 +2325,40 @@ export class SearchTab extends LitElement {
             </div>
           </div>
         ` : ''}
+
+        ${this.searchSubTab === 'natural-search' ? html`
+          <lab-tab
+            .tenant=${this.tenant}
+            .tagStatsBySource=${this.tagStatsBySource}
+            .activeCurateTagSource=${this.activeCurateTagSource}
+            .keywords=${this.keywords}
+            .imageStats=${this.imageStats}
+            .curateOrderBy=${this.searchOrderBy}
+            .curateDateOrder=${this.searchDateOrder}
+            .renderCurateRatingWidget=${this.renderCurateRatingWidget}
+            .renderCurateRatingStatic=${this.renderCurateRatingStatic}
+            .formatCurateDate=${this.formatCurateDate}
+            @image-clicked=${(event) => this._handleSearchImageClick(event.detail.event, event.detail.image, event.detail.imageSet)}
+            @image-selected=${(event) => this._handleSearchImageClick(null, event.detail.image, event.detail.imageSet)}
+          ></lab-tab>
+        ` : html``}
+
+        ${this.searchSubTab === 'chips' ? html`
+          <home-chips-tab
+            .tenant=${this.tenant}
+            .tagStatsBySource=${this.tagStatsBySource}
+            .activeCurateTagSource=${this.activeCurateTagSource}
+            .keywords=${this.keywords}
+            .imageStats=${this.imageStats}
+            .curateOrderBy=${this.searchOrderBy}
+            .curateDateOrder=${this.searchDateOrder}
+            .renderCurateRatingWidget=${this.renderCurateRatingWidget}
+            .renderCurateRatingStatic=${this.renderCurateRatingStatic}
+            .formatCurateDate=${this.formatCurateDate}
+            @image-clicked=${(event) => this._handleSearchImageClick(event.detail.event, event.detail.image, event.detail.imageSet)}
+            @image-selected=${(event) => this._handleSearchImageClick(null, event.detail.image, event.detail.imageSet)}
+          ></home-chips-tab>
+        ` : html``}
       </div>
     `;
   }

@@ -246,6 +246,8 @@ async def get_ml_training_stats(
     db: Session = Depends(get_db)
 ):
     """Return ML training summary stats for a tenant."""
+    active_tag_type = get_tenant_setting(db, tenant.id, 'active_machine_tag_type', default='siglip')
+
     image_count = db.query(func.count(ImageMetadata.id)).filter(
         ImageMetadata.tenant_id == tenant.id
     ).scalar() or 0
@@ -256,9 +258,18 @@ async def get_ml_training_stats(
 
     zero_shot_image_count = db.query(func.count(distinct(MachineTag.asset_id))).filter(
         MachineTag.tenant_id == tenant.id,
-        MachineTag.tag_type == 'siglip',
+        MachineTag.tag_type == active_tag_type,
         MachineTag.asset_id.is_not(None),
     ).scalar() or 0
+
+    zero_shot_tag_oldest, zero_shot_tag_newest = db.query(
+        func.min(MachineTag.created_at),
+        func.max(MachineTag.created_at),
+    ).filter(
+        MachineTag.tenant_id == tenant.id,
+        MachineTag.tag_type == active_tag_type,
+        MachineTag.asset_id.is_not(None),
+    ).one()
 
     model_count = db.query(func.count(KeywordModel.id)).filter(
         KeywordModel.tenant_id == tenant.id
@@ -287,6 +298,8 @@ async def get_ml_training_stats(
         "image_count": int(image_count),
         "embedding_count": int(embedding_count),
         "zero_shot_image_count": int(zero_shot_image_count),
+        "zero_shot_tag_oldest": zero_shot_tag_oldest.isoformat() if zero_shot_tag_oldest else None,
+        "zero_shot_tag_newest": zero_shot_tag_newest.isoformat() if zero_shot_tag_newest else None,
         "trained_image_count": int(trained_image_count or 0),
         "keyword_model_count": int(model_count),
         "keyword_model_last_trained": last_trained.isoformat() if last_trained else None,

@@ -54,6 +54,7 @@ export class ImageFilterPanel {
       rating: undefined,
       ratingOperator: undefined,
       dropboxPathPrefix: '',
+      filenameQuery: '',
       permatagPositiveMissing: false,
       listId: undefined,
       listExcludeId: undefined,
@@ -218,6 +219,7 @@ export class ImageFilterPanel {
       rating: undefined,
       ratingOperator: undefined,
       dropboxPathPrefix: '',
+      filenameQuery: '',
       permatagPositiveMissing: false,
     };
     this._emit('filters-changed', { tabId: this.tabId, filters: this.filters });

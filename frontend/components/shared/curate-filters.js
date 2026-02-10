@@ -12,6 +12,7 @@ export function buildCurateFilterObject(state, overrides = {}) {
       : state.curateCategoryFilterOperator,
     categoryFilterSource: 'permatags',
     dropboxPathPrefix: overrides.dropboxPathPrefix !== undefined ? overrides.dropboxPathPrefix : state.curateDropboxPathPrefix,
+    filenameQuery: overrides.filenameQuery !== undefined ? overrides.filenameQuery : state.curateFilenameQuery,
     listId: overrides.listId !== undefined ? overrides.listId : state.curateListId,
     listExcludeId: overrides.listExcludeId !== undefined ? overrides.listExcludeId : state.curateListExcludeId,
   };
@@ -47,6 +48,7 @@ export function buildCurateAuditFilterObject(state, overrides = {}) {
     permatagMissing: state.curateAuditMode === 'missing',
     hideZeroRating: state.curateAuditHideDeleted,
     dropboxPathPrefix: overrides.dropboxPathPrefix !== undefined ? overrides.dropboxPathPrefix : state.curateAuditDropboxPathPrefix,
+    filenameQuery: overrides.filenameQuery !== undefined ? overrides.filenameQuery : state.curateAuditFilenameQuery,
   };
 
   if (useAiSort) {
@@ -94,8 +96,5 @@ export function getCurateQuickSortArrow(state, orderBy) {
 }
 
 export function shouldIncludeRatingStats(state) {
-  return (
-    (state.activeTab === 'curate' && state.curateSubTab === 'home')
-    || (state.activeTab === 'search' && state.searchSubTab === 'explore-by-tag')
-  );
+  return state.activeTab === 'curate' && state.curateSubTab === 'home';
 }

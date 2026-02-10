@@ -9,6 +9,7 @@
 ENV ?= prod
 PROJECT_ID = photocat-483622
 REGION = us-central1
+DEV_PID_FILE = .dev-pids
 
 help:
 	@echo "PhotoCat - Make targets"
@@ -78,27 +79,62 @@ clean:
 dev:
 	@$(MAKE) dev-clean
 	@echo "Starting development servers..."
-	make dev-backend & make dev-frontend & make dev-css
+	@rm -f $(DEV_PID_FILE)
+	@set -e; \
+	$(MAKE) dev-backend & backend_pid=$$!; \
+	$(MAKE) dev-frontend & frontend_pid=$$!; \
+	$(MAKE) dev-css & css_pid=$$!; \
+	echo "$$backend_pid $$frontend_pid $$css_pid" > $(DEV_PID_FILE); \
+	echo "Dev process ids: backend=$$backend_pid frontend=$$frontend_pid css=$$css_pid"; \
+	trap 'echo "Stopping dev processes..."; kill $$backend_pid $$frontend_pid $$css_pid 2>/dev/null || true; wait $$backend_pid $$frontend_pid $$css_pid 2>/dev/null || true; rm -f $(DEV_PID_FILE)' INT TERM EXIT; \
+	wait $$backend_pid $$frontend_pid $$css_pid
 
 dev-clean:
 	@echo "Stopping any existing development processes..."
-	@for pattern in "uvicorn photocat.api:app" "photocat.api:app" "npm run dev" "npm run build:css" "vite" "tailwindcss"; do \
-		if command -v pkill >/dev/null 2>&1; then \
+	@set -e; \
+	pids=""; \
+	if [ -f $(DEV_PID_FILE) ]; then \
+		pids="$$pids $$(cat $(DEV_PID_FILE) 2>/dev/null || true)"; \
+		rm -f $(DEV_PID_FILE); \
+	fi; \
+	for pattern in "uvicorn photocat.api:app" "photocat.api:app" "npm run dev" "npm run build:css" "node .*vite" "node .*tailwindcss" "tailwindcss"; do \
+		if command -v pgrep >/dev/null 2>&1; then \
+			found="$$(pgrep -f "$$pattern" 2>/dev/null || true)"; \
+			if [ -n "$$found" ]; then \
+				pids="$$pids $$found"; \
+			fi; \
+		elif command -v pkill >/dev/null 2>&1; then \
 			pkill -f "$$pattern" 2>/dev/null || true; \
 		fi; \
-	done
-	@for port in 8000 5173; do \
+	done; \
+	for port in 8000 5173; do \
 		if command -v lsof >/dev/null 2>&1; then \
 			ids=$$(lsof -tiTCP:$$port -sTCP:LISTEN || true); \
 			if [ -n "$$ids" ]; then \
-				echo "Killing processes on port $$port: $$ids"; \
-				for id in $$ids; do \
-					kill -9 $$id 2>/dev/null || true; \
-				done; \
+				echo "Found listeners on port $$port: $$ids"; \
+				pids="$$pids $$ids"; \
 			fi; \
 		fi; \
-	done
-	@sleep 1
+	done; \
+	uniq_pids=$$(printf '%s\n' $$pids | awk 'NF && !seen[$$1]++ {print $$1}'); \
+	if [ -n "$$uniq_pids" ]; then \
+		echo "Sending SIGTERM to: $$uniq_pids"; \
+		echo "$$uniq_pids" | xargs kill 2>/dev/null || true; \
+		sleep 2; \
+		still_alive=""; \
+		for pid in $$uniq_pids; do \
+			if kill -0 $$pid 2>/dev/null; then \
+				still_alive="$$still_alive $$pid"; \
+			fi; \
+		done; \
+		if [ -n "$$still_alive" ]; then \
+			echo "Force killing stuck processes: $$still_alive"; \
+			echo "$$still_alive" | xargs kill -9 2>/dev/null || true; \
+		fi; \
+	else \
+		echo "No matching dev processes found."; \
+	fi; \
+	sleep 1
 
 dev-backend:
 	@echo "Starting backend development server..."

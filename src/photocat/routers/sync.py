@@ -1,22 +1,32 @@
-"""Router for Dropbox sync and image processing endpoints."""
+"""Router for storage-provider sync and image ingestion endpoints."""
 
 import traceback
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session
 from google.cloud import storage
+from sqlalchemy.orm import Session
 
-from photocat.dependencies import get_db, get_tenant, get_secret
-from photocat.tenant import Tenant
-from photocat.metadata import Tenant as TenantModel, Asset
-from photocat.settings import settings
+from photocat.dependencies import get_db, get_secret, get_tenant
 from photocat.image import ImageProcessor
-from photocat.sync_pipeline import process_dropbox_entry
+from photocat.metadata import Asset, Tenant as TenantModel
+from photocat.settings import settings
+from photocat.storage import ProviderEntry, create_storage_provider
+from photocat.sync_pipeline import process_storage_entry
+from photocat.tenant import Tenant
 
 router = APIRouter(
     prefix="/api/v1",
     tags=["sync"]
 )
+
+
+def _normalize_provider(provider: str) -> str:
+    value = (provider or "dropbox").strip().lower()
+    if value in {"dbx", "dropbox"}:
+        return "dropbox"
+    if value in {"gdrive", "google-drive", "google_drive", "drive"}:
+        return "gdrive"
+    return value
 
 
 @router.post("/sync", response_model=dict)
@@ -25,54 +35,26 @@ async def trigger_sync(
     db: Session = Depends(get_db),
     model: str = Query("siglip", description="'clip' or 'siglip'"),
     reprocess_existing: bool = Query(False, description="Reprocess entries even if already ingested"),
+    provider: str = Query("dropbox", description="Storage provider: dropbox or gdrive"),
 ):
-    """Trigger Dropbox sync for tenant."""
+    """Trigger one-item sync for the requested storage provider."""
     try:
         _ = model  # Legacy query param retained for backward compatibility.
-        # Check if Dropbox credentials are configured
-        if not tenant.dropbox_app_key:
-            raise HTTPException(
-                status_code=400,
-                detail="Dropbox app key not configured. Please set it in the admin interface."
-            )
-
-        # Get tenant's Dropbox credentials
-        try:
-            refresh_token = get_secret(f"dropbox-token-{tenant.id}")
-        except Exception as e:
-            raise HTTPException(
-                status_code=400,
-                detail="Dropbox not connected. Please click 'Connect Dropbox Account' first."
-            )
-
-        app_key = tenant.dropbox_app_key
+        provider_name = _normalize_provider(provider)
 
         try:
-            app_secret = get_secret(f"dropbox-app-secret-{tenant.id}")
-        except Exception as e:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Dropbox app secret not found in Secret Manager. Please create secret: dropbox-app-secret-{tenant.id}"
-            )
+            storage_provider = create_storage_provider(provider_name, tenant=tenant, get_secret=get_secret)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Unable to initialize {provider_name} provider: {exc}")
 
-        # Use Dropbox SDK directly with refresh token
-        from dropbox import Dropbox
-        dbx = Dropbox(
-            oauth2_refresh_token=refresh_token,
-            app_key=app_key,
-            app_secret=app_secret
-        )
-
-        # Get tenant settings from database to access sync folders
         tenant_row = db.query(TenantModel).filter(TenantModel.id == tenant.id).first()
-        sync_folders = tenant_row.settings.get('dropbox_sync_folders', []) if tenant_row.settings else []
+        tenant_settings = tenant_row.settings if tenant_row and tenant_row.settings else {}
 
-        print(f"[Sync] Tenant {tenant.id} sync folders: {sync_folders}")
+        sync_folder_key = "dropbox_sync_folders" if storage_provider.provider_name == "dropbox" else "gdrive_sync_folders"
+        sync_folders = tenant_settings.get(sync_folder_key, [])
 
-        # Only fetch unprocessed files by checking what's already in DB
-        from dropbox.files import FileMetadata
-
-        # Get already processed dropbox source paths
         processed_paths = set()
         if not reprocess_existing:
             processed_paths = set(
@@ -80,142 +62,76 @@ async def trigger_sync(
                 for row in db.query(Asset.source_key)
                 .filter(
                     Asset.tenant_id == tenant.id,
-                    Asset.source_provider == "dropbox",
+                    Asset.source_provider == storage_provider.provider_name,
                 )
                 .all()
                 if row[0]
             )
 
-        # Find next unprocessed image
-        file_entry = None
+        try:
+            file_entries = storage_provider.list_image_entries(sync_folders=sync_folders)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to list {storage_provider.provider_name} files: {exc}")
 
-        if sync_folders:
-            # Sync only configured folders
-            for folder_path in sync_folders:
-                try:
-                    print(f"[Sync] Listing folder: {folder_path}")
-                    result = dbx.files_list_folder(folder_path, recursive=True)
-                    entries = list(result.entries)
-                    print(f"[Sync] Got {len(entries)} entries from {folder_path}")
+        processor = ImageProcessor()
+        candidate: ProviderEntry | None = None
+        for entry in file_entries:
+            if not processor.is_supported(entry.name):
+                continue
+            if reprocess_existing or entry.source_key not in processed_paths:
+                candidate = entry
+                break
 
-                    # Handle pagination
-                    page_count = 1
-                    while result.has_more:
-                        print(f"[Sync] Fetching page {page_count + 1} for {folder_path}")
-                        result = dbx.files_list_folder_continue(result.cursor)
-                        entries.extend(result.entries)
-                        page_count += 1
-
-                    print(f"[Sync] Total entries after pagination: {len(entries)}")
-
-                    # Filter to images, sort by date, find first unprocessed
-                    file_entries = [e for e in entries if isinstance(e, FileMetadata)]
-                    print(f"[Sync] Found {len(file_entries)} files (filtering images)")
-                    file_entries.sort(key=lambda e: e.server_modified, reverse=True)
-
-                    for entry in file_entries:
-                        if reprocess_existing or entry.path_display not in processed_paths:
-                            processor = ImageProcessor()
-                            if processor.is_supported(entry.name):
-                                file_entry = entry
-                                print(f"[Sync] Found unprocessed image: {entry.name}")
-                                break
-
-                    if file_entry:
-                        break  # Found one, stop searching
-                    else:
-                        print(f"[Sync] No unprocessed images in {folder_path}")
-
-                except Exception as e:
-                    print(f"[Sync] Error listing folder {folder_path}: {e}")
-                    traceback.print_exc()
-        else:
-            # No folder constraint - sync entire Dropbox (limit to first batch to avoid hanging)
-            try:
-                print(f"[Sync] Listing entire Dropbox for tenant {tenant.id} (limited to first batch)")
-                result = dbx.files_list_folder("", recursive=True)
-                entries = list(result.entries)
-
-                # Don't paginate through everything - just check first batch
-                # This prevents hanging on large Dropboxes
-                print(f"[Sync] Found {len(entries)} entries in first batch")
-
-                # Filter to images, sort by date, find first unprocessed
-                file_entries = [e for e in entries if isinstance(e, FileMetadata)]
-                print(f"[Sync] Found {len(file_entries)} image files")
-                file_entries.sort(key=lambda e: e.server_modified, reverse=True)
-
-                for entry in file_entries:
-                    if reprocess_existing or entry.path_display not in processed_paths:
-                        processor = ImageProcessor()
-                        if processor.is_supported(entry.name):
-                            file_entry = entry
-                            print(f"[Sync] Found unprocessed image: {entry.name}")
-                            break
-
-            except Exception as e:
-                print(f"Error listing Dropbox root: {e}")
-                traceback.print_exc()
-
-        if not file_entry:
+        if candidate is None:
             return {
                 "tenant_id": tenant.id,
+                "provider": storage_provider.provider_name,
                 "status": "sync_complete",
                 "processed": 0,
-                "has_more": False
+                "has_more": False,
             }
-
-        changes = {
-            "entries": [file_entry],
-            "cursor": None,
-            "has_more": True  # Assume more until we check all folders
-        }
 
         storage_client = storage.Client(project=settings.gcp_project_id)
         thumbnail_bucket = storage_client.bucket(tenant.get_thumbnail_bucket(settings))
 
-        processed = 0
-        max_per_sync = 1  # Process one at a time for real-time UI updates
-        status_messages = []
+        try:
+            result = process_storage_entry(
+                db=db,
+                tenant=tenant,
+                entry=candidate,
+                provider=storage_provider,
+                thumbnail_bucket=thumbnail_bucket,
+                reprocess_existing=reprocess_existing,
+                log=print,
+            )
+        except Exception as exc:
+            print(f"[Sync] Error processing {candidate.name}: {exc}")
+            traceback.print_exc()
+            raise HTTPException(status_code=500, detail=f"Failed to process {candidate.name}: {exc}")
 
-        from dropbox.files import FileMetadata
-        for entry in changes['entries']:
-            if processed >= max_per_sync:
-                break
+        processed = 1 if result.status == "processed" else 0
+        message = f"{candidate.name}: metadata + thumbnail stored" if processed else f"{candidate.name}: already synced"
 
-            if not isinstance(entry, FileMetadata):
-                continue
-
-            try:
-                result = process_dropbox_entry(
-                    db=db,
-                    tenant=tenant,
-                    entry=entry,
-                    dropbox_client=dbx,
-                    thumbnail_bucket=thumbnail_bucket,
-                    reprocess_existing=reprocess_existing,
-                    log=print,
-                )
-                if result.status == "processed":
-                    processed += 1
-                    status_messages.append(f"{entry.name}: metadata + thumbnail stored")
-                elif result.status == "skipped":
-                    status_messages.append(f"{entry.name}: already synced")
-            except Exception as e:
-                print(f"[Sync] Error processing {entry.name}: {e}")
-                traceback.print_exc()
-                continue
+        has_more = any(
+            processor.is_supported(entry.name)
+            and (reprocess_existing or entry.source_key not in processed_paths)
+            and entry.source_key != candidate.source_key
+            for entry in file_entries
+        )
 
         return {
             "tenant_id": tenant.id,
+            "provider": storage_provider.provider_name,
             "status": "sync_complete",
             "processed": processed,
-            "has_more": len(file_entries) > processed if 'file_entries' in locals() else False,
-            "status_message": " → ".join(status_messages) if 'status_messages' in locals() else None,
-            "filename": file_entry.name if file_entry else None
+            "has_more": bool(has_more),
+            "status_message": message,
+            "filename": candidate.name,
         }
 
-    except Exception as e:
-        error_detail = f"Sync failed: {str(e)}\n{traceback.format_exc()}"
+    except HTTPException:
+        raise
+    except Exception as exc:
+        error_detail = f"Sync failed: {str(exc)}\n{traceback.format_exc()}"
         print(error_detail)
-        raise HTTPException(status_code=500, detail=f"Sync failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Sync failed: {str(exc)}")

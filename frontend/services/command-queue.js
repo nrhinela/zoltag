@@ -157,10 +157,10 @@ function scheduleRetry(command) {
 
 async function processCommand(command) {
   try {
-    await executeCommand(command);
+    const result = await executeCommand(command);
     completedCount += 1;
     window.dispatchEvent(
-      new CustomEvent('queue-command-complete', { detail: command })
+      new CustomEvent('queue-command-complete', { detail: { ...command, result } })
     );
   } catch (error) {
     command.attempts += 1;
@@ -170,7 +170,7 @@ async function processCommand(command) {
     }
     failed.push({ ...command, error: String(error) });
     window.dispatchEvent(
-      new CustomEvent('queue-command-failed', { detail: command })
+      new CustomEvent('queue-command-failed', { detail: { ...command, error: String(error) } })
     );
   } finally {
     inProgress = inProgress.filter((item) => item.id !== command.id);

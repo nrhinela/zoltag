@@ -14,6 +14,9 @@ class Tenant:
     dropbox_token_secret: Optional[str] = None  # Secret Manager reference
     dropbox_app_key: Optional[str] = None  # Dropbox app key (public, stored in DB)
     dropbox_app_secret: Optional[str] = None  # Secret Manager reference
+    gdrive_client_id: Optional[str] = None  # Google OAuth client ID (stored in tenant settings)
+    gdrive_token_secret: Optional[str] = None  # Secret Manager reference
+    gdrive_client_secret: Optional[str] = None  # Secret Manager reference
     storage_bucket: Optional[str] = None  # GCS bucket for full-size images
     thumbnail_bucket: Optional[str] = None  # GCS bucket for thumbnails
     

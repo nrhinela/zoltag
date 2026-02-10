@@ -379,6 +379,7 @@ class MachineTag(Base):
         Index("idx_machine_tags_per_asset", "tenant_id", "asset_id", "tag_type"),
         Index("idx_machine_tags_asset_id", "asset_id"),
         Index("idx_machine_tags_tenant_type_keyword_asset", "tenant_id", "tag_type", "keyword_id", "asset_id"),
+        Index("idx_machine_tags_tenant_type_keyword_model_asset", "tenant_id", "tag_type", "keyword_id", "model_name", "asset_id"),
 
         # Prevent duplicate outputs from same algorithm for same asset/keyword/model
         Index("idx_machine_tags_unique",

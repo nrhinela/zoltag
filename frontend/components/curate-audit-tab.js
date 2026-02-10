@@ -50,6 +50,7 @@ export class CurateAuditTab extends LitElement {
     keywords: { type: Array },
     minRating: { type: Object },
     dropboxPathPrefix: { type: String },
+    filenameQuery: { type: String },
     dropboxFolders: { type: Array },
     offset: { type: Number },
     limit: { type: Number },
@@ -98,6 +99,7 @@ export class CurateAuditTab extends LitElement {
     this.keywords = [];
     this.minRating = null;
     this.dropboxPathPrefix = '';
+    this.filenameQuery = '';
     this.dropboxFolders = [];
     this.offset = 0;
     this.limit = 100;
@@ -611,6 +613,15 @@ export class CurateAuditTab extends LitElement {
       });
     }
 
+    if (this.filenameQuery) {
+      filters.push({
+        type: 'filename',
+        value: this.filenameQuery,
+        displayLabel: 'Filename',
+        displayValue: this.filenameQuery,
+      });
+    }
+
     return filters;
   }
 
@@ -669,7 +680,7 @@ export class CurateAuditTab extends LitElement {
               .keywords=${this.keywords}
               .activeFilters=${activeFilters}
               .dropboxFolders=${this.dropboxFolders || []}
-              .availableFilterTypes=${['keyword', 'rating', 'folder']}
+              .availableFilterTypes=${['keyword', 'rating', 'folder', 'filename']}
               .keywordMultiSelect=${false}
               @filters-changed=${this._handleAuditChipFiltersChanged}
               @folder-search=${this._handleAuditDropboxInput}

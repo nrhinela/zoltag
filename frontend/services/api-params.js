@@ -112,4 +112,5 @@ export function addMiscParams(params, filters = {}) {
   appendIf(params, 'list_exclude_id', filters.listExcludeId, filters.listExcludeId !== undefined && filters.listExcludeId !== null && filters.listExcludeId !== '');
   appendIf(params, 'reviewed', filters.reviewed, filters.reviewed !== undefined && filters.reviewed !== '');
   appendIf(params, 'dropbox_path_prefix', filters.dropboxPathPrefix, filters.dropboxPathPrefix !== undefined && filters.dropboxPathPrefix !== null && filters.dropboxPathPrefix !== '');
+  appendIf(params, 'filename_query', filters.filenameQuery, filters.filenameQuery !== undefined && filters.filenameQuery !== null && filters.filenameQuery !== '');
 }

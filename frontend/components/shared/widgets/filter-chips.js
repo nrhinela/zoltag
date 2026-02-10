@@ -26,6 +26,7 @@ class FilterChips extends LitElement {
     listFilterMode: { type: String },
     keywordMultiSelect: { type: Boolean },
     keywordSearchQuery: { type: String },
+    filenameFilterQuery: { type: String },
   };
 
   constructor() {
@@ -47,6 +48,7 @@ class FilterChips extends LitElement {
     this.listFilterMode = 'include';
     this.keywordMultiSelect = true;
     this.keywordSearchQuery = '';
+    this.filenameFilterQuery = '';
   }
 
   _getKeywordFilter() {
@@ -124,6 +126,7 @@ class FilterChips extends LitElement {
       { type: 'rating', label: 'Rating', icon: '⭐' },
       { type: 'folder', label: 'Folder', icon: '📂' },
       { type: 'list', label: 'List', icon: '🧾' },
+      { type: 'filename', label: 'Filename', icon: '📝' },
     ];
     const allowed = Array.isArray(this.availableFilterTypes) && this.availableFilterTypes.length
       ? new Set(this.availableFilterTypes)
@@ -155,6 +158,10 @@ class FilterChips extends LitElement {
       this.searchDropboxQuery = '';
       this._requestFolders({ query: '', limit: 500 });
     }
+    if (type === 'filename') {
+      const existing = (this.activeFilters || []).find((filter) => filter.type === 'filename');
+      this.filenameFilterQuery = existing?.value || '';
+    }
   }
 
   _handleEditFilter(type, index) {
@@ -170,6 +177,10 @@ class FilterChips extends LitElement {
     }
     if (type === 'folder') {
       this._requestFolders({ query: this.searchDropboxQuery || '', limit: 500 });
+    }
+    if (type === 'filename') {
+      const existing = this.activeFilters[index];
+      this.filenameFilterQuery = existing?.value || '';
     }
   }
 
@@ -310,6 +321,44 @@ class FilterChips extends LitElement {
     this._addFilter(filter);
   }
 
+  _handleFilenameInput(value) {
+    this.filenameFilterQuery = String(value || '');
+  }
+
+  _clearFilenameFilter() {
+    this.filenameFilterQuery = '';
+    this._removeFilterByType('filename');
+    this.valueSelectorOpen = null;
+    this.filterMenuOpen = false;
+  }
+
+  _applyFilenameFilter() {
+    const trimmed = (this.filenameFilterQuery || '').trim();
+    if (!trimmed) {
+      this._removeFilterByType('filename');
+    } else {
+      this._addFilter({
+        type: 'filename',
+        value: trimmed,
+        displayLabel: 'Filename',
+        displayValue: trimmed,
+      });
+    }
+    this.valueSelectorOpen = null;
+    this.filterMenuOpen = false;
+  }
+
+  _removeFilterByType(type) {
+    const nextFilters = (this.activeFilters || []).filter((filter) => filter.type !== type);
+    if (nextFilters.length === (this.activeFilters || []).length) return;
+    this.activeFilters = nextFilters;
+    this.dispatchEvent(new CustomEvent('filters-changed', {
+      detail: { filters: this.activeFilters },
+      bubbles: true,
+      composed: true,
+    }));
+  }
+
   _addFilter(filter) {
     const nextFilters = [...this.activeFilters];
     const existingIndex = nextFilters.findIndex((entry) => entry.type === filter.type);
@@ -331,6 +380,8 @@ class FilterChips extends LitElement {
     this.activeFilters = this.activeFilters.filter((_, i) => i !== index);
     if (removed?.type === 'list') {
       this.listFilterMode = 'include';
+    } else if (removed?.type === 'filename') {
+      this.filenameFilterQuery = '';
     }
     this.dispatchEvent(new CustomEvent('filters-changed', {
       detail: { filters: this.activeFilters },
@@ -386,6 +437,8 @@ class FilterChips extends LitElement {
         return this._renderFolderSelector();
       case 'list':
         return this._renderListSelector();
+      case 'filename':
+        return this._renderFilenameSelector();
       default:
         return html``;
     }
@@ -637,6 +690,55 @@ class FilterChips extends LitElement {
               Refresh lists
             </button>
           `}
+        </div>
+      </div>
+    `;
+  }
+
+  _renderFilenameSelector() {
+    return html`
+      <div class="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-50 w-full max-w-none">
+        <div class="p-4">
+          <div class="text-sm font-semibold text-gray-700 mb-2">Filename</div>
+          <input
+            type="text"
+            class="w-full px-3 py-2 border rounded-lg text-sm"
+            placeholder="Type part of a filename..."
+            .value=${this.filenameFilterQuery || ''}
+            @input=${(e) => this._handleFilenameInput(e.target.value)}
+            @keydown=${(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                e.stopPropagation();
+                this._applyFilenameFilter();
+              } else if (e.key === 'Escape') {
+                e.preventDefault();
+                e.stopPropagation();
+                this.valueSelectorOpen = null;
+              }
+            }}
+          >
+          <div class="mt-3 flex items-center justify-between gap-2">
+            <div class="text-xs text-gray-500">
+              Case-insensitive partial match.
+            </div>
+            <div class="flex items-center gap-2">
+              <button
+                class="px-3 py-1.5 border rounded-lg text-xs text-gray-700 hover:bg-gray-50"
+                @click=${() => this._clearFilenameFilter()}
+                type="button"
+              >
+                Clear
+              </button>
+              <button
+                class="px-3 py-1.5 rounded-lg text-xs bg-gray-900 text-white hover:bg-gray-800"
+                @click=${() => this._applyFilenameFilter()}
+                type="button"
+              >
+                Apply
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     `;

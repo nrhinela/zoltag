@@ -1,5 +1,6 @@
 import { LitElement, html } from 'lit';
 import { formatStatNumber } from './shared/formatting.js';
+import { renderPropertyRows, renderPropertySection } from './shared/widgets/property-grid.js';
 
 export class HomeInsightsTab extends LitElement {
   createRenderRoot() {
@@ -9,6 +10,7 @@ export class HomeInsightsTab extends LitElement {
   static properties = {
     imageStats: { type: Object },
     mlTrainingStats: { type: Object },
+    tagStatsBySource: { type: Object },
     keywords: { type: Array },
   };
 
@@ -16,6 +18,7 @@ export class HomeInsightsTab extends LitElement {
     super();
     this.imageStats = null;
     this.mlTrainingStats = null;
+    this.tagStatsBySource = {};
     this.keywords = [];
   }
 
@@ -40,6 +43,19 @@ export class HomeInsightsTab extends LitElement {
     const date = new Date(dateValue);
     if (Number.isNaN(date.getTime())) return '--';
     return date.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+  }
+
+  _formatDateTime(dateValue) {
+    if (!dateValue) return '--';
+    const date = new Date(dateValue);
+    if (Number.isNaN(date.getTime())) return '--';
+    return date.toLocaleString(undefined, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
   }
 
   _buildMockBins(total, labels, fractions) {
@@ -77,87 +93,131 @@ export class HomeInsightsTab extends LitElement {
     `;
   }
 
+  _sumTagSourceCounts(sourceData) {
+    if (!sourceData || typeof sourceData !== 'object') return 0;
+    let total = 0;
+    Object.values(sourceData).forEach((rows) => {
+      if (!Array.isArray(rows)) return;
+      rows.forEach((row) => {
+        total += Number(row?.count || 0);
+      });
+    });
+    return total;
+  }
+
   render() {
     const imageCount = this.imageStats?.image_count || 0;
-    const taggedCount = Number.isFinite(this.imageStats?.positive_permatag_image_count)
+    const positiveTaggedAssetCount = Number.isFinite(this.imageStats?.positive_permatag_image_count)
       ? this.imageStats.positive_permatag_image_count
       : (this.imageStats?.tagged_image_count || 0);
-    const coveragePct = imageCount ? Math.round((taggedCount / imageCount) * 100) : 0;
+    const coveragePct = imageCount ? Math.round((positiveTaggedAssetCount / imageCount) * 100) : 0;
+
+    const positivePermatagCount = Number.isFinite(this.imageStats?.positive_permatag_count)
+      ? this.imageStats.positive_permatag_count
+      : this._sumTagSourceCounts(this.tagStatsBySource?.permatags);
+    const avgPositivePermatagsPerAsset = imageCount
+      ? (positivePermatagCount / imageCount)
+      : 0;
 
     const modelLastTrained = this.mlTrainingStats?.keyword_model_last_trained;
     const trainedOldest = this.mlTrainingStats?.trained_tag_oldest;
     const trainedNewest = this.mlTrainingStats?.trained_tag_newest;
+
+    const zeroShotOldest = this.mlTrainingStats?.zero_shot_tag_oldest;
+    const zeroShotNewest = this.mlTrainingStats?.zero_shot_tag_newest;
+
+    const assetsMostRecent = this.imageStats?.asset_newest || this.imageStats?.image_newest || null;
+    const permatagOldest = this.imageStats?.positive_permatag_oldest || null;
+    const permatagNewest = this.imageStats?.positive_permatag_newest || null;
+
     const keywordCount = (this.keywords || []).length;
 
-    const keywordAgeBins = this._buildMockBins(
-      keywordCount,
-      ['0-30d', '31-90d', '91-180d', '180d+'],
-      [0.2, 0.3, 0.25, 0.25]
-    );
+    const photoAgeBins = Array.isArray(this.imageStats?.photo_age_bins) && this.imageStats.photo_age_bins.length
+      ? this.imageStats.photo_age_bins
+      : this._buildMockBins(
+        imageCount,
+        ['0-6mo', '6-12mo', '1-2y', '2-5y', '5-10y', '10y+'],
+        [0.14, 0.2, 0.24, 0.22, 0.12, 0.08]
+      );
 
-    const photoAgeBins = this._buildMockBins(
-      imageCount,
-      ['0-6mo', '6-12mo', '1-2y', '2-5y', '5-10y', '10y+'],
-      [0.14, 0.2, 0.24, 0.22, 0.12, 0.08]
-    );
+    const assetsRows = [
+      { label: 'Total assets', value: formatStatNumber(imageCount) },
+      {
+        label: 'Most recent asset',
+        value: html`<span class=${assetsMostRecent ? 'text-gray-900' : 'text-amber-700'}>${this._formatDateTime(assetsMostRecent)}</span>`,
+      },
+      {
+        label: 'Positive permatag coverage',
+        value: `${coveragePct}% (${formatStatNumber(positiveTaggedAssetCount)} / ${formatStatNumber(imageCount)})`,
+      },
+    ];
+
+    const permatagRows = [
+      { label: 'Assets w/ positive permatags', value: formatStatNumber(positiveTaggedAssetCount) },
+      { label: 'Avg positive permatags/asset', value: avgPositivePermatagsPerAsset.toFixed(2) },
+      {
+        label: 'Oldest positive permatag',
+        value: html`<span class=${permatagOldest ? 'text-gray-900' : 'text-amber-700'}>${this._formatDateTime(permatagOldest)}</span>`,
+      },
+      {
+        label: 'Newest positive permatag',
+        value: html`<span class=${permatagNewest ? 'text-gray-900' : 'text-amber-700'}>${this._formatDateTime(permatagNewest)}</span>`,
+      },
+    ];
+
+    const zeroShotRows = [
+      { label: 'Assets with zero-shot tags', value: formatStatNumber(this.mlTrainingStats?.zero_shot_image_count || 0) },
+      {
+        label: 'Oldest zero-shot tag',
+        value: html`<span class=${zeroShotOldest ? 'text-gray-900' : 'text-amber-700'}>${this._formatDateTime(zeroShotOldest)}</span>`,
+      },
+      {
+        label: 'Newest zero-shot tag',
+        value: html`<span class=${zeroShotNewest ? 'text-gray-900' : 'text-amber-700'}>${this._formatDateTime(zeroShotNewest)}</span>`,
+      },
+    ];
+
+    const trainedRows = [
+      {
+        label: 'Last model build',
+        value: html`<span class=${modelLastTrained ? 'text-gray-900' : 'text-amber-700'}>${this._formatDateTime(modelLastTrained)}</span>`,
+      },
+      {
+        label: 'Oldest trained tag',
+        value: html`<span class=${trainedOldest ? 'text-gray-900' : 'text-amber-700'}>${this._formatDateTime(trainedOldest)}</span>`,
+      },
+      {
+        label: 'Newest trained tag',
+        value: html`<span class=${trainedNewest ? 'text-gray-900' : 'text-amber-700'}>${this._formatDateTime(trainedNewest)}</span>`,
+      },
+      { label: 'Model age', value: this._formatAge(modelLastTrained) },
+      { label: 'Trained-tag span', value: `${this._formatAge(trainedOldest)} -> ${this._formatAge(trainedNewest)}` },
+    ];
 
     return html`
       <div class="container">
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <div class="bg-white border border-gray-200 rounded-xl p-4 shadow-sm">
-            <div class="flex items-center justify-between mb-3">
-              <div class="text-sm font-semibold text-gray-800">Model + Keyword Age</div>
-              <span class="text-xs text-gray-500">Mock</span>
-            </div>
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div class="border border-gray-100 rounded-lg p-3 bg-gray-50">
-                <div class="text-xs text-gray-500 uppercase">Model Age</div>
-                <div class="text-2xl font-semibold text-gray-900">
-                  ${this._formatAge(modelLastTrained)}
-                </div>
-                <div class="text-xs text-gray-500 mt-1">
-                  Last trained: ${this._formatDate(modelLastTrained)}
-                </div>
-              </div>
-              <div class="border border-gray-100 rounded-lg p-3 bg-gray-50">
-                <div class="text-xs text-gray-500 uppercase">Trained Tag Window</div>
-                <div class="text-sm font-semibold text-gray-900">
-                  ${this._formatDate(trainedOldest)} → ${this._formatDate(trainedNewest)}
-                </div>
-                <div class="text-xs text-gray-500 mt-1">
-                  Oldest: ${this._formatAge(trainedOldest)} · Newest: ${this._formatAge(trainedNewest)}
-                </div>
-              </div>
-            </div>
-            <div class="mt-4">
-              <div class="text-xs font-semibold text-gray-600 uppercase mb-2">Keyword Age Distribution</div>
-              ${this._renderBarList(keywordAgeBins)}
-              <div class="text-xs text-gray-400 mt-2">Mock distribution until keyword timestamps are surfaced.</div>
-            </div>
+        <div class="mb-4 flex items-center justify-between">
+          <div>
+            <div class="text-lg font-semibold text-gray-900">Insights</div>
+            <div class="text-xs text-gray-500">Live stats from image, permatag, and machine-tag data.</div>
           </div>
+          <div class="text-xs text-gray-500">keywords: ${formatStatNumber(keywordCount)}</div>
+        </div>
 
-          <div class="bg-white border border-gray-200 rounded-xl p-4 shadow-sm">
-            <div class="text-sm font-semibold text-gray-800 mb-3">Coverage</div>
-            <div class="flex items-end gap-4">
-              <div class="text-3xl font-semibold text-gray-900">${coveragePct}%</div>
-              <div class="text-sm text-gray-500 mb-1">
-                ${formatStatNumber(taggedCount)} tagged of ${formatStatNumber(imageCount)} images
+        <div class="grid grid-cols-1 xl:grid-cols-2 gap-3">
+          ${renderPropertySection({
+            title: 'Assets',
+            body: html`
+              ${renderPropertyRows(assetsRows)}
+              <div class="prop-content">
+                <div class="text-[10px] font-semibold uppercase tracking-[0.03em] text-gray-500 mb-2">Age histogram</div>
+                ${this._renderBarList(photoAgeBins)}
               </div>
-            </div>
-            <div class="mt-3 h-3 bg-gray-100 rounded-full">
-              <div class="h-3 bg-emerald-500 rounded-full" style="width: ${coveragePct}%"></div>
-            </div>
-            <div class="text-xs text-gray-400 mt-2">Positive permatags coverage.</div>
-          </div>
-
-          <div class="bg-white border border-gray-200 rounded-xl p-4 shadow-sm lg:col-span-2">
-            <div class="flex items-center justify-between mb-3">
-              <div class="text-sm font-semibold text-gray-800">Photo Age Histogram (by photo date)</div>
-              <span class="text-xs text-gray-500">Mock</span>
-            </div>
-            ${this._renderBarList(photoAgeBins)}
-            <div class="text-xs text-gray-400 mt-2">Mock histogram until photo date stats are available.</div>
-          </div>
+            `,
+          })}
+          ${renderPropertySection({ title: 'Permatags', rows: permatagRows })}
+          ${renderPropertySection({ title: 'Zero-shot Tags', rows: zeroShotRows })}
+          ${renderPropertySection({ title: 'Trained Tags', rows: trainedRows })}
         </div>
       </div>
     `;

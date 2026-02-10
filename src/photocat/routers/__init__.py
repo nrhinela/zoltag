@@ -9,6 +9,7 @@ from . import admin_people
 from . import admin_tenants
 from . import admin_keywords
 from . import dropbox
+from . import gdrive
 from . import sync
 from . import config
 from . import people
@@ -25,6 +26,7 @@ __all__ = [
     "admin_keywords",
     "people",
     "dropbox",
+    "gdrive",
     "sync",
     "config",
     "nl_search",

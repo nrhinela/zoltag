@@ -863,8 +863,10 @@ def build_image_query_with_subqueries(
     permatag_missing: bool = False,
     permatag_positive_missing: bool = False,
     dropbox_path_prefix: Optional[str] = None,
+    filename_query: Optional[str] = None,
     ml_keyword: Optional[str] = None,
     ml_tag_type: Optional[str] = None,
+    apply_ml_tag_filter: bool = True,
 ) -> tuple:
     """Build a query with combined subquery filters (non-materialized).
 
@@ -886,8 +888,10 @@ def build_image_query_with_subqueries(
         permatag_signum: Optional permatag signum (1 or -1)
         permatag_missing: Whether to exclude permatag matches
         permatag_positive_missing: Whether to exclude images with positive permatags
+        filename_query: Case-insensitive partial filename match
         ml_keyword: Optional ML keyword to filter by (for zero-shot tagging)
         ml_tag_type: Optional ML tag type (e.g., 'siglip', 'clip') to use with ml_keyword
+        apply_ml_tag_filter: Whether to apply explicit ML keyword/type filter subquery
 
     Returns:
         Tuple of (base_query, subqueries_list, is_empty)
@@ -992,15 +996,23 @@ def build_image_query_with_subqueries(
             )
             subqueries_list.append(dropbox_subquery)
 
+    if filename_query:
+        normalized_filename_query = str(filename_query).strip()
+        if normalized_filename_query:
+            filename_subquery = (
+                db.query(ImageMetadata.id)
+                .filter(
+                    ImageMetadata.tenant_id == tenant.id,
+                    ImageMetadata.filename.ilike(f"%{normalized_filename_query}%"),
+                )
+                .subquery()
+            )
+            subqueries_list.append(filename_subquery)
+
     # Apply ML tag type filter if both keyword and tag_type provided
-    if ml_keyword and ml_tag_type:
+    if apply_ml_tag_filter and ml_keyword and ml_tag_type:
         ml_subquery = apply_ml_tag_type_filter_subquery(db, tenant, ml_keyword, ml_tag_type)
         subqueries_list.append(ml_subquery)
 
-    # Combine all subqueries with intersection logic
-    for subquery in subqueries_list:
-        base_query = base_query.filter(ImageMetadata.id.in_(select(subquery.c.id)))
-    for subquery in exclude_subqueries_list:
-        base_query = base_query.filter(~ImageMetadata.id.in_(select(subquery.c.id)))
-    
+    # Subqueries are returned for the caller to apply (single application point).
     return base_query, subqueries_list, exclude_subqueries_list, False

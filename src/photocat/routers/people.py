@@ -2,6 +2,7 @@
 
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import distinct, func
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
 
@@ -11,6 +12,27 @@ from photocat.metadata import Person, MachineTag
 from photocat.models.config import Keyword, KeywordCategory
 
 router = APIRouter(prefix="/api/v1/people", tags=["people"])
+
+PERSON_MACHINE_TAG_TYPES = ("manual_person", "person")
+
+
+def _get_person_keyword(db: Session, tenant_id: str, person_id: int) -> Optional[Keyword]:
+    """Resolve the canonical keyword row backing a person tag."""
+    return db.query(Keyword).filter(
+        Keyword.tenant_id == tenant_id,
+        Keyword.person_id == person_id,
+        Keyword.tag_type == "person",
+    ).first()
+
+
+def _count_person_tagged_images(db: Session, tenant_id: str, keyword_id: int) -> int:
+    """Count distinct assets tagged for this person within tenant scope."""
+    count = db.query(func.count(distinct(MachineTag.asset_id))).filter(
+        MachineTag.tenant_id == tenant_id,
+        MachineTag.keyword_id == keyword_id,
+        MachineTag.tag_type.in_(PERSON_MACHINE_TAG_TYPES),
+    ).scalar()
+    return int(count or 0)
 
 
 # ============================================================================
@@ -151,18 +173,14 @@ async def list_people(
     results = []
     for person in people:
         # Get the keyword for this person (if any)
-        keyword = db.query(Keyword).filter(
-            Keyword.person_id == person.id
-        ).first()
+        keyword = _get_person_keyword(db, tenant.id, person.id)
 
         # Get tag count using the keyword
         tag_count = 0
         keyword_id = None
         if keyword:
             keyword_id = keyword.id
-            tag_count = db.query(MachineTag).filter(
-                MachineTag.keyword_id == keyword.id
-            ).count()
+            tag_count = _count_person_tagged_images(db, tenant.id, keyword.id)
 
         results.append(PersonResponse(
             id=person.id,
@@ -193,17 +211,13 @@ async def get_person(
         raise HTTPException(status_code=404, detail="Person not found")
 
     # Get the keyword for this person
-    keyword = db.query(Keyword).filter(
-        Keyword.person_id == person.id
-    ).first()
+    keyword = _get_person_keyword(db, tenant.id, person.id)
 
     tag_count = 0
     keyword_id = None
     if keyword:
         keyword_id = keyword.id
-        tag_count = db.query(MachineTag).filter(
-            MachineTag.keyword_id == keyword.id
-        ).count()
+        tag_count = _count_person_tagged_images(db, tenant.id, keyword.id)
 
     return PersonResponse(
         id=person.id,
@@ -235,9 +249,7 @@ async def update_person(
 
     try:
         # Get the keyword for this person
-        keyword = db.query(Keyword).filter(
-            Keyword.person_id == person.id
-        ).first()
+        keyword = _get_person_keyword(db, tenant.id, person.id)
 
         # Update person fields
         if request.name is not None:
@@ -256,9 +268,7 @@ async def update_person(
         keyword_id = None
         if keyword:
             keyword_id = keyword.id
-            tag_count = db.query(MachineTag).filter(
-                MachineTag.keyword_id == keyword.id
-            ).count()
+            tag_count = _count_person_tagged_images(db, tenant.id, keyword.id)
 
         return PersonResponse(
             id=person.id,
@@ -292,9 +302,7 @@ async def delete_person(
 
     try:
         # Get the keyword for this person
-        keyword = db.query(Keyword).filter(
-            Keyword.person_id == person.id
-        ).first()
+        keyword = _get_person_keyword(db, tenant.id, person.id)
 
         # Delete associated keyword (cascade will delete related tags)
         if keyword:
@@ -331,16 +339,12 @@ async def get_person_stats(
         raise HTTPException(status_code=404, detail="Person not found")
 
     # Get the keyword for this person
-    keyword = db.query(Keyword).filter(
-        Keyword.person_id == person.id
-    ).first()
+    keyword = _get_person_keyword(db, tenant.id, person.id)
 
     # Count tags if keyword exists
     tag_count = 0
     if keyword:
-        tag_count = db.query(MachineTag).filter(
-            MachineTag.keyword_id == keyword.id
-        ).count()
+        tag_count = _count_person_tagged_images(db, tenant.id, keyword.id)
 
     return PersonStatsResponse(
         id=person.id,
@@ -370,9 +374,7 @@ def get_or_create_person_keyword(
         return None
 
     # Check if keyword already exists for this person
-    existing_keyword = db.query(Keyword).filter(
-        Keyword.person_id == person.id
-    ).first()
+    existing_keyword = _get_person_keyword(db, tenant_id, person.id)
 
     if existing_keyword:
         return existing_keyword

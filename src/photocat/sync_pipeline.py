@@ -1,10 +1,10 @@
-"""Shared Dropbox ingestion pipeline for web and CLI sync."""
+"""Shared storage-provider ingestion pipeline for web and CLI sync."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
 import mimetypes
+from datetime import datetime
 from typing import Any, Callable, Dict, Optional
 
 from sqlalchemy.orm import Session
@@ -19,49 +19,12 @@ from photocat.exif import (
 from photocat.image import ImageProcessor
 from photocat.metadata import Asset, ImageMetadata
 from photocat.settings import settings
+from photocat.storage import (
+    DropboxStorageProvider,
+    ProviderEntry,
+    StorageProvider,
+)
 from photocat.tenant import Tenant
-
-
-class DropboxAdapter:
-    """Adapter for Dropbox SDK or client wrappers."""
-
-    def __init__(self, client: Any):
-        self._client = client
-
-    def get_metadata_with_media_info(self, path: str) -> Any:
-        if hasattr(self._client, "get_metadata_with_media_info"):
-            return self._client.get_metadata_with_media_info(path)
-        kwargs: Dict[str, Any] = {"include_media_info": True}
-        try:
-            from dropbox.files import IncludePropertyGroups
-            kwargs["include_property_groups"] = IncludePropertyGroups.filter_some([])
-        except Exception:
-            pass
-        return self._client.files_get_metadata(path, **kwargs)
-
-    def get_thumbnail(self, path: str, size: str = "w640h480") -> Optional[bytes]:
-        if hasattr(self._client, "get_thumbnail"):
-            return self._client.get_thumbnail(path, size=size)
-        if hasattr(self._client, "files_get_thumbnail_v2"):
-            from dropbox.files import ThumbnailSize
-            target_size = getattr(ThumbnailSize, size, None)
-            if target_size is None:
-                raise ValueError(f"Unsupported thumbnail size: {size}")
-            metadata, response = self._client.files_get_thumbnail_v2(path, size=target_size)
-            return response.content
-        from dropbox.files import ThumbnailFormat, ThumbnailSize
-        metadata, response = self._client.files_get_thumbnail(
-            path=path,
-            format=ThumbnailFormat.jpeg,
-            size=ThumbnailSize.w640h480,
-        )
-        return response.content
-
-    def download_file(self, path: str) -> bytes:
-        if hasattr(self._client, "download_file"):
-            return self._client.download_file(path)
-        metadata, response = self._client.files_download(path)
-        return response.content
 
 
 @dataclass
@@ -81,12 +44,36 @@ def _log(log: Optional[Callable[[str], None]], message: str) -> None:
         log(message)
 
 
-def process_dropbox_entry(
+def _entry_from_dropbox_raw(entry: Any) -> ProviderEntry:
+    source_key = getattr(entry, "path_display", None) or getattr(entry, "path_lower", None)
+    if not source_key:
+        raise ValueError("Dropbox entry is missing path metadata")
+    modified_time = getattr(entry, "server_modified", None)
+    if isinstance(modified_time, str):
+        try:
+            modified_time = datetime.fromisoformat(modified_time.replace("Z", "+00:00"))
+        except Exception:
+            modified_time = None
+    return ProviderEntry(
+        provider="dropbox",
+        source_key=source_key,
+        file_id=getattr(entry, "id", None),
+        display_path=getattr(entry, "path_display", None),
+        name=getattr(entry, "name", source_key.rsplit("/", 1)[-1]),
+        modified_time=modified_time,
+        size=getattr(entry, "size", None),
+        content_hash=getattr(entry, "content_hash", None),
+        revision=getattr(entry, "rev", None),
+        mime_type=None,
+    )
+
+
+def process_storage_entry(
     *,
     db: Session,
     tenant: Tenant,
-    entry: Any,
-    dropbox_client: Any,
+    entry: ProviderEntry,
+    provider: StorageProvider,
     thumbnail_bucket: Any,
     keywords_by_category: Optional[Dict[str, list[dict]]] = None,
     keyword_to_category: Optional[Dict[str, str]] = None,
@@ -95,64 +82,50 @@ def process_dropbox_entry(
     reprocess_existing: bool = False,
     log: Optional[Callable[[str], None]] = None,
 ) -> ProcessResult:
-    """Process a Dropbox FileMetadata entry into Asset + ImageMetadata."""
-    adapter = DropboxAdapter(dropbox_client)
+    """Process a provider entry into Asset + ImageMetadata."""
+    _ = keywords_by_category
+    _ = keyword_to_category
+    _ = model_type
+    _ = keyword_models
+
     processor = ImageProcessor()
-    dropbox_exif: Dict[str, Any] = {}
-    dropbox_props: Dict[str, Any] = {}
+    provider_exif: Dict[str, Any] = {}
+    provider_props: Dict[str, Any] = {}
 
     try:
-        metadata_result = adapter.get_metadata_with_media_info(entry.path_display)
-        if hasattr(metadata_result, "media_info") and metadata_result.media_info:
-            media_info = metadata_result.media_info.get_metadata()
-            _log(log, f"[Sync] Media info type: {type(media_info).__name__}")
-            _log(log, f"[Sync] Media info time_taken present: {hasattr(media_info, 'time_taken')}")
-            if hasattr(media_info, "dimensions") and media_info.dimensions:
-                dropbox_exif["ImageWidth"] = media_info.dimensions.width
-                dropbox_exif["ImageLength"] = media_info.dimensions.height
-            if hasattr(media_info, "location") and media_info.location:
-                dropbox_exif["GPSLatitude"] = media_info.location.latitude
-                dropbox_exif["GPSLongitude"] = media_info.location.longitude
-            if hasattr(media_info, "time_taken") and media_info.time_taken:
-                dropbox_exif["DateTimeOriginal"] = media_info.time_taken.isoformat()
-                dropbox_exif["DateTime"] = media_info.time_taken.isoformat()
-            else:
-                _log(log, "[Sync] Time taken not available on media_info")
-        if hasattr(metadata_result, "property_groups") and metadata_result.property_groups:
-            for prop_group in metadata_result.property_groups:
-                template_name = prop_group.template_id
-                for field in prop_group.fields:
-                    dropbox_props[f"{template_name}.{field.name}"] = field.value
+        media_metadata = provider.get_media_metadata(entry.source_key)
+        provider_exif = dict(media_metadata.exif_overrides or {})
+        provider_props = dict(media_metadata.provider_properties or {})
     except Exception as exc:
-        _log(log, f"[Sync] Dropbox metadata lookup failed: {exc}")
+        _log(log, f"[Sync] {provider.provider_name} metadata lookup failed: {exc}")
 
     image_data = None
     used_full_download = False
     if not entry.name.lower().endswith((".heic", ".heif")):
         try:
-            image_data = adapter.get_thumbnail(entry.path_display, size="w640h480")
+            image_data = provider.get_thumbnail(entry.source_key, size="w640h480")
         except Exception as exc:
             _log(log, f"[Sync] Thumbnail download failed: {exc}")
 
     if image_data is None:
-        image_data = adapter.download_file(entry.path_display)
+        image_data = provider.download_file(entry.source_key)
         used_full_download = True
 
     features = processor.extract_features(image_data)
     exif = features.get("exif", {}) or {}
-    exif.update(dropbox_exif)
+    exif.update(provider_exif)
 
     capture_timestamp = parse_exif_datetime(
         get_exif_value(exif, "DateTimeOriginal", "DateTime")
     )
     if capture_timestamp is None and not used_full_download:
         try:
-            full_data = adapter.download_file(entry.path_display)
+            full_data = provider.download_file(entry.source_key)
             used_full_download = True
             full_features = processor.extract_features(full_data)
             full_exif = full_features.get("exif", {}) or {}
             if full_exif:
-                full_exif.update(dropbox_exif)
+                full_exif.update(provider_exif)
                 exif = full_exif
                 capture_timestamp = parse_exif_datetime(
                     get_exif_value(exif, "DateTimeOriginal", "DateTime")
@@ -176,8 +149,8 @@ def process_dropbox_entry(
         .filter(
             ImageMetadata.tenant_id == tenant.id,
             Asset.tenant_id == tenant.id,
-            Asset.source_provider == "dropbox",
-            Asset.source_key == entry.path_display,
+            Asset.source_provider == provider.provider_name,
+            Asset.source_key == entry.source_key,
         )
         .order_by(ImageMetadata.id.asc())
         .first()
@@ -185,10 +158,7 @@ def process_dropbox_entry(
     if existing and not reprocess_existing:
         return ProcessResult(status="skipped", image_id=existing.id)
 
-    source_provider = "dropbox"
-    source_key = entry.path_display
-    source_rev = getattr(entry, "rev", None)
-    guessed_mime_type = mimetypes.guess_type(entry.name)[0]
+    guessed_mime_type = entry.mime_type or mimetypes.guess_type(entry.name)[0]
     mime_type = guessed_mime_type
     if not mime_type and features.get("format"):
         mime_type = f"image/{str(features.get('format')).lower()}"
@@ -197,8 +167,8 @@ def process_dropbox_entry(
         db.query(Asset)
         .filter(
             Asset.tenant_id == tenant.id,
-            Asset.source_provider == source_provider,
-            Asset.source_key == source_key,
+            Asset.source_provider == provider.provider_name,
+            Asset.source_key == entry.source_key,
         )
         .order_by(Asset.created_at.asc(), Asset.id.asc())
         .first()
@@ -207,10 +177,10 @@ def process_dropbox_entry(
         asset = Asset(
             tenant_id=tenant.id,
             filename=entry.name,
-            source_provider=source_provider,
-            source_key=source_key,
-            source_rev=source_rev,
-            thumbnail_key=f"legacy:{tenant.id}:{entry.id}:thumbnail",
+            source_provider=provider.provider_name,
+            source_key=entry.source_key,
+            source_rev=entry.revision,
+            thumbnail_key=f"legacy:{tenant.id}:{entry.source_key}:thumbnail",
             mime_type=mime_type,
             width=features.get("width"),
             height=features.get("height"),
@@ -220,8 +190,8 @@ def process_dropbox_entry(
         db.flush()
     else:
         asset.filename = entry.name or asset.filename
-        if source_rev:
-            asset.source_rev = source_rev
+        if entry.revision:
+            asset.source_rev = entry.revision
         if asset.mime_type is None:
             asset.mime_type = mime_type
         if asset.width is None:
@@ -238,23 +208,16 @@ def process_dropbox_entry(
     metadata = existing or ImageMetadata(tenant_id=tenant.id)
     metadata.asset_id = asset.id
     metadata.tenant_id = tenant.id
-    if hasattr(ImageMetadata, "dropbox_path"):
-        legacy_dropbox_path = getattr(metadata, "dropbox_path", None)
-        if settings.asset_write_legacy_fields or not legacy_dropbox_path:
-            setattr(metadata, "dropbox_path", entry.path_display)
-    if hasattr(ImageMetadata, "dropbox_id"):
-        setattr(metadata, "dropbox_id", entry.id)
     metadata.filename = entry.name
-    metadata.file_size = getattr(entry, "size", None)
-    metadata.content_hash = getattr(entry, "content_hash", None)
-    metadata.modified_time = getattr(entry, "server_modified", None)
+    metadata.file_size = entry.size
+    metadata.content_hash = entry.content_hash
+    metadata.modified_time = entry.modified_time
     metadata.width = features.get("width")
     metadata.height = features.get("height")
     metadata.format = features.get("format")
     metadata.perceptual_hash = features.get("perceptual_hash")
     metadata.color_histogram = features.get("color_histogram")
     metadata.exif_data = exif
-    metadata.dropbox_properties = dropbox_props or None
     metadata.camera_make = camera_make
     metadata.camera_model = camera_model
     metadata.lens_model = lens_model
@@ -265,11 +228,24 @@ def process_dropbox_entry(
     metadata.aperture = aperture
     metadata.shutter_speed = shutter_speed
     metadata.focal_length = focal_length
-    if settings.asset_write_legacy_fields and hasattr(ImageMetadata, "thumbnail_path"):
-        setattr(metadata, "thumbnail_path", thumbnail_key)
     metadata.embedding_generated = False
     metadata.faces_detected = False
     metadata.tags_applied = False
+
+    if provider.provider_name == "dropbox":
+        if hasattr(ImageMetadata, "dropbox_path"):
+            legacy_dropbox_path = getattr(metadata, "dropbox_path", None)
+            if settings.asset_write_legacy_fields or not legacy_dropbox_path:
+                setattr(metadata, "dropbox_path", entry.display_path or entry.source_key)
+        if hasattr(ImageMetadata, "dropbox_id") and entry.file_id:
+            setattr(metadata, "dropbox_id", entry.file_id)
+        metadata.dropbox_properties = provider_props or None
+    else:
+        metadata.dropbox_properties = None
+
+    if settings.asset_write_legacy_fields and hasattr(ImageMetadata, "thumbnail_path"):
+        setattr(metadata, "thumbnail_path", thumbnail_key)
+
     if existing is None:
         db.add(metadata)
     db.commit()
@@ -278,10 +254,40 @@ def process_dropbox_entry(
     return ProcessResult(
         status="processed",
         image_id=metadata.id,
-        tags_count=0,
-        trained_tags_count=0,
-        width=metadata.width,
-        height=metadata.height,
+        width=features.get("width"),
+        height=features.get("height"),
         capture_timestamp=capture_timestamp,
-        used_full_download=used_full_download
+        used_full_download=used_full_download,
+    )
+
+
+def process_dropbox_entry(
+    *,
+    db: Session,
+    tenant: Tenant,
+    entry: Any,
+    dropbox_client: Any,
+    thumbnail_bucket: Any,
+    keywords_by_category: Optional[Dict[str, list[dict]]] = None,
+    keyword_to_category: Optional[Dict[str, str]] = None,
+    model_type: str = "siglip",
+    keyword_models: Optional[Dict[str, Any]] = None,
+    reprocess_existing: bool = False,
+    log: Optional[Callable[[str], None]] = None,
+) -> ProcessResult:
+    """Backward-compatible Dropbox wrapper for existing callers."""
+    provider = DropboxStorageProvider(client=dropbox_client)
+    normalized_entry = _entry_from_dropbox_raw(entry)
+    return process_storage_entry(
+        db=db,
+        tenant=tenant,
+        entry=normalized_entry,
+        provider=provider,
+        thumbnail_bucket=thumbnail_bucket,
+        keywords_by_category=keywords_by_category,
+        keyword_to_category=keyword_to_category,
+        model_type=model_type,
+        keyword_models=keyword_models,
+        reprocess_existing=reprocess_existing,
+        log=log,
     )

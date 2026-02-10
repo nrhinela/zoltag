@@ -12,7 +12,7 @@ Provides a unified interface for:
 """
 
 from typing import Optional, List, Union, Tuple
-from sqlalchemy import func
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, Query
 from sqlalchemy.sql import Selectable
 
@@ -80,9 +80,9 @@ class QueryBuilder:
             Modified query with all subqueries applied as filters
         """
         for subquery in subqueries_list:
-            query = query.filter(ImageMetadata.id.in_(subquery))
+            query = query.filter(ImageMetadata.id.in_(select(subquery.c.id)))
         for subquery in exclude_subqueries_list or []:
-            query = query.filter(~ImageMetadata.id.in_(subquery))
+            query = query.filter(~ImageMetadata.id.in_(select(subquery.c.id)))
         return query
 
     def build_order_clauses(self, ml_keyword_id: Optional[int] = None) -> Tuple:
@@ -140,9 +140,10 @@ class QueryBuilder:
         self,
         query: Query,
         ml_keyword_id: int,
-        ml_tag_type: Optional[str] = None
+        ml_tag_type: Optional[str] = None,
+        require_match: bool = False,
     ) -> Tuple[Query, Selectable]:
-        """Add ML score ordering to a query via outer join with scoring subquery.
+        """Add ML score ordering to a query via join with scoring subquery.
 
         This consolidates the ML score query construction (lines 373-402) that
         was only in the "no filters" path. Adds an outer join with a subquery
@@ -152,10 +153,11 @@ class QueryBuilder:
             query: SQLAlchemy query to add ML scoring to
             ml_keyword_id: ID of keyword to score on
             ml_tag_type: Optional machine tag type (defaults to tenant's active type)
+            require_match: If True, only include rows with a matching ML score
 
         Returns:
             Tuple of (modified_query, ml_scores_subquery) where:
-            - modified_query: Query with ML score outer join applied
+            - modified_query: Query with ML score join applied
             - ml_scores_subquery: The subquery for use in order clauses
         """
         # Get active tag type if not specified
@@ -192,8 +194,11 @@ class QueryBuilder:
             MachineTag.asset_id
         ).subquery()
 
-        # Outer join with ML scores
-        query = query.outerjoin(ml_scores, ml_scores.c.asset_id == ImageMetadata.asset_id)
+        # Join with ML scores. Use inner join when rows must have an ML match.
+        if require_match:
+            query = query.join(ml_scores, ml_scores.c.asset_id == ImageMetadata.asset_id)
+        else:
+            query = query.outerjoin(ml_scores, ml_scores.c.asset_id == ImageMetadata.asset_id)
 
         return query, ml_scores
 
@@ -255,8 +260,15 @@ class QueryBuilder:
         if isinstance(query_or_ids, list):
             return len(query_or_ids)
         else:
-            # Assume it's a SQLAlchemy query
-            return query_or_ids.count()
+            # Count against a narrow ID-only subquery to avoid expensive wide-row count plans.
+            id_subquery = (
+                query_or_ids
+                .with_entities(ImageMetadata.id)
+                .order_by(None)
+                .distinct()
+                .subquery()
+            )
+            return int(self.db.query(func.count()).select_from(id_subquery).scalar() or 0)
 
     def apply_filters_to_id_set(
         self,

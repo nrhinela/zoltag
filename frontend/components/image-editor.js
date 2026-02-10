@@ -16,7 +16,6 @@ import {
 } from '../services/api.js';
 import { tailwind } from './tailwind-lit.js';
 import { propertyGridStyles, renderPropertyRows, renderPropertySection } from './shared/widgets/property-grid.js';
-import './people-tagger.js';
 import './shared/widgets/keyword-dropdown.js';
 
 class ImageEditor extends LitElement {
@@ -2058,19 +2057,6 @@ class ImageEditor extends LitElement {
     `;
   }
 
-  _renderPeopleTab() {
-    if (!this.details || !this.details.id) {
-      return html`<div class="empty-text">Load an image first.</div>`;
-    }
-    return html`
-      <people-tagger
-        .tenant="${this.tenant}"
-        .imageId="${this.details.id}"
-        .imageName="${this.details.filename}">
-      </people-tagger>
-    `;
-  }
-
   _renderTopTabs() {
     return html`
       <div class="editor-tab-strip">
@@ -2082,9 +2068,6 @@ class ImageEditor extends LitElement {
         </button>
         <button class="tab-button ${this.activeTab === 'tags' ? 'active' : ''}" @click=${() => this._setTab('tags')}>
           Tags
-        </button>
-        <button class="tab-button ${this.activeTab === 'people' ? 'active' : ''}" @click=${() => this._setTab('people')}>
-          People
         </button>
         <button class="tab-button ${this.activeTab === 'variants' ? 'active' : ''}" @click=${() => this._setTab('variants')}>
           Variants
@@ -2373,9 +2356,7 @@ class ImageEditor extends LitElement {
       ? this._renderMetadataTab()
       : this.activeTab === 'tags'
         ? this._renderTagsReadOnly()
-        : this.activeTab === 'people'
-          ? this._renderPeopleTab()
-          : this._renderEditTab();
+        : this._renderEditTab();
 
     if (this.activeTab === 'variants') {
       return html`

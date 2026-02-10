@@ -65,6 +65,8 @@ async def get_tenant(
     if not tenant_row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Tenant {x_tenant_id} not found")
 
+    tenant_settings = tenant_row.settings or {}
+
     # Convert database row to Tenant dataclass
     tenant = Tenant(
         id=tenant_row.id,
@@ -73,6 +75,9 @@ async def get_tenant(
         dropbox_token_secret=f"dropbox-token-{tenant_row.id}",
         dropbox_app_key=tenant_row.dropbox_app_key,
         dropbox_app_secret=f"dropbox-app-secret-{tenant_row.id}",
+        gdrive_client_id=tenant_settings.get("gdrive_client_id"),
+        gdrive_token_secret=tenant_settings.get("gdrive_token_secret") or f"gdrive-token-{tenant_row.id}",
+        gdrive_client_secret=tenant_settings.get("gdrive_client_secret") or f"gdrive-client-secret-{tenant_row.id}",
         storage_bucket=tenant_row.storage_bucket,
         thumbnail_bucket=tenant_row.thumbnail_bucket,
     )
