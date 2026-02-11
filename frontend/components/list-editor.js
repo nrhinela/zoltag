@@ -1,6 +1,16 @@
 import { LitElement, html, css } from 'lit';
 import { tailwind } from './tailwind-lit.js';
-import { getLists, createList, updateList, deleteList, getListItems, deleteListItem, fetchWithAuth } from '../services/api.js';
+import {
+  getLists,
+  createList,
+  updateList,
+  deleteList,
+  getListItems,
+  deleteListItem,
+  fetchWithAuth,
+  listAssetVariants,
+  getAssetVariantContent,
+} from '../services/api.js';
 import { renderImageGrid } from './shared/image-grid.js';
 
 class ListEditor extends LitElement {
@@ -81,6 +91,7 @@ class ListEditor extends LitElement {
     listItems: { type: Array },
     editingSelectedList: { type: Boolean },
     isDownloading: { type: Boolean },
+    downloadIncludeVariants: { type: Boolean },
     isLoadingItems: { type: Boolean },
     isLoadingLists: { type: Boolean },
     listSortKey: { type: String },
@@ -100,6 +111,7 @@ class ListEditor extends LitElement {
     this.listItems = [];
     this.editingSelectedList = false;
     this.isDownloading = false;
+    this.downloadIncludeVariants = false;
     this.isLoadingItems = false;
     this.isLoadingLists = false;
     this.listSortKey = 'id';
@@ -290,6 +302,274 @@ class ListEditor extends LitElement {
     }
   }
 
+  async _ensureDownloadLibraries() {
+    if (!window.JSZip) {
+      const script = document.createElement('script');
+      script.src = 'https://cdn.jsdelivr.net/npm/jszip@3/dist/jszip.min.js';
+      await new Promise((resolve, reject) => {
+        script.onload = resolve;
+        script.onerror = reject;
+        document.head.appendChild(script);
+      });
+    }
+
+    if (!window.jspdf) {
+      const pdfScript = document.createElement('script');
+      pdfScript.src = 'https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js';
+      await new Promise((resolve, reject) => {
+        pdfScript.onload = resolve;
+        pdfScript.onerror = reject;
+        document.head.appendChild(pdfScript);
+      });
+    }
+  }
+
+  _normalizeFilename(value, fallback) {
+    const trimmed = String(value || '').trim();
+    const safe = trimmed.replace(/[\\/:*?"<>|]+/g, '_');
+    return safe || fallback;
+  }
+
+  _sanitizeFolderSegment(value, fallback = 'item') {
+    const trimmed = String(value || '').trim();
+    const safe = trimmed
+      .replace(/[\\/:*?"<>|]+/g, '_')
+      .replace(/\s+/g, '_');
+    return safe || fallback;
+  }
+
+  _splitFilename(name) {
+    const normalized = this._normalizeFilename(name, 'file');
+    const dotIndex = normalized.lastIndexOf('.');
+    if (dotIndex <= 0 || dotIndex === normalized.length - 1) {
+      return { stem: normalized, ext: '' };
+    }
+    return {
+      stem: normalized.slice(0, dotIndex),
+      ext: normalized.slice(dotIndex),
+    };
+  }
+
+  _ensureUniqueZipPath(path, usedPaths) {
+    if (!usedPaths.has(path)) {
+      usedPaths.add(path);
+      return path;
+    }
+    const slash = path.lastIndexOf('/');
+    const dir = slash >= 0 ? path.slice(0, slash + 1) : '';
+    const filename = slash >= 0 ? path.slice(slash + 1) : path;
+    const { stem, ext } = this._splitFilename(filename);
+    let index = 2;
+    while (true) {
+      const nextPath = `${dir}${stem} (${index})${ext}`;
+      if (!usedPaths.has(nextPath)) {
+        usedPaths.add(nextPath);
+        return nextPath;
+      }
+      index += 1;
+    }
+  }
+
+  _getImageSourceUrl(image) {
+    const sourcePath = image?.source_key || image?.dropbox_path || '';
+    const sourceProvider = String(image?.source_provider || '').trim().toLowerCase();
+    const sourceUrlFromApi = String(image?.source_url || '').trim();
+    if (sourceUrlFromApi) {
+      return sourceUrlFromApi;
+    }
+    if (sourcePath && sourceProvider === 'dropbox') {
+      const encodedPath = sourcePath.split('/').map((part) => encodeURIComponent(part)).join('/');
+      return `https://www.dropbox.com/home${encodedPath}`;
+    }
+    return `${window.location.origin}/api/v1/images/${image.id}/full`;
+  }
+
+  async _blobToDataUrl(blob) {
+    if (!blob) return '';
+    return await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ''));
+      reader.onerror = () => reject(new Error('Failed to convert blob to data URL'));
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  _detectPdfImageType(dataUrl) {
+    const prefix = String(dataUrl || '').toLowerCase();
+    if (prefix.startsWith('data:image/png')) return 'PNG';
+    if (prefix.startsWith('data:image/webp')) return 'WEBP';
+    return 'JPEG';
+  }
+
+  _drawPdfThumbnail(doc, dataUrl, x, y, width, height) {
+    if (!dataUrl) {
+      doc.setDrawColor(209, 213, 219);
+      doc.rect(x, y, width, height);
+      doc.setTextColor(156, 163, 175);
+      doc.setFontSize(7);
+      doc.text('No preview', x + 2, y + height / 2);
+      return;
+    }
+    try {
+      doc.addImage(dataUrl, this._detectPdfImageType(dataUrl), x, y, width, height);
+    } catch (_error) {
+      doc.setDrawColor(209, 213, 219);
+      doc.rect(x, y, width, height);
+      doc.setTextColor(156, 163, 175);
+      doc.setFontSize(7);
+      doc.text('Preview error', x + 2, y + height / 2);
+    }
+  }
+
+  _drawWrappedPdfLink(doc, url, x, y, maxWidth, lineHeight = 4) {
+    const linkText = String(url || '').trim();
+    if (!linkText) {
+      doc.setTextColor(107, 114, 128);
+      doc.text('Unavailable', x, y);
+      return 1;
+    }
+
+    const lines = doc.splitTextToSize(linkText, maxWidth);
+    doc.text(lines, x, y);
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index];
+      const baselineY = y + index * lineHeight;
+      const lineWidth = Math.min(doc.getTextWidth(line), maxWidth);
+      doc.link(x, baselineY - (lineHeight - 0.6), Math.max(lineWidth, 1), lineHeight, { url: linkText });
+    }
+    return Math.max(1, lines.length);
+  }
+
+  _estimateReadmeEntryHeight(doc, entry, textWidth) {
+    const lineHeight = 4;
+    let height = 6;
+    const filenameLines = doc.splitTextToSize(entry.filename || 'Untitled', textWidth);
+    height += filenameLines.length * lineHeight + 2;
+    const sourceLines = doc.splitTextToSize(entry.sourceUrl || '', textWidth);
+    height += Math.max(1, sourceLines.length) * lineHeight + 3;
+    height += lineHeight;
+    if (entry.variants?.length) {
+      for (const variant of entry.variants) {
+        const variantNameLines = doc.splitTextToSize(variant.filename || 'variant', textWidth - 12);
+        const variantUrlLines = doc.splitTextToSize(variant.url || '', textWidth - 12);
+        const textBlock = (variantNameLines.length + variantUrlLines.length) * lineHeight + 2;
+        height += Math.max(12, textBlock) + 2;
+      }
+    }
+    return Math.max(30, height);
+  }
+
+  _renderReadmePdf(entries) {
+    const jsPDF = window.jspdf.jsPDF;
+    const doc = new jsPDF();
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+    const margin = 12;
+    const contentWidth = pageWidth - margin * 2;
+    const thumbWidth = 24;
+    const variantThumb = 9;
+    const textStart = margin + thumbWidth + 5;
+    const textWidth = contentWidth - thumbWidth - 8;
+    let y = 15;
+
+    doc.setFontSize(18);
+    doc.setFont(undefined, 'bold');
+    doc.text(this.selectedList?.title || 'List Export', margin, y);
+    y += 7;
+
+    doc.setFontSize(9);
+    doc.setFont(undefined, 'normal');
+    doc.text(`Author: ${this.selectedList?.created_by_name || 'Unknown'}`, margin, y);
+    y += 4.5;
+    doc.text(`Created: ${new Date(this.selectedList?.created_at || Date.now()).toLocaleString()}`, margin, y);
+    y += 4.5;
+    doc.text(`Items: ${entries.length}`, margin, y);
+    y += 4.5;
+    doc.text(`Include variants in ZIP: ${this.downloadIncludeVariants ? 'Yes' : 'No'}`, margin, y);
+    y += 6;
+
+    if (this.selectedList?.notebox) {
+      doc.setFont(undefined, 'bold');
+      doc.text('Notes', margin, y);
+      y += 4;
+      doc.setFont(undefined, 'normal');
+      const notesLines = doc.splitTextToSize(this.selectedList.notebox, contentWidth);
+      doc.text(notesLines, margin, y);
+      y += notesLines.length * 4 + 4;
+    }
+
+    for (const entry of entries) {
+      const rowHeight = this._estimateReadmeEntryHeight(doc, entry, textWidth);
+      if (y + rowHeight > pageHeight - margin) {
+        doc.addPage();
+        y = margin;
+      }
+
+      doc.setDrawColor(209, 213, 219);
+      doc.rect(margin, y, contentWidth, rowHeight);
+
+      this._drawPdfThumbnail(doc, entry.thumbnailDataUrl, margin + 2, y + 2, thumbWidth - 4, thumbWidth - 4);
+
+      let textY = y + 4;
+      doc.setFontSize(10);
+      doc.setFont(undefined, 'bold');
+      const filenameLines = doc.splitTextToSize(entry.filename || 'Untitled', textWidth);
+      doc.text(filenameLines, textStart, textY);
+      textY += filenameLines.length * 4 + 1;
+
+      doc.setFontSize(8);
+      doc.setFont(undefined, 'normal');
+      doc.setTextColor(75, 85, 99);
+      doc.text(`Image ID: #${entry.imageId}`, textStart, textY);
+      textY += 4;
+      doc.text('URL:', textStart, textY);
+      textY += 3.5;
+      doc.setTextColor(29, 78, 216);
+      const sourceLineCount = this._drawWrappedPdfLink(doc, entry.sourceUrl || '', textStart, textY, textWidth, 4);
+      textY += sourceLineCount * 4 + 2;
+      doc.setTextColor(17, 24, 39);
+
+      if (entry.variants.length) {
+        doc.setFont(undefined, 'bold');
+        doc.text(`Variants (${entry.variants.length})`, textStart, textY);
+        textY += 4;
+        doc.setFont(undefined, 'normal');
+        doc.setFontSize(8);
+
+        for (const variant of entry.variants) {
+          this._drawPdfThumbnail(doc, variant.thumbnailDataUrl, textStart, textY - 1.5, variantThumb, variantThumb);
+          const variantTextX = textStart + variantThumb + 3;
+          const variantTextWidth = textWidth - variantThumb - 3;
+
+          doc.setFont(undefined, 'bold');
+          doc.setTextColor(17, 24, 39);
+          const variantNameLines = doc.splitTextToSize(variant.filename || 'variant', variantTextWidth);
+          doc.text(variantNameLines, variantTextX, textY + 1.5);
+          let variantY = textY + variantNameLines.length * 3.8 + 1;
+
+          doc.setFont(undefined, 'normal');
+          doc.setTextColor(29, 78, 216);
+          const variantUrlLineCount = this._drawWrappedPdfLink(
+            doc,
+            variant.url || '',
+            variantTextX,
+            variantY,
+            variantTextWidth,
+            3.8,
+          );
+          variantY += variantUrlLineCount * 3.8;
+
+          textY = Math.max(textY + variantThumb + 1, variantY + 1);
+        }
+      }
+
+      y += rowHeight + 3;
+      doc.setTextColor(17, 24, 39);
+    }
+
+    return doc.output('blob');
+  }
+
   async _downloadListImages() {
     if (!this.listItems || this.listItems.length === 0) {
       alert('No items to download');
@@ -299,127 +579,101 @@ class ListEditor extends LitElement {
     this.isDownloading = true;
 
     try {
-      // Load JSZip library from CDN if not already loaded
-      if (!window.JSZip) {
-        const script = document.createElement('script');
-        script.src = 'https://cdn.jsdelivr.net/npm/jszip@3/dist/jszip.min.js';
-        await new Promise((resolve, reject) => {
-          script.onload = resolve;
-          script.onerror = reject;
-          document.head.appendChild(script);
-        });
-      }
-
-      // Load jsPDF library for README generation
-      if (!window.jspdf) {
-        const pdfScript = document.createElement('script');
-        pdfScript.src = 'https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js';
-        await new Promise((resolve, reject) => {
-          pdfScript.onload = resolve;
-          pdfScript.onerror = reject;
-          document.head.appendChild(pdfScript);
-        });
-      }
+      await this._ensureDownloadLibraries();
 
       const zip = new window.JSZip();
-
-      // Create README.pdf with list information
-      const jsPDF = window.jspdf.jsPDF;
-      const doc = new jsPDF();
-      const pageWidth = doc.internal.pageSize.getWidth();
-      const pageHeight = doc.internal.pageSize.getHeight();
-      let yPosition = 20;
-      const lineHeight = 7;
-      const margin = 20;
-      const maxWidth = pageWidth - 2 * margin;
-
-      // Title
-      doc.setFontSize(18);
-      doc.setFont(undefined, 'bold');
-      doc.text(this.selectedList.title, margin, yPosition);
-      yPosition += lineHeight * 2;
-
-      // Metadata
-      doc.setFontSize(10);
-      doc.setFont(undefined, 'normal');
-      doc.text(`Author: ${this.selectedList.created_by_name || 'Unknown'}`, margin, yPosition);
-      yPosition += lineHeight;
-      doc.text(`Created: ${new Date(this.selectedList.created_at).toLocaleDateString()}`, margin, yPosition);
-      yPosition += lineHeight * 1.5;
-
-      // Notes
-      if (this.selectedList.notebox) {
-        doc.setFont(undefined, 'bold');
-        doc.text('Notes:', margin, yPosition);
-        yPosition += lineHeight;
-        doc.setFont(undefined, 'normal');
-        const notesLines = doc.splitTextToSize(this.selectedList.notebox, maxWidth);
-        doc.text(notesLines, margin, yPosition);
-        yPosition += notesLines.length * lineHeight + lineHeight;
-      }
-
-      // Items list
-      doc.setFont(undefined, 'bold');
-      doc.text(`List Items (${this.listItems.length})`, margin, yPosition);
-      yPosition += lineHeight * 1.5;
-
-      doc.setFontSize(9);
-      doc.setFont(undefined, 'normal');
-
-      // Add table headers
-      doc.setFont(undefined, 'bold');
-      doc.text('URL', margin, yPosition);
-      yPosition += lineHeight;
-
-      // Add items
-      doc.setFont(undefined, 'normal');
-      for (const item of this.listItems) {
-        const sourcePath = item?.image?.source_key || item?.image?.dropbox_path || '';
-        const sourceProvider = String(item?.image?.source_provider || '').trim().toLowerCase();
-        const sourceUrlFromApi = String(item?.image?.source_url || '').trim();
-        let sourceUrl = sourceUrlFromApi;
-        if (!sourceUrl && sourcePath && sourceProvider === 'dropbox') {
-          const encodedPath = sourcePath.split('/').map((part) => encodeURIComponent(part)).join('/');
-          sourceUrl = `https://www.dropbox.com/home${encodedPath}`;
-        }
-        if (!sourceUrl) {
-          sourceUrl = `${window.location.origin}/api/v1/images/${item.image.id}/full`;
-        }
-
-        // Wrap long URLs to fit the page width
-        const urlLines = doc.splitTextToSize(sourceUrl, maxWidth);
-        const itemHeight = urlLines.length * lineHeight;
-
-        // Check if we need a new page
-        if (yPosition + itemHeight > pageHeight - margin) {
-          doc.addPage();
-          yPosition = margin;
-        }
-
-        doc.text(urlLines, margin, yPosition);
-        yPosition += itemHeight + lineHeight * 0.25;
-      }
-
-      // Add PDF to zip
-      const pdfBlob = doc.output('blob');
-      zip.file('README.pdf', pdfBlob);
+      const usedZipPaths = new Set();
+      const readmeEntries = [];
 
       // Download each image and add to zip
       for (const item of this.listItems) {
-        const filename = item.image.filename || `image_${item.image.id}`;
+        const image = item?.image;
+        if (!image?.id) continue;
+        const imageId = Number(image.id);
+        const fallbackFilename = `image_${imageId}.jpg`;
+        const filename = this._normalizeFilename(image.filename, fallbackFilename);
+        const sourceUrl = this._getImageSourceUrl(image);
+        const variantsData = [];
+        const parentStem = this._splitFilename(filename).stem;
+        const variantFolder = `${this._sanitizeFolderSegment(parentStem, `image_${imageId}`)}_${imageId}__variants`;
+
+        // Fetch variants so README can include them regardless of zip option.
+        let variants = [];
+        try {
+          const variantPayload = await listAssetVariants(this.tenant, imageId);
+          variants = Array.isArray(variantPayload?.variants) ? variantPayload.variants : [];
+        } catch (error) {
+          console.error(`Error loading variants for image ${imageId}:`, error);
+        }
 
         try {
-          // Fetch image from Dropbox using authenticated request
-          const blob = await fetchWithAuth(`/images/${item.image.id}/full`, {
+          const originalBlob = await fetchWithAuth(`/images/${imageId}/full`, {
             tenantId: this.tenant,
-            responseType: 'blob'
+            responseType: 'blob',
           });
-
-          zip.file(filename, blob);
+          const originalZipPath = this._ensureUniqueZipPath(filename, usedZipPaths);
+          zip.file(originalZipPath, originalBlob);
         } catch (error) {
           console.error(`Error downloading ${filename}:`, error);
         }
+
+        let thumbnailDataUrl = '';
+        try {
+          const thumbBlob = await fetchWithAuth(`/images/${imageId}/thumbnail`, {
+            tenantId: this.tenant,
+            responseType: 'blob',
+          });
+          thumbnailDataUrl = await this._blobToDataUrl(thumbBlob);
+        } catch (_error) {
+          thumbnailDataUrl = '';
+        }
+
+        for (const variant of variants) {
+          const variantId = String(variant?.id || '').trim();
+          if (!variantId) continue;
+          const variantFilename = this._normalizeFilename(
+            variant.filename,
+            `variant_${variantId}`
+          );
+          const variantUrl = variant.public_url
+            || `${window.location.origin}${variant.content_url || `/api/v1/images/${imageId}/asset-variants/${variantId}/content`}`;
+
+          let variantBlob = null;
+          let variantThumbDataUrl = '';
+          try {
+            variantBlob = await getAssetVariantContent(this.tenant, imageId, variantId);
+            variantThumbDataUrl = await this._blobToDataUrl(variantBlob);
+          } catch (error) {
+            console.error(`Error fetching variant ${variantId} for image ${imageId}:`, error);
+          }
+
+          if (this.downloadIncludeVariants && variantBlob) {
+            const variantZipPath = this._ensureUniqueZipPath(
+              `${variantFolder}/${variantFilename}`,
+              usedZipPaths
+            );
+            zip.file(variantZipPath, variantBlob);
+          }
+
+          variantsData.push({
+            id: variantId,
+            filename: variantFilename,
+            url: variantUrl,
+            thumbnailDataUrl: variantThumbDataUrl,
+          });
+        }
+
+        readmeEntries.push({
+          imageId,
+          filename,
+          sourceUrl,
+          thumbnailDataUrl,
+          variants: variantsData,
+        });
       }
+
+      const readmeBlob = this._renderReadmePdf(readmeEntries);
+      zip.file('README.pdf', readmeBlob);
 
       // Generate zip file
       const zipBlob = await zip.generateAsync({ type: 'blob' });
@@ -579,6 +833,16 @@ class ListEditor extends LitElement {
                   ` : html``}
                 </div>
                 <div class="flex gap-2">
+                  <label class="inline-flex items-center gap-2 text-xs text-gray-700 border border-gray-200 rounded px-3 py-1 bg-white">
+                    <input
+                      type="checkbox"
+                      .checked=${this.downloadIncludeVariants}
+                      @change=${(event) => {
+                        this.downloadIncludeVariants = !!event.target.checked;
+                      }}
+                    >
+                    <span>Include variants when downloading ZIP</span>
+                  </label>
                   <button @click=${this._downloadListImages} ?disabled=${this.isDownloading} class="bg-blue-600 text-white px-3 py-1 rounded text-sm hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1">
                     ${this.isDownloading ? html`<span class="inline-block w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></span>` : ''}
                     Download

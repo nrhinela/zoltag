@@ -666,6 +666,88 @@ export async function removeUserTenantAssignment(supabaseUid, tenantId) {
     });
 }
 
+/**
+ * List users assigned to a tenant (tenant admin scope)
+ * @param {string} tenantId - Tenant ID
+ * @returns {Promise<Array>} Tenant users
+ */
+export async function getTenantUsers(tenantId) {
+    return fetchWithAuth('/admin/tenant-users', {
+        tenantId
+    });
+}
+
+/**
+ * Update user role in the current tenant (tenant admin scope)
+ * @param {string} tenantId - Tenant ID
+ * @param {string} supabaseUid - User UUID
+ * @param {'user'|'admin'} role - Updated role
+ * @returns {Promise<Object>} Success payload
+ */
+export async function updateTenantUserRole(tenantId, supabaseUid, role) {
+    return fetchWithAuth(`/admin/tenant-users/${supabaseUid}/role`, {
+        method: 'PATCH',
+        tenantId,
+        body: JSON.stringify({ role })
+    });
+}
+
+/**
+ * Remove user membership from the current tenant (tenant admin scope)
+ * @param {string} tenantId - Tenant ID
+ * @param {string} supabaseUid - User UUID
+ * @returns {Promise<Object>} Success payload
+ */
+export async function removeTenantUserMembership(tenantId, supabaseUid) {
+    return fetchWithAuth(`/admin/tenant-users/${supabaseUid}`, {
+        method: 'DELETE',
+        tenantId
+    });
+}
+
+/**
+ * Create a tenant invitation for a user with pre-assigned role
+ * @param {string} tenantId - Tenant ID
+ * @param {string} email - Invitee email
+ * @param {'user'|'admin'} role - Intended tenant role after acceptance
+ * @returns {Promise<Object>} Invitation payload (includes token)
+ */
+export async function createTenantInvitation(tenantId, email, role = 'user') {
+    return fetchWithAuth('/admin/invitations', {
+        method: 'POST',
+        tenantId,
+        body: JSON.stringify({
+            email,
+            tenant_id: tenantId,
+            role
+        })
+    });
+}
+
+/**
+ * List invitations for the tenant
+ * @param {string} tenantId - Tenant ID
+ * @returns {Promise<Array>} Invitations
+ */
+export async function getTenantInvitations(tenantId) {
+    const params = new URLSearchParams();
+    params.append('tenant_id', tenantId);
+    return fetchWithAuth(`/admin/invitations?${params.toString()}`, { tenantId });
+}
+
+/**
+ * Cancel a pending invitation
+ * @param {string} tenantId - Tenant ID
+ * @param {string} invitationId - Invitation UUID
+ * @returns {Promise<Object>} Success payload
+ */
+export async function cancelTenantInvitation(tenantId, invitationId) {
+    return fetchWithAuth(`/admin/invitations/${invitationId}`, {
+        method: 'DELETE',
+        tenantId
+    });
+}
+
 // ============================================================================
 // People and Categories Management
 // ============================================================================

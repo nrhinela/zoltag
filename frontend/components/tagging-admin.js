@@ -324,10 +324,17 @@ class TaggingAdmin extends LitElement {
         ...this.keywordsByCategory,
         [this.dialog.categoryId]: keywords || [],
       };
-      await this.loadCategories({ preserveExpanded: this.dialog.mode === 'edit' });
+      await this.loadCategories({ preserveExpanded: true });
+      this.expandedCategories.add(this.dialog.categoryId);
+      this.expandedCategories = new Set(this.expandedCategories);
       if (this.dialog.mode === 'create') {
-        this.closeDialog();
+        this.dialog = {
+          ...this.dialog,
+          keyword: '',
+          prompt: '',
+        };
       }
+      this.error = '';
     } catch (error) {
       console.error('Failed to save keyword:', error);
       this.error = 'Failed to save keyword.';

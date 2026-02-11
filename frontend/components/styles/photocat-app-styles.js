@@ -808,7 +808,36 @@ export const photocatAppStyles = css`
         padding: 2px 6px;
         border-radius: 6px;
         text-align: center;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 5px;
         pointer-events: none;
+    }
+    .curate-thumb-variant-bar {
+        position: absolute;
+        left: 3px;
+        bottom: 8px;
+        width: 3px;
+        height: 42px;
+        border-radius: 999px;
+        background: linear-gradient(
+            180deg,
+            rgb(254, 202, 202) 0%,
+            rgb(248, 113, 113) 35%,
+            rgb(239, 68, 68) 70%,
+            rgb(220, 38, 38) 100%
+        );
+        box-shadow: 0 0 0 1px rgb(220, 38, 38);
+        pointer-events: none;
+        z-index: 8;
+    }
+    .curate-thumb-rating-label {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        display: block;
     }
     .curate-thumb-ml-score {
         position: absolute;

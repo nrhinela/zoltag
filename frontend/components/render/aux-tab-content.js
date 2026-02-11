@@ -38,10 +38,15 @@ export function renderRatingModal(host) {
 }
 
 export function renderAuxTabContent(host, { formatCurateDate }) {
+  const tenantMembership = (host.currentUser?.tenants || []).find(
+    (membership) => String(membership.tenant_id) === String(host.tenant)
+  );
+  const canManageTenantUsers = tenantMembership?.role === 'admin';
   const libraryTabActive = host.activeTab === 'library' || host.activeTab === 'admin';
   const rawLibrarySubTab = host.activeLibrarySubTab
     || (host.activeTab === 'admin' ? 'keywords' : 'assets');
-  const librarySubTab = rawLibrarySubTab === 'keywords' || rawLibrarySubTab === 'assets'
+  const librarySubTab = (rawLibrarySubTab === 'keywords' || rawLibrarySubTab === 'assets'
+    || (rawLibrarySubTab === 'users' && canManageTenantUsers))
     ? rawLibrarySubTab
     : 'assets';
 
@@ -61,6 +66,14 @@ export function renderAuxTabContent(host, { formatCurateDate }) {
           >
             <i class="fas fa-tags mr-2"></i>Keywords
           </button>
+          ${canManageTenantUsers ? html`
+            <button
+              class="admin-subtab ${librarySubTab === 'users' ? 'active' : ''}"
+              @click=${() => host.activeLibrarySubTab = 'users'}
+            >
+              <i class="fas fa-users mr-2"></i>Users
+            </button>
+          ` : html``}
         </div>
         ${librarySubTab === 'assets' ? html`
           <assets-admin
@@ -96,6 +109,14 @@ export function renderAuxTabContent(host, { formatCurateDate }) {
           ${host.activeAdminSubTab === 'people' ? html`
             <person-manager .tenant=${host.tenant}></person-manager>
           ` : html``}
+        ` : html``}
+        ${librarySubTab === 'users' ? html`
+          <div class="mt-2">
+            <tenant-users-admin
+              .tenant=${host.tenant}
+              .canManage=${canManageTenantUsers}
+            ></tenant-users-admin>
+          </div>
         ` : html``}
       </div>
     ` : html``}

@@ -1,13 +1,17 @@
 """Admin endpoints for user and invitation management."""
 
 from datetime import datetime, timedelta
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Header
 from sqlalchemy.orm import Session
 from typing import List, Optional
 import secrets
 
 from photocat.database import get_db
-from photocat.auth.dependencies import get_current_user, require_super_admin
+from photocat.auth.dependencies import (
+    get_current_user,
+    require_super_admin,
+    require_tenant_role_from_header,
+)
 from photocat.auth.models import UserProfile, UserTenant, Invitation
 from photocat.auth.schemas import (
     UserProfileResponse,
@@ -103,6 +107,45 @@ async def list_approved_users(
         user_data["tenants"] = tenants
         result.append(user_data)
 
+    return result
+
+
+@router.get("/tenant-users", response_model=List[dict])
+async def list_tenant_users(
+    x_tenant_id: str = Header(..., alias="X-Tenant-ID"),
+    _admin: UserProfile = Depends(require_tenant_role_from_header("admin")),
+    db: Session = Depends(get_db),
+):
+    """List users assigned to the tenant in X-Tenant-ID (tenant admin or super admin)."""
+
+    memberships = db.query(UserTenant).filter(
+        UserTenant.tenant_id == x_tenant_id,
+        UserTenant.accepted_at.isnot(None),
+    ).all()
+
+    users_by_id = {}
+    if memberships:
+        user_ids = [membership.supabase_uid for membership in memberships]
+        users = db.query(UserProfile).filter(UserProfile.supabase_uid.in_(user_ids)).all()
+        users_by_id = {user.supabase_uid: user for user in users}
+
+    result = []
+    for membership in memberships:
+        user = users_by_id.get(membership.supabase_uid)
+        if not user:
+            continue
+        profile = UserProfileResponse.from_orm(user).dict()
+        profile["role"] = membership.role
+        profile["tenant_id"] = membership.tenant_id
+        profile["accepted_at"] = membership.accepted_at.isoformat() if membership.accepted_at else None
+        result.append(profile)
+
+    result.sort(
+        key=lambda item: (
+            (item.get("display_name") or "").lower(),
+            (item.get("email") or "").lower(),
+        )
+    )
     return result
 
 
@@ -298,6 +341,108 @@ async def remove_user_tenant_membership(
         "message": "Tenant membership removed",
         "user_id": supabase_uid,
         "tenant_id": tenant_id,
+    }
+
+
+@router.patch("/tenant-users/{supabase_uid}/role", response_model=dict)
+async def update_tenant_user_role(
+    supabase_uid: str,
+    request: UpdateTenantMembershipRequest,
+    x_tenant_id: str = Header(..., alias="X-Tenant-ID"),
+    admin: UserProfile = Depends(require_tenant_role_from_header("admin")),
+    db: Session = Depends(get_db),
+):
+    """Update role for a user in the current tenant (tenant admin or super admin)."""
+
+    membership = db.query(UserTenant).filter(
+        UserTenant.supabase_uid == supabase_uid,
+        UserTenant.tenant_id == x_tenant_id,
+        UserTenant.accepted_at.isnot(None),
+    ).first()
+
+    if not membership:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Tenant membership not found",
+        )
+
+    target_user = db.query(UserProfile).filter(UserProfile.supabase_uid == supabase_uid).first()
+    if not target_user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    if target_user.is_super_admin or membership.role == "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin users cannot be edited from tenant admin",
+        )
+
+    if request.role not in {"user", "admin"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Role must be 'user' or 'admin'",
+        )
+
+    if supabase_uid == admin.supabase_uid and request.role != membership.role:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You cannot change your own role",
+        )
+
+    membership.role = request.role
+    db.commit()
+
+    return {
+        "message": "Tenant role updated",
+        "user_id": supabase_uid,
+        "tenant_id": x_tenant_id,
+        "role": membership.role,
+    }
+
+
+@router.delete("/tenant-users/{supabase_uid}", response_model=dict)
+async def remove_tenant_user(
+    supabase_uid: str,
+    x_tenant_id: str = Header(..., alias="X-Tenant-ID"),
+    admin: UserProfile = Depends(require_tenant_role_from_header("admin")),
+    db: Session = Depends(get_db),
+):
+    """Remove a user from the current tenant (tenant admin or super admin)."""
+
+    membership = db.query(UserTenant).filter(
+        UserTenant.supabase_uid == supabase_uid,
+        UserTenant.tenant_id == x_tenant_id,
+        UserTenant.accepted_at.isnot(None),
+    ).first()
+
+    if not membership:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Tenant membership not found",
+        )
+
+    target_user = db.query(UserProfile).filter(UserProfile.supabase_uid == supabase_uid).first()
+    if not target_user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    if target_user.is_super_admin or membership.role == "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin users cannot be edited from tenant admin",
+        )
+
+    if supabase_uid == admin.supabase_uid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You cannot remove yourself from the tenant",
+        )
+
+    db.delete(membership)
+    db.commit()
+
+    return {
+        "message": "Tenant membership removed",
+        "user_id": supabase_uid,
+        "tenant_id": x_tenant_id,
     }
 
 

@@ -1,5 +1,8 @@
 import { LitElement, html, css } from 'lit';
 import { getSession } from '../services/supabase.js';
+import { acceptInvitation } from '../services/auth.js';
+
+const INVITATION_TOKEN_KEY = 'photocat_invitation_token';
 
 /**
  * OAuth callback handler component
@@ -115,6 +118,31 @@ export class AuthCallback extends LitElement {
 
       const result = await response.json();
       console.log('✅ Registration complete:', result);
+
+      let invitationToken = '';
+      try {
+        const params = new URLSearchParams(window.location.search || '');
+        invitationToken = (params.get('invitation_token')
+          || sessionStorage.getItem(INVITATION_TOKEN_KEY)
+          || '').trim();
+      } catch (_error) {
+        invitationToken = '';
+      }
+
+      if (invitationToken) {
+        this.message = 'Applying tenant invitation...';
+        try {
+          await acceptInvitation(invitationToken);
+        } catch (inviteError) {
+          console.error('Invitation acceptance failed after OAuth:', inviteError);
+          // Non-fatal: keep user signed in even if invitation token is stale/invalid.
+        }
+        try {
+          sessionStorage.removeItem(INVITATION_TOKEN_KEY);
+        } catch (_error) {
+          // no-op
+        }
+      }
 
       // Registration successful - redirect to home
       this.message = 'Login successful! Redirecting...';

@@ -1245,6 +1245,31 @@ class ImageEditor extends LitElement {
     }
   }
 
+  async _handleDownloadVariant(row) {
+    const variantId = String(row?.id || '');
+    if (!variantId || !this.details?.id || !this.tenant) return;
+    const busyKey = `${variantId}:download`;
+    if (this.variantRowBusy[busyKey]) return;
+    this.variantRowBusy = { ...this.variantRowBusy, [busyKey]: true };
+    this.assetVariantsError = '';
+    try {
+      const blob = await getAssetVariantContent(this.tenant, this.details.id, variantId);
+      const downloadUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      const fallbackName = `variant-${variantId}`;
+      link.href = downloadUrl;
+      link.download = row?.filename || fallbackName;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(downloadUrl);
+    } catch (error) {
+      this.assetVariantsError = error?.message || 'Failed to download variant.';
+    } finally {
+      this.variantRowBusy = { ...this.variantRowBusy, [busyKey]: false };
+    }
+  }
+
   _updateVariantDraft(variantId, field, value) {
     this.variantDrafts = {
       ...this.variantDrafts,
@@ -2210,6 +2235,7 @@ class ImageEditor extends LitElement {
                   const draft = this.variantDrafts[row.id] || { variant: row.variant || '', filename: row.filename || '' };
                   const saveBusy = !!this.variantRowBusy[`${row.id}:save`];
                   const deleteBusy = !!this.variantRowBusy[`${row.id}:delete`];
+                  const downloadBusy = !!this.variantRowBusy[`${row.id}:download`];
                   const previewUrl = this._variantPreviewUrls[String(row.id)] || '';
                   const publicUrl = row.public_url || previewUrl || '';
                   const createdBy = row.created_by_name || '--';
@@ -2312,6 +2338,14 @@ class ImageEditor extends LitElement {
                             @click=${() => this._handleOpenVariant(row)}
                           >
                             Open
+                          </button>
+                          <button
+                            type="button"
+                            class="variants-action"
+                            ?disabled=${downloadBusy}
+                            @click=${() => this._handleDownloadVariant(row)}
+                          >
+                            ${downloadBusy ? 'Downloading...' : 'Download'}
                           </button>
                           ${this.canEditTags ? html`
                             <button

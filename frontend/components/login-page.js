@@ -1,5 +1,7 @@
 import { LitElement, html, css } from 'lit';
-import { signIn, signInWithGoogle } from '../services/auth.js';
+import { signIn, signInWithGoogle, acceptInvitation } from '../services/auth.js';
+
+const INVITATION_TOKEN_KEY = 'photocat_invitation_token';
 
 /**
  * Login page component
@@ -13,6 +15,7 @@ export class LoginPage extends LitElement {
     password: { type: String },
     error: { type: String },
     loading: { type: Boolean },
+    invitationToken: { type: String },
   };
 
   static styles = css`
@@ -171,6 +174,45 @@ export class LoginPage extends LitElement {
     this.password = '';
     this.error = '';
     this.loading = false;
+    this.invitationToken = '';
+  }
+
+  connectedCallback() {
+    super.connectedCallback();
+    this.captureInvitationToken();
+  }
+
+  captureInvitationToken() {
+    try {
+      const params = new URLSearchParams(window.location.search || '');
+      const token = (params.get('invitation_token') || '').trim();
+      if (token) {
+        sessionStorage.setItem(INVITATION_TOKEN_KEY, token);
+        this.invitationToken = token;
+        return;
+      }
+      this.invitationToken = (sessionStorage.getItem(INVITATION_TOKEN_KEY) || '').trim();
+    } catch (_error) {
+      this.invitationToken = '';
+    }
+  }
+
+  async acceptPendingInvitationIfNeeded() {
+    const token = (this.invitationToken || '').trim();
+    if (!token) return;
+    try {
+      await acceptInvitation(token);
+    } catch (error) {
+      console.error('Invitation acceptance failed:', error);
+      this.error = `Signed in, but invitation was not applied: ${error.message}`;
+    } finally {
+      try {
+        sessionStorage.removeItem(INVITATION_TOKEN_KEY);
+      } catch (_error) {
+        // no-op
+      }
+      this.invitationToken = '';
+    }
   }
 
   async handleSubmit(e) {
@@ -180,6 +222,7 @@ export class LoginPage extends LitElement {
 
     try {
       await signIn(this.email, this.password);
+      await this.acceptPendingInvitationIfNeeded();
       // Redirect to main app
       window.location.href = '/app';
     } catch (err) {
@@ -193,6 +236,10 @@ export class LoginPage extends LitElement {
     this.loading = true;
 
     try {
+      this.captureInvitationToken();
+      if (this.invitationToken) {
+        sessionStorage.setItem(INVITATION_TOKEN_KEY, this.invitationToken);
+      }
       await signInWithGoogle();
       // User will be redirected to Google, then back to /auth/callback
     } catch (err) {
@@ -207,6 +254,11 @@ export class LoginPage extends LitElement {
         <h1>PhotoCat</h1>
 
         ${this.error ? html`<div class="error">${this.error}</div>` : ''}
+        ${this.invitationToken ? html`
+          <div class="success" style="background:#eff6ff;color:#1d4ed8;">
+            Invitation detected. Sign in to join your tenant automatically.
+          </div>
+        ` : ''}
 
         <form @submit=${this.handleSubmit}>
           <div class="form-group">

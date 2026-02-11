@@ -532,6 +532,18 @@ async def list_images(
         Permatag.asset_id.in_(asset_ids),
         Permatag.tenant_id == tenant.id
     ).all() if asset_ids else []
+    variant_count_by_asset = {
+        asset_id: int(count or 0)
+        for asset_id, count in (
+            db.query(
+                AssetDerivative.asset_id,
+                func.count(AssetDerivative.id),
+            ).filter(
+                AssetDerivative.asset_id.in_(asset_ids),
+                AssetDerivative.deleted_at.is_(None),
+            ).group_by(AssetDerivative.asset_id).all() if asset_ids else []
+        )
+    }
 
     # Load all keywords to avoid N+1 queries
     keyword_ids = set()
@@ -594,6 +606,8 @@ async def list_images(
         images_list.append({
             "id": img.id,
             "asset_id": storage_info.asset_id,
+            "variant_count": int(variant_count_by_asset.get(img.asset_id, 0)),
+            "has_variants": int(variant_count_by_asset.get(img.asset_id, 0)) > 0,
             "filename": img.filename,
             "width": img.width,
             "height": img.height,
@@ -725,6 +739,18 @@ async def list_duplicate_images(
         Permatag.asset_id.in_(asset_ids),
         Permatag.tenant_id == tenant.id
     ).all() if asset_ids else []
+    variant_count_by_asset = {
+        asset_id: int(count or 0)
+        for asset_id, count in (
+            db.query(
+                AssetDerivative.asset_id,
+                func.count(AssetDerivative.id),
+            ).filter(
+                AssetDerivative.asset_id.in_(asset_ids),
+                AssetDerivative.deleted_at.is_(None),
+            ).group_by(AssetDerivative.asset_id).all() if asset_ids else []
+        )
+    }
 
     keyword_ids = {tag.keyword_id for tag in permatags}
     keywords_map = load_keywords_map(db, tenant.id, keyword_ids)
@@ -757,6 +783,8 @@ async def list_duplicate_images(
         images_list.append({
             "id": img.id,
             "asset_id": storage_info.asset_id,
+            "variant_count": int(variant_count_by_asset.get(img.asset_id, 0)),
+            "has_variants": int(variant_count_by_asset.get(img.asset_id, 0)) > 0,
             "filename": img.filename,
             "file_size": img.file_size,
             "source_provider": storage_info.source_provider,

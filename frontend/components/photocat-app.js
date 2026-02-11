@@ -8,6 +8,7 @@ import './list-editor.js';
 import './permatag-editor.js';
 import './tagging-admin.js';
 import './assets-admin.js';
+import './tenant-users-admin.js';
 import './ml-training.js';
 import './image-editor.js';
 import './cli-commands.js';

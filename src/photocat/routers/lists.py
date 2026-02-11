@@ -10,7 +10,7 @@ from photocat.asset_helpers import AssetReadinessError, load_assets_for_images, 
 from photocat.dependencies import get_db, get_tenant, get_tenant_setting
 from photocat.tenant import Tenant
 from photocat.models.config import PhotoList, PhotoListItem, Keyword, KeywordCategory
-from photocat.metadata import ImageMetadata, MachineTag, Permatag
+from photocat.metadata import AssetDerivative, ImageMetadata, MachineTag, Permatag
 from photocat.tagging import calculate_tags
 from photocat.models.requests import AddPhotoRequest
 from photocat.settings import settings
@@ -277,6 +277,18 @@ async def get_list_items(
         Permatag.asset_id.in_(asset_ids),
         Permatag.tenant_id == tenant.id
     ).all() if asset_ids else []
+    variant_count_by_asset = {
+        asset_id: int(count or 0)
+        for asset_id, count in (
+            db.query(
+                AssetDerivative.asset_id,
+                func.count(AssetDerivative.id),
+            ).filter(
+                AssetDerivative.asset_id.in_(asset_ids),
+                AssetDerivative.deleted_at.is_(None),
+            ).group_by(AssetDerivative.asset_id).all() if asset_ids else []
+        )
+    }
 
     # Load all keywords
     keyword_ids = set()
@@ -342,6 +354,8 @@ async def get_list_items(
             "image": {
                 "id": img.id,
                 "asset_id": storage_info.asset_id,
+                "variant_count": int(variant_count_by_asset.get(img.asset_id, 0)),
+                "has_variants": int(variant_count_by_asset.get(img.asset_id, 0)) > 0,
                 "filename": img.filename,
                 "width": img.width,
                 "height": img.height,

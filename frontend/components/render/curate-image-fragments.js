@@ -31,13 +31,21 @@ export function renderCurateAiMLScore(host, image) {
 export function renderCuratePermatagSummary(image) {
   const permatags = Array.isArray(image?.permatags) ? image.permatags : [];
   const positives = permatags.filter((tag) => tag.signum === 1 && tag.keyword);
-  if (!positives.length) return html``;
-  const keywords = positives
-    .map((tag) => tag.keyword)
-    .filter(Boolean);
-  if (!keywords.length) return html``;
+  const keywords = positives.map((tag) => tag.keyword).filter(Boolean);
   const unique = Array.from(new Set(keywords));
+  const variantCount = Number(image?.variant_count || 0);
+  const hasVariants = Number.isFinite(variantCount) && variantCount > 0;
+  if (!unique.length && !hasVariants) return html``;
+  const label = unique.length ? unique.join(', ') : 'none';
+  const variantTitle = hasVariants
+    ? `${variantCount} variant${variantCount === 1 ? '' : 's'}`
+    : '';
   return html`
-    <div class="curate-thumb-rating">Tags: ${unique.join(', ')}</div>
+    ${hasVariants ? html`
+      <span class="curate-thumb-variant-bar" title=${variantTitle} aria-hidden="true"></span>
+    ` : html``}
+    <div class="curate-thumb-rating">
+      <span class="curate-thumb-rating-label">Tags: ${label}</span>
+    </div>
   `;
 }

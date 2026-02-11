@@ -1,6 +1,8 @@
 import { LitElement, html, css } from 'lit';
 import { signUp, signInWithGoogle } from '../services/auth.js';
 
+const INVITATION_TOKEN_KEY = 'photocat_invitation_token';
+
 /**
  * Signup page component
  *
@@ -16,6 +18,7 @@ export class SignupPage extends LitElement {
     error: { type: String },
     success: { type: String },
     loading: { type: Boolean },
+    invitationToken: { type: String },
   };
 
   static styles = css`
@@ -196,6 +199,27 @@ export class SignupPage extends LitElement {
     this.error = '';
     this.success = '';
     this.loading = false;
+    this.invitationToken = '';
+  }
+
+  connectedCallback() {
+    super.connectedCallback();
+    this.captureInvitationToken();
+  }
+
+  captureInvitationToken() {
+    try {
+      const params = new URLSearchParams(window.location.search || '');
+      const token = (params.get('invitation_token') || '').trim();
+      if (token) {
+        sessionStorage.setItem(INVITATION_TOKEN_KEY, token);
+        this.invitationToken = token;
+        return;
+      }
+      this.invitationToken = (sessionStorage.getItem(INVITATION_TOKEN_KEY) || '').trim();
+    } catch (_error) {
+      this.invitationToken = '';
+    }
   }
 
   validatePasswords() {
@@ -235,8 +259,11 @@ export class SignupPage extends LitElement {
       this.displayName = '';
 
       // Redirect to login after 2 seconds
+      const inviteParam = this.invitationToken
+        ? `?invitation_token=${encodeURIComponent(this.invitationToken)}`
+        : '';
       setTimeout(() => {
-        window.location.href = '/login';
+        window.location.href = `/login${inviteParam}`;
       }, 2000);
     } catch (err) {
       this.error = err.message;
@@ -249,6 +276,10 @@ export class SignupPage extends LitElement {
     this.loading = true;
 
     try {
+      this.captureInvitationToken();
+      if (this.invitationToken) {
+        sessionStorage.setItem(INVITATION_TOKEN_KEY, this.invitationToken);
+      }
       await signInWithGoogle();
       // User will be redirected to Google, then back to /auth/callback
     } catch (err) {
@@ -262,6 +293,11 @@ export class SignupPage extends LitElement {
       <div class="signup-card">
         <h1>PhotoCat</h1>
         <p class="subtitle">Create your account</p>
+        ${this.invitationToken ? html`
+          <div class="success" style="background:#eff6ff;color:#1d4ed8;">
+            Invitation detected. Use the same email from your invitation.
+          </div>
+        ` : ''}
 
         ${this.error ? html`<div class="error">${this.error}</div>` : ''}
         ${this.success ? html`<div class="success">${this.success}</div>` : ''}
