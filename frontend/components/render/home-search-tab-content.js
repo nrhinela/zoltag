@@ -1,6 +1,7 @@
 import { html } from 'lit';
 import { renderCuratePermatagSummary } from './curate-image-fragments.js';
 import { renderCurateRatingWidget, renderCurateRatingStatic } from './curate-rating-widgets.js';
+import { formatStatNumber } from '../shared/formatting.js';
 
 function renderCtaIcon(iconKey) {
   if (iconKey === 'search') {
@@ -102,6 +103,32 @@ function renderCtaGlyph(glyphKey) {
 }
 
 export function renderHomeTabContent(host, { navCards, formatCurateDate }) {
+  const imageStats = host.imageStats || {};
+  const totalImages = Number(imageStats.image_count || 0);
+  const taggedImages = Number(imageStats.positive_permatag_image_count || 0);
+  const coverageRate = totalImages > 0
+    ? `${Math.round((taggedImages / totalImages) * 100)}%`
+    : '0%';
+  const cardMetrics = {
+    lists: [
+      { label: 'Lists', value: formatStatNumber(imageStats.list_count) },
+    ],
+    curate: [
+      { label: 'Tags', value: formatStatNumber(imageStats.positive_permatag_count) },
+      { label: 'Rated', value: formatStatNumber(imageStats.rated_image_count) },
+    ],
+    'tagging-stats': [
+      { label: 'Coverage', value: coverageRate },
+    ],
+    'keyword-definitions': [
+      { label: 'Categories', value: formatStatNumber(imageStats.category_count) },
+      { label: 'Keywords', value: formatStatNumber(imageStats.keyword_count) },
+    ],
+    'asset-library': [
+      { label: 'Items', value: formatStatNumber(imageStats.image_count) },
+    ],
+  };
+
   const ctaCards = [
     {
       key: 'search',
@@ -126,6 +153,7 @@ export function renderHomeTabContent(host, { navCards, formatCurateDate }) {
       iconKey: 'curate',
       accentClass: 'home-cta-curate',
       glyphKey: 'curate',
+      requiresCurate: true,
     },
     {
       key: 'tagging-stats',
@@ -193,6 +221,16 @@ export function renderHomeTabContent(host, { navCards, formatCurateDate }) {
                   <div class="home-cta-content">
                     <div class="home-cta-title">${card.label}</div>
                     <div class="home-cta-subtitle">${card.subtitle}</div>
+                    ${cardMetrics[card.key]?.length ? html`
+                      <div class="home-cta-metrics">
+                        ${cardMetrics[card.key].map((metric) => html`
+                          <div class="home-cta-metric">
+                            <span class="home-cta-metric-label">${metric.label}</span>
+                            <span class="home-cta-metric-value">${metric.value}</span>
+                          </div>
+                        `)}
+                      </div>
+                    ` : html``}
                   </div>
                   <div class="home-cta-arrow" aria-hidden="true">
                     <span class="home-cta-arrow-char">&#8594;</span>
@@ -202,10 +240,10 @@ export function renderHomeTabContent(host, { navCards, formatCurateDate }) {
             </div>
           </div>
           <div class="home-overview-right">
-            <home-insights-tab
-              .imageStats=${host.imageStats}
-              .keywords=${host.keywords}
-            ></home-insights-tab>
+            <div class="home-recommendations-panel" aria-label="Recommendations panel">
+              <div class="home-recommendations-header">Recommendations</div>
+              <div class="home-recommendations-empty">Coming soon</div>
+            </div>
           </div>
         </div>
       </div>

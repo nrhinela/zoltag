@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse, HTMLResponse
 from sqlalchemy.orm import Session
 
+from photocat import oauth_state
 from photocat.dependencies import get_db, get_secret, store_secret
 from photocat.metadata import Tenant as TenantModel
 from photocat.settings import settings
@@ -27,13 +28,14 @@ async def dropbox_authorize(tenant: str, db: Session = Depends(get_db)):
     app_key = tenant_obj.dropbox_app_key
     redirect_uri = f"{settings.app_url}/oauth/dropbox/callback"
 
+    state = oauth_state.generate(tenant)
     oauth_url = (
         f"https://www.dropbox.com/oauth2/authorize"
         f"?client_id={app_key}"
         f"&response_type=code"
         f"&token_access_type=offline"
         f"&redirect_uri={redirect_uri}"
-        f"&state={tenant}"
+        f"&state={state}"
     )
 
     return RedirectResponse(oauth_url)
@@ -42,7 +44,9 @@ async def dropbox_authorize(tenant: str, db: Session = Depends(get_db)):
 @router.get("/oauth/dropbox/callback")
 async def dropbox_callback(code: str, state: str, db: Session = Depends(get_db)):
     """Handle Dropbox OAuth callback."""
-    tenant_id = state
+    tenant_id = oauth_state.consume(state)
+    if not tenant_id:
+        raise HTTPException(status_code=400, detail="Invalid or expired OAuth state")
 
     # Get tenant's app key from database
     tenant_obj = db.query(TenantModel).filter(TenantModel.id == tenant_id).first()

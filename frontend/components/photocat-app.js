@@ -11,7 +11,6 @@ import './assets-admin.js';
 import './tenant-users-admin.js';
 import './ml-training.js';
 import './image-editor.js';
-import './cli-commands.js';
 import './person-manager.js';
 import './people-tagger.js';
 import './shared/widgets/filter-chips.js';
@@ -185,11 +184,7 @@ class PhotoCatApp extends LitElement {
             @open-upload-modal=${this._handleOpenUploadModal}
             .activeTab=${this.activeTab}
             .canCurate=${canCurate}
-            .queueCount=${(this.queueState?.queuedCount || 0) + (this.queueState?.inProgressCount || 0) + (this.queueState?.failedCount || 0)}
             @tab-change=${this._handleTabChange}
-            @sync-progress=${this._handleSyncProgress}
-            @sync-complete=${this._handleSyncComplete}
-            @sync-error=${this._handleSyncError}
         ></app-header>
         
         <tab-container .activeTab=${this.activeTab}>

@@ -49,10 +49,9 @@ export function renderAuxTabContent(host, { formatCurateDate }) {
   const canDeleteTenantAssets = isSuperAdmin || isTenantAdmin;
   const canEditKeywords = isSuperAdmin || isTenantAdmin || isTenantEditor;
   const canManageTenantUsers = isSuperAdmin || isTenantAdmin;
-  const libraryTabActive = host.activeTab === 'library' || host.activeTab === 'admin';
+  const libraryTabActive = host.activeTab === 'library';
   const defaultLibrarySubTab = 'assets';
-  const rawLibrarySubTab = host.activeLibrarySubTab
-    || (host.activeTab === 'admin' ? 'keywords' : defaultLibrarySubTab);
+  const rawLibrarySubTab = host.activeLibrarySubTab || defaultLibrarySubTab;
   const librarySubTab = (rawLibrarySubTab === 'keywords' || rawLibrarySubTab === 'assets'
     || (rawLibrarySubTab === 'users' && canManageTenantUsers))
     ? rawLibrarySubTab
@@ -158,12 +157,6 @@ export function renderAuxTabContent(host, { formatCurateDate }) {
           .readOnly=${!canEditKeywords}
           @open-upload-modal=${host._handleOpenUploadModal}
         ></tagging-admin>
-      </div>
-    ` : html``}
-
-    ${host.activeTab === 'cli' ? html`
-      <div slot="cli" class="container">
-        <cli-commands></cli-commands>
       </div>
     ` : html``}
 

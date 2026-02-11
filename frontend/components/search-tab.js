@@ -15,6 +15,7 @@ import {
 } from './shared/keyword-utils.js';
 import { createSelectionHandlers } from './shared/selection-handlers.js';
 import { renderResultsPagination } from './shared/pagination-controls.js';
+import { renderImageGrid } from './shared/image-grid.js';
 import './shared/widgets/filter-chips.js';
 import './shared/widgets/right-panel.js';
 import './shared/widgets/list-targets-panel.js';
@@ -104,6 +105,7 @@ export class SearchTab extends LitElement {
     searchDateOrder: { type: String },
     renderCurateRatingWidget: { type: Object },
     renderCurateRatingStatic: { type: Object },
+    renderCuratePermatagSummary: { type: Object },
     formatCurateDate: { type: Object },
     searchDragSelection: { type: Array },
     searchDragSelecting: { type: Boolean },
@@ -162,6 +164,7 @@ export class SearchTab extends LitElement {
     this.searchDateOrder = 'desc';
     this.renderCurateRatingWidget = null;
     this.renderCurateRatingStatic = null;
+    this.renderCuratePermatagSummary = null;
     this.formatCurateDate = null;
     this.searchDragSelection = [];
     this.searchDragSelecting = false;
@@ -2026,7 +2029,7 @@ export class SearchTab extends LitElement {
           .lists=${this.searchLists}
           .listDragTargetId=${this._listDragTargetId}
           .renderCurateRatingWidget=${this.renderCurateRatingWidget}
-          .renderCuratePermatagSummary=${this._renderSearchPermatagSummary.bind(this)}
+          .renderCuratePermatagSummary=${this.renderCuratePermatagSummary || this._renderSearchPermatagSummary.bind(this)}
           .formatCurateDate=${this.formatCurateDate}
           @list-target-select=${(event) => this._handleListTargetSelect(event.detail.targetId, event.detail.value)}
           @list-target-remove=${(event) => this._handleRemoveListTarget(event.detail.targetId)}
@@ -2159,45 +2162,31 @@ export class SearchTab extends LitElement {
                     ${searchPagination}
                   </div>
                   ${this.searchImages && this.searchImages.length > 0 ? html`
-                    <div class="curate-grid">
-                      <!-- ⭐ REFERENCE: Standardized image rendering pattern -->
-                      <!-- This template shows the complete pattern for images with: -->
-                      <!-- - Long-press multi-select (pointerdown/move/enter handlers) -->
-                      <!-- - Drag & drop (dragstart handler checks selectingProperty) -->
-                      <!-- - Rating widgets (renderCurateRatingWidget/Static props) -->
-                      <!-- - Click to open modal (image-clicked event) -->
-                      <!-- - Selection styling (.selected class, flash animation) -->
-                      <!-- - Photo date display (formatCurateDate prop) -->
-                      <!-- COPY THIS PATTERN when creating image display components! -->
-                      ${this.searchImages.map((image, index) => html`
-                        <div
-                          class="curate-thumb-wrapper ${this.searchDragSelection.includes(image.id) ? 'selected' : ''}"
-                          data-image-id="${image.id}"
-                          draggable="true"
-                          @dragstart=${(event) => this._handleSearchDragStart(event, image)}
-                          @click=${(event) => this._handleSearchImageClick(event, image, this.searchImages)}
-                        >
-                          <img
-                            src=${image.thumbnail_url || `/api/v1/images/${image.id}/thumbnail`}
-                            alt=${image.filename}
-                            class="curate-thumb ${this.searchDragSelection.includes(image.id) ? 'selected' : ''} ${this._searchFlashSelectionIds?.has(image.id) ? 'flash' : ''}"
-                            draggable="false"
-                            @pointerdown=${(event) => this._handleSearchPointerDown(event, index, image.id)}
-                            @pointermove=${(event) => this._handleSearchPointerMove(event)}
-                            @pointerenter=${() => this._handleSearchSelectHover(index)}
-                          >
-                          ${this.renderCurateRatingWidget ? this.renderCurateRatingWidget(image) : ''}
-                          ${this.renderCurateRatingStatic ? this.renderCurateRatingStatic(image) : ''}
-                          ${this._renderSearchPermatagSummary(image)}
-                          ${this.formatCurateDate && this.formatCurateDate(image) ? html`
-                            <div class="curate-thumb-date">
-                              <span class="curate-thumb-id">#${image.id}</span>
-                              <span class="curate-thumb-icon" aria-hidden="true">📷</span>${this.formatCurateDate(image)}
-                            </div>
-                          ` : ''}
-                        </div>
-                      `)}
-                    </div>
+                    ${renderImageGrid({
+                      images: this.searchImages,
+                      selection: this.searchDragSelection,
+                      flashSelectionIds: this._searchFlashSelectionIds,
+                      selectionHandlers: this._searchSelectionHandlers,
+                      renderFunctions: {
+                        renderCurateRatingWidget: this.renderCurateRatingWidget,
+                        renderCurateRatingStatic: this.renderCurateRatingStatic,
+                        renderCuratePermatagSummary: this.renderCuratePermatagSummary || this._renderSearchPermatagSummary.bind(this),
+                        formatCurateDate: this.formatCurateDate,
+                      },
+                      eventHandlers: {
+                        onImageClick: (event, image) => this._handleSearchImageClick(event, image, this.searchImages),
+                        onDragStart: (event, image) => this._handleSearchDragStart(event, image),
+                        onPointerDown: (event, index, imageId) => this._handleSearchPointerDown(event, index, imageId),
+                        onPointerMove: (event) => this._handleSearchPointerMove(event),
+                        onPointerEnter: (index) => this._handleSearchSelectHover(index),
+                      },
+                      options: {
+                        enableReordering: false,
+                        showPermatags: true,
+                        showAiScore: false,
+                        emptyMessage: 'No images found. Adjust filters to search.',
+                      },
+                    })}
                   ` : html`
                     <div class="p-4 text-center text-gray-500 text-sm">
                       No images found. Adjust filters to search.
@@ -2347,40 +2336,35 @@ export class SearchTab extends LitElement {
                                 ` : folder}
                                 <span class="text-xs text-gray-500 font-normal">(${images.length} images)</span>
                               </div>
-                              <div class="curate-grid">
-                                ${sortedImages.length ? sortedImages.map((image, index) => html`
-                                  <div
-                                    class="curate-thumb-wrapper ${this.searchDragSelection.includes(image.id) ? 'selected' : ''}"
-                                    data-image-id="${image.id}"
-                                    draggable="true"
-                                    @dragstart=${(event) => this._handleSearchDragStart(event, image)}
-                                    @click=${(event) => this._handleSearchImageClick(event, image, images)}
-                                  >
-                                    <img
-                                      src=${image.thumbnail_url || `/api/v1/images/${image.id}/thumbnail`}
-                                      alt=${image.filename}
-                                      class="curate-thumb ${this.searchDragSelection.includes(image.id) ? 'selected' : ''} ${this._searchFlashSelectionIds?.has(image.id) ? 'flash' : ''}"
-                                      draggable="false"
-                                      @pointerdown=${(event) => this._handleBrowseByFolderPointerDown(event, index, image.id, order, folder)}
-                                      @pointermove=${(event) => this._handleSearchPointerMove(event)}
-                                      @pointerenter=${() => this._handleBrowseByFolderSelectHover(index, folder)}
-                                    >
-                                    ${this.renderCurateRatingWidget ? this.renderCurateRatingWidget(image) : ''}
-                                    ${this.renderCurateRatingStatic ? this.renderCurateRatingStatic(image) : ''}
-                                    ${this._renderSearchPermatagSummary(image)}
-                                    ${this.formatCurateDate && this.formatCurateDate(image) ? html`
-                                      <div class="curate-thumb-date">
-                                        <span class="curate-thumb-id">#${image.id}</span>
-                                        <span class="curate-thumb-icon" aria-hidden="true">📷</span>${this.formatCurateDate(image)}
-                                      </div>
-                                    ` : ''}
-                                  </div>
-                                `) : html`
-                                  <div class="col-span-full flex items-center justify-center py-6">
-                                    <span class="curate-spinner large" aria-hidden="true"></span>
-                                  </div>
-                                `}
-                              </div>
+                              ${sortedImages.length ? renderImageGrid({
+                                images: sortedImages,
+                                selection: this.searchDragSelection,
+                                flashSelectionIds: this._searchFlashSelectionIds,
+                                selectionHandlers: this._searchSelectionHandlers,
+                                renderFunctions: {
+                                  renderCurateRatingWidget: this.renderCurateRatingWidget,
+                                  renderCurateRatingStatic: this.renderCurateRatingStatic,
+                                  renderCuratePermatagSummary: this.renderCuratePermatagSummary || this._renderSearchPermatagSummary.bind(this),
+                                  formatCurateDate: this.formatCurateDate,
+                                },
+                                eventHandlers: {
+                                  onImageClick: (event, image) => this._handleSearchImageClick(event, image, sortedImages),
+                                  onDragStart: (event, image) => this._handleSearchDragStart(event, image),
+                                  onPointerDown: (event, index, imageId) => this._handleBrowseByFolderPointerDown(event, index, imageId, order, folder),
+                                  onPointerMove: (event) => this._handleSearchPointerMove(event),
+                                  onPointerEnter: (index) => this._handleBrowseByFolderSelectHover(index, folder),
+                                },
+                                options: {
+                                  enableReordering: false,
+                                  showPermatags: true,
+                                  showAiScore: false,
+                                  emptyMessage: 'No images available.',
+                                },
+                              }) : html`
+                                <div class="col-span-full flex items-center justify-center py-6">
+                                  <span class="curate-spinner large" aria-hidden="true"></span>
+                                </div>
+                              `}
                             </div>
                           `;
                         })}

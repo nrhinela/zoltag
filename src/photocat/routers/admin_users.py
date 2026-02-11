@@ -1,11 +1,13 @@
 """Admin endpoints for user and invitation management."""
 
 from datetime import datetime, timedelta
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Header
+from fastapi import APIRouter, Depends, HTTPException, Request, status, Query, Header
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 from typing import List, Optional
 import secrets
+
+from photocat.ratelimit import limiter
 
 from photocat.database import get_db
 from photocat.auth.dependencies import (
@@ -22,6 +24,7 @@ from photocat.auth.schemas import (
     InvitationResponse,
 )
 from photocat.metadata import Tenant as TenantModel
+from photocat.settings import settings
 
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
@@ -151,9 +154,11 @@ async def list_tenant_users(
 
 
 @router.post("/users/{supabase_uid}/approve", response_model=dict)
+@limiter.limit("10/minute")
 async def approve_user(
+    request: Request,
     supabase_uid: str,
-    request: ApproveUserRequest,
+    body: ApproveUserRequest,
     admin: UserProfile = Depends(require_super_admin),
     db: Session = Depends(get_db)
 ):
@@ -188,10 +193,10 @@ async def approve_user(
     user.is_active = True
 
     # Optionally assign to tenant
-    if request.tenant_id:
+    if body.tenant_id:
         # Verify tenant exists
         tenant = db.query(TenantModel).filter(
-            TenantModel.id == request.tenant_id
+            TenantModel.id == body.tenant_id
         ).first()
         if not tenant:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
@@ -199,8 +204,8 @@ async def approve_user(
         # Create membership
         membership = UserTenant(
             supabase_uid=user.supabase_uid,
-            tenant_id=request.tenant_id,
-            role=request.role,
+            tenant_id=body.tenant_id,
+            role=body.role,
             invited_by=admin.supabase_uid,
             invited_at=datetime.utcnow(),
             accepted_at=datetime.utcnow()
@@ -625,8 +630,10 @@ async def set_super_admin(
 
 
 @router.post("/invitations", response_model=dict, status_code=201)
+@limiter.limit("20/minute")
 async def create_invitation(
-    request: CreateInvitationRequest,
+    request: Request,
+    body: CreateInvitationRequest,
     user: UserProfile = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -655,7 +662,7 @@ async def create_invitation(
         HTTPException 403: User is not admin of the tenant
         HTTPException 400: Invitation already exists for this email
     """
-    normalized_email = (request.email or "").strip().lower()
+    normalized_email = (body.email or "").strip().lower()
     if not normalized_email:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -666,7 +673,7 @@ async def create_invitation(
     if not user.is_super_admin:
         membership = db.query(UserTenant).filter(
             UserTenant.supabase_uid == user.supabase_uid,
-            UserTenant.tenant_id == request.tenant_id,
+            UserTenant.tenant_id == body.tenant_id,
             UserTenant.role == "admin"
         ).first()
 
@@ -684,7 +691,7 @@ async def create_invitation(
         now = datetime.utcnow()
         existing_membership = db.query(UserTenant).filter(
             UserTenant.supabase_uid == existing_user.supabase_uid,
-            UserTenant.tenant_id == request.tenant_id,
+            UserTenant.tenant_id == body.tenant_id,
         ).first()
 
         if existing_membership:
@@ -692,14 +699,14 @@ async def create_invitation(
                 existing_membership.accepted_at = now
                 existing_membership.invited_at = existing_membership.invited_at or now
                 existing_membership.invited_by = existing_membership.invited_by or user.supabase_uid
-            if existing_membership.role != request.role:
-                existing_membership.role = request.role
+            if existing_membership.role != body.role:
+                existing_membership.role = body.role
         else:
             db.add(
                 UserTenant(
                     supabase_uid=existing_user.supabase_uid,
-                    tenant_id=request.tenant_id,
-                    role=request.role,
+                    tenant_id=body.tenant_id,
+                    role=body.role,
                     invited_by=user.supabase_uid,
                     invited_at=now,
                     accepted_at=now,
@@ -709,7 +716,7 @@ async def create_invitation(
         # Remove stale pending invitations for this tenant/email.
         stale_invitations = db.query(Invitation).filter(
             func.lower(Invitation.email) == normalized_email,
-            Invitation.tenant_id == request.tenant_id,
+            Invitation.tenant_id == body.tenant_id,
             Invitation.accepted_at.is_(None),
         ).all()
         for stale in stale_invitations:
@@ -721,13 +728,13 @@ async def create_invitation(
             "message": "Existing user added to tenant",
             "user_id": str(existing_user.supabase_uid),
             "invitation_created": False,
-            "role": request.role,
+            "role": body.role,
         }
 
     # Check for existing invitation
     existing = db.query(Invitation).filter(
         func.lower(Invitation.email) == normalized_email,
-        Invitation.tenant_id == request.tenant_id,
+        Invitation.tenant_id == body.tenant_id,
         Invitation.accepted_at.is_(None),
         Invitation.expires_at > datetime.utcnow()
     ).first()
@@ -744,8 +751,8 @@ async def create_invitation(
     # Create invitation
     invitation = Invitation(
         email=normalized_email,
-        tenant_id=request.tenant_id,
-        role=request.role,
+        tenant_id=body.tenant_id,
+        role=body.role,
         invited_by=user.supabase_uid,
         token=token,
         expires_at=datetime.utcnow() + timedelta(days=7)
@@ -754,14 +761,12 @@ async def create_invitation(
     db.commit()
     db.refresh(invitation)
 
-    # TODO: Send invitation email with link
-    # invitation_link = f"https://photocat.app/accept-invitation?token={token}"
-    # send_invitation_email(request.email, invitation_link)
+    invitation_link = f"{settings.app_url}/accept-invitation?token={token}"
 
     return {
         "message": "Invitation created",
         "invitation_id": str(invitation.id),
-        "token": token,  # Return for now, would not be returned in production
+        "invitation_link": invitation_link,
         "expires_at": invitation.expires_at.isoformat(),
         "invitation_created": True,
     }

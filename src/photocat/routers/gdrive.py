@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
+from photocat import oauth_state
 from photocat.dependencies import get_db, get_secret, store_secret
 from photocat.metadata import Tenant as TenantModel
 from photocat.settings import settings
@@ -29,6 +30,7 @@ async def gdrive_authorize(tenant: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Google Drive client ID not configured")
 
     redirect_uri = f"{settings.app_url}/oauth/gdrive/callback"
+    state = oauth_state.generate(tenant)
     params = {
         "client_id": client_id,
         "redirect_uri": redirect_uri,
@@ -37,7 +39,7 @@ async def gdrive_authorize(tenant: str, db: Session = Depends(get_db)):
         "access_type": "offline",
         "include_granted_scopes": "true",
         "prompt": "consent",
-        "state": tenant,
+        "state": state,
     }
     oauth_url = f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
     return RedirectResponse(oauth_url)
@@ -46,7 +48,10 @@ async def gdrive_authorize(tenant: str, db: Session = Depends(get_db)):
 @router.get("/oauth/gdrive/callback")
 async def gdrive_callback(code: str, state: str, db: Session = Depends(get_db)):
     """Handle Google OAuth callback and persist refresh token."""
-    tenant_id = state
+    tenant_id = oauth_state.consume(state)
+    if not tenant_id:
+        raise HTTPException(status_code=400, detail="Invalid or expired OAuth state")
+
     tenant_obj = db.query(TenantModel).filter(TenantModel.id == tenant_id).first()
     if not tenant_obj:
         raise HTTPException(status_code=400, detail="Tenant not found")

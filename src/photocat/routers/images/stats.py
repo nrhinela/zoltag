@@ -8,7 +8,7 @@ from photocat.database import SessionLocal
 from photocat.dependencies import get_tenant, get_tenant_setting
 from photocat.tenant import Tenant
 from photocat.metadata import ImageMetadata, MachineTag, Permatag
-from photocat.models.config import Keyword
+from photocat.models.config import Keyword, KeywordCategory, PhotoList
 
 router = APIRouter()
 
@@ -98,10 +98,20 @@ def _compute_image_stats(tenant_id: str, include_ratings: bool) -> dict:
             MachineTag.asset_id.is_not(None),
         ).scalar() or 0
 
+        keyword_count = db.query(func.count(Keyword.id)).filter(
+            Keyword.tenant_id == tenant_id
+        ).scalar() or 0
+
+        category_count = db.query(func.count(KeywordCategory.id)).filter(
+            KeywordCategory.tenant_id == tenant_id
+        ).scalar() or 0
+
+        list_count = db.query(func.count(PhotoList.id)).filter(
+            PhotoList.tenant_id == tenant_id
+        ).scalar() or 0
+
         rating_by_category = {}
         if include_ratings:
-            from photocat.models.config import KeywordCategory
-
             categories = db.query(KeywordCategory.id, KeywordCategory.name).filter(
                 KeywordCategory.tenant_id == tenant_id
             ).order_by(KeywordCategory.name).all()
@@ -248,6 +258,9 @@ def _compute_image_stats(tenant_id: str, include_ratings: bool) -> dict:
             "positive_permatag_newest": positive_permatag_newest.isoformat() if positive_permatag_newest else None,
             "untagged_positive_count": int(max(image_count - positive_permatag_image_count, 0)),
             "ml_tag_count": int(ml_tag_count),
+            "list_count": int(list_count),
+            "category_count": int(category_count),
+            "keyword_count": int(keyword_count),
             "rated_image_count": rated_image_count,
             "rating_counts": rating_counts,
             "photo_age_bins": photo_age_bins,

@@ -1,5 +1,5 @@
 import { LitElement, html } from 'lit';
-import { getTenantsPublic, sync, retagAll } from '../services/api.js';
+import { getTenantsPublic } from '../services/api.js';
 import { getCurrentUser } from '../services/auth.js';
 import { supabase } from '../services/supabase.js';
 import './app-header.css';
@@ -9,13 +9,7 @@ class AppHeader extends LitElement {
         tenants: { type: Array },
         tenant: { type: String },
         activeTab: { type: String },
-        isSyncing: { type: Boolean },
-        syncCount: { type: Number },
         environment: { type: String },
-        syncStatus: { type: String },
-        lastSyncAt: { type: String },
-        lastSyncCount: { type: Number },
-        queueCount: { type: Number },
         currentUser: { type: Object },
         canCurate: { type: Boolean },
         tenantMenuOpen: { type: Boolean },
@@ -26,14 +20,7 @@ class AppHeader extends LitElement {
         super();
         this.tenants = [];
         this.activeTab = 'home'; // Default
-        this.isSyncing = false;
-        this.syncCount = 0;
-        this._stopRequested = false;
         this.environment = '...';
-        this.syncStatus = 'idle';
-        this.lastSyncAt = '';
-        this.lastSyncCount = 0;
-        this.queueCount = 0;
         this.currentUser = null;
         this.canCurate = null;
         this.tenantMenuOpen = false;
@@ -49,7 +36,6 @@ class AppHeader extends LitElement {
   connectedCallback() {
       super.connectedCallback();
       this.fetchEnvironment();
-      this._loadSyncStatus();
       this.fetchCurrentUser();
       document.addEventListener('click', this._handleDocumentClick);
   }
@@ -74,12 +60,6 @@ class AppHeader extends LitElement {
       } catch (error) {
           console.error('Error fetching current user:', error);
           this.currentUser = null;
-      }
-  }
-
-  willUpdate(changedProperties) {
-      if (changedProperties.has('tenant')) {
-          this._loadSyncStatus();
       }
   }
 
@@ -329,7 +309,7 @@ class AppHeader extends LitElement {
   render() {
     const canCurate = this.canCurate ?? this._canCurateFromUser();
     const canManageTenantUsers = this._canManageTenantUsersFromUser();
-    const libraryActive = this.activeTab === 'library' || this.activeTab === 'admin';
+    const libraryActive = this.activeTab === 'library';
     const selectedTenant = this._getEffectiveTenantId();
     const tenantMissingFromList = !!selectedTenant
       && !this.tenants.some((tenant) => this._normalizeTenantValue(tenant.id) === selectedTenant);
@@ -480,155 +460,6 @@ class AppHeader extends LitElement {
   _handleTabChange(tabName) {
       this.dispatchEvent(new CustomEvent('tab-change', { detail: tabName, bubbles: true, composed: true }));
   }
-
-  async _sync() {
-    if (this.isSyncing) return;
-
-    this.isSyncing = true;
-    this.syncCount = 0;
-    this._stopRequested = false;
-    this.syncStatus = 'running';
-    this.lastSyncAt = '';
-    this.lastSyncCount = 0;
-    this._persistSyncStatus();
-
-    try {
-        let hasMore = true;
-
-        while (hasMore && !this._stopRequested) {
-            const result = await sync(this.tenant);
-
-            if (result.processed > 0) {
-                this.syncCount += result.processed;
-                this.lastSyncCount = this.syncCount;
-                this._persistSyncStatus();
-                // Notify gallery to refresh
-                this.dispatchEvent(new CustomEvent('sync-progress', {
-                    detail: { count: this.syncCount, status: result.status },
-                    bubbles: true,
-                    composed: true
-                }));
-            }
-
-            hasMore = result.has_more;
-
-            if (!hasMore) {
-                console.log(`Sync complete. Total processed: ${this.syncCount}`);
-            }
-        }
-
-        if (this._stopRequested) {
-            console.log(`Sync stopped by user. Processed: ${this.syncCount}`);
-            this.syncStatus = 'stopped';
-        }
-
-        // Final refresh notification
-        this.dispatchEvent(new CustomEvent('sync-complete', {
-            detail: { count: this.syncCount },
-            bubbles: true,
-            composed: true
-        }));
-        this.syncStatus = 'complete';
-        this.lastSyncAt = new Date().toISOString();
-        this.lastSyncCount = this.syncCount;
-        this._persistSyncStatus();
-
-    } catch (error) {
-        console.error('Failed to sync:', error);
-        this.dispatchEvent(new CustomEvent('sync-error', {
-            detail: { error: error.message },
-            bubbles: true,
-            composed: true
-        }));
-        this.syncStatus = 'error';
-        this._persistSyncStatus();
-    } finally {
-        this.isSyncing = false;
-        this._stopRequested = false;
-    }
-  }
-
-  _stopSync() {
-    console.log('Stop requested...');
-    this._stopRequested = true;
-  }
-
-  _syncStorageKey() {
-      return `photocat_sync_status_${this.tenant || 'default'}`;
-  }
-
-  _persistSyncStatus() {
-      const payload = {
-          status: this.syncStatus,
-          lastSyncAt: this.lastSyncAt,
-          lastSyncCount: this.lastSyncCount,
-      };
-      try {
-          localStorage.setItem(this._syncStorageKey(), JSON.stringify(payload));
-      } catch (error) {
-          console.error('Failed to persist sync status:', error);
-      }
-  }
-
-  _loadSyncStatus() {
-      try {
-          const raw = localStorage.getItem(this._syncStorageKey());
-          if (!raw) {
-              this.syncStatus = 'idle';
-              this.lastSyncAt = '';
-              this.lastSyncCount = 0;
-              return;
-          }
-          const parsed = JSON.parse(raw);
-          this.syncStatus = parsed.status || 'idle';
-          this.lastSyncAt = parsed.lastSyncAt || '';
-          this.lastSyncCount = parsed.lastSyncCount || 0;
-          if (this.syncStatus === 'running') {
-              this.syncStatus = 'interrupted';
-          }
-      } catch (error) {
-          console.error('Failed to load sync status:', error);
-      }
-  }
-
-  _getSyncLabel() {
-      if (this.isSyncing || this.syncStatus === 'running') {
-          return `Syncing: ${this.syncCount}`;
-      }
-      if (this.syncStatus === 'interrupted') {
-          return `Sync interrupted (${this.lastSyncCount})`;
-      }
-      if (this.syncStatus === 'complete' && this.lastSyncAt) {
-          const date = new Date(this.lastSyncAt).toLocaleString();
-          return `Last sync: ${date} (${this.lastSyncCount})`;
-      }
-      if (this.syncStatus === 'stopped') {
-          return `Sync stopped (${this.lastSyncCount})`;
-      }
-      if (this.syncStatus === 'error') {
-          return 'Sync error';
-      }
-      return 'Sync idle';
-  }
-
-    async _retagAll() {
-        try {
-            await retagAll(this.tenant);
-        } catch (error) {
-            console.error('Failed to retag all:', error);
-        }
-    }
-
-    _switchTenant(e) {
-        const nextTenant = this._normalizeTenantValue(e.target.value || '');
-        const currentTenant = this._normalizeTenantValue(this.tenant);
-        if (!nextTenant || nextTenant === currentTenant) return;
-        this.dispatchEvent(new CustomEvent('tenant-change', { detail: nextTenant, bubbles: true, composed: true }));
-    }
-
-    _openAdmin() {
-        window.location.href = '/admin';
-    }
 }
 
 customElements.define('app-header', AppHeader);

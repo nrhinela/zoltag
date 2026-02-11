@@ -45,21 +45,7 @@ export class AppShellStateController extends BaseStateController {
   }
 
   setActiveTab(tabName) {
-    // Normalize legacy deep-links now nested under Library.
-    if (tabName === 'admin') {
-      this.host.activeLibrarySubTab = 'keywords';
-      this.host.activeTab = 'library';
-      return;
-    }
-    if (tabName === 'ml-training') {
-      this.host.activeTab = 'cli';
-      return;
-    }
-    if (tabName === 'system') {
-      this.host.activeTab = 'cli';
-      return;
-    }
-    if (tabName === 'queue') {
+    if (!tabName || !['home', 'search', 'curate', 'library', 'lists'].includes(tabName)) {
       this.host.activeTab = 'home';
       return;
     }
@@ -182,9 +168,6 @@ export class AppShellStateController extends BaseStateController {
         break;
       }
       case 'library':
-      case 'admin':
-      case 'people':
-      case 'tagging':
       default:
         break;
     }

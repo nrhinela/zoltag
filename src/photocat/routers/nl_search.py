@@ -369,12 +369,14 @@ async def nl_search(
     }
 
     url = _get_gemini_endpoint(model_name)
-    headers = {"Content-Type": "application/json"}
-    params = {"key": api_key}
+    headers = {
+        "Content-Type": "application/json",
+        "x-goog-api-key": api_key,
+    }
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(url, headers=headers, params=params, json=payload)
+            response = await client.post(url, headers=headers, json=payload)
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"Gemini request failed: {exc}") from exc
 

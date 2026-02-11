@@ -18,11 +18,14 @@ email accounts:
 See: https://supabase.com/docs/guides/auth/social-login/auth-google
 """
 
+import logging
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Request, status, Header
 from sqlalchemy.orm import Session
 from typing import Optional
 from jose import JWTError
+
+logger = logging.getLogger(__name__)
 
 from photocat.database import get_db
 from photocat.auth.dependencies import get_current_user
@@ -166,9 +169,10 @@ async def register(
         db.refresh(profile)
     except Exception as e:
         db.rollback()
+        logger.error("Failed to create user profile for %s: %s", supabase_uid, e)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Failed to create user profile: {str(e)}",
+            detail="Failed to create user profile. Please try again or contact support.",
         )
 
     return {

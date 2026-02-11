@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from photocat.auth.dependencies import require_tenant_role_from_header
 from photocat.dependencies import get_db, get_tenant
 from photocat.metadata import Person
 from photocat.models.config import KeywordCategory, Keyword
@@ -13,7 +14,8 @@ from photocat.tenant import Tenant
 
 router = APIRouter(
     prefix="/api/v1/admin/keywords",
-    tags=["admin-keywords"]
+    tags=["admin-keywords"],
+    dependencies=[Depends(require_tenant_role_from_header("admin"))],
 )
 
 

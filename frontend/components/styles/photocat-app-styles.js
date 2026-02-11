@@ -84,7 +84,7 @@ export const photocatAppStyles = css`
     }
     @media (min-width: 1100px) {
         .home-overview-layout {
-            grid-template-columns: minmax(420px, 0.95fr) minmax(520px, 1.25fr);
+            grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
             align-items: stretch;
         }
         .home-overview-left,
@@ -104,13 +104,25 @@ export const photocatAppStyles = css`
             height: 100%;
         }
     }
-    .home-overview-right home-insights-tab {
-        display: block;
+    .home-recommendations-panel {
+        height: 100%;
+        min-height: 100%;
+        border-radius: 14px;
+        border: 1px solid #e2e8f0;
+        background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+        padding: 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
     }
-    .home-overview-right .container.home-insights-large {
-        max-width: none;
-        margin: 0;
-        padding: 0;
+    .home-recommendations-header {
+        font-size: 18px;
+        font-weight: 700;
+        color: #0f172a;
+    }
+    .home-recommendations-empty {
+        font-size: 14px;
+        color: #64748b;
     }
     .home-loading-overlay {
         position: absolute;
@@ -142,7 +154,7 @@ export const photocatAppStyles = css`
     .home-cta-grid {
         display: grid;
         grid-template-columns: 1fr;
-        gap: 16px;
+        gap: 10px;
         margin-top: 4px;
     }
     @media (min-width: 900px) {
@@ -163,11 +175,11 @@ export const photocatAppStyles = css`
         overflow: hidden;
         display: flex;
         align-items: center;
-        gap: 16px;
+        gap: 13px;
         width: 100%;
         border-radius: 14px;
         border: 1px solid #dbe4f0;
-        padding: 18px 18px 18px 16px;
+        padding: 13px;
         text-align: left;
         transition: transform 0.18s ease, box-shadow 0.18s ease;
         background: #ffffff;
@@ -217,15 +229,15 @@ export const photocatAppStyles = css`
     }
     .home-cta-glyph {
         position: absolute;
-        right: 12px;
-        top: 10px;
+        right: 10px;
+        top: 8px;
         z-index: 1;
         color: rgba(148, 163, 184, 0.2);
         pointer-events: none;
         transform: rotate(-7deg);
     }
     .home-cta-glyph-char {
-        font-size: 36px;
+        font-size: 28px;
         font-weight: 800;
         line-height: 1;
         display: inline-block;
@@ -251,21 +263,21 @@ export const photocatAppStyles = css`
     .home-cta-icon-wrap {
         position: relative;
         z-index: 1;
-        width: 52px;
-        height: 52px;
+        width: 46px;
+        height: 46px;
         border-radius: 12px;
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        font-size: 22px;
+        font-size: 18px;
         color: #1d4ed8;
         border: 1px solid rgba(37, 99, 235, 0.22);
         background: rgba(255, 255, 255, 0.95);
         box-shadow: 0 4px 12px rgba(37, 99, 235, 0.14);
     }
     .home-cta-icon-wrap svg {
-        width: 25px;
-        height: 25px;
+        width: 21px;
+        height: 21px;
         display: block;
     }
     .home-cta-curate .home-cta-icon-wrap {
@@ -300,22 +312,51 @@ export const photocatAppStyles = css`
         min-width: 0;
     }
     .home-cta-title {
-        font-size: 1.2rem;
+        font-size: 1.05rem;
         font-weight: 700;
         color: #0f172a;
         line-height: 1.1;
     }
     .home-cta-subtitle {
-        margin-top: 6px;
-        font-size: 0.94rem;
+        margin-top: 4px;
+        font-size: 0.82rem;
         color: #475569;
-        line-height: 1.35;
+        line-height: 1.2;
+    }
+    .home-cta-metrics {
+        margin-top: 6px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+    }
+    .home-cta-metric {
+        display: inline-flex;
+        align-items: baseline;
+        gap: 4px;
+        padding: 2px 6px;
+        border-radius: 999px;
+        border: 1px solid rgba(148, 163, 184, 0.32);
+        background: rgba(255, 255, 255, 0.88);
+        box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+    }
+    .home-cta-metric-label {
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.01em;
+        color: #475569;
+        text-transform: uppercase;
+    }
+    .home-cta-metric-value {
+        font-size: 11px;
+        font-weight: 800;
+        color: #0f172a;
+        letter-spacing: 0.01em;
     }
     .home-cta-arrow {
         position: relative;
         z-index: 1;
-        width: 36px;
-        height: 36px;
+        width: 33px;
+        height: 33px;
         border-radius: 999px;
         display: inline-flex;
         align-items: center;
@@ -323,7 +364,7 @@ export const photocatAppStyles = css`
         color: #1e40af;
         background: rgba(255, 255, 255, 0.86);
         border: 1px solid rgba(30, 64, 175, 0.2);
-        font-size: 15px;
+        font-size: 13px;
     }
     .home-cta-arrow-char {
         font-weight: 700;
