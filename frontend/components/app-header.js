@@ -46,7 +46,6 @@ class AppHeader extends LitElement {
 
   connectedCallback() {
       super.connectedCallback();
-      this.fetchTenants();
       this.fetchEnvironment();
       this._loadSyncStatus();
       this.fetchCurrentUser();
@@ -62,6 +61,14 @@ class AppHeader extends LitElement {
       try {
           const user = await getCurrentUser();
           this.currentUser = user;
+          const membershipTenants = this._getTenantsFromMemberships();
+          if (membershipTenants.length) {
+              this.tenants = membershipTenants;
+              this._reconcileTenantWithStoredSelection();
+          }
+          if (this._isAdmin()) {
+              await this.fetchTenants();
+          }
       } catch (error) {
           console.error('Error fetching current user:', error);
           this.currentUser = null;
@@ -108,23 +115,57 @@ class AppHeader extends LitElement {
   }
 
   async fetchTenants() {
+      const fallbackTenants = this._getTenantsFromMemberships();
+      if (!this._isAdmin() && fallbackTenants.length) {
+          this.tenants = fallbackTenants;
+          this._reconcileTenantWithStoredSelection();
+          return;
+      }
       try {
-          this.tenants = await getTenantsPublic();
-          const storedTenant = this._getStoredTenant();
-          const currentTenant = this._normalizeTenantValue(this.tenant);
-
-          // localStorage is the source of truth on initial load; reconcile header/app state.
-          if (storedTenant && storedTenant !== currentTenant) {
-              this.dispatchEvent(new CustomEvent('tenant-change', {
-                  detail: storedTenant,
-                  bubbles: true,
-                  composed: true,
-              }));
+          const publicTenants = await getTenantsPublic();
+          this.tenants = Array.isArray(publicTenants) ? publicTenants : [];
+          if (!this.tenants.length && fallbackTenants.length) {
+              this.tenants = fallbackTenants;
+          }
+          this._reconcileTenantWithStoredSelection();
+      } catch (error) {
+          if (fallbackTenants.length) {
+              this.tenants = fallbackTenants;
+              this._reconcileTenantWithStoredSelection();
               return;
           }
-      } catch (error) {
           console.error('Error fetching tenants:', error);
       }
+  }
+
+  _getTenantsFromMemberships() {
+      const memberships = Array.isArray(this.currentUser?.tenants) ? this.currentUser.tenants : [];
+      if (!memberships.length) return [];
+
+      const seen = new Set();
+      const tenants = [];
+      for (const membership of memberships) {
+          const tenantId = this._normalizeTenantValue(membership?.tenant_id);
+          if (!tenantId || seen.has(tenantId)) continue;
+          seen.add(tenantId);
+          tenants.push({
+              id: tenantId,
+              name: this._normalizeTenantValue(membership?.tenant_name) || tenantId,
+              active: true,
+          });
+      }
+      return tenants;
+  }
+
+  _reconcileTenantWithStoredSelection() {
+      const storedTenant = this._getStoredTenant();
+      const currentTenant = this._normalizeTenantValue(this.tenant);
+      if (!storedTenant || storedTenant === currentTenant) return;
+      this.dispatchEvent(new CustomEvent('tenant-change', {
+          detail: storedTenant,
+          bubbles: true,
+          composed: true,
+      }));
   }
 
   _handleUserMenuChange(e) {
@@ -180,9 +221,8 @@ class AppHeader extends LitElement {
       if (!tenant) return '';
       const name = this._normalizeTenantValue(tenant.name);
       const id = this._normalizeTenantValue(tenant.id);
-      if (!id) return name;
-      if (!name || name === id) return id;
-      return `${id} - ${name}`;
+      if (name) return name;
+      return id;
   }
 
   _normalizeTenantValue(value) {

@@ -81,7 +81,7 @@ async def add_permatag(
     request: Request,
     tenant: Tenant = Depends(get_tenant),
     db: Session = Depends(get_db),
-    current_user: UserProfile = Depends(require_tenant_role_from_header("admin"))
+    current_user: UserProfile = Depends(require_tenant_role_from_header("editor"))
 ):
     """Add or update a permatag for an image."""
     body = await request.json()
@@ -157,7 +157,7 @@ async def bulk_permatags(
     payload: dict = Body(...),
     tenant: Tenant = Depends(get_tenant),
     db: Session = Depends(get_db),
-    current_user: UserProfile = Depends(require_tenant_role_from_header("admin"))
+    current_user: UserProfile = Depends(require_tenant_role_from_header("editor"))
 ):
     """Bulk add/update permatags for multiple images."""
     operations = payload.get("operations") if isinstance(payload, dict) else None
@@ -276,7 +276,7 @@ async def delete_permatag(
     permatag_id: int,
     tenant: Tenant = Depends(get_tenant),
     db: Session = Depends(get_db),
-    current_user: UserProfile = Depends(require_tenant_role_from_header("admin"))
+    current_user: UserProfile = Depends(require_tenant_role_from_header("editor"))
 ):
     """Delete a permatag."""
     # Verify image belongs to tenant
@@ -308,7 +308,7 @@ async def accept_all_tags(
     image_id: int,
     tenant: Tenant = Depends(get_tenant),
     db: Session = Depends(get_db),
-    current_user: UserProfile = Depends(require_tenant_role_from_header("admin"))
+    current_user: UserProfile = Depends(require_tenant_role_from_header("editor"))
 ):
     """Accept all current tags as positive permatags and create negative permatags for all other keywords."""
     image = db.query(ImageMetadata).filter_by(
@@ -387,7 +387,7 @@ async def freeze_permatags(
     image_id: int,
     tenant: Tenant = Depends(get_tenant),
     db: Session = Depends(get_db),
-    current_user: UserProfile = Depends(require_tenant_role_from_header("admin"))
+    current_user: UserProfile = Depends(require_tenant_role_from_header("editor"))
 ):
     """Create permatags for all keywords without existing permatags."""
     image = db.query(ImageMetadata).filter_by(

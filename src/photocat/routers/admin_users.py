@@ -370,16 +370,16 @@ async def update_tenant_user_role(
     if not target_user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
-    if target_user.is_super_admin or membership.role == "admin":
+    if target_user.is_super_admin:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin users cannot be edited from tenant admin",
         )
 
-    if request.role not in {"user", "admin"}:
+    if request.role not in {"user", "editor", "admin"}:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Role must be 'user' or 'admin'",
+            detail="Role must be 'user', 'editor', or 'admin'",
         )
 
     if supabase_uid == admin.supabase_uid and request.role != membership.role:
@@ -424,7 +424,7 @@ async def remove_tenant_user(
     if not target_user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
-    if target_user.is_super_admin or membership.role == "admin":
+    if target_user.is_super_admin:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin users cannot be edited from tenant admin",

@@ -5,6 +5,7 @@ import { getPeople, createPerson, deletePerson } from '../services/api.js';
 class PersonManager extends LitElement {
   static properties = {
     tenant: { type: String },
+    readOnly: { type: Boolean },
     view: { type: String }, // 'list' or 'editor'
     people: { type: Array },
     selectedPersonId: { type: Number },
@@ -234,6 +235,7 @@ class PersonManager extends LitElement {
 
   constructor() {
     super();
+    this.readOnly = false;
     this.view = 'list';
     this.people = [];
     this.selectedPersonId = null;
@@ -247,6 +249,12 @@ class PersonManager extends LitElement {
     super.connectedCallback();
     console.log('[PersonManager] connectedCallback, tenant:', this.tenant);
     await this.loadData();
+  }
+
+  updated(changedProperties) {
+    if (changedProperties.has('readOnly') && this.readOnly && this.view !== 'list') {
+      this.view = 'list';
+    }
   }
 
   async loadData() {
@@ -282,6 +290,7 @@ class PersonManager extends LitElement {
   }
 
   async createPerson() {
+    if (this.readOnly) return;
     if (!this.formData.name.trim()) {
       this.error = 'Please enter a name';
       return;
@@ -304,6 +313,7 @@ class PersonManager extends LitElement {
   }
 
   async deletePerson(personId) {
+    if (this.readOnly) return;
     if (!confirm('Delete this person? This will remove all tags.')) return;
 
     this.loading = true;
@@ -337,9 +347,11 @@ class PersonManager extends LitElement {
                 .value="${this.searchQuery}"
                 @input="${(e) => { this.searchQuery = e.target.value; this.loadPeople(); }}"
               />
-              <button class="btn-primary" @click="${() => { this.view = 'editor'; this.formData = { name: '', instagram_url: '' }; }}">
-                + Add Person
-              </button>
+              ${this.readOnly ? html`` : html`
+                <button class="btn-primary" @click="${() => { this.view = 'editor'; this.formData = { name: '', instagram_url: '' }; }}">
+                  + Add Person
+                </button>
+              `}
             ` : html`
               <button class="btn-secondary" @click="${() => { this.view = 'list'; }}">
                 ← Back to List
@@ -382,14 +394,16 @@ class PersonManager extends LitElement {
                       <div style="font-size: 11px; color: #9ca3af;">
                         Created ${new Date(person.created_at).toLocaleDateString()}
                       </div>
-                      <div class="card-actions">
-                        <button class="btn-small" @click="${() => { this.view = 'editor'; this.selectedPersonId = person.id; this.formData = { ...person }; }}">
-                          Edit
-                        </button>
-                        <button class="btn-small delete" @click="${() => this.deletePerson(person.id)}">
-                          Delete
-                        </button>
-                      </div>
+                      ${this.readOnly ? html`` : html`
+                        <div class="card-actions">
+                          <button class="btn-small" @click="${() => { this.view = 'editor'; this.selectedPersonId = person.id; this.formData = { ...person }; }}">
+                            Edit
+                          </button>
+                          <button class="btn-small delete" @click="${() => this.deletePerson(person.id)}">
+                            Delete
+                          </button>
+                        </div>
+                      `}
                     </div>
                   </div>
                 `)}

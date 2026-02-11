@@ -207,7 +207,7 @@ async def propagate_dropbox_tags(
     image_id: int,
     tenant: Tenant = Depends(get_tenant),
     db: Session = Depends(get_db),
-    current_user: UserProfile = Depends(require_tenant_role_from_header("admin"))
+    current_user: UserProfile = Depends(require_tenant_role_from_header("editor"))
 ):
     """Apply calculated tags to Dropbox for a single image."""
     image = db.query(ImageMetadata).filter_by(

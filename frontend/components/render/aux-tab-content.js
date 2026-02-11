@@ -41,14 +41,22 @@ export function renderAuxTabContent(host, { formatCurateDate }) {
   const tenantMembership = (host.currentUser?.tenants || []).find(
     (membership) => String(membership.tenant_id) === String(host.tenant)
   );
-  const canManageTenantUsers = tenantMembership?.role === 'admin';
+  const isSuperAdmin = !!host.currentUser?.user?.is_super_admin;
+  const tenantRole = tenantMembership?.role || '';
+  const isTenantAdmin = tenantRole === 'admin';
+  const isTenantEditor = tenantRole === 'editor';
+  const canUploadTenantAssets = isSuperAdmin || isTenantAdmin || isTenantEditor;
+  const canDeleteTenantAssets = isSuperAdmin || isTenantAdmin;
+  const canEditKeywords = isSuperAdmin || isTenantAdmin || isTenantEditor;
+  const canManageTenantUsers = isSuperAdmin || isTenantAdmin;
   const libraryTabActive = host.activeTab === 'library' || host.activeTab === 'admin';
+  const defaultLibrarySubTab = 'assets';
   const rawLibrarySubTab = host.activeLibrarySubTab
-    || (host.activeTab === 'admin' ? 'keywords' : 'assets');
+    || (host.activeTab === 'admin' ? 'keywords' : defaultLibrarySubTab);
   const librarySubTab = (rawLibrarySubTab === 'keywords' || rawLibrarySubTab === 'assets'
     || (rawLibrarySubTab === 'users' && canManageTenantUsers))
     ? rawLibrarySubTab
-    : 'assets';
+    : defaultLibrarySubTab;
 
   return html`
     ${libraryTabActive ? html`
@@ -78,6 +86,8 @@ export function renderAuxTabContent(host, { formatCurateDate }) {
         ${librarySubTab === 'assets' ? html`
           <assets-admin
             .tenant=${host.tenant}
+            .canUpload=${canUploadTenantAssets}
+            .canDelete=${canDeleteTenantAssets}
             .refreshToken=${host.assetsRefreshToken}
             @open-library-upload-modal=${host._handleOpenUploadLibraryModal}
             @image-selected=${(e) => host._handleCurateImageClick(null, e.detail.image, e.detail.imageSet)}
@@ -103,11 +113,15 @@ export function renderAuxTabContent(host, { formatCurateDate }) {
           ${host.activeAdminSubTab === 'tagging' ? html`
             <tagging-admin
               .tenant=${host.tenant}
+              .readOnly=${!canEditKeywords}
               @open-upload-modal=${host._handleOpenUploadModal}
             ></tagging-admin>
           ` : html``}
           ${host.activeAdminSubTab === 'people' ? html`
-            <person-manager .tenant=${host.tenant}></person-manager>
+            <person-manager
+              .tenant=${host.tenant}
+              .readOnly=${!canEditKeywords}
+            ></person-manager>
           ` : html``}
         ` : html``}
         ${librarySubTab === 'users' ? html`
@@ -115,6 +129,7 @@ export function renderAuxTabContent(host, { formatCurateDate }) {
             <tenant-users-admin
               .tenant=${host.tenant}
               .canManage=${canManageTenantUsers}
+              .isSuperAdmin=${isSuperAdmin}
             ></tenant-users-admin>
           </div>
         ` : html``}
@@ -137,7 +152,10 @@ export function renderAuxTabContent(host, { formatCurateDate }) {
 
     ${host.activeTab === 'people' ? html`
       <div slot="people" class="container p-4">
-        <person-manager .tenant=${host.tenant}></person-manager>
+        <person-manager
+          .tenant=${host.tenant}
+          .readOnly=${!canEditKeywords}
+        ></person-manager>
       </div>
     ` : html``}
 
@@ -145,6 +163,7 @@ export function renderAuxTabContent(host, { formatCurateDate }) {
       <div slot="tagging" class="container p-4">
         <tagging-admin
           .tenant=${host.tenant}
+          .readOnly=${!canEditKeywords}
           @open-upload-modal=${host._handleOpenUploadModal}
         ></tagging-admin>
       </div>

@@ -910,6 +910,7 @@ class AdminUsers extends LitElement {
                 title="Change role for this tenant"
               >
                 <option value="user">User</option>
+                <option value="editor">Editor</option>
                 <option value="admin">Admin</option>
               </select>
               <button
@@ -1178,8 +1179,9 @@ class AdminUsers extends LitElement {
                               class="form-control"
                               .value=${this.assignForm.role}
                               @change=${(e) => this.updateAssignForm('role', e.target.value)}
-                            >
+                          >
                               <option value="user">User</option>
+                              <option value="editor">Editor</option>
                               <option value="admin">Admin</option>
                             </select>
                             <button
@@ -1268,6 +1270,7 @@ class AdminUsers extends LitElement {
                             @change=${(e) => this.updateFormField('role', e.target.value)}
                           >
                             <option value="user">User</option>
+                            <option value="editor">Editor</option>
                             <option value="admin">Admin</option>
                           </select>
                         </div>
@@ -1355,6 +1358,7 @@ class AdminUsers extends LitElement {
                             @change=${(e) => this.updateAssignForm('role', e.target.value)}
                           >
                             <option value="user">User</option>
+                            <option value="editor">Editor</option>
                             <option value="admin">Admin</option>
                           </select>
                         </div>

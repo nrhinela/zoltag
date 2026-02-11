@@ -1,8 +1,10 @@
 """Pydantic schemas for authentication requests and responses."""
 
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, Literal
 from pydantic import BaseModel, UUID4, Field
+
+TenantRole = Literal["user", "editor", "admin"]
 
 
 class UserProfileResponse(BaseModel):
@@ -27,7 +29,7 @@ class TenantMembershipResponse(BaseModel):
 
     tenant_id: str = Field(..., description="Tenant ID")
     tenant_name: str = Field(..., description="Tenant display name")
-    role: str = Field(..., description="User's role in tenant (admin|user)")
+    role: TenantRole = Field(..., description="User's role in tenant (admin|editor|user)")
     accepted_at: Optional[datetime] = Field(None, description="When membership was accepted")
 
     class Config:
@@ -75,7 +77,7 @@ class CreateInvitationRequest(BaseModel):
 
     email: str = Field(..., description="Email address to invite")
     tenant_id: str = Field(..., description="Tenant ID")
-    role: str = Field("user", description="Role (admin|user)")
+    role: TenantRole = Field("user", description="Role (admin|editor|user)")
 
     class Config:
         json_schema_extra = {
@@ -91,7 +93,7 @@ class ApproveUserRequest(BaseModel):
     """Approve pending user request body."""
 
     tenant_id: Optional[str] = Field(None, description="Optionally assign to tenant")
-    role: str = Field("user", description="Role (admin|user)")
+    role: TenantRole = Field("user", description="Role (admin|editor|user)")
 
     class Config:
         json_schema_extra = {
@@ -105,7 +107,7 @@ class ApproveUserRequest(BaseModel):
 class UpdateTenantMembershipRequest(BaseModel):
     """Update an existing tenant membership role."""
 
-    role: str = Field(..., description="Role (admin|user)")
+    role: TenantRole = Field(..., description="Role (admin|editor|user)")
 
     class Config:
         json_schema_extra = {

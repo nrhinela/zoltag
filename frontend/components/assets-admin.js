@@ -45,6 +45,8 @@ class AssetsAdmin extends LitElement {
 
   static properties = {
     tenant: { type: String },
+    canUpload: { type: Boolean },
+    canDelete: { type: Boolean },
     assets: { type: Array },
     total: { type: Number },
     offset: { type: Number },
@@ -62,6 +64,8 @@ class AssetsAdmin extends LitElement {
   constructor() {
     super();
     this.tenant = '';
+    this.canUpload = true;
+    this.canDelete = true;
     this.assets = [];
     this.total = 0;
     this.offset = 0;
@@ -187,6 +191,7 @@ class AssetsAdmin extends LitElement {
   }
 
   _openLibraryUpload() {
+    if (!this.canUpload) return;
     this.dispatchEvent(new CustomEvent('open-library-upload-modal', {
       bubbles: true,
       composed: true,
@@ -216,6 +221,7 @@ class AssetsAdmin extends LitElement {
   }
 
   async _handleDelete(asset) {
+    if (!this.canDelete) return;
     const imageId = asset?.id;
     if (!imageId || !this.tenant) return;
     const confirmed = window.confirm(`Delete asset ${imageId}? This cannot be undone.`);
@@ -300,9 +306,17 @@ class AssetsAdmin extends LitElement {
             <div>
               <h2 class="text-xl font-semibold text-gray-800">Assets</h2>
               <p class="text-sm text-gray-500">Manage uploaded and provider-backed assets.</p>
+              ${this.canUpload || this.canDelete ? html`` : html`
+                <p class="text-xs text-gray-500 mt-1">Read-only for your tenant role.</p>
+              `}
             </div>
             <div class="flex items-center gap-3">
-              <button class="px-4 py-2 bg-emerald-600 text-white rounded-lg" @click=${() => this._openLibraryUpload()}>
+              <button
+                class="px-4 py-2 bg-emerald-600 text-white rounded-lg disabled:opacity-60 disabled:cursor-not-allowed"
+                ?disabled=${!this.canUpload}
+                title=${this.canUpload ? 'Upload files' : 'Editor or Admin role required'}
+                @click=${() => this._openLibraryUpload()}
+              >
                 <i class="fas fa-upload mr-2"></i>Upload
               </button>
               <button class="px-4 py-2 bg-blue-100 text-blue-700 rounded-lg" @click=${() => this._loadAssets()}>
@@ -428,7 +442,8 @@ class AssetsAdmin extends LitElement {
                         <td class="px-3 py-2 text-right">
                           <button
                             class="px-3 py-1 rounded border border-red-200 text-red-700 bg-red-50 hover:bg-red-100 disabled:opacity-60"
-                            ?disabled=${this.deletingImageId === imageId}
+                            ?disabled=${!this.canDelete || this.deletingImageId === imageId}
+                            title=${this.canDelete ? 'Delete asset' : 'Admin role required'}
                             @click=${() => this._handleDelete(asset)}
                           >
                             ${this.deletingImageId === imageId ? 'Deleting...' : 'Delete'}

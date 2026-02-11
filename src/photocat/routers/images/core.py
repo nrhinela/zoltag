@@ -9,6 +9,8 @@ from sqlalchemy.orm import Session, load_only
 from google.cloud import storage
 
 from photocat.dependencies import get_db, get_tenant, get_tenant_setting
+from photocat.auth.dependencies import require_tenant_role_from_header
+from photocat.auth.models import UserProfile
 from photocat.asset_helpers import load_assets_for_images
 from photocat.tenant import Tenant
 from photocat.metadata import (
@@ -1012,6 +1014,7 @@ async def get_asset(
 @router.delete("/images/{image_id}", response_model=dict, operation_id="delete_image")
 async def delete_image(
     image_id: int,
+    _current_user: UserProfile = Depends(require_tenant_role_from_header("admin")),
     tenant: Tenant = Depends(get_tenant),
     db: Session = Depends(get_db),
 ):

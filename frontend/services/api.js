@@ -644,7 +644,7 @@ export async function setSuperAdminStatus(supabaseUid, isSuperAdmin) {
  * Update a user's role in a specific tenant membership
  * @param {string} supabaseUid - User UUID
  * @param {string} tenantId - Tenant ID
- * @param {'user'|'admin'} role - Updated role value
+ * @param {'user'|'editor'|'admin'} role - Updated role value
  * @returns {Promise<Object>} Success payload
  */
 export async function updateUserTenantRole(supabaseUid, tenantId, role) {
@@ -681,7 +681,7 @@ export async function getTenantUsers(tenantId) {
  * Update user role in the current tenant (tenant admin scope)
  * @param {string} tenantId - Tenant ID
  * @param {string} supabaseUid - User UUID
- * @param {'user'|'admin'} role - Updated role
+ * @param {'user'|'editor'|'admin'} role - Updated role
  * @returns {Promise<Object>} Success payload
  */
 export async function updateTenantUserRole(tenantId, supabaseUid, role) {
@@ -709,7 +709,7 @@ export async function removeTenantUserMembership(tenantId, supabaseUid) {
  * Create a tenant invitation for a user with pre-assigned role
  * @param {string} tenantId - Tenant ID
  * @param {string} email - Invitee email
- * @param {'user'|'admin'} role - Intended tenant role after acceptance
+ * @param {'user'|'editor'|'admin'} role - Intended tenant role after acceptance
  * @returns {Promise<Object>} Invitation payload (includes token)
  */
 export async function createTenantInvitation(tenantId, email, role = 'user') {

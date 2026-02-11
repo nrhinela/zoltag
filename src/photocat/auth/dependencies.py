@@ -12,6 +12,29 @@ from photocat.auth.models import UserProfile, UserTenant
 from photocat.metadata import Tenant as TenantModel
 
 
+ROLE_PRIORITY = {
+    "user": 1,
+    "editor": 2,
+    "admin": 3,
+}
+
+
+def _validate_role_name(required_role: str) -> None:
+    if required_role not in ROLE_PRIORITY:
+        raise ValueError(
+            f"Unsupported required_role '{required_role}'. "
+            f"Expected one of: {', '.join(ROLE_PRIORITY.keys())}"
+        )
+
+
+def _role_satisfies(actual_role: str, required_role: str) -> bool:
+    actual_priority = ROLE_PRIORITY.get(actual_role)
+    required_priority = ROLE_PRIORITY.get(required_role)
+    if actual_priority is None or required_priority is None:
+        return False
+    return actual_priority >= required_priority
+
+
 async def get_current_user(
     authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db)
@@ -191,12 +214,12 @@ def require_tenant_role(tenant_id: str, required_role: str = "user") -> Callable
 
     Creates a dependency that checks if the authenticated user has at least
     the specified role in the tenant. Supports role hierarchy:
-    - 'admin' is higher than 'user'
+    - admin > editor > user
     - Super admins automatically pass the check
 
     Args:
         tenant_id: The tenant ID to check
-        required_role: Minimum required role ('user' or 'admin')
+        required_role: Minimum required role ('user', 'editor', or 'admin')
 
     Returns:
         Callable: Dependency function
@@ -209,6 +232,8 @@ def require_tenant_role(tenant_id: str, required_role: str = "user") -> Callable
         ):
             # User is guaranteed to be an admin in tenant_id
     """
+    _validate_role_name(required_role)
+
     async def check_role(
         user: UserProfile = Depends(get_current_user),
         db: Session = Depends(get_db)
@@ -230,11 +255,10 @@ def require_tenant_role(tenant_id: str, required_role: str = "user") -> Callable
                 detail=f"No access to tenant {tenant_id}"
             )
 
-        # Check role hierarchy: admin > user
-        if required_role == "admin" and membership.role != "admin":
+        if not _role_satisfies(membership.role, required_role):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Admin role required in this tenant"
+                detail=f"{required_role.capitalize()} role required in this tenant"
             )
 
         return user
@@ -244,6 +268,8 @@ def require_tenant_role(tenant_id: str, required_role: str = "user") -> Callable
 
 def require_tenant_role_from_header(required_role: str = "admin") -> Callable:
     """Dependency factory to check tenant role using X-Tenant-ID header."""
+    _validate_role_name(required_role)
+
     async def check_role(
         x_tenant_id: str = Header(..., alias="X-Tenant-ID"),
         user: UserProfile = Depends(get_current_user),
@@ -264,10 +290,10 @@ def require_tenant_role_from_header(required_role: str = "admin") -> Callable:
                 detail=f"No access to tenant {x_tenant_id}"
             )
 
-        if required_role == "admin" and membership.role != "admin":
+        if not _role_satisfies(membership.role, required_role):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Admin role required in this tenant"
+                detail=f"{required_role.capitalize()} role required in this tenant"
             )
 
         return user

@@ -13,6 +13,7 @@ class TenantUsersAdmin extends LitElement {
   static properties = {
     tenant: { type: String },
     canManage: { type: Boolean },
+    isSuperAdmin: { type: Boolean },
     users: { type: Array },
     loading: { type: Boolean },
     error: { type: String },
@@ -174,6 +175,11 @@ class TenantUsersAdmin extends LitElement {
       .badge-user {
         background: #e0e7ff;
         color: #3730a3;
+      }
+
+      .badge-editor {
+        background: #dbeafe;
+        color: #1d4ed8;
       }
 
       .row-actions {
@@ -360,6 +366,7 @@ class TenantUsersAdmin extends LitElement {
     super();
     this.tenant = '';
     this.canManage = false;
+    this.isSuperAdmin = false;
     this.users = [];
     this.loading = false;
     this.error = '';
@@ -394,7 +401,20 @@ class TenantUsersAdmin extends LitElement {
   }
 
   _isAdminProtected(user) {
-    return Boolean(user?.is_super_admin || user?.role === 'admin');
+    if (!user) return true;
+    return Boolean(user.is_super_admin);
+  }
+
+  _roleLabel(role) {
+    if (role === 'admin') return 'Admin';
+    if (role === 'editor') return 'Editor';
+    return 'User';
+  }
+
+  _roleBadgeClass(role) {
+    if (role === 'admin') return 'badge-admin';
+    if (role === 'editor') return 'badge-editor';
+    return 'badge-user';
   }
 
   async _loadUsers() {
@@ -584,8 +604,8 @@ class TenantUsersAdmin extends LitElement {
               <tr>
                 <td><span class="email">${invitation.email}</span></td>
                 <td>
-                  <span class="badge ${invitation.role === 'admin' ? 'badge-admin' : 'badge-user'}">
-                    ${invitation.role === 'admin' ? 'Admin' : 'User'}
+                  <span class="badge ${this._roleBadgeClass(invitation.role)}>
+                    ${this._roleLabel(invitation.role)}
                   </span>
                 </td>
                 <td>${this._formatDate(invitation.created_at)}</td>
@@ -647,8 +667,8 @@ class TenantUsersAdmin extends LitElement {
                     </span>
                   </td>
                   <td>
-                    <span class="badge ${user.role === 'admin' ? 'badge-admin' : 'badge-user'}">
-                      ${user.role === 'admin' ? 'Admin' : 'User'}
+                    <span class="badge ${this._roleBadgeClass(user.role)}>
+                      ${this._roleLabel(user.role)}
                     </span>
                   </td>
                   <td>${this._formatDate(user.created_at)}</td>
@@ -760,6 +780,7 @@ class TenantUsersAdmin extends LitElement {
                   ?disabled=${this.saving}
                 >
                   <option value="user">User</option>
+                  <option value="editor">Editor</option>
                   <option value="admin">Admin</option>
                 </select>
               </div>
@@ -808,6 +829,7 @@ class TenantUsersAdmin extends LitElement {
                   ?disabled=${this.inviteSubmitting}
                 >
                   <option value="user">User</option>
+                  <option value="editor">Editor</option>
                   <option value="admin">Admin</option>
                 </select>
               </div>

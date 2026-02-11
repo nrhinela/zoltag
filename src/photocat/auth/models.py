@@ -70,7 +70,7 @@ class UserTenant(Base):
         id: UUID primary key
         supabase_uid: Reference to UserProfile (UUID)
         tenant_id: Reference to Tenant (string)
-        role: User's role in the tenant ('admin' or 'user')
+        role: User's role in the tenant ('admin', 'editor', or 'user')
         invited_by: Which admin created this membership (optional)
         invited_at: When the invitation was created
         accepted_at: When user accepted the invitation (NULL = pending)
@@ -113,7 +113,7 @@ class UserTenant(Base):
     )
 
     __table_args__ = (
-        CheckConstraint("role IN ('admin', 'user')", name="ck_user_tenants_role"),
+        CheckConstraint("role IN ('admin', 'editor', 'user')", name="ck_user_tenants_role"),
         Index("idx_user_tenants_supabase_uid", "supabase_uid"),
         Index("idx_user_tenants_tenant_id", "tenant_id"),
     )
@@ -183,7 +183,7 @@ class Invitation(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     __table_args__ = (
-        CheckConstraint("role IN ('admin', 'user')", name="ck_invitations_role"),
+        CheckConstraint("role IN ('admin', 'editor', 'user')", name="ck_invitations_role"),
     )
 
     @property

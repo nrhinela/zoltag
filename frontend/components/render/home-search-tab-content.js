@@ -64,6 +64,7 @@ function renderCtaGlyph(glyphKey) {
 }
 
 export function renderHomeTabContent(host, { navCards, formatCurateDate }) {
+  const tenantRole = host?._appShellState?.getTenantRole?.();
   const ctaCards = [
     {
       key: 'search',
@@ -82,8 +83,7 @@ export function renderHomeTabContent(host, { navCards, formatCurateDate }) {
       glyphKey: 'curate',
     },
     {
-      key: 'curate',
-      subTab: 'lists',
+      key: 'lists',
       label: 'Lists',
       subtitle: 'Create and download collections of content',
       iconKey: 'lists',
@@ -93,7 +93,9 @@ export function renderHomeTabContent(host, { navCards, formatCurateDate }) {
     {
       key: 'library',
       label: 'Admin',
-      subtitle: 'Manage assets, keywords, and people.',
+      subtitle: tenantRole === 'user'
+        ? 'View asset library and keyword settings. (Read-only)'
+        : 'Manage assets, keywords, and people.',
       iconKey: 'admin',
       accentClass: 'home-cta-admin',
       glyphKey: 'admin',

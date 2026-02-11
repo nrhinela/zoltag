@@ -99,6 +99,7 @@ class TaggingAdmin extends LitElement {
 
   static properties = {
     tenant: { type: String },
+    readOnly: { type: Boolean },
     categories: { type: Array },
     keywordsByCategory: { type: Object },
     expandedCategories: { type: Object },
@@ -113,6 +114,7 @@ class TaggingAdmin extends LitElement {
   constructor() {
     super();
     this.tenant = '';
+    this.readOnly = false;
     this.categories = [];
     this.keywordsByCategory = {};
     this.expandedCategories = new Set();
@@ -170,6 +172,7 @@ class TaggingAdmin extends LitElement {
   }
 
   openCategoryDialog(mode, category = null) {
+    if (this.readOnly) return;
     this.dialog = {
       type: 'category',
       mode,
@@ -200,6 +203,7 @@ class TaggingAdmin extends LitElement {
   }
 
   async openKeywordDialog(mode, category, keyword = null) {
+    if (this.readOnly) return;
     const isPeopleCategory = !!category.is_people_category;
     if (isPeopleCategory) {
       await this.loadPeopleOptions();
@@ -240,6 +244,7 @@ class TaggingAdmin extends LitElement {
   }
 
   openConfirmDialog(action, payload) {
+    if (this.readOnly) return;
     this.dialog = {
       type: 'confirm',
       action,
@@ -253,6 +258,7 @@ class TaggingAdmin extends LitElement {
 
   async handleCategorySubmit(e) {
     e.preventDefault();
+    if (this.readOnly) return;
     const payload = {
       name: this.dialog?.name?.trim(),
       slug: this.dialog?.slug?.trim() || null,
@@ -283,6 +289,7 @@ class TaggingAdmin extends LitElement {
 
   async handleKeywordSubmit(e) {
     e.preventDefault();
+    if (this.readOnly) return;
     const payload = {
       keyword: this.dialog?.keyword?.trim(),
       prompt: this.dialog?.prompt?.trim() || '',
@@ -343,6 +350,7 @@ class TaggingAdmin extends LitElement {
 
   async handleConfirm() {
     if (!this.dialog) return;
+    if (this.readOnly) return;
     const { action, payload } = this.dialog;
     try {
       if (action === 'delete-category') {
@@ -367,6 +375,7 @@ class TaggingAdmin extends LitElement {
 
   renderDialog() {
     if (!this.dialog) return null;
+    if (this.readOnly) return null;
 
     if (this.dialog.type === 'confirm') {
       const message = this.dialog.action === 'delete-category'
@@ -632,25 +641,29 @@ class TaggingAdmin extends LitElement {
             <span class="font-semibold text-gray-800">${category.name}</span>
             <span class="category-count">(${category.keyword_count} keywords)</span>
           </div>
-          <button
-            class="text-xs text-blue-600 hover:text-blue-700"
-            @click=${(e) => { e.stopPropagation(); this.openCategoryDialog('edit', category); }}
-          >
-            Edit
-          </button>
+          ${this.readOnly ? html`<span></span>` : html`
+            <button
+              class="text-xs text-blue-600 hover:text-blue-700"
+              @click=${(e) => { e.stopPropagation(); this.openCategoryDialog('edit', category); }}
+            >
+              Edit
+            </button>
+          `}
         </div>
         ${isExpanded ? html`
           <div class="border-t border-gray-200 px-4 py-3">
-            <div class="mb-3">
-              <button class="text-xs text-blue-600 hover:text-blue-700" @click=${() => this.openKeywordDialog('create', category)}>
-                + Add keyword
-              </button>
-            </div>
+            ${this.readOnly ? html`` : html`
+              <div class="mb-3">
+                <button class="text-xs text-blue-600 hover:text-blue-700" @click=${() => this.openKeywordDialog('create', category)}>
+                  + Add keyword
+                </button>
+              </div>
+            `}
             ${keywords.length ? html`
               <div class="grid grid-cols-3 gap-2 text-xs font-semibold text-gray-500 mb-2">
                 <div>Keyword</div>
                 <div>${isPeopleCategory ? 'Person' : 'Prompt'}</div>
-                <div class="text-right">Actions</div>
+                <div class="text-right">${this.readOnly ? '' : 'Actions'}</div>
               </div>
               <div class="divide-y divide-gray-100">
                 ${keywords.map((kw) => html`
@@ -662,7 +675,9 @@ class TaggingAdmin extends LitElement {
                         : (kw.prompt || '—')}
                     </div>
                     <div class="flex items-center justify-end gap-2">
-                      <button class="text-xs text-blue-600" @click=${() => this.openKeywordDialog('edit', category, kw)}>Edit</button>
+                      ${this.readOnly ? html`` : html`
+                        <button class="text-xs text-blue-600" @click=${() => this.openKeywordDialog('edit', category, kw)}>Edit</button>
+                      `}
                     </div>
                   </div>
                 `)}
@@ -682,12 +697,17 @@ class TaggingAdmin extends LitElement {
             <div>
               <h2 class="text-xl font-semibold text-gray-800">Keywords Configuration</h2>
               <p class="text-sm text-gray-500">Define categories and keywords for image tagging.</p>
+              ${this.readOnly ? html`
+                <p class="text-xs text-gray-500 mt-1">Read-only for your tenant role.</p>
+              ` : html``}
             </div>
-            <div class="flex items-center gap-3">
-              <button class="px-4 py-2 bg-blue-600 text-white rounded-lg" @click=${this._openUploadModal}>
-                <i class="fas fa-flask mr-2"></i>Test
-              </button>
-            </div>
+            ${this.readOnly ? html`` : html`
+              <div class="flex items-center gap-3">
+                <button class="px-4 py-2 bg-blue-600 text-white rounded-lg" @click=${this._openUploadModal}>
+                  <i class="fas fa-flask mr-2"></i>Test
+                </button>
+              </div>
+            `}
           </div>
           <details class="help-panel mb-6">
             <summary>How keywords and categories work</summary>
@@ -703,11 +723,13 @@ class TaggingAdmin extends LitElement {
 
           ${this.error ? html`<div class="text-sm text-red-600 mb-4">${this.error}</div>` : ''}
           ${this.isLoading ? html`<div class="text-sm text-gray-500">Loading categories…</div>` : ''}
-          <div class="mb-3">
-            <button class="text-sm text-blue-600 hover:text-blue-700" @click=${() => this.openCategoryDialog('create')}>
-              + New category
-            </button>
-          </div>
+          ${this.readOnly ? html`` : html`
+            <div class="mb-3">
+              <button class="text-sm text-blue-600 hover:text-blue-700" @click=${() => this.openCategoryDialog('create')}>
+                + New category
+              </button>
+            </div>
+          `}
           <div class="space-y-4">
             ${this.categories.map((category) => this.renderCategory(category))}
           </div>
@@ -718,6 +740,7 @@ class TaggingAdmin extends LitElement {
   }
 
   _openUploadModal() {
+    if (this.readOnly) return;
     this.dispatchEvent(new CustomEvent('open-upload-modal', { bubbles: true, composed: true }));
   }
 }
