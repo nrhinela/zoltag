@@ -111,7 +111,7 @@ class ListEditor extends LitElement {
     this.listItems = [];
     this.editingSelectedList = false;
     this.isDownloading = false;
-    this.downloadIncludeVariants = false;
+    this.downloadIncludeVariants = true;
     this.isLoadingItems = false;
     this.isLoadingLists = false;
     this.listSortKey = 'id';
@@ -440,6 +440,89 @@ class ListEditor extends LitElement {
     return Math.max(1, lines.length);
   }
 
+  _collectAttributionTags(image) {
+    const permatags = Array.isArray(image?.permatags) ? image.permatags : [];
+    const seen = new Set();
+    const tags = [];
+    for (const permatag of permatags) {
+      if (Number(permatag?.signum) !== 1) continue;
+      const category = String(permatag?.category || '').trim().toLowerCase();
+      if (!category.includes('attribution')) continue;
+      const keyword = String(permatag?.keyword || '').trim();
+      if (!keyword) continue;
+      const key = keyword.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      tags.push(keyword);
+    }
+    return tags;
+  }
+
+  _formatAttributionLine(attributionTags) {
+    const values = (Array.isArray(attributionTags) ? attributionTags : [])
+      .map((tag) => {
+        if (typeof tag === 'string') {
+          return tag.trim();
+        }
+        const keyword = String(tag?.keyword || '').trim();
+        const instagramUrl = String(tag?.instagram_url || '').trim();
+        if (keyword && instagramUrl) {
+          return `${keyword} (${instagramUrl})`;
+        }
+        return keyword || instagramUrl;
+      })
+      .filter(Boolean);
+    if (!values.length) return '';
+    return `Attribution: ${values.join(', ')}`;
+  }
+
+  async _loadPeopleInstagramMap() {
+    const map = new Map();
+    if (!this.tenant) {
+      return map;
+    }
+
+    const pageSize = 500;
+    let skip = 0;
+    while (true) {
+      const people = await fetchWithAuth(`/people?skip=${skip}&limit=${pageSize}`, {
+        tenantId: this.tenant,
+      });
+      if (!Array.isArray(people) || people.length === 0) {
+        break;
+      }
+      for (const person of people) {
+        const name = String(person?.name || '').trim().toLowerCase();
+        const instagramUrl = String(person?.instagram_url || '').trim();
+        if (!name || !instagramUrl || map.has(name)) continue;
+        map.set(name, instagramUrl);
+      }
+      if (people.length < pageSize) {
+        break;
+      }
+      skip += people.length;
+    }
+
+    return map;
+  }
+
+  _attachAttributionInstagramUrls(attributionTags, peopleInstagramByName) {
+    const seen = new Set();
+    const tags = [];
+    for (const tag of (Array.isArray(attributionTags) ? attributionTags : [])) {
+      const keyword = String(tag || '').trim();
+      if (!keyword) continue;
+      const key = keyword.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      tags.push({
+        keyword,
+        instagram_url: peopleInstagramByName.get(key) || null,
+      });
+    }
+    return tags;
+  }
+
   _estimateReadmeEntryHeight(doc, entry, textWidth) {
     const lineHeight = 4;
     let height = 6;
@@ -448,6 +531,11 @@ class ListEditor extends LitElement {
     const sourceLines = doc.splitTextToSize(entry.sourceUrl || '', textWidth);
     height += Math.max(1, sourceLines.length) * lineHeight + 3;
     height += lineHeight;
+    if (entry.attributionTags?.length) {
+      const attributionText = this._formatAttributionLine(entry.attributionTags);
+      const attributionLines = doc.splitTextToSize(attributionText, textWidth);
+      height += Math.max(1, attributionLines.length) * lineHeight + 2;
+    }
     if (entry.variants?.length) {
       for (const variant of entry.variants) {
         const variantNameLines = doc.splitTextToSize(variant.filename || 'variant', textWidth - 12);
@@ -522,6 +610,20 @@ class ListEditor extends LitElement {
       doc.setTextColor(75, 85, 99);
       doc.text(`Image ID: #${entry.imageId}`, textStart, textY);
       textY += 4;
+
+      if (entry.attributionTags?.length) {
+        doc.setFont(undefined, 'normal');
+        doc.setFontSize(8);
+        doc.setTextColor(75, 85, 99);
+        const attributionText = this._formatAttributionLine(entry.attributionTags);
+        const attributionLines = doc.splitTextToSize(
+          attributionText,
+          textWidth,
+        );
+        doc.text(attributionLines, textStart, textY);
+        textY += attributionLines.length * 4 + 1.5;
+      }
+
       doc.text('URL:', textStart, textY);
       textY += 3.5;
       doc.setTextColor(29, 78, 216);
@@ -584,6 +686,12 @@ class ListEditor extends LitElement {
       const zip = new window.JSZip();
       const usedZipPaths = new Set();
       const readmeEntries = [];
+      let peopleInstagramByName = new Map();
+      try {
+        peopleInstagramByName = await this._loadPeopleInstagramMap();
+      } catch (error) {
+        console.error('Failed to load people Instagram URLs for README attribution export:', error);
+      }
 
       // Download each image and add to zip
       for (const item of this.listItems) {
@@ -593,6 +701,10 @@ class ListEditor extends LitElement {
         const fallbackFilename = `image_${imageId}.jpg`;
         const filename = this._normalizeFilename(image.filename, fallbackFilename);
         const sourceUrl = this._getImageSourceUrl(image);
+        const attributionTags = this._attachAttributionInstagramUrls(
+          this._collectAttributionTags(image),
+          peopleInstagramByName,
+        );
         const variantsData = [];
         const parentStem = this._splitFilename(filename).stem;
         const variantFolder = `${this._sanitizeFolderSegment(parentStem, `image_${imageId}`)}_${imageId}__variants`;
@@ -667,6 +779,7 @@ class ListEditor extends LitElement {
           imageId,
           filename,
           sourceUrl,
+          attributionTags,
           thumbnailDataUrl,
           variants: variantsData,
         });

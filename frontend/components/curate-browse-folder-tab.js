@@ -8,6 +8,7 @@ import {
   getKeywordsByCategoryFromList,
 } from './shared/keyword-utils.js';
 import { renderResultsPagination } from './shared/pagination-controls.js';
+import { renderImageGrid } from './shared/image-grid.js';
 import FolderBrowserPanel from './folder-browser-panel.js';
 import './shared/widgets/filter-chips.js';
 import './shared/widgets/right-panel.js';
@@ -1226,39 +1227,32 @@ export class CurateBrowseFolderTab extends LitElement {
                           ` : folder}
                           <span class="text-xs text-gray-500 font-normal">(${images.length} images)</span>
                         </div>
-                        <div class="curate-grid">
-                          ${sortedImages.length ? sortedImages.map((image, index) => html`
-                            <div
-                              class="curate-thumb-wrapper ${this.browseDragSelection.includes(image.id) ? 'selected' : ''}"
-                              data-image-id="${image.id}"
-                              draggable="true"
-                              @dragstart=${(event) => this._handleBrowseDragStart(event, image)}
-                              @click=${(event) => this._handleBrowseImageClick(event, image, images)}
-                            >
-                              <img
-                                src=${image.thumbnail_url || `/api/v1/images/${image.id}/thumbnail`}
-                                alt=${image.filename}
-                                class="curate-thumb ${this.browseDragSelection.includes(image.id) ? 'selected' : ''} ${this._browseFlashSelectionIds?.has(image.id) ? 'flash' : ''}"
-                                draggable="false"
-                                @pointerdown=${(event) => this._handleBrowsePointerDown(event, index, image.id, order, folder)}
-                                @pointermove=${(event) => this._handleBrowsePointerMove(event)}
-                                @pointerenter=${() => this._handleBrowseSelectHover(index, folder)}
-                              >
-                              ${this.renderCurateRatingWidget ? this.renderCurateRatingWidget(image) : ''}
-                              ${this.renderCurateRatingStatic ? this.renderCurateRatingStatic(image) : ''}
-                              ${this.formatCurateDate && this.formatCurateDate(image) ? html`
-                                <div class="curate-thumb-date">
-                                  <span class="curate-thumb-id">#${image.id}</span>
-                                  <span class="curate-thumb-icon" aria-hidden="true">📷</span>${this.formatCurateDate(image)}
-                                </div>
-                              ` : ''}
-                            </div>
-                          `) : html`
-                            <div class="col-span-full flex items-center justify-center py-6">
-                              <span class="curate-spinner large" aria-hidden="true"></span>
-                            </div>
-                          `}
-                        </div>
+                        ${sortedImages.length ? renderImageGrid({
+                          images: sortedImages,
+                          selection: this.browseDragSelection,
+                          flashSelectionIds: this._browseFlashSelectionIds,
+                          selectionHandlers: this._browseSelectionHandlers,
+                          renderFunctions: {
+                            renderCurateRatingWidget: this.renderCurateRatingWidget,
+                            renderCurateRatingStatic: this.renderCurateRatingStatic,
+                            renderCuratePermatagSummary: this.renderCuratePermatagSummary,
+                            formatCurateDate: this.formatCurateDate,
+                          },
+                          eventHandlers: {
+                            onImageClick: (event, image) => this._handleBrowseImageClick(event, image, images),
+                            onDragStart: (event, image) => this._handleBrowseDragStart(event, image),
+                            onPointerDown: (event, index, imageId) => this._handleBrowsePointerDown(event, index, imageId, order, folder),
+                            onPointerMove: (event) => this._handleBrowsePointerMove(event),
+                            onPointerEnter: (index) => this._handleBrowseSelectHover(index, folder),
+                          },
+                          options: {
+                            showPermatags: true,
+                          },
+                        }) : html`
+                          <div class="col-span-full flex items-center justify-center py-6">
+                            <span class="curate-spinner large" aria-hidden="true"></span>
+                          </div>
+                        `}
                       </div>
                     `;
                   })}

@@ -9,13 +9,13 @@ import {
   createKeyword,
   updateKeyword,
   deleteKeyword,
-  getPeople,
 } from '../services/api.js';
 
 class TaggingAdmin extends LitElement {
   static styles = [tailwind, css`
     :host {
       display: block;
+      font-size: 16px;
     }
     .modal-backdrop {
       background: rgba(15, 23, 42, 0.45);
@@ -104,8 +104,6 @@ class TaggingAdmin extends LitElement {
     keywordsByCategory: { type: Object },
     expandedCategories: { type: Object },
     isLoading: { type: Boolean },
-    peopleOptions: { type: Array },
-    peopleLoading: { type: Boolean },
     isSavingCategory: { type: Boolean },
     dialog: { type: Object },
     error: { type: String },
@@ -119,8 +117,6 @@ class TaggingAdmin extends LitElement {
     this.keywordsByCategory = {};
     this.expandedCategories = new Set();
     this.isLoading = false;
-    this.peopleOptions = [];
-    this.peopleLoading = false;
     this.isSavingCategory = false;
     this.dialog = null;
     this.error = '';
@@ -186,47 +182,9 @@ class TaggingAdmin extends LitElement {
     };
   }
 
-  async loadPeopleOptions() {
-    if (!this.tenant) return;
-    this.peopleLoading = true;
-    try {
-      const tenantId = this.tenant || localStorage.getItem('tenantId') || 'default';
-      const people = await getPeople(tenantId, { limit: 500 });
-      this.peopleOptions = people || [];
-    } catch (error) {
-      console.error('Failed to load people:', error);
-      this.peopleOptions = [];
-      this.error = 'Failed to load people.';
-    } finally {
-      this.peopleLoading = false;
-    }
-  }
-
   async openKeywordDialog(mode, category, keyword = null) {
     if (this.readOnly) return;
     const isPeopleCategory = !!category.is_people_category;
-    if (isPeopleCategory) {
-      await this.loadPeopleOptions();
-    }
-    const personSelection = keyword?.person_id ? String(keyword.person_id) : '';
-    let personName = keyword?.person_name || '';
-    let personInstagramUrl = keyword?.person_instagram_url || '';
-    if (isPeopleCategory && personSelection) {
-      const matched = (this.peopleOptions || []).find((person) => String(person.id) === personSelection);
-      if (matched) {
-        personName = matched.name || personName;
-        personInstagramUrl = matched.instagram_url || personInstagramUrl;
-      } else if (keyword?.person_name) {
-        this.peopleOptions = [
-          ...this.peopleOptions,
-          {
-            id: Number(personSelection),
-            name: keyword.person_name,
-            instagram_url: keyword.person_instagram_url || '',
-          },
-        ];
-      }
-    }
 
     this.dialog = {
       type: 'keyword',
@@ -237,9 +195,9 @@ class TaggingAdmin extends LitElement {
       keywordId: keyword?.id || null,
       keyword: keyword?.keyword || '',
       prompt: keyword?.prompt || '',
-      personSelection,
-      personName,
-      personInstagramUrl,
+      personId: keyword?.person_id || null,
+      personName: keyword?.person_name || '',
+      personInstagramUrl: keyword?.person_instagram_url || '',
     };
   }
 
@@ -296,27 +254,21 @@ class TaggingAdmin extends LitElement {
     };
     if (!payload.keyword) return;
     if (this.dialog?.isPeopleCategory) {
-      const selection = this.dialog.personSelection || '';
-      if (!selection) {
+      const personName = (this.dialog.personName || '').trim();
+      const personInstagramUrl = (this.dialog.personInstagramUrl || '').trim();
+      if (!personName && !personInstagramUrl) {
         payload.person = null;
       } else {
-        const name = this.dialog.personName?.trim() || '';
-        if (!name) {
-          this.error = 'Person / company name is required when linking a person or company.';
+        if (!personName) {
+          this.error = 'Person / company name is required when setting person/company details.';
           return;
         }
-        const instagramUrl = (this.dialog.personInstagramUrl || '').trim();
-        if (selection === 'new') {
-          payload.person = {
-            name,
-            instagram_url: instagramUrl || null,
-          };
-        } else {
-          payload.person = {
-            id: Number(selection),
-            name,
-            instagram_url: instagramUrl || null,
-          };
+        payload.person = {
+          name: personName,
+          instagram_url: personInstagramUrl || null,
+        };
+        if (this.dialog.personId) {
+          payload.person.id = Number(this.dialog.personId);
         }
       }
     }
@@ -335,11 +287,7 @@ class TaggingAdmin extends LitElement {
       this.expandedCategories.add(this.dialog.categoryId);
       this.expandedCategories = new Set(this.expandedCategories);
       if (this.dialog.mode === 'create') {
-        this.dialog = {
-          ...this.dialog,
-          keyword: '',
-          prompt: '',
-        };
+        this.closeDialog();
       }
       this.error = '';
     } catch (error) {
@@ -364,7 +312,9 @@ class TaggingAdmin extends LitElement {
           ...this.keywordsByCategory,
           [payload.categoryId]: keywords || [],
         };
-        await this.loadCategories();
+        await this.loadCategories({ preserveExpanded: true });
+        this.expandedCategories.add(payload.categoryId);
+        this.expandedCategories = new Set(this.expandedCategories);
       }
       this.closeDialog();
     } catch (error) {
@@ -487,13 +437,6 @@ class TaggingAdmin extends LitElement {
     }
 
     if (this.dialog.type === 'keyword') {
-      const personSelection = this.dialog.personSelection ? String(this.dialog.personSelection) : '';
-      const selectedMissing = !!personSelection
-        && personSelection !== 'new'
-        && !(this.peopleOptions || []).some((person) => String(person.id) === String(personSelection));
-      const selectedLabel = this.dialog.personName
-        ? `${this.dialog.personName} (linked)`
-        : `Linked person #${personSelection}`;
       return html`
         <div class="fixed inset-0 z-50 flex items-center justify-center modal-backdrop">
           <div class="bg-white rounded-lg shadow-xl w-full max-w-6xl mx-4 p-6">
@@ -522,67 +465,24 @@ class TaggingAdmin extends LitElement {
               `}
               ${this.dialog.isPeopleCategory ? html`
                 <div class="border-t border-gray-100 pt-4 mt-2 mb-6">
-                  <label class="block text-sm font-semibold text-gray-700 mb-2">Linked Person / Company</label>
-                  <select
+                  <label class="block text-sm font-semibold text-gray-700 mb-2">Person / Company Name</label>
+                  <input
                     class="w-full border rounded-lg px-3 py-2 mb-3"
-                    .value=${personSelection}
-                    @change=${(e) => {
-                      const value = e.target.value;
-                      let personName = '';
-                      let personInstagramUrl = '';
-                      if (value && value !== 'new') {
-                        const matched = (this.peopleOptions || []).find((person) => String(person.id) === value);
-                        if (matched) {
-                          personName = matched.name || '';
-                          personInstagramUrl = matched.instagram_url || '';
-                        }
-                      }
-                      this.dialog = {
-                        ...this.dialog,
-                        personSelection: value,
-                        personName,
-                        personInstagramUrl,
-                      };
-                    }}
-                  >
-                    <option value="">None</option>
-                    <option value="new" ?selected=${personSelection === 'new'}>Create new person/company…</option>
-                    ${selectedMissing ? html`
-                      <option value=${personSelection} ?selected=${true}>${selectedLabel}</option>
-                    ` : ''}
-                    ${this.peopleOptions.map((person) => html`
-                      <option
-                        value=${String(person.id)}
-                        ?selected=${personSelection === String(person.id)}
-                      >${person.name}</option>
-                    `)}
-                  </select>
-                  ${this.peopleLoading ? html`
-                    <div class="text-xs text-gray-500 mb-3">Loading people…</div>
-                  ` : ''}
-                  ${this.dialog.personSelection ? html`
-                    <label class="block text-sm font-semibold text-gray-700 mb-2">Person / Company Name</label>
-                    <input
-                      class="w-full border rounded-lg px-3 py-2 mb-3"
-                      .value=${this.dialog.personName || ''}
-                      @input=${(e) => { this.dialog = { ...this.dialog, personName: e.target.value }; }}
-                      placeholder="e.g. Kendall Bush"
-                      required
-                    />
-                    <label class="block text-sm font-semibold text-gray-700 mb-2">Instagram URL</label>
-                    <input
-                      class="w-full border rounded-lg px-3 py-2"
-                      type="url"
-                      .value=${this.dialog.personInstagramUrl || ''}
-                      @input=${(e) => { this.dialog = { ...this.dialog, personInstagramUrl: e.target.value }; }}
-                      placeholder="https://instagram.com/username"
-                    />
-                    <p class="text-xs text-gray-500 mt-2">
-                      Changes here update the linked person record.
-                    </p>
-                  ` : html`
-                    <p class="text-xs text-gray-500">No person linked.</p>
-                  `}
+                    .value=${this.dialog.personName || ''}
+                    @input=${(e) => { this.dialog = { ...this.dialog, personName: e.target.value }; }}
+                    placeholder="e.g. Kendall Bush"
+                  />
+                  <label class="block text-sm font-semibold text-gray-700 mb-2">Instagram URL</label>
+                  <input
+                    class="w-full border rounded-lg px-3 py-2"
+                    type="url"
+                    .value=${this.dialog.personInstagramUrl || ''}
+                    @input=${(e) => { this.dialog = { ...this.dialog, personInstagramUrl: e.target.value }; }}
+                    placeholder="https://instagram.com/username"
+                  />
+                  <p class="text-xs text-gray-500 mt-2">
+                    Leave both fields empty to keep this keyword unlinked.
+                  </p>
                 </div>
               ` : ''}
               <div class="flex justify-between items-center gap-3">
@@ -643,7 +543,7 @@ class TaggingAdmin extends LitElement {
           </div>
           ${this.readOnly ? html`<span></span>` : html`
             <button
-              class="text-xs text-blue-600 hover:text-blue-700"
+              class="inline-flex items-center px-2.5 py-1.5 rounded-lg border border-blue-200 bg-blue-50 text-sm font-semibold text-blue-700 hover:bg-blue-100"
               @click=${(e) => { e.stopPropagation(); this.openCategoryDialog('edit', category); }}
             >
               Edit
@@ -654,20 +554,39 @@ class TaggingAdmin extends LitElement {
           <div class="border-t border-gray-200 px-4 py-3">
             ${this.readOnly ? html`` : html`
               <div class="mb-3">
-                <button class="text-xs text-blue-600 hover:text-blue-700" @click=${() => this.openKeywordDialog('create', category)}>
-                  + Add keyword
+                <button
+                  class="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-blue-200 bg-blue-50 text-sm font-semibold text-blue-700 hover:bg-blue-100"
+                  @click=${() => this.openKeywordDialog('create', category)}
+                >
+                  <span aria-hidden="true">+</span>
+                  <span>Add keyword</span>
                 </button>
               </div>
             `}
             ${keywords.length ? html`
-              <div class="grid grid-cols-3 gap-2 text-xs font-semibold text-gray-500 mb-2">
+              <div class="grid grid-cols-3 gap-2 text-sm font-semibold text-gray-500 mb-2">
                 <div>Keyword</div>
                 <div>${isPeopleCategory ? 'Person / Company' : 'Prompt'}</div>
                 <div class="text-right">${this.readOnly ? '' : 'Actions'}</div>
               </div>
               <div class="divide-y divide-gray-100">
                 ${keywords.map((kw) => html`
-                  <div class="grid grid-cols-3 gap-2 text-sm text-gray-700 items-start py-2">
+                  <div
+                    class="grid grid-cols-3 gap-2 text-base text-gray-700 items-start py-2 ${this.readOnly ? '' : 'cursor-pointer hover:bg-gray-50'}"
+                    role=${this.readOnly ? 'row' : 'button'}
+                    tabindex=${this.readOnly ? '-1' : '0'}
+                    @click=${() => {
+                      if (this.readOnly) return;
+                      this.openKeywordDialog('edit', category, kw);
+                    }}
+                    @keydown=${(e) => {
+                      if (this.readOnly) return;
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        this.openKeywordDialog('edit', category, kw);
+                      }
+                    }}
+                  >
                     <div class="font-medium">${kw.keyword}</div>
                     <div class="text-gray-500">
                       ${isPeopleCategory
@@ -676,7 +595,15 @@ class TaggingAdmin extends LitElement {
                     </div>
                     <div class="flex items-center justify-end gap-2">
                       ${this.readOnly ? html`` : html`
-                        <button class="text-xs text-blue-600" @click=${() => this.openKeywordDialog('edit', category, kw)}>Edit</button>
+                        <button
+                          class="inline-flex items-center px-2.5 py-1.5 rounded-lg border border-blue-200 bg-blue-50 text-sm font-semibold text-blue-700 hover:bg-blue-100"
+                          @click=${(e) => {
+                            e.stopPropagation();
+                            this.openKeywordDialog('edit', category, kw);
+                          }}
+                        >
+                          Edit
+                        </button>
                       `}
                     </div>
                   </div>

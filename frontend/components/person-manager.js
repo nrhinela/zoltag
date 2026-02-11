@@ -58,9 +58,9 @@ class PersonManager extends LitElement {
       background: #3b82f6;
       color: #ffffff;
       border: none;
-      border-radius: 6px;
-      font-size: 13px;
-      font-weight: 500;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
       cursor: pointer;
       transition: background 0.2s;
     }
@@ -72,9 +72,9 @@ class PersonManager extends LitElement {
       background: #e5e7eb;
       color: #111827;
       border: none;
-      border-radius: 6px;
-      font-size: 13px;
-      font-weight: 500;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
       cursor: pointer;
       transition: background 0.2s;
     }
@@ -86,9 +86,9 @@ class PersonManager extends LitElement {
       background: #dc2626;
       color: #ffffff;
       border: none;
-      border-radius: 6px;
-      font-size: 13px;
-      font-weight: 500;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
       cursor: pointer;
       transition: background 0.2s;
     }
@@ -189,19 +189,21 @@ class PersonManager extends LitElement {
       background: #e5e7eb;
     }
     .editor-form {
-      max-width: 760px;
+      width: 100%;
+      max-width: 1152px;
       margin: 0 auto;
       background: #ffffff;
       border-radius: 8px;
-      padding: 24px 24px 20px;
+      padding: 24px;
       border: 1px solid #e5e7eb;
-      box-shadow: 0 1px 2px rgba(17, 24, 39, 0.05);
+      box-shadow: 0 10px 20px rgba(15, 23, 42, 0.08);
     }
     .editor-title {
-      margin-bottom: 18px;
+      margin-bottom: 16px;
       font-size: 20px;
       font-weight: 700;
       color: #111827;
+      line-height: 1.3;
     }
     .form-group {
       margin-bottom: 16px;
@@ -210,7 +212,7 @@ class PersonManager extends LitElement {
       gap: 6px;
     }
     .form-label {
-      font-size: 13px;
+      font-size: 14px;
       font-weight: 600;
       color: #111827;
     }
@@ -218,7 +220,7 @@ class PersonManager extends LitElement {
       padding: 10px 12px;
       border: 1px solid #d1d5db;
       border-radius: 6px;
-      font-size: 13px;
+      font-size: 14px;
       font-family: inherit;
     }
     .form-input:focus {
@@ -227,7 +229,7 @@ class PersonManager extends LitElement {
       box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
     }
     .form-hint {
-      font-size: 12px;
+      font-size: 13px;
       color: #6b7280;
     }
     .form-actions {

@@ -2,7 +2,7 @@
 
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import distinct, func
+from sqlalchemy import distinct, func, case
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
 
@@ -178,20 +178,54 @@ async def list_people(
     """List all people for a tenant."""
 
     query = db.query(Person).filter(Person.tenant_id == tenant.id)
-
     people = query.order_by(Person.name).offset(skip).limit(limit).all()
+    if not people:
+        return []
+
+    person_ids = [person.id for person in people]
+
+    # Resolve each person's canonical keyword in one pass:
+    # prefer tag_type='person', else lowest keyword id for legacy rows.
+    keyword_rows = db.query(
+        Keyword.id,
+        Keyword.person_id,
+    ).filter(
+        Keyword.tenant_id == tenant.id,
+        Keyword.person_id.in_(person_ids),
+    ).order_by(
+        Keyword.person_id.asc(),
+        case((Keyword.tag_type == "person", 0), else_=1),
+        Keyword.id.asc(),
+    ).all()
+
+    keyword_id_by_person: dict[int, int] = {}
+    for keyword_id, person_id in keyword_rows:
+        if person_id is None or person_id in keyword_id_by_person:
+            continue
+        keyword_id_by_person[person_id] = keyword_id
+
+    keyword_ids = list(keyword_id_by_person.values())
+    tag_count_by_keyword: dict[int, int] = {}
+    if keyword_ids:
+        tag_count_rows = db.query(
+            Permatag.keyword_id,
+            func.count(distinct(Permatag.asset_id)).label("tag_count"),
+        ).filter(
+            Permatag.tenant_id == tenant.id,
+            Permatag.keyword_id.in_(keyword_ids),
+            Permatag.signum == 1,
+        ).group_by(
+            Permatag.keyword_id,
+        ).all()
+        tag_count_by_keyword = {
+            keyword_id: int(tag_count or 0)
+            for keyword_id, tag_count in tag_count_rows
+        }
 
     results = []
     for person in people:
-        # Get the keyword for this person (if any)
-        keyword = _get_person_keyword(db, tenant.id, person.id)
-
-        # Get tag count using the keyword
-        tag_count = 0
-        keyword_id = None
-        if keyword:
-            keyword_id = keyword.id
-            tag_count = _count_person_tagged_images(db, tenant.id, keyword.id)
+        keyword_id = keyword_id_by_person.get(person.id)
+        tag_count = int(tag_count_by_keyword.get(keyword_id, 0)) if keyword_id else 0
 
         results.append(PersonResponse(
             id=person.id,
