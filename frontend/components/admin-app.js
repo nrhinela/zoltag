@@ -4,6 +4,7 @@ import './app-header.js';
 import './admin-tenant-list.js';
 import './admin-tenant-editor.js';
 import './admin-users.js';
+import './cli-commands.js';
 import { getTenants } from '../services/api.js';
 
 /**
@@ -12,7 +13,7 @@ import { getTenants } from '../services/api.js';
  */
 class AdminApp extends LitElement {
   static properties = {
-    activeTab: { type: String }, // 'tenants' or 'users'
+    activeTab: { type: String }, // 'tenants', 'users', or 'cli'
     view: { type: String }, // 'list' or 'editor' (for tenants)
     currentTenantId: { type: String },
     tenants: { type: Array },
@@ -84,6 +85,13 @@ class AdminApp extends LitElement {
         text-align: center;
         padding: 40px;
         color: #666;
+      }
+
+      .panel {
+        background: white;
+        border-radius: 8px;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        padding: 20px;
       }
 
       .tabs {
@@ -197,6 +205,12 @@ class AdminApp extends LitElement {
           >
             <i class="fas fa-users-cog mr-2"></i>Users
           </button>
+          <button
+            class="tab-button ${this.activeTab === 'cli' ? 'active' : ''}"
+            @click="${() => this.switchTab('cli')}"
+          >
+            <i class="fas fa-terminal mr-2"></i>CLI Docs
+          </button>
         </div>
 
         ${this.activeTab === 'tenants'
@@ -212,7 +226,13 @@ class AdminApp extends LitElement {
                   .tenantId="${this.currentTenantId}"
                   @close="${this.handleCloseEditor}"
                 ></admin-tenant-editor>`
-          : html`<admin-users></admin-users>`}
+          : this.activeTab === 'users'
+            ? html`<admin-users></admin-users>`
+            : html`
+                <div class="panel">
+                  <cli-commands></cli-commands>
+                </div>
+              `}
       </div>
     `;
   }

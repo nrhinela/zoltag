@@ -19,6 +19,7 @@ class AppHeader extends LitElement {
         currentUser: { type: Object },
         canCurate: { type: Boolean },
         tenantMenuOpen: { type: Boolean },
+        userMenuOpen: { type: Boolean },
     }
 
     constructor() {
@@ -36,6 +37,7 @@ class AppHeader extends LitElement {
         this.currentUser = null;
         this.canCurate = null;
         this.tenantMenuOpen = false;
+        this.userMenuOpen = false;
         this._lastTenantReconcileAttempt = '';
         this._handleDocumentClick = this._handleDocumentClick.bind(this);
     }
@@ -168,19 +170,15 @@ class AppHeader extends LitElement {
       }));
   }
 
-  _handleUserMenuChange(e) {
-      const value = e.target.value;
+  _handleUserMenuAction(value) {
+      this.userMenuOpen = false;
       if (value === 'public-site') {
           window.location.href = '/';
-      } else if (value === 'cli-docs') {
-          this._handleTabChange('cli');
       } else if (value === 'admin') {
           this._openAdmin();
       } else if (value === 'logout') {
           this._handleLogout();
       }
-      // Reset to default
-      e.target.value = '';
   }
 
   _isAdmin() {
@@ -254,6 +252,7 @@ class AppHeader extends LitElement {
 
   _toggleTenantMenu(event) {
       event?.stopPropagation?.();
+      this.userMenuOpen = false;
       this.tenantMenuOpen = !this.tenantMenuOpen;
   }
 
@@ -265,11 +264,56 @@ class AppHeader extends LitElement {
       this.dispatchEvent(new CustomEvent('tenant-change', { detail: nextTenant, bubbles: true, composed: true }));
   }
 
+  _toggleUserMenu(event) {
+      event?.stopPropagation?.();
+      this.tenantMenuOpen = false;
+      this.userMenuOpen = !this.userMenuOpen;
+  }
+
   _handleDocumentClick(event) {
-      if (!this.tenantMenuOpen) return;
+      if (!this.tenantMenuOpen && !this.userMenuOpen) return;
       const target = event?.target;
       if (target && this.contains(target)) return;
       this.tenantMenuOpen = false;
+      this.userMenuOpen = false;
+  }
+
+  _getUserDisplayName() {
+      return this.currentUser?.user?.display_name
+          || this.currentUser?.user?.email?.split('@')?.[0]
+          || 'User';
+  }
+
+  _getUserEmail() {
+      return this.currentUser?.user?.email || '';
+  }
+
+  _getUserMenuIdentityLine() {
+      const name = this._getUserDisplayName();
+      const email = this._getUserEmail();
+      return email ? `${name} - ${email}` : name;
+  }
+
+  _getUserAvatarLetter() {
+      const name = this._getUserDisplayName().trim();
+      return name ? name.charAt(0).toUpperCase() : 'U';
+  }
+
+  _hashString(value) {
+      let hash = 0;
+      for (let i = 0; i < value.length; i += 1) {
+          hash = ((hash << 5) - hash) + value.charCodeAt(i);
+          hash |= 0;
+      }
+      return Math.abs(hash);
+  }
+
+  _getUserAvatarStyle() {
+      const seed = `${this._getUserDisplayName()}|${this._getUserEmail()}`;
+      const hash = this._hashString(seed);
+      const hueA = hash % 360;
+      const hueB = (hueA + 45 + (hash % 70)) % 360;
+      return `background: linear-gradient(135deg, hsl(${hueA} 78% 56%), hsl(${hueB} 78% 46%));`;
   }
 
   render() {
@@ -294,7 +338,7 @@ class AppHeader extends LitElement {
                                 <button
                                     id="tenantSelect"
                                     type="button"
-                                    class="px-4 py-2 border-2 border-gray-300 rounded-lg text-base font-medium focus:border-blue-500 focus:outline-none bg-white min-w-[280px] flex items-center justify-between gap-3"
+                                    class="px-4 py-2 border-2 border-gray-300 rounded-lg text-sm font-normal text-gray-800 focus:border-blue-500 focus:outline-none bg-white min-w-[280px] flex items-center justify-between gap-3"
                                     style="min-height: 42px;"
                                     aria-haspopup="listbox"
                                     aria-expanded=${this.tenantMenuOpen ? 'true' : 'false'}
@@ -334,17 +378,43 @@ class AppHeader extends LitElement {
                                 ` : html``}
                             </div>
                         </div>
-                        <select
-                            class="px-4 py-2 text-base font-medium focus:outline-none bg-transparent"
-                            style="min-height: 42px; border: none; appearance: none; cursor: pointer;"
-                            @change=${this._handleUserMenuChange}
-                        >
-                            <option value="">${this.currentUser?.user?.display_name || 'User Menu'}</option>
-                            <option value="public-site">Back to public site</option>
-                            <option value="cli-docs">CLI docs</option>
-                            ${this._isAdmin() ? html`<option value="admin">System Administration</option>` : ''}
-                            <option value="logout">Sign Out</option>
-                        </select>
+                        <div class="relative">
+                            <button
+                                type="button"
+                                class="inline-flex items-center justify-center h-10 w-10 rounded-full text-white text-lg font-semibold shadow-sm ring-1 ring-black/10 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                style=${this._getUserAvatarStyle()}
+                                aria-haspopup="menu"
+                                aria-expanded=${this.userMenuOpen ? 'true' : 'false'}
+                                @click=${this._toggleUserMenu}
+                                title=${this._getUserDisplayName()}
+                            >
+                                ${this._getUserAvatarLetter()}
+                            </button>
+                            ${this.userMenuOpen ? html`
+                                <div class="absolute right-0 mt-2 min-w-[320px] max-w-[80vw] bg-white border border-gray-200 rounded-lg shadow-lg z-50" role="menu">
+                                    <div class="px-3 py-2 text-sm text-gray-800 border-b border-gray-100 truncate" title=${this._getUserMenuIdentityLine()}>
+                                        ${this._getUserMenuIdentityLine()}
+                                    </div>
+                                    <button
+                                        type="button"
+                                        class="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 text-gray-800"
+                                        @click=${() => this._handleUserMenuAction('public-site')}
+                                    >Back to public site</button>
+                                    ${this._isAdmin() ? html`
+                                        <button
+                                            type="button"
+                                            class="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 text-gray-800"
+                                            @click=${() => this._handleUserMenuAction('admin')}
+                                        >System Administration</button>
+                                    ` : html``}
+                                    <button
+                                        type="button"
+                                        class="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 text-red-700 border-t border-gray-100"
+                                        @click=${() => this._handleUserMenuAction('logout')}
+                                    >Sign Out</button>
+                                </div>
+                            ` : html``}
+                        </div>
                     </div>
                 </div>
             </div>
