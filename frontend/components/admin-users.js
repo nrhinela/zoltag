@@ -1,6 +1,13 @@
 import { LitElement, html, css } from 'lit';
 import { tailwind } from './tailwind-lit.js';
-import { fetchWithAuth, disableUser, enableUser, setSuperAdminStatus } from '../services/api.js';
+import {
+  fetchWithAuth,
+  disableUser,
+  enableUser,
+  setSuperAdminStatus,
+  updateUserTenantRole,
+  removeUserTenantAssignment,
+} from '../services/api.js';
 
 /**
  * Admin User Management Component
@@ -22,10 +29,12 @@ class AdminUsers extends LitElement {
     showAssignTenantForm: { type: Boolean },
     assignForm: { type: Object },
     assigningTenant: { type: Boolean },
+    showEditUserForm: { type: Boolean },
     showDisableConfirmation: { type: Boolean },
     disablingUser: { type: Boolean },
     userToDisable: { type: Object },
     updatingUserStatus: { type: Boolean },
+    updatingMembershipKey: { type: String },
   };
 
   static styles = [
@@ -59,36 +68,62 @@ class AdminUsers extends LitElement {
 
       .card-content {
         padding: 20px;
+        overflow-x: auto;
       }
 
-      .users-list {
-        border-collapse: collapse;
-        width: 100%;
+      .users-grid {
+        border: 1px solid #e5e7eb;
+        border-radius: 8px;
+        overflow: hidden;
+        min-width: 1180px;
       }
 
-      .users-list th {
-        text-align: left;
-        padding: 12px;
-        background: #f9fafb;
+      .users-grid-row {
+        display: grid;
+        grid-template-columns:
+          minmax(140px, 1fr)
+          minmax(220px, 1.4fr)
+          120px
+          130px
+          170px
+          minmax(260px, 2fr)
+          minmax(140px, 1.1fr);
+        gap: 12px;
+        align-items: start;
+        padding: 12px 16px;
         border-bottom: 1px solid #e5e7eb;
-        font-weight: 600;
+      }
+
+      .users-grid-row:last-child {
+        border-bottom: none;
+      }
+
+      .users-grid-row:hover {
+        background: #f9fafb;
+      }
+
+      .users-grid-header {
+        background: #f9fafb;
         color: #374151;
-        font-size: 14px;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        text-transform: uppercase;
       }
 
-      .users-list td {
-        padding: 12px;
-        border-bottom: 1px solid #e5e7eb;
-      }
-
-      .users-list tr:hover {
+      .users-grid-header:hover {
         background: #f9fafb;
+      }
+
+      .users-grid-cell {
+        min-width: 0;
       }
 
       .user-email {
         font-family: monospace;
         font-size: 13px;
         color: #6b7280;
+        overflow-wrap: anywhere;
       }
 
       .user-name {
@@ -124,11 +159,19 @@ class AdminUsers extends LitElement {
       .btn-secondary {
         background: #e5e7eb;
         color: #374151;
-        margin-left: 8px;
       }
 
       .btn-secondary:hover {
         background: #d1d5db;
+      }
+
+      .btn-info {
+        background: #2563eb;
+        color: white;
+      }
+
+      .btn-info:hover {
+        background: #1d4ed8;
       }
 
       .btn-danger {
@@ -352,14 +395,113 @@ class AdminUsers extends LitElement {
         color: #3730a3;
       }
 
-      .tenant-badge {
-        display: inline-block;
-        padding: 4px 8px;
-        background: #e0e7ff;
-        color: #3730a3;
-        border-radius: 4px;
+      .tenant-memberships {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .tenant-membership-row {
+        display: grid;
+        grid-template-columns: minmax(100px, 1fr) 96px auto;
+        gap: 8px;
+        align-items: center;
+      }
+
+      .tenant-membership-name {
+        font-size: 13px;
+        color: #1f2937;
+        overflow-wrap: anywhere;
+      }
+
+      .tenant-role-select {
+        border: 1px solid #d1d5db;
+        border-radius: 6px;
+        background: white;
         font-size: 12px;
-        margin: 2px 2px;
+        padding: 5px 8px;
+        color: #374151;
+      }
+
+      .tenant-role-select:disabled {
+        background: #f3f4f6;
+      }
+
+      .tenant-remove-btn {
+        border: 1px solid #fca5a5;
+        border-radius: 6px;
+        background: #fef2f2;
+        color: #dc2626;
+        font-size: 12px;
+        padding: 6px 10px;
+        cursor: pointer;
+      }
+
+      .tenant-remove-btn:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+      }
+
+      .muted-label {
+        color: #9ca3af;
+        font-size: 13px;
+      }
+
+      .row-actions {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+      }
+
+      .tenant-summary {
+        font-size: 13px;
+        color: #374151;
+      }
+
+      .tenant-summary-sub {
+        font-size: 12px;
+        color: #6b7280;
+        margin-top: 2px;
+      }
+
+      .edit-section {
+        margin-bottom: 16px;
+        padding: 12px;
+        border: 1px solid #e5e7eb;
+        border-radius: 8px;
+      }
+
+      .edit-section:last-of-type {
+        margin-bottom: 0;
+      }
+
+      .edit-section-title {
+        font-size: 13px;
+        font-weight: 700;
+        color: #374151;
+        margin-bottom: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.02em;
+      }
+
+      .edit-inline-row {
+        display: grid;
+        grid-template-columns: 1fr 130px auto;
+        gap: 8px;
+        align-items: center;
+      }
+
+      @media (max-width: 1400px) {
+        .users-grid-row {
+          grid-template-columns:
+            minmax(140px, 1fr)
+            minmax(220px, 1.4fr)
+            110px
+            120px
+            150px
+            minmax(220px, 1.7fr)
+            minmax(130px, 1fr);
+        }
       }
     `
   ];
@@ -386,9 +528,11 @@ class AdminUsers extends LitElement {
       role: 'user',
     };
     this.assigningTenant = false;
+    this.showEditUserForm = false;
     this.showDisableConfirmation = false;
     this.disablingUser = false;
     this.userToDisable = null;
+    this.updatingMembershipKey = '';
   }
 
   connectedCallback() {
@@ -406,6 +550,12 @@ class AdminUsers extends LitElement {
       await this.loadPendingUsers();
       await this.loadApprovedUsers();
       this.allUsers = [...this.pendingUsers, ...this.approvedUsers];
+      if (this.selectedUser?.supabase_uid) {
+        const refreshedUser = this.allUsers.find((u) => u.supabase_uid === this.selectedUser.supabase_uid);
+        if (refreshedUser) {
+          this.selectedUser = refreshedUser;
+        }
+      }
     } catch (error) {
       console.error('Failed to load users:', error);
       this.error = error.message;
@@ -521,7 +671,9 @@ class AdminUsers extends LitElement {
 
   closeAssignTenantForm() {
     this.showAssignTenantForm = false;
-    this.selectedUser = null;
+    if (!this.showEditUserForm) {
+      this.selectedUser = null;
+    }
   }
 
   updateAssignForm(field, value) {
@@ -552,6 +704,54 @@ class AdminUsers extends LitElement {
 
       // Success - reload users and close form
       this.closeAssignTenantForm();
+      await this.loadAllUsers();
+    } catch (error) {
+      console.error('Failed to assign tenant:', error);
+      this.error = error.message;
+    } finally {
+      this.assigningTenant = false;
+    }
+  }
+
+  openEditUserForm(user) {
+    this.selectedUser = user;
+    this.showEditUserForm = true;
+    this.assignForm = {
+      tenantId: '',
+      role: 'user',
+    };
+  }
+
+  closeEditUserForm() {
+    this.showEditUserForm = false;
+    if (!this.showAssignTenantForm && !this.showApprovalForm) {
+      this.selectedUser = null;
+    }
+  }
+
+  async assignTenantFromEdit() {
+    if (!this.selectedUser || !this.assignForm.tenantId) {
+      this.error = 'Please select a tenant';
+      return;
+    }
+
+    this.assigningTenant = true;
+    try {
+      await fetchWithAuth(
+        `/admin/users/${this.selectedUser.supabase_uid}/assign-tenant`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            tenant_id: this.assignForm.tenantId,
+            role: this.assignForm.role,
+          }),
+        }
+      );
+
+      this.assignForm = {
+        tenantId: '',
+        role: 'user',
+      };
       await this.loadAllUsers();
     } catch (error) {
       console.error('Failed to assign tenant:', error);
@@ -620,6 +820,49 @@ class AdminUsers extends LitElement {
     }
   }
 
+  getMembershipKey(supabaseUid, tenantId) {
+    return `${supabaseUid}:${tenantId}`;
+  }
+
+  isMembershipUpdating(supabaseUid, tenantId) {
+    return this.updatingMembershipKey === this.getMembershipKey(supabaseUid, tenantId);
+  }
+
+  async updateMembershipRole(user, tenantId, role) {
+    const membershipKey = this.getMembershipKey(user.supabase_uid, tenantId);
+    this.updatingMembershipKey = membershipKey;
+    this.error = '';
+    try {
+      await updateUserTenantRole(user.supabase_uid, tenantId, role);
+      await this.loadAllUsers();
+    } catch (error) {
+      console.error('Failed to update tenant role:', error);
+      this.error = error.message;
+    } finally {
+      this.updatingMembershipKey = '';
+    }
+  }
+
+  async removeMembership(user, tenant) {
+    const confirmMessage = `Remove ${user.email} from tenant "${tenant.tenant_name}"?`;
+    if (!confirm(confirmMessage)) {
+      return;
+    }
+
+    const membershipKey = this.getMembershipKey(user.supabase_uid, tenant.tenant_id);
+    this.updatingMembershipKey = membershipKey;
+    this.error = '';
+    try {
+      await removeUserTenantAssignment(user.supabase_uid, tenant.tenant_id);
+      await this.loadAllUsers();
+    } catch (error) {
+      console.error('Failed to remove tenant membership:', error);
+      this.error = error.message;
+    } finally {
+      this.updatingMembershipKey = '';
+    }
+  }
+
   getTenantAssignments(user) {
     if (!user.tenants) return [];
     return user.tenants.map(t => t.tenant_id);
@@ -647,6 +890,59 @@ class AdminUsers extends LitElement {
     }
   }
 
+  renderTenantMemberships(user) {
+    if (!user.tenants || user.tenants.length === 0) {
+      return html`<span class="muted-label">No tenants</span>`;
+    }
+
+    return html`
+      <div class="tenant-memberships">
+        ${user.tenants.map((tenant) => {
+          const isBusy = this.isMembershipUpdating(user.supabase_uid, tenant.tenant_id);
+          return html`
+            <div class="tenant-membership-row">
+              <span class="tenant-membership-name">${tenant.tenant_name}</span>
+              <select
+                class="tenant-role-select"
+                .value=${tenant.role}
+                ?disabled=${isBusy}
+                @change=${(e) => this.updateMembershipRole(user, tenant.tenant_id, e.target.value)}
+                title="Change role for this tenant"
+              >
+                <option value="user">User</option>
+                <option value="admin">Admin</option>
+              </select>
+              <button
+                class="tenant-remove-btn"
+                ?disabled=${isBusy}
+                @click=${() => this.removeMembership(user, tenant)}
+                title="Remove tenant assignment"
+              >
+                ${isBusy ? 'Saving...' : 'Remove'}
+              </button>
+            </div>
+          `;
+        })}
+      </div>
+    `;
+  }
+
+  renderTenantSummary(user) {
+    if (!user.tenants || user.tenants.length === 0) {
+      return html`<span class="muted-label">No tenants</span>`;
+    }
+
+    const names = user.tenants.map((tenant) => tenant.tenant_name);
+    const headline = user.tenants.length === 1 ? '1 tenant' : `${user.tenants.length} tenants`;
+    const preview = names.slice(0, 2).join(', ');
+    const suffix = names.length > 2 ? ` +${names.length - 2} more` : '';
+
+    return html`
+      <div class="tenant-summary">${headline}</div>
+      <div class="tenant-summary-sub">${preview}${suffix}</div>
+    `;
+  }
+
   renderUserTable(users) {
     if (users.length === 0) {
       const emptyMessage =
@@ -672,107 +968,70 @@ class AdminUsers extends LitElement {
     }
 
     return html`
-      <table class="users-list">
-        <thead>
-          <tr>
-            <th>User</th>
-            <th>Email</th>
-            <th>Status</th>
-            <th>Role</th>
-            <th>Registered</th>
-            ${this.activeUserTab !== 'pending' ? html`<th>Tenants</th>` : ''}
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${users.map(
-            user => html`
-              <tr>
-                <td>
-                  <div class="user-name">
-                    ${user.display_name || 'No name'}
-                  </div>
-                </td>
-                <td>
-                  <div class="user-email">${user.email}</div>
-                </td>
-                <td>
-                  <span class="user-status-badge ${user.is_active ? 'status-approved' : 'status-pending'}">
-                    ${user.is_active ? 'Approved' : 'Pending'}
-                  </span>
-                </td>
-                <td>
-                  <span class="user-status-badge ${user.is_super_admin ? 'status-super-admin' : 'status-user'}">
-                    ${user.is_super_admin ? 'Super Admin' : 'User'}
-                  </span>
-                </td>
-                <td>
-                  <div class="created-date">${this.formatDate(user.created_at)}</div>
-                </td>
-                ${this.activeUserTab !== 'pending'
+      <div class="users-grid">
+        <div class="users-grid-row users-grid-header">
+          <div class="users-grid-cell">User</div>
+          <div class="users-grid-cell">Email</div>
+          <div class="users-grid-cell">Status</div>
+          <div class="users-grid-cell">Account</div>
+          <div class="users-grid-cell">Registered</div>
+          <div class="users-grid-cell">Tenant Assignments</div>
+          <div class="users-grid-cell">Actions</div>
+        </div>
+        ${users.map((user) => html`
+          <div class="users-grid-row">
+            <div class="users-grid-cell">
+              <div class="user-name">${user.display_name || 'No name'}</div>
+            </div>
+            <div class="users-grid-cell">
+              <div class="user-email">${user.email}</div>
+            </div>
+            <div class="users-grid-cell">
+              <span class="user-status-badge ${user.is_active ? 'status-approved' : 'status-pending'}">
+                ${user.is_active ? 'Approved' : 'Pending'}
+              </span>
+            </div>
+            <div class="users-grid-cell">
+              <span class="user-status-badge ${user.is_super_admin ? 'status-super-admin' : 'status-user'}">
+                ${user.is_super_admin ? 'Super Admin' : 'User'}
+              </span>
+            </div>
+            <div class="users-grid-cell">
+              <div class="created-date">${this.formatDate(user.created_at)}</div>
+            </div>
+            <div class="users-grid-cell">
+              ${user.is_active ? this.renderTenantSummary(user) : html`<span class="muted-label">Pending approval</span>`}
+            </div>
+            <div class="users-grid-cell">
+              <div class="row-actions">
+                ${user.is_active
                   ? html`
-                      <td>
-                        ${user.tenants && user.tenants.length > 0
-                          ? user.tenants.map(
-                              tenant => html`
-                                <span class="tenant-badge">
-                                  ${tenant.tenant_name} (${tenant.role})
-                                </span>
-                              `
-                            )
-                          : html`<span style="color: #9ca3af; font-size: 13px;">No tenants</span>`}
-                      </td>
+                      <button
+                        class="btn btn-primary"
+                        @click=${() => this.openEditUserForm(user)}
+                      >
+                        <i class="fas fa-pen"></i> Edit
+                      </button>
                     `
-                  : ''}
-                <td>
-                  <div style="display: flex; gap: 4px; flex-wrap: wrap;">
-                    ${user.is_active
-                      ? html`
-                          <button
-                            class="btn btn-primary"
-                            @click=${() => this.openAssignTenantForm(user)}
-                            ?disabled=${this.getAvailableTenants(user).length === 0}
-                            title="${this.getAvailableTenants(user).length === 0 ? 'No more tenants available' : ''}"
-                          >
-                            <i class="fas fa-plus"></i> Assign
-                          </button>
-                        `
-                      : html`
-                          <button
-                            class="btn btn-primary"
-                            @click=${() => this.openApprovalForm(user)}
-                          >
-                            <i class="fas fa-check"></i> Approve
-                          </button>
-                          <button
-                            class="btn btn-secondary"
-                            @click=${() => this.rejectUser(user)}
-                          >
-                            <i class="fas fa-times"></i> Reject
-                          </button>
-                        `}
-                    <button
-                      class="btn ${user.is_super_admin ? 'btn-warning' : 'btn-info'}"
-                      @click=${() => this.toggleSuperAdmin(user)}
-                      ?disabled=${this.updatingUserStatus}
-                    >
-                      <i class="fas ${user.is_super_admin ? 'fa-crown' : 'fa-user'}"></i>
-                      ${user.is_super_admin ? 'Remove Admin' : 'Make Admin'}
-                    </button>
-                    <button
-                      class="btn btn-danger"
-                      @click=${() => this.openDisableConfirmation(user)}
-                      ?disabled=${!user.is_active}
-                    >
-                      <i class="fas fa-ban"></i> Disable
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            `
-          )}
-        </tbody>
-      </table>
+                  : html`
+                      <button
+                        class="btn btn-primary"
+                        @click=${() => this.openApprovalForm(user)}
+                      >
+                        <i class="fas fa-check"></i> Approve
+                      </button>
+                      <button
+                        class="btn btn-secondary"
+                        @click=${() => this.rejectUser(user)}
+                      >
+                        <i class="fas fa-times"></i> Reject
+                      </button>
+                    `}
+              </div>
+            </div>
+          </div>
+        `)}
+      </div>
     `;
   }
 
@@ -833,6 +1092,123 @@ class AdminUsers extends LitElement {
             : this.renderUserTable(displayUsers)}
         </div>
       </div>
+
+      ${this.showEditUserForm
+        ? html`
+            <div class="modal-overlay" @click=${this.closeEditUserForm}>
+              <div class="modal" @click=${(e) => e.stopPropagation()}>
+                <div class="modal-header">
+                  <h3 class="modal-title">Edit User</h3>
+                  <button
+                    class="modal-close"
+                    @click=${this.closeEditUserForm}
+                  >
+                    ×
+                  </button>
+                </div>
+
+                <div class="modal-content">
+                  <div class="user-info">
+                    <div class="user-info-item">
+                      <span class="user-info-label">Name:</span>
+                      <span class="user-info-value">${this.selectedUser?.display_name || 'Not provided'}</span>
+                    </div>
+                    <div class="user-info-item">
+                      <span class="user-info-label">Email:</span>
+                      <span class="user-info-value">${this.selectedUser?.email}</span>
+                    </div>
+                    <div class="user-info-item">
+                      <span class="user-info-label">Registered:</span>
+                      <span class="user-info-value">${this.formatDate(this.selectedUser?.created_at)}</span>
+                    </div>
+                  </div>
+
+                  <div class="edit-section">
+                    <div class="edit-section-title">Account Controls</div>
+                    <div class="row-actions">
+                      <button
+                        class="btn ${this.selectedUser?.is_super_admin ? 'btn-warning' : 'btn-info'}"
+                        @click=${() => this.toggleSuperAdmin(this.selectedUser)}
+                        ?disabled=${this.updatingUserStatus}
+                      >
+                        <i class="fas ${this.selectedUser?.is_super_admin ? 'fa-crown' : 'fa-user'}"></i>
+                        ${this.selectedUser?.is_super_admin ? 'Remove Admin' : 'Make Admin'}
+                      </button>
+                      ${this.selectedUser?.is_active
+                        ? html`
+                            <button
+                              class="btn btn-danger"
+                              @click=${() => this.openDisableConfirmation(this.selectedUser)}
+                            >
+                              <i class="fas fa-ban"></i> Disable
+                            </button>
+                          `
+                        : html`
+                            <button
+                              class="btn btn-primary"
+                              @click=${() => this.enableUserAccount(this.selectedUser)}
+                            >
+                              <i class="fas fa-check"></i> Enable
+                            </button>
+                          `}
+                    </div>
+                  </div>
+
+                  <div class="edit-section">
+                    <div class="edit-section-title">Tenant Assignments</div>
+                    ${this.renderTenantMemberships(this.selectedUser || {})}
+                  </div>
+
+                  <div class="edit-section">
+                    <div class="edit-section-title">Assign Tenant</div>
+                    ${this.getAvailableTenants(this.selectedUser || {}).length > 0
+                      ? html`
+                          <div class="edit-inline-row">
+                            <select
+                              class="form-control"
+                              .value=${this.assignForm.tenantId}
+                              @change=${(e) => this.updateAssignForm('tenantId', e.target.value)}
+                            >
+                              <option value="">-- Choose a tenant --</option>
+                              ${this.getAvailableTenants(this.selectedUser || {}).map(
+                                (tenant) => html`<option value=${tenant.id}>${tenant.name}</option>`
+                              )}
+                            </select>
+                            <select
+                              class="form-control"
+                              .value=${this.assignForm.role}
+                              @change=${(e) => this.updateAssignForm('role', e.target.value)}
+                            >
+                              <option value="user">User</option>
+                              <option value="admin">Admin</option>
+                            </select>
+                            <button
+                              class="btn btn-primary"
+                              @click=${() => this.assignTenantFromEdit()}
+                              ?disabled=${this.assigningTenant || !this.assignForm.tenantId}
+                            >
+                              ${this.assigningTenant
+                                ? html`<i class="fas fa-spinner fa-spin"></i> Assigning...`
+                                : html`<i class="fas fa-plus"></i> Assign`}
+                            </button>
+                          </div>
+                        `
+                      : html`<span class="muted-label">User is assigned to all available tenants.</span>`}
+                  </div>
+
+                  <div class="modal-actions">
+                    <button
+                      class="btn btn-secondary"
+                      @click=${this.closeEditUserForm}
+                    >
+                      Done
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          `
+        : ''}
 
       ${this.showApprovalForm
         ? html`

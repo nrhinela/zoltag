@@ -50,12 +50,6 @@ export function renderCurateTabContent(host, { formatCurateDate }) {
             Tag audit
           </button>
           <button
-            class="curate-subtab ${host.curateSubTab === 'lists' ? 'active' : ''}"
-            @click=${() => host._handleCurateSubTabChange('lists')}
-          >
-            Lists
-          </button>
-          <button
             class="curate-subtab ${host.curateSubTab === 'home' ? 'active' : ''}"
             @click=${() => host._handleCurateSubTabChange('home')}
           >
@@ -261,20 +255,6 @@ export function renderCurateTabContent(host, { formatCurateDate }) {
             @rating-drop=${(e) => host._handleCurateAuditRatingDrop(e.detail.event)}
             @curate-audit-filters-changed=${host._handleCurateAuditChipFiltersChanged}
           ></curate-audit-tab>
-        </div>
-      ` : html``}
-
-      ${host.curateSubTab === 'lists' ? html`
-        <div>
-          <list-editor
-            .tenant=${host.tenant}
-            .thumbSize=${host.curateThumbSize}
-            .renderCurateRatingWidget=${(image) => renderCurateRatingWidget(host, image)}
-            .renderCurateRatingStatic=${renderCurateRatingStatic}
-            .renderCuratePermatagSummary=${renderCuratePermatagSummary}
-            .formatCurateDate=${formatCurateDate}
-            @image-selected=${(e) => host._handleCurateImageClick(null, e.detail.image, e.detail.imageSet)}
-          ></list-editor>
         </div>
       ` : html``}
 

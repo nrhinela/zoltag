@@ -7,12 +7,13 @@ from typing import List, Optional
 import secrets
 
 from photocat.database import get_db
-from photocat.auth.dependencies import get_current_user, require_super_admin, require_tenant_role
+from photocat.auth.dependencies import get_current_user, require_super_admin
 from photocat.auth.models import UserProfile, UserTenant, Invitation
 from photocat.auth.schemas import (
     UserProfileResponse,
     CreateInvitationRequest,
     ApproveUserRequest,
+    UpdateTenantMembershipRequest,
     InvitationResponse,
 )
 from photocat.metadata import Tenant as TenantModel
@@ -234,6 +235,70 @@ async def assign_user_to_tenant(
     db.commit()
 
     return {"message": "User assigned to tenant", "user_id": str(user.supabase_uid)}
+
+
+@router.patch("/users/{supabase_uid}/tenant-memberships/{tenant_id}", response_model=dict)
+async def update_user_tenant_membership(
+    supabase_uid: str,
+    tenant_id: str,
+    request: UpdateTenantMembershipRequest,
+    _admin: UserProfile = Depends(require_super_admin),
+    db: Session = Depends(get_db),
+):
+    """Update role for an existing user-tenant membership (super admin only)."""
+
+    membership = db.query(UserTenant).filter(
+        UserTenant.supabase_uid == supabase_uid,
+        UserTenant.tenant_id == tenant_id,
+        UserTenant.accepted_at.isnot(None),
+    ).first()
+
+    if not membership:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Tenant membership not found",
+        )
+
+    membership.role = request.role
+    db.commit()
+
+    return {
+        "message": "Tenant role updated",
+        "user_id": supabase_uid,
+        "tenant_id": tenant_id,
+        "role": membership.role,
+    }
+
+
+@router.delete("/users/{supabase_uid}/tenant-memberships/{tenant_id}", response_model=dict)
+async def remove_user_tenant_membership(
+    supabase_uid: str,
+    tenant_id: str,
+    _admin: UserProfile = Depends(require_super_admin),
+    db: Session = Depends(get_db),
+):
+    """Remove an existing user-tenant membership (super admin only)."""
+
+    membership = db.query(UserTenant).filter(
+        UserTenant.supabase_uid == supabase_uid,
+        UserTenant.tenant_id == tenant_id,
+        UserTenant.accepted_at.isnot(None),
+    ).first()
+
+    if not membership:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Tenant membership not found",
+        )
+
+    db.delete(membership)
+    db.commit()
+
+    return {
+        "message": "Tenant membership removed",
+        "user_id": supabase_uid,
+        "tenant_id": tenant_id,
+    }
 
 
 @router.post("/users/{supabase_uid}/reject", response_model=dict)

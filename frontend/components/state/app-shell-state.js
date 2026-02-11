@@ -46,30 +46,32 @@ export class AppShellStateController extends BaseStateController {
 
   setActiveTab(tabName) {
     // Normalize legacy deep-links now nested under Library.
-    if (tabName === 'lists') {
-      this.host.curateSubTab = 'lists';
-      this.host.activeTab = 'curate';
-      return;
-    }
     if (tabName === 'admin') {
       this.host.activeLibrarySubTab = 'keywords';
       this.host.activeTab = 'library';
       return;
     }
     if (tabName === 'ml-training') {
-      this.host.activeSystemSubTab = 'cli';
-      this.host.activeTab = 'system';
+      this.host.activeTab = 'cli';
+      return;
+    }
+    if (tabName === 'system') {
+      this.host.activeTab = 'cli';
+      return;
+    }
+    if (tabName === 'queue') {
+      this.host.activeTab = 'home';
       return;
     }
     if (tabName === 'library' && !this.host.activeLibrarySubTab) {
       this.host.activeLibrarySubTab = 'assets';
     }
-    if (tabName === 'library' && this.host.activeLibrarySubTab === 'lists') {
-      this.host.activeLibrarySubTab = 'assets';
-    }
     if (tabName === 'curate' && !this.canCurate()) {
       this.host.activeTab = 'home';
       return;
+    }
+    if (tabName === 'curate' && this.host.curateSubTab === 'lists') {
+      this.host.curateSubTab = 'main';
     }
     this.host.activeTab = tabName;
   }
@@ -161,15 +163,10 @@ export class AppShellStateController extends BaseStateController {
         this.host._curateExploreState.initializeCurateTab();
         break;
       }
-      case 'system': {
-        this.host.fetchStats({ includeTagStats: false });
-        break;
-      }
       case 'library':
       case 'admin':
       case 'people':
       case 'tagging':
-      case 'queue':
       default:
         break;
     }

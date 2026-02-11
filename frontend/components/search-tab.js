@@ -230,6 +230,7 @@ export class SearchTab extends LitElement {
     this._searchFilterPanelHandlers = null;
     this._folderBrowserPanelHandlers = null;
     this._searchDropboxFetchTimer = null;
+    this._searchListDropRefreshTimer = null;
     this._searchDropboxQuery = '';
     this.folderBrowserPanel = new FolderBrowserPanel('search');
 
@@ -352,6 +353,10 @@ export class SearchTab extends LitElement {
     if (this._searchDropboxFetchTimer) {
       clearTimeout(this._searchDropboxFetchTimer);
       this._searchDropboxFetchTimer = null;
+    }
+    if (this._searchListDropRefreshTimer) {
+      clearTimeout(this._searchListDropRefreshTimer);
+      this._searchListDropRefreshTimer = null;
     }
   }
 
@@ -959,6 +964,63 @@ export class SearchTab extends LitElement {
         items: nextItems,
       };
     });
+
+    // When viewing "not in list X", optimistically remove dropped items immediately.
+    this._excludeAddedImagesFromVisibleResults(listId, uniqueIds);
+    this._scheduleSearchRefreshAfterListDrop(listId);
+  }
+
+  _excludeAddedImagesFromVisibleResults(_listId, ids) {
+    const removeSet = new Set((ids || []).map((id) => Number(id)).filter(Number.isFinite));
+    if (!removeSet.size) {
+      return;
+    }
+    const removedIds = Array.from(removeSet);
+
+    if (Array.isArray(this.searchImages) && this.searchImages.length) {
+      const before = this.searchImages.length;
+      this.searchImages = this.searchImages.filter((image) => !removeSet.has(Number(image?.id)));
+      const removedCount = before - this.searchImages.length;
+      if (removedCount > 0 && Number.isFinite(this.searchTotal)) {
+        this.searchTotal = Math.max(0, Number(this.searchTotal) - removedCount);
+      }
+    }
+
+    if (this.browseByFolderData && typeof this.browseByFolderData === 'object') {
+      const nextData = {};
+      for (const [folder, images] of Object.entries(this.browseByFolderData)) {
+        nextData[folder] = Array.isArray(images)
+          ? images.filter((image) => !removeSet.has(Number(image?.id)))
+          : images;
+      }
+      this.browseByFolderData = nextData;
+    }
+
+    this.searchDragSelection = (this.searchDragSelection || []).filter((id) => !removeSet.has(Number(id)));
+    this.searchSavedImages = (this.searchSavedImages || []).filter((image) => !removeSet.has(Number(image?.id)));
+
+    // Mirror the optimistic change into parent-owned search state so it survives parent re-renders.
+    this.dispatchEvent(new CustomEvent('search-images-optimistic-remove', {
+      detail: { ids: removedIds },
+      bubbles: true,
+      composed: true,
+    }));
+  }
+
+  _scheduleSearchRefreshAfterListDrop(listId) {
+    if (this._searchListDropRefreshTimer) {
+      clearTimeout(this._searchListDropRefreshTimer);
+      this._searchListDropRefreshTimer = null;
+    }
+
+    this._searchListDropRefreshTimer = setTimeout(() => {
+      this._searchListDropRefreshTimer = null;
+      if (this.searchSubTab === 'browse-by-folder') {
+        this._refreshBrowseByFolderData({ force: true });
+      } else {
+        this.searchFilterPanel?.fetchImages?.();
+      }
+    }, 1200);
   }
 
   _parseSearchDragIds(event) {

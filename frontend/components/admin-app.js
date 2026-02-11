@@ -159,7 +159,7 @@ class AdminApp extends LitElement {
   }
 
   handleBack() {
-    window.location.href = '/';
+    window.location.href = '/app';
   }
 
   switchTab(tab) {

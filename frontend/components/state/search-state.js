@@ -88,6 +88,23 @@ export class SearchStateController extends BaseStateController {
     panel.fetchImages();
   }
 
+  handleOptimisticRemove(detail = {}) {
+    const ids = Array.isArray(detail.ids) ? detail.ids : [];
+    const removeSet = new Set(ids.map((id) => Number(id)).filter(Number.isFinite));
+    if (!removeSet.size || !Array.isArray(this.host.searchImages) || !this.host.searchImages.length) {
+      return;
+    }
+
+    const before = this.host.searchImages.length;
+    this.host.searchImages = this.host.searchImages.filter(
+      (image) => !removeSet.has(Number(image?.id))
+    );
+    const removedCount = before - this.host.searchImages.length;
+    if (removedCount > 0 && Number.isFinite(this.host.searchTotal)) {
+      this.host.searchTotal = Math.max(0, Number(this.host.searchTotal) - removedCount);
+    }
+  }
+
   initializeSearchTab() {
     const panelState = this.host.searchFilterPanel?.getState?.() || this.host.searchFilterPanel?.filters || {};
     if (panelState.orderBy) {

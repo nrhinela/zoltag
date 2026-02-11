@@ -34,21 +34,30 @@ async def get_tenant(
         HTTPException 404: Tenant not found
     """
     if not user.is_super_admin:
-        membership = db.query(UserTenant).filter(
-            UserTenant.supabase_uid == user.supabase_uid,
-            UserTenant.tenant_id == x_tenant_id,
-            UserTenant.accepted_at.isnot(None)
-        ).first()
-        if not membership:
+        # Single JOIN: verify membership and load tenant in one query
+        tenant_row = (
+            db.query(TenantModel)
+            .join(UserTenant, UserTenant.tenant_id == TenantModel.id)
+            .filter(
+                UserTenant.supabase_uid == user.supabase_uid,
+                UserTenant.tenant_id == x_tenant_id,
+                UserTenant.accepted_at.isnot(None),
+                TenantModel.id == x_tenant_id,
+            )
+            .first()
+        )
+        if not tenant_row:
+            exists = db.query(TenantModel.id).filter(TenantModel.id == x_tenant_id).scalar()
+            if not exists:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Tenant {x_tenant_id} not found")
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"No access to tenant {x_tenant_id}"
             )
-
-    # Load tenant from database
-    tenant_row = db.query(TenantModel).filter(TenantModel.id == x_tenant_id).first()
-    if not tenant_row:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Tenant {x_tenant_id} not found")
+    else:
+        tenant_row = db.query(TenantModel).filter(TenantModel.id == x_tenant_id).first()
+        if not tenant_row:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Tenant {x_tenant_id} not found")
 
     tenant_settings = tenant_row.settings or {}
 

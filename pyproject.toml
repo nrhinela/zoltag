@@ -55,6 +55,7 @@ dependencies = [
 
     # Authentication
     "python-jose[cryptography]>=3.3.0",  # JWT verification via JWKS
+    "slowapi>=0.1.9",  # Rate limiting for FastAPI
 
     # Utilities
     "pyyaml>=6.0.1",

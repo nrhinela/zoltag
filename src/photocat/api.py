@@ -5,6 +5,7 @@ from fastapi import FastAPI, Depends, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 from typing import Optional
 
@@ -13,6 +14,11 @@ from photocat.dependencies import get_db, get_tenant
 from photocat.tenant import Tenant
 from photocat.metadata import Tenant as TenantModel
 from photocat.settings import settings
+from photocat.auth.dependencies import require_super_admin
+from photocat.auth.models import UserProfile
+from photocat.ratelimit import limiter
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 
 # Import all routers
 from photocat.routers import (
@@ -37,6 +43,8 @@ app = FastAPI(
     description="Multi-tenant image organization and search utility",
     version="0.1.0"
 )
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 
 @app.on_event("startup")
@@ -48,10 +56,22 @@ async def warm_jwks_cache():
     except Exception:
         pass  # Non-fatal: requests will fetch on demand if this fails
 
-# Add CORS middleware (single consolidated block)
+# Add CORS middleware
+# In production the frontend is served from the same origin as the API, so no
+# cross-origin request is made. We still configure CORS explicitly to support
+# local development (Vite dev server on a different port).
+_allowed_origins = [settings.app_url]
+if settings.is_development:
+    # Allow any localhost port during local development
+    _allowed_origins += [
+        "http://localhost:5173",  # Vite default
+        "http://localhost:8080",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:8080",
+    ]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure appropriately for production
+    allow_origins=_allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -83,13 +103,23 @@ dist_dir = static_dir / "dist"
 # Health check endpoint
 @app.get("/health")
 async def health_check():
-    """Simple health check endpoint."""
-    return {"status": "healthy"}
+    """Health check endpoint with DB connectivity verification."""
+    db = SessionLocal()
+    try:
+        db.execute(text("SELECT 1"))
+        return {"status": "healthy"}
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Database unavailable: {exc}")
+    finally:
+        db.close()
 
-# List all tenants (utility endpoint, not admin CRUD)
+# List all tenants (super admin only)
 @app.get("/api/v1/tenants")
-async def list_tenants(db: Session = Depends(get_db)):
-    """List all tenants (for system health checks)."""
+async def list_tenants(
+    db: Session = Depends(get_db),
+    _user: UserProfile = Depends(require_super_admin),
+):
+    """List all tenants. Restricted to super admins."""
     tenants = db.query(TenantModel).all()
     return [{
         "id": t.id,

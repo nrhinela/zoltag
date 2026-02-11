@@ -29,4 +29,7 @@ export function initializeAppCoreSetup(host) {
 
   host._handleSearchSortChanged = (event) =>
     host._searchState.handleSortChanged(event.detail || {});
+
+  host._handleSearchOptimisticRemove = (event) =>
+    host._searchState.handleOptimisticRemove(event.detail || {});
 }

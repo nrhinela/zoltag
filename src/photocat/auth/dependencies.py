@@ -4,7 +4,7 @@ from typing import Optional, Callable
 from fastapi import Header, HTTPException, Depends, status
 from sqlalchemy.orm import Session
 from jose import JWTError
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from photocat.database import get_db
 from photocat.auth.jwt import verify_supabase_jwt, get_supabase_uid_from_token
@@ -79,9 +79,15 @@ async def get_current_user(
             detail="Account pending admin approval"
         )
 
-    # Update last login timestamp
-    user.last_login_at = datetime.utcnow()
-    db.commit()
+    # Update last login timestamp at most once per hour to avoid per-request writes
+    now = datetime.now(timezone.utc)
+    last = user.last_login_at
+    # Normalise stored value to aware if DB returned naive UTC
+    if last is not None and last.tzinfo is None:
+        last = last.replace(tzinfo=timezone.utc)
+    if last is None or (now - last) > timedelta(hours=1):
+        user.last_login_at = now
+        db.commit()
 
     return user
 

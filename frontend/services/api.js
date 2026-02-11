@@ -640,6 +640,32 @@ export async function setSuperAdminStatus(supabaseUid, isSuperAdmin) {
     });
 }
 
+/**
+ * Update a user's role in a specific tenant membership
+ * @param {string} supabaseUid - User UUID
+ * @param {string} tenantId - Tenant ID
+ * @param {'user'|'admin'} role - Updated role value
+ * @returns {Promise<Object>} Success payload
+ */
+export async function updateUserTenantRole(supabaseUid, tenantId, role) {
+    return fetchWithAuth(`/admin/users/${supabaseUid}/tenant-memberships/${tenantId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ role })
+    });
+}
+
+/**
+ * Remove a tenant assignment from a user
+ * @param {string} supabaseUid - User UUID
+ * @param {string} tenantId - Tenant ID
+ * @returns {Promise<Object>} Success payload
+ */
+export async function removeUserTenantAssignment(supabaseUid, tenantId) {
+    return fetchWithAuth(`/admin/users/${supabaseUid}/tenant-memberships/${tenantId}`, {
+        method: 'DELETE'
+    });
+}
+
 // ============================================================================
 // People and Categories Management
 // ============================================================================

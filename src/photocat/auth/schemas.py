@@ -102,6 +102,19 @@ class ApproveUserRequest(BaseModel):
         }
 
 
+class UpdateTenantMembershipRequest(BaseModel):
+    """Update an existing tenant membership role."""
+
+    role: str = Field(..., description="Role (admin|user)")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "role": "admin"
+            }
+        }
+
+
 class InvitationResponse(BaseModel):
     """Invitation response schema."""
 

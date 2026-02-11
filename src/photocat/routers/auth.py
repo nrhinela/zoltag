@@ -19,7 +19,7 @@ See: https://supabase.com/docs/guides/auth/social-login/auth-google
 """
 
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException, status, Header
+from fastapi import APIRouter, Depends, HTTPException, Request, status, Header
 from sqlalchemy.orm import Session
 from typing import Optional
 from jose import JWTError
@@ -36,14 +36,17 @@ from photocat.auth.schemas import (
     TenantMembershipResponse,
 )
 from photocat.metadata import Tenant as TenantModel
+from photocat.ratelimit import limiter
 
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
 
 @router.post("/register", response_model=dict, status_code=201)
+@limiter.limit("10/minute")
 async def register(
-    request: RegisterRequest,
+    request: Request,
+    body: RegisterRequest,
     db: Session = Depends(get_db),
     authorization: Optional[str] = Header(None)
 ):
@@ -153,7 +156,7 @@ async def register(
             supabase_uid=supabase_uid,
             email=email,
             email_verified=email_verified,
-            display_name=request.display_name or email.split("@")[0],
+            display_name=body.display_name or email.split("@")[0],
             is_active=False,
             is_super_admin=False
         )
@@ -227,8 +230,10 @@ async def get_current_user_info(
 
 
 @router.post("/accept-invitation", response_model=LoginResponse)
+@limiter.limit("20/minute")
 async def accept_invitation(
-    request: AcceptInvitationRequest,
+    request: Request,
+    body: AcceptInvitationRequest,
     user: UserProfile = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -257,7 +262,7 @@ async def accept_invitation(
     """
     # Find invitation
     invitation = db.query(Invitation).filter(
-        Invitation.token == request.invitation_token,
+        Invitation.token == body.invitation_token,
         Invitation.email == user.email,
         Invitation.accepted_at.is_(None),
         Invitation.expires_at > datetime.utcnow()

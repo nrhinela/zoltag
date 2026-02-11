@@ -118,17 +118,13 @@ def load_keyword_models(
     model_name: str
 ) -> Dict[str, KeywordModel]:
     """Load keyword models for a tenant."""
-    rows = db.query(KeywordModel).filter(
+    rows = db.query(KeywordModel, Keyword.keyword).join(
+        Keyword, Keyword.id == KeywordModel.keyword_id
+    ).filter(
         KeywordModel.tenant_id == tenant_id,
         KeywordModel.model_name == model_name
     ).all()
-    # Map keyword name to KeywordModel using the FK relationship
-    keyword_models = {}
-    for row in rows:
-        keyword = db.query(Keyword).filter(Keyword.id == row.keyword_id).first()
-        if keyword:
-            keyword_models[keyword.keyword] = row
-    return keyword_models
+    return {keyword_name: model_row for model_row, keyword_name in rows}
 
 
 def score_image_with_models(
@@ -235,17 +231,18 @@ def recompute_trained_tags_for_image(
         ).first()
         asset_id = image_row[0] if image_row else None
 
+    # Build keyword_id_map from a single query if not provided by caller
+    if keyword_id_map is None and trained_tags:
+        tag_names = [t["keyword"] for t in trained_tags]
+        keyword_id_map = dict(
+            db.query(Keyword.keyword, Keyword.id).filter(
+                Keyword.tenant_id == tenant_id,
+                Keyword.keyword.in_(tag_names)
+            ).all()
+        )
+
     for tag in trained_tags:
-        # Look up keyword_id for this keyword
-        keyword_id = None
-        if keyword_id_map is not None:
-            keyword_id = keyword_id_map.get(tag["keyword"])
-        if keyword_id is None:
-            keyword_obj = db.query(Keyword).filter(
-                Keyword.keyword == tag["keyword"],
-                Keyword.tenant_id == tenant_id
-            ).first()
-            keyword_id = keyword_obj.id if keyword_obj else None
+        keyword_id = (keyword_id_map or {}).get(tag["keyword"])
         if not keyword_id:
             print(f"Warning: Keyword '{tag['keyword']}' not found for tenant {tenant_id}")
             continue

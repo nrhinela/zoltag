@@ -1,4 +1,6 @@
 import { html } from 'lit';
+import { renderCuratePermatagSummary } from './curate-image-fragments.js';
+import { renderCurateRatingWidget, renderCurateRatingStatic } from './curate-rating-widgets.js';
 
 export function renderRatingModal(host) {
   if (!host._curateRatingModalActive) {
@@ -35,8 +37,8 @@ export function renderRatingModal(host) {
   `;
 }
 
-export function renderAuxTabContent(host, { formatCurateDate, formatQueueItem, retryFailedCommand }) {
-  const libraryTabActive = host.activeTab === 'library' || host.activeTab === 'lists' || host.activeTab === 'admin';
+export function renderAuxTabContent(host, { formatCurateDate }) {
+  const libraryTabActive = host.activeTab === 'library' || host.activeTab === 'admin';
   const rawLibrarySubTab = host.activeLibrarySubTab
     || (host.activeTab === 'admin' ? 'keywords' : 'assets');
   const librarySubTab = rawLibrarySubTab === 'keywords' || rawLibrarySubTab === 'assets'
@@ -98,6 +100,20 @@ export function renderAuxTabContent(host, { formatCurateDate, formatQueueItem, r
       </div>
     ` : html``}
 
+    ${host.activeTab === 'lists' ? html`
+      <div slot="lists" class="container">
+        <list-editor
+          .tenant=${host.tenant}
+          .thumbSize=${host.curateThumbSize}
+          .renderCurateRatingWidget=${(image) => renderCurateRatingWidget(host, image)}
+          .renderCurateRatingStatic=${renderCurateRatingStatic}
+          .renderCuratePermatagSummary=${renderCuratePermatagSummary}
+          .formatCurateDate=${formatCurateDate}
+          @image-selected=${(e) => host._handleCurateImageClick(null, e.detail.image, e.detail.imageSet)}
+        ></list-editor>
+      </div>
+    ` : html``}
+
     ${host.activeTab === 'people' ? html`
       <div slot="people" class="container p-4">
         <person-manager .tenant=${host.tenant}></person-manager>
@@ -113,60 +129,12 @@ export function renderAuxTabContent(host, { formatCurateDate, formatQueueItem, r
       </div>
     ` : html``}
 
-    ${host.activeTab === 'system' ? html`
-      <div slot="system" class="container p-4">
-        <cli-commands></cli-commands>
-      </div>
-    ` : html``}
-
     ${host.activeTab === 'cli' ? html`
-      <div slot="cli" class="container p-4">
+      <div slot="cli" class="container">
         <cli-commands></cli-commands>
       </div>
     ` : html``}
 
-    ${host.activeTab === 'queue' ? html`
-      <div slot="queue" class="container p-4">
-        <div class="border border-gray-200 rounded-lg p-4 bg-white text-sm text-gray-600 space-y-3">
-          <div class="font-semibold text-gray-700">Work Queue</div>
-          <div class="text-xs text-gray-500">
-            ${host.queueState.inProgressCount || 0} active · ${host.queueState.queuedCount || 0} queued · ${host.queueState.failedCount || 0} failed
-          </div>
-          ${host.queueState.inProgress?.length ? html`
-            <div>
-              <div class="font-semibold text-gray-600 mb-1">In Progress</div>
-              ${host.queueState.inProgress.map((item) => html`
-                <div>${formatQueueItem(item)}</div>
-              `)}
-            </div>
-          ` : html``}
-          ${host.queueState.queue?.length ? html`
-            <div>
-              <div class="font-semibold text-gray-600 mb-1">Queued</div>
-              ${host.queueState.queue.map((item) => html`
-                <div>${formatQueueItem(item)}</div>
-              `)}
-            </div>
-          ` : html``}
-          ${host.queueState.failed?.length ? html`
-            <div>
-              <div class="font-semibold text-red-600 mb-1">Failed</div>
-              ${host.queueState.failed.map((item) => html`
-                <div class="flex items-center justify-between">
-                  <span>${formatQueueItem(item)}</span>
-                  <button
-                    class="text-xs text-blue-600 hover:text-blue-700"
-                    @click=${() => retryFailedCommand(item.id)}
-                  >
-                    Retry
-                  </button>
-                </div>
-              `)}
-            </div>
-          ` : html`<div class="text-gray-400">No failed commands.</div>`}
-        </div>
-      </div>
-    ` : html``}
   `;
 }
 

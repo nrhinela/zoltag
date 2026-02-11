@@ -422,7 +422,7 @@ export class HomeChipsTab extends LitElement {
           { id: 'all', label: 'All ratings' },
         ];
     return html`
-      <aside class="bg-white border border-gray-200 rounded-xl p-4 shadow-sm h-full">
+      <section class="bg-white border border-gray-200 rounded-xl p-4 shadow-sm">
         <div class="text-xs font-semibold uppercase tracking-widest text-gray-500">Ratings</div>
         <div class="mt-3 flex flex-col gap-2 text-sm text-gray-700">
           ${options.map((option) => {
@@ -455,7 +455,7 @@ export class HomeChipsTab extends LitElement {
             `;
           })}
         </div>
-      </aside>
+      </section>
     `;
   }
 
@@ -464,11 +464,13 @@ export class HomeChipsTab extends LitElement {
     if (!showResults) {
       return html`
         <div class="container">
-          <div class="grid grid-cols-1 lg:grid-cols-[240px_1fr] gap-6">
-            ${this._renderRatingsPanel()}
+          <div class="space-y-6">
             <div>
               ${this._renderModeToggle()}
               ${this._renderChipList()}
+            </div>
+            <div>
+              ${this._renderRatingsPanel()}
             </div>
           </div>
         </div>
@@ -481,8 +483,7 @@ export class HomeChipsTab extends LitElement {
 
     return html`
       <div class="container">
-        <div class="grid grid-cols-1 lg:grid-cols-[240px_1fr] gap-6 items-start">
-          ${this._renderRatingsPanel()}
+        <div class="space-y-6">
           <div>
             ${this._renderModeToggle()}
             <button
@@ -521,6 +522,9 @@ export class HomeChipsTab extends LitElement {
               @thumb-size-changed=${this._handleThumbSizeChanged}
               @filters-changed=${this._handleSearchFiltersChanged}
             ></search-tab>
+          </div>
+          <div>
+            ${this._renderRatingsPanel()}
           </div>
         </div>
       </div>

@@ -131,6 +131,8 @@ class AppHeader extends LitElement {
       const value = e.target.value;
       if (value === 'public-site') {
           window.location.href = '/';
+      } else if (value === 'cli-docs') {
+          this._handleTabChange('cli');
       } else if (value === 'admin') {
           this._openAdmin();
       } else if (value === 'logout') {
@@ -232,7 +234,7 @@ class AppHeader extends LitElement {
 
   render() {
     const canCurate = this.canCurate ?? this._canCurateFromUser();
-    const libraryActive = this.activeTab === 'library' || this.activeTab === 'lists' || this.activeTab === 'admin';
+    const libraryActive = this.activeTab === 'library' || this.activeTab === 'admin';
     const selectedTenant = this._getEffectiveTenantId();
     const tenantMissingFromList = !!selectedTenant
       && !this.tenants.some((tenant) => this._normalizeTenantValue(tenant.id) === selectedTenant);
@@ -299,6 +301,7 @@ class AppHeader extends LitElement {
                         >
                             <option value="">${this.currentUser?.user?.display_name || 'User Menu'}</option>
                             <option value="public-site">Back to public site</option>
+                            <option value="cli-docs">CLI docs</option>
                             ${this._isAdmin() ? html`<option value="admin">System Administration</option>` : ''}
                             <option value="logout">Sign Out</option>
                         </select>
@@ -320,6 +323,12 @@ class AppHeader extends LitElement {
                     >
                         <i class="fas fa-magnifying-glass mr-2"></i>Search
                     </button>
+                    <button
+                        @click=${() => this._handleTabChange('lists')}
+                        class="py-3 px-6 text-base font-semibold ${this.activeTab === 'lists' ? 'border-b-4 border-blue-600 text-blue-800 bg-blue-50' : 'text-gray-600 hover:text-gray-800 hover:bg-gray-100'} transition-all duration-200"
+                    >
+                        <i class="fas fa-list mr-2"></i>Lists
+                    </button>
                     ${canCurate ? html`
                     <button
                         @click=${() => this._handleTabChange('curate')}
@@ -332,22 +341,7 @@ class AppHeader extends LitElement {
                         @click=${() => this._handleTabChange('library')}
                         class="py-3 px-6 text-base font-semibold ${libraryActive ? 'border-b-4 border-blue-600 text-blue-800 bg-blue-50' : 'text-gray-600 hover:text-gray-800 hover:bg-gray-100'} transition-all duration-200"
                     >
-                        <i class="fas fa-book-open mr-2"></i>Library
-                    </button>
-                    <button
-                        @click=${() => this._handleTabChange('system')}
-                        class="py-3 px-6 text-base font-semibold ${this.activeTab === 'system' ? 'border-b-4 border-blue-600 text-blue-800 bg-blue-50' : 'text-gray-600 hover:text-gray-800 hover:bg-gray-100'} transition-all duration-200"
-                    >
-                        <i class="fas fa-sliders mr-2"></i>System
-                    </button>
-                    <button
-                        @click=${() => this._handleTabChange('queue')}
-                        class="py-3 px-6 text-base font-semibold ${this.activeTab === 'queue' ? 'border-b-4 border-blue-600 text-blue-800 bg-blue-50' : 'text-gray-600 hover:text-gray-800 hover:bg-gray-100'} transition-all duration-200"
-                    >
-                        <i class="fas fa-stream mr-2"></i>Queue
-                        <span class="ml-2 text-xs font-semibold px-2 py-0.5 rounded-full ${this.queueCount > 0 ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-600'}">
-                            ${this.queueCount}
-                        </span>
+                        <i class="fas fa-cog mr-2"></i>Admin
                     </button>
                 </div>
             </div>

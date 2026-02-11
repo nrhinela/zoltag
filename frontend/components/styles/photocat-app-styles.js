@@ -77,6 +77,41 @@ export const photocatAppStyles = css`
         position: relative;
         min-height: 280px;
     }
+    .home-overview-layout {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 16px;
+    }
+    @media (min-width: 1100px) {
+        .home-overview-layout {
+            grid-template-columns: minmax(420px, 0.95fr) minmax(520px, 1.25fr);
+            align-items: stretch;
+        }
+        .home-overview-left,
+        .home-overview-right {
+            height: 100%;
+        }
+        .home-overview-left {
+            display: flex;
+        }
+        .home-overview-left .home-cta-grid.home-cta-grid-quad {
+            height: 100%;
+            width: 100%;
+            grid-auto-rows: 1fr;
+            align-content: stretch;
+        }
+        .home-overview-left .home-cta-grid.home-cta-grid-quad .home-cta-card {
+            height: 100%;
+        }
+    }
+    .home-overview-right home-insights-tab {
+        display: block;
+    }
+    .home-overview-right .container.home-insights-large {
+        max-width: none;
+        margin: 0;
+        padding: 0;
+    }
     .home-loading-overlay {
         position: absolute;
         inset: 0;
@@ -113,6 +148,14 @@ export const photocatAppStyles = css`
     @media (min-width: 900px) {
         .home-cta-grid {
             grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+    }
+    .home-cta-grid.home-cta-grid-quad {
+        grid-template-columns: 1fr;
+    }
+    @media (min-width: 680px) {
+        .home-cta-grid.home-cta-grid-quad {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
         }
     }
     .home-cta-card {
@@ -157,6 +200,11 @@ export const photocatAppStyles = css`
             radial-gradient(circle at 80% 24%, rgba(245, 158, 11, 0.2), transparent 54%),
             linear-gradient(140deg, #fff9ef 0%, #fff5de 52%, #fff8e8 100%);
     }
+    .home-cta-admin .home-cta-backdrop {
+        background:
+            radial-gradient(circle at 80% 24%, rgba(99, 102, 241, 0.18), transparent 54%),
+            linear-gradient(140deg, #f4f4ff 0%, #eceefe 52%, #f6f7ff 100%);
+    }
     .home-cta-glyph {
         position: absolute;
         right: 12px;
@@ -180,6 +228,9 @@ export const photocatAppStyles = css`
     }
     .home-cta-upload .home-cta-glyph {
         color: rgba(245, 158, 11, 0.24);
+    }
+    .home-cta-admin .home-cta-glyph {
+        color: rgba(99, 102, 241, 0.22);
     }
     .home-cta-icon-wrap {
         position: relative;
@@ -210,6 +261,11 @@ export const photocatAppStyles = css`
         color: #b45309;
         border-color: rgba(180, 83, 9, 0.24);
         box-shadow: 0 4px 12px rgba(180, 83, 9, 0.14);
+    }
+    .home-cta-admin .home-cta-icon-wrap {
+        color: #4338ca;
+        border-color: rgba(67, 56, 202, 0.24);
+        box-shadow: 0 4px 12px rgba(67, 56, 202, 0.14);
     }
     .home-cta-content {
         position: relative;
@@ -254,6 +310,10 @@ export const photocatAppStyles = css`
     .home-cta-upload .home-cta-arrow {
         color: #b45309;
         border-color: rgba(180, 83, 9, 0.28);
+    }
+    .home-cta-admin .home-cta-arrow {
+        color: #4338ca;
+        border-color: rgba(67, 56, 202, 0.28);
     }
     .home-loading-bar {
         width: 100%;

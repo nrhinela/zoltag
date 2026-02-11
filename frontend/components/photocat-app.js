@@ -21,10 +21,8 @@ import { initializeAppDefaultState } from './state/app-default-state.js';
 import { initializeAppConstructorWiring } from './state/app-constructor-wiring.js';
 import { bindAppDelegateMethods } from './state/app-delegate-methods.js';
 import { tailwind } from './tailwind-lit.js';
-import { retryFailedCommand } from '../services/command-queue.js';
 import {
   formatCurateDate,
-  formatQueueItem,
 } from './shared/formatting.js';
 import './home-tab.js';
 import './home-chips-tab.js';
@@ -197,7 +195,7 @@ class PhotoCatApp extends LitElement {
             ${this.activeTab === 'home' ? renderHomeTabContent(this, { navCards, formatCurateDate }) : ''}
             ${this.activeTab === 'search' ? renderSearchTabContent(this, { formatCurateDate }) : ''}
             ${this.activeTab === 'curate' ? renderCurateTabContent(this, { formatCurateDate }) : ''}
-            ${renderAuxTabContent(this, { formatCurateDate, formatQueueItem, retryFailedCommand })}
+            ${renderAuxTabContent(this, { formatCurateDate })}
         </tab-container>
         ${renderGlobalOverlays(this, { canCurate })}
     `;
