@@ -959,15 +959,8 @@ def build_image_query_with_subqueries(
         subqueries_list.append(apply_no_positive_permatag_filter_subquery(db, tenant))
 
     if dropbox_path_prefix:
-        prefixes = [dropbox_path_prefix]
-        expanded_prefixes = []
-        for prefix in prefixes:
-            if isinstance(prefix, str) and "," in prefix:
-                expanded_prefixes.extend([part.strip() for part in prefix.split(",") if part.strip()])
-            else:
-                expanded_prefixes.append(prefix)
         normalized_prefixes = []
-        for prefix in expanded_prefixes:
+        for prefix in [dropbox_path_prefix]:
             if not prefix:
                 continue
             normalized = prefix.strip()
