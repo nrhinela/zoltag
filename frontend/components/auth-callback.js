@@ -1,5 +1,5 @@
 import { LitElement, html, css } from 'lit';
-import { getSession } from '../services/supabase.js';
+import { getSession, onAuthStateChange } from '../services/supabase.js';
 import { acceptInvitation } from '../services/auth.js';
 
 const INVITATION_TOKEN_KEY = 'photocat_invitation_token';
@@ -69,15 +69,76 @@ export class AuthCallback extends LitElement {
     await this.handleCallback();
   }
 
+  async waitForSession(timeoutMs = 15000, pollMs = 250) {
+    const existingSession = await getSession();
+    if (existingSession?.access_token) {
+      return existingSession;
+    }
+
+    return await new Promise((resolve, reject) => {
+      const startedAt = Date.now();
+      let settled = false;
+      let subscription = null;
+
+      const cleanup = () => {
+        if (subscription) {
+          subscription.unsubscribe();
+          subscription = null;
+        }
+      };
+
+      const finish = (fn, value) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        fn(value);
+      };
+
+      const pollForSession = async () => {
+        try {
+          const session = await getSession();
+          if (session?.access_token) {
+            finish(resolve, session);
+            return;
+          }
+        } catch (_error) {
+          // Keep waiting until timeout.
+        }
+
+        if (Date.now() - startedAt >= timeoutMs) {
+          finish(reject, new Error('Timed out waiting for OAuth session. Please try again.'));
+          return;
+        }
+
+        setTimeout(pollForSession, pollMs);
+      };
+
+      const authListener = onAuthStateChange((_event, session) => {
+        if (session?.access_token) {
+          finish(resolve, session);
+        }
+      });
+      subscription = authListener?.data?.subscription || null;
+
+      pollForSession();
+    });
+  }
+
   async handleCallback() {
     try {
       console.log('🔄 Auth callback: Waiting for Supabase to process OAuth...');
 
-      // Wait for Supabase to set the session
-      // The callback handler should have already run, so the session should be available
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      const searchParams = new URLSearchParams(window.location.search || '');
+      const hashParams = new URLSearchParams((window.location.hash || '').replace(/^#/, ''));
+      const oauthError = searchParams.get('error_description')
+        || searchParams.get('error')
+        || hashParams.get('error_description')
+        || hashParams.get('error');
+      if (oauthError) {
+        throw new Error(oauthError);
+      }
 
-      const session = await getSession();
+      const session = await this.waitForSession();
       console.log('Session available:', !!session);
 
       if (!session) {
