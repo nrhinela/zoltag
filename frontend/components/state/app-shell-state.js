@@ -87,6 +87,9 @@ export class AppShellStateController extends BaseStateController {
       this.host.activeSearchSubTab = 'home';
       this.host.pendingSearchExploreSelection = null;
     }
+    if (detail === 'lists') {
+      this.host.pendingListSelectionId = null;
+    }
     this.setActiveTab(detail);
   }
 
@@ -95,6 +98,7 @@ export class AppShellStateController extends BaseStateController {
     const subTab = event?.detail?.subTab;
     const adminSubTab = event?.detail?.adminSubTab;
     const exploreSelection = event?.detail?.exploreSelection || null;
+    const listSelection = event?.detail?.listSelection || null;
     if (tab === 'library' && subTab) {
       this.host.activeLibrarySubTab = subTab;
     }
@@ -109,6 +113,11 @@ export class AppShellStateController extends BaseStateController {
     }
     if (tab === 'search') {
       this.host.pendingSearchExploreSelection = exploreSelection;
+    }
+    if (tab === 'lists') {
+      const listId = listSelection?.listId ?? null;
+      this.host.pendingListSelectionId = listId;
+      this.host.pendingListSelectionToken = (this.host.pendingListSelectionToken || 0) + 1;
     }
     this.setActiveTab(tab);
   }
@@ -167,6 +176,7 @@ export class AppShellStateController extends BaseStateController {
       }
       this.fetchHomeStats({ force });
       this.host.fetchKeywords();
+      this.host.fetchHomeLists({ force });
       this.host._tabBootstrapped.add(key);
       return;
     }
@@ -222,12 +232,16 @@ export class AppShellStateController extends BaseStateController {
     this.host.imageStats = null;
     this.host.mlTrainingStats = null;
     this.host.tagStatsBySource = {};
+    this.host.homeLists = [];
+    this.host.homeRecommendationsTab = 'lists';
 
     // Tenant switch always returns to Home and forces a fresh data pull.
     this.host.activeTab = 'home';
     this.host.homeSubTab = 'overview';
     this.host.activeSearchSubTab = 'home';
     this.host.pendingSearchExploreSelection = null;
+    this.host.pendingListSelectionId = null;
+    this.host.pendingListSelectionToken = 0;
     this.host._tabBootstrapped = new Set();
     this.initializeTab('home', { force: true });
   }

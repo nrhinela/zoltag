@@ -51,7 +51,9 @@ class PhotoCatApp extends LitElement {
       activeSearchSubTab: { type: String },
       activeAdminSubTab: { type: String },
       activeSystemSubTab: { type: String },
+      homeRecommendationsTab: { type: String },
       keywords: { type: Array },
+      homeLists: { type: Array },
       queueState: { type: Object },
       queueNotice: { type: Object },
       imageStats: { type: Object },
@@ -129,6 +131,8 @@ class PhotoCatApp extends LitElement {
       _homeLoadingCount: { type: Number },
       assetsRefreshToken: { type: Number },
       pendingSearchExploreSelection: { type: Object },
+      pendingListSelectionId: { type: [String, Number] },
+      pendingListSelectionToken: { type: Number },
   }
 
   constructor() {
@@ -148,8 +152,11 @@ class PhotoCatApp extends LitElement {
       this.activeLibrarySubTab = 'assets';
       this.activeAdminSubTab = 'tagging';
       this.activeSystemSubTab = 'cli';
+      this.homeRecommendationsTab = 'lists';
       this.assetsRefreshToken = 0;
       this.pendingSearchExploreSelection = null;
+      this.pendingListSelectionId = null;
+      this.pendingListSelectionToken = 0;
 
       initializeAppCoreSetup(this);
       bindAppDelegateMethods(this);
@@ -203,6 +210,10 @@ class PhotoCatApp extends LitElement {
 
   async fetchKeywords() {
       return await this._appDataState.fetchKeywords();
+  }
+
+  async fetchHomeLists({ force = false } = {}) {
+      return await this._appDataState.fetchHomeLists({ force });
   }
 
   async fetchStats({ force = false, includeRatings, includeImageStats = true, includeMlStats = false, includeTagStats = true } = {}) {

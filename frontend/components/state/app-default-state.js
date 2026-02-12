@@ -8,9 +8,11 @@ export function initializeAppDefaultState(host) {
   host._unsubscribeQueue = null;
   host.homeLoading = false;
   host._homeLoadingCount = 0;
+  host.homeRecommendationsTab = host.homeRecommendationsTab || 'lists';
   host.imageStats = null;
   host.mlTrainingStats = null;
   host.tagStatsBySource = {};
+  host.homeLists = [];
   host.curateLimit = 100;
   host.curateOrderBy = 'photo_creation';
   host.curateOrderDirection = 'desc';
@@ -75,6 +77,8 @@ export function initializeAppDefaultState(host) {
   host.searchTotal = 0;
   host.activeSearchSubTab = host.activeSearchSubTab || 'home';
   host.pendingSearchExploreSelection = null;
+  host.pendingListSelectionId = null;
+  host.pendingListSelectionToken = host.pendingListSelectionToken || 0;
   host.currentUser = null;
   host.curateExploreTargets = [
     { id: 1, category: '', keyword: '', action: 'add', count: 0 },

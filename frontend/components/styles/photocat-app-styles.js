@@ -115,6 +115,9 @@ export const photocatAppStyles = css`
         flex-direction: column;
         gap: 8px;
     }
+    .home-recommendations-tabs {
+        margin-bottom: 8px;
+    }
     .home-recommendations-header {
         font-size: 18px;
         font-weight: 700;

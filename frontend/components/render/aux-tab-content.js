@@ -131,11 +131,16 @@ export function renderAuxTabContent(host, { formatCurateDate }) {
       <div slot="lists" class="container">
         <list-editor
           .tenant=${host.tenant}
+          .initialSelectedListId=${host.pendingListSelectionId}
+          .initialSelectedListToken=${host.pendingListSelectionToken || 0}
           .thumbSize=${host.curateThumbSize}
           .renderCurateRatingWidget=${(image) => renderCurateRatingWidget(host, image)}
           .renderCurateRatingStatic=${renderCurateRatingStatic}
           .renderCuratePermatagSummary=${renderCuratePermatagSummary}
           .formatCurateDate=${formatCurateDate}
+          @initial-list-selection-applied=${() => {
+            host.pendingListSelectionId = null;
+          }}
           @image-selected=${(e) => host._handleCurateImageClick(null, e.detail.image, e.detail.imageSet)}
         ></list-editor>
       </div>

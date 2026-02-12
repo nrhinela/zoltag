@@ -135,6 +135,9 @@ export function renderHomeTabContent(host, { navCards, formatCurateDate }) {
       (keywords || []).filter((kw) => Number(kw?.count || 0) > 0),
     ])
     .filter(([, keywords]) => keywords.length > 0);
+  const homeLists = [...(host.homeLists || [])]
+    .sort((a, b) => (a.title || '').localeCompare(b.title || ''));
+  const homeRecommendationsTab = host.homeRecommendationsTab === 'keywords' ? 'keywords' : 'lists';
 
   const ctaCards = [
     {
@@ -218,6 +221,17 @@ export function renderHomeTabContent(host, { navCards, formatCurateDate }) {
       },
     });
   };
+  const handleListNavigate = (list) => {
+    if (!list?.id) return;
+    host._handleHomeNavigate({
+      detail: {
+        tab: 'lists',
+        listSelection: {
+          listId: list.id,
+        },
+      },
+    });
+  };
 
   return html`
     <div slot="home" class="home-tab-shell">
@@ -261,27 +275,64 @@ export function renderHomeTabContent(host, { navCards, formatCurateDate }) {
           </div>
           <div class="home-overview-right">
             <div class="home-recommendations-panel" aria-label="Recommendations panel">
+              <div class="admin-subtabs home-recommendations-tabs">
+                <button
+                  type="button"
+                  class="admin-subtab ${homeRecommendationsTab === 'lists' ? 'active' : ''}"
+                  @click=${() => { host.homeRecommendationsTab = 'lists'; }}
+                >
+                  Lists
+                </button>
+                <button
+                  type="button"
+                  class="admin-subtab ${homeRecommendationsTab === 'keywords' ? 'active' : ''}"
+                  @click=${() => { host.homeRecommendationsTab = 'keywords'; }}
+                >
+                  Keywords
+                </button>
+              </div>
               <div class="home-recommendations-body">
-                ${exploreTagCategories.length ? html`
-                  ${exploreTagCategories.map(([category, keywords]) => html`
+                ${homeRecommendationsTab === 'lists' ? html`
+                  ${homeLists.length ? html`
                     <section class="home-tag-section">
-                      <div class="home-tag-section-title">${category}</div>
                       <div class="home-tag-chip-wrap">
-                        ${keywords.map((kw) => html`
+                        ${homeLists.map((list) => html`
                           <button
                             type="button"
                             class="home-tag-chip"
-                            @click=${() => handleExploreTagNavigate(category, kw.keyword, kw.count)}
+                            @click=${() => handleListNavigate(list)}
                           >
-                            <span class="home-tag-chip-label">${kw.keyword}</span>
-                            <span class="home-tag-chip-count">${formatStatNumber(kw.count)}</span>
+                            <span class="home-tag-chip-label">${list.title || `List ${list.id}`}</span>
+                            <span class="home-tag-chip-count">${formatStatNumber(list.item_count)}</span>
                           </button>
                         `)}
                       </div>
                     </section>
-                  `)}
+                  ` : html`
+                    <div class="home-recommendations-empty">No lists available.</div>
+                  `}
                 ` : html`
-                  <div class="home-recommendations-empty">No tags available.</div>
+                  ${exploreTagCategories.length ? html`
+                    ${exploreTagCategories.map(([category, keywords]) => html`
+                      <section class="home-tag-section">
+                        <div class="home-tag-section-title">${category}</div>
+                        <div class="home-tag-chip-wrap">
+                          ${keywords.map((kw) => html`
+                            <button
+                              type="button"
+                              class="home-tag-chip"
+                              @click=${() => handleExploreTagNavigate(category, kw.keyword, kw.count)}
+                            >
+                              <span class="home-tag-chip-label">${kw.keyword}</span>
+                              <span class="home-tag-chip-count">${formatStatNumber(kw.count)}</span>
+                            </button>
+                          `)}
+                        </div>
+                      </section>
+                    `)}
+                  ` : html`
+                    <div class="home-recommendations-empty">No tags available.</div>
+                  `}
                 `}
               </div>
             </div>

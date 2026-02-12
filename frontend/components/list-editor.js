@@ -96,6 +96,8 @@ class ListEditor extends LitElement {
     isLoadingLists: { type: Boolean },
     listSortKey: { type: String },
     listSortDir: { type: String },
+    initialSelectedListId: { type: [String, Number] },
+    initialSelectedListToken: { type: Number },
     thumbSize: { type: Number },
     renderCurateRatingWidget: { type: Object },
     renderCurateRatingStatic: { type: Object },
@@ -116,6 +118,8 @@ class ListEditor extends LitElement {
     this.isLoadingLists = false;
     this.listSortKey = 'id';
     this.listSortDir = 'asc';
+    this.initialSelectedListId = null;
+    this.initialSelectedListToken = 0;
     this.thumbSize = 190;
     this.renderCurateRatingWidget = null;
     this.renderCurateRatingStatic = null;
@@ -123,6 +127,7 @@ class ListEditor extends LitElement {
     this.formatCurateDate = null;
     this._isVisible = false;
     this._hasRefreshedOnce = false;
+    this._lastInitialSelectionKey = '';
   }
 
   // Use Light DOM instead of Shadow DOM to access Tailwind CSS classes
@@ -148,6 +153,32 @@ class ListEditor extends LitElement {
       this.selectedList = null;
       this.listItems = [];
     }
+    if (
+      changedProperties.has('initialSelectedListId')
+      || changedProperties.has('initialSelectedListToken')
+      || changedProperties.has('lists')
+    ) {
+      this._applyInitialListSelection();
+    }
+  }
+
+  async _applyInitialListSelection() {
+    if (!this.initialSelectedListId) return;
+    const selectionKey = `${this.tenant || ''}:${this.initialSelectedListToken}:${this.initialSelectedListId}`;
+    if (this._lastInitialSelectionKey === selectionKey) return;
+
+    const list = (this.lists || []).find(
+      (entry) => String(entry.id) === String(this.initialSelectedListId)
+    );
+    if (!list) return;
+
+    this._lastInitialSelectionKey = selectionKey;
+    await this._selectList(list);
+    this.dispatchEvent(new CustomEvent('initial-list-selection-applied', {
+      detail: { listId: list.id },
+      bubbles: true,
+      composed: true,
+    }));
   }
 
   // Refresh data when component becomes visible (tab is clicked)

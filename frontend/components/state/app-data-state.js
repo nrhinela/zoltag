@@ -4,6 +4,7 @@ import {
   getImageStats,
   getMlTrainingStats,
   getTagStats,
+  getLists,
 } from '../../services/api.js';
 import { shouldIncludeRatingStats } from '../shared/curate-filters.js';
 
@@ -36,6 +37,20 @@ export class AppDataStateController extends BaseStateController {
         this.host._homeLoadingCount = Math.max(0, (this.host._homeLoadingCount || 1) - 1);
         this.host.homeLoading = this.host._homeLoadingCount > 0;
       }
+    }
+  }
+
+  async fetchHomeLists({ force = false } = {}) {
+    if (!this.host.tenant) {
+      this.host.homeLists = [];
+      return;
+    }
+    try {
+      const lists = await getLists(this.host.tenant, { force });
+      this.host.homeLists = Array.isArray(lists) ? lists : [];
+    } catch (error) {
+      console.error('Error fetching home lists:', error);
+      this.host.homeLists = [];
     }
   }
 
