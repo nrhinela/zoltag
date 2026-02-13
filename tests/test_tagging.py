@@ -1,4 +1,4 @@
-from photocat.tagging import calculate_tags
+from zoltag.tagging import calculate_tags
 
 def test_calculate_tags():
     # Scenario 1: No permatags

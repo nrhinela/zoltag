@@ -515,7 +515,7 @@ export class CurateBrowseFolderTab extends LitElement {
       this.browseDragSelection = [image.id];
     }
     event.dataTransfer.setData('text/plain', ids.join(','));
-    event.dataTransfer.setData('application/x-photocat-source', 'curate-browse');
+    event.dataTransfer.setData('application/x-zoltag-source', 'curate-browse');
     event.dataTransfer.setData('image-ids', JSON.stringify(ids));
   }
 

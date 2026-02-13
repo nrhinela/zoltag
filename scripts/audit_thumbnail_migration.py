@@ -25,9 +25,9 @@ from PIL import Image, UnidentifiedImageError
 from sqlalchemy import func, literal, text
 from sqlalchemy.orm import Session
 
-from photocat.database import SessionLocal
-from photocat.metadata import Asset, ImageMetadata, MachineTag, Permatag, Tenant
-from photocat.settings import settings
+from zoltag.database import SessionLocal
+from zoltag.metadata import Asset, ImageMetadata, MachineTag, Permatag, Tenant
+from zoltag.settings import settings
 
 
 def parse_args() -> argparse.Namespace:

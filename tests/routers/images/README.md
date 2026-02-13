@@ -58,7 +58,7 @@ pytest tests/routers/images/test_ml_training.py
 pytest tests/routers/images/test_tagging.py
 
 # Run with coverage
-pytest tests/routers/ --cov=src/photocat/routers
+pytest tests/routers/ --cov=src/zoltag/routers
 ```
 
 ## Test Implementation Guidelines

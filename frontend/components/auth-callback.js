@@ -2,7 +2,7 @@ import { LitElement, html, css } from 'lit';
 import { getSession, onAuthStateChange } from '../services/supabase.js';
 import { acceptInvitation } from '../services/auth.js';
 
-const INVITATION_TOKEN_KEY = 'photocat_invitation_token';
+const INVITATION_TOKEN_KEY = 'zoltag_invitation_token';
 
 /**
  * OAuth callback handler component

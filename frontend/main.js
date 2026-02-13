@@ -5,7 +5,7 @@ import './components/login-page.js';
 import './components/signup-page.js';
 import './components/auth-callback.js';
 import './components/auth-guard.js';
-import './components/photocat-app.js';
+import './components/zoltag-app.js';
 import './components/public-story-page.js';
 
 /**
@@ -44,14 +44,14 @@ if (path === '/login') {
 } else if (path === '/app') {
   appContainer.innerHTML = `
     <auth-guard>
-      <photocat-app></photocat-app>
+      <zoltag-app></zoltag-app>
     </auth-guard>
   `;
 } else {
   // All other routes require authentication
   appContainer.innerHTML = `
     <auth-guard>
-      <photocat-app></photocat-app>
+      <zoltag-app></zoltag-app>
     </auth-guard>
   `;
 }

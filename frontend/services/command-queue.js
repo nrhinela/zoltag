@@ -9,7 +9,7 @@ import {
   bulkPermatags,
 } from './api.js';
 
-const STORAGE_KEY = 'photocat_command_queue_v1';
+const STORAGE_KEY = 'zoltag_command_queue_v1';
 const CONCURRENCY = 3;
 const MAX_RETRIES = 2;
 

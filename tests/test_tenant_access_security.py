@@ -8,9 +8,9 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from photocat.auth.models import UserProfile, UserTenant
-from photocat.dependencies import get_tenant
-from photocat.metadata import Tenant as TenantModel
+from zoltag.auth.models import UserProfile, UserTenant
+from zoltag.dependencies import get_tenant
+from zoltag.metadata import Tenant as TenantModel
 
 
 def _create_tenant(db: Session, tenant_id: str = "tenant_a") -> TenantModel:

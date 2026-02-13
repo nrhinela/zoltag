@@ -633,7 +633,7 @@ export class AdminStorageSetup extends LitElement {
         <div class="section section-success">
           <h4>2. Connect to Dropbox</h4>
           <p>
-            Authorize PhotoCat to access this tenant's Dropbox account. This will automatically create and store the
+            Authorize Zoltag to access this tenant's Dropbox account. This will automatically create and store the
             refresh token in Secret Manager.
           </p>
           <button type="button" class="btn btn-primary" @click="${this.handleConnectDropbox}">
@@ -727,7 +727,7 @@ export class AdminStorageSetup extends LitElement {
               <pre>echo -n "YOUR_APP_SECRET" | \
   gcloud secrets create dropbox-app-secret-${this.tenant.id} \
   --data-file=- \
-  --project=photocat-483622</pre>
+  --project=${this.systemSettings?.gcp_project_id || 'your-project-id'}</pre>
             </li>
             <li>Enter your App Key above and click "Save App Key"</li>
             <li>Click "Connect Dropbox Account" to generate/store the refresh token secret</li>
@@ -782,7 +782,7 @@ export class AdminStorageSetup extends LitElement {
         <div class="section section-success">
           <h4>2. Connect Google Drive</h4>
           <p>
-            Authorize PhotoCat to access this tenant's Google Drive. The refresh token will be stored in Secret Manager.
+            Authorize Zoltag to access this tenant's Google Drive. The refresh token will be stored in Secret Manager.
           </p>
           <button type="button" class="btn btn-primary" @click="${this.handleConnectGdrive}">
             <i class="fab fa-google-drive"></i> Connect Google Drive
@@ -867,7 +867,7 @@ export class AdminStorageSetup extends LitElement {
               <pre>echo -n "YOUR_GOOGLE_CLIENT_SECRET" | \
   gcloud secrets create ${gdriveClientSecretName} \
   --data-file=- \
-  --project=photocat-483622</pre>
+  --project=${this.systemSettings?.gcp_project_id || 'your-project-id'}</pre>
             </li>
             <li>Save the secret names above, then click "Connect Google Drive" to complete OAuth and store refresh token in:
               <pre>${gdriveTokenSecretName}</pre>
@@ -993,7 +993,7 @@ export class AdminStorageSetup extends LitElement {
               <pre>echo -n "YOUR_FLICKR_API_SECRET" | \
   gcloud secrets create ${flickrApiSecretName} \
   --data-file=- \
-  --project=photocat-483622</pre>
+  --project=${this.systemSettings?.gcp_project_id || 'your-project-id'}</pre>
             </li>
             <li>Create OAuth token/secret for the tenant, then store them together as JSON in:
               <pre>${flickrTokenSecretName}</pre>
@@ -1001,7 +1001,7 @@ export class AdminStorageSetup extends LitElement {
             <li>Optional: add photoset IDs in "Sync Albums" to limit scope.</li>
           </ol>
           <p>
-            OAuth callback wiring for Flickr is not yet enabled in PhotoCat. Save settings here first, then backend OAuth can
+            OAuth callback wiring for Flickr is not yet enabled in Zoltag. Save settings here first, then backend OAuth can
             be added without changing tenant config.
           </p>
         </div>

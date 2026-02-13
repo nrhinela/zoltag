@@ -54,8 +54,8 @@ logs/
 data/
 datasets/
 models/
-!src/photocat/models
-!src/photocat/models/**
+!src/zoltag/models
+!src/zoltag/models/**
 checkpoints/
 outputs/
 *.pt

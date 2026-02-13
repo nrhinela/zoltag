@@ -4,11 +4,11 @@ import pytest
 from sqlalchemy.orm import Session
 from sqlalchemy import func, distinct
 
-from photocat.metadata import (
+from zoltag.metadata import (
     ImageMetadata, MachineTag, Permatag
 )
-from photocat.models.config import Keyword, KeywordCategory
-from photocat.dependencies import get_tenant_setting
+from zoltag.models.config import Keyword, KeywordCategory
+from zoltag.dependencies import get_tenant_setting
 
 
 @pytest.fixture
@@ -295,7 +295,7 @@ class TestTenantSetting:
 
     def test_get_tenant_setting_from_jsonb(self, test_db: Session):
         """Test retrieving setting from JSONB."""
-        from photocat.metadata import Tenant as TenantModel
+        from zoltag.metadata import Tenant as TenantModel
 
         # Create tenant with settings
         tenant = TenantModel(

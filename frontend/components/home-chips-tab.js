@@ -414,7 +414,7 @@ export class HomeChipsTab extends LitElement {
             .checked=${this.chipMode === 'search'}
             @change=${() => this._handleChipModeChange('search')}
           >
-          <span>Search in PhotoCat</span>
+          <span>Search in Zoltag</span>
         </label>
         <label class="inline-flex items-center gap-2">
           <input

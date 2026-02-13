@@ -7,7 +7,7 @@ set -e
 PROJECT_ID="photocat-483622"
 REGION="us-central1"
 
-echo "=== PhotoCat Shared Bucket Setup ==="
+echo "=== Zoltag Shared Bucket Setup ==="
 echo "Project: $PROJECT_ID"
 echo "Region: $REGION"
 echo ""

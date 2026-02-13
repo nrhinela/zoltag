@@ -397,7 +397,7 @@ export class CurateAuditTab extends LitElement {
 
     event.dataTransfer.effectAllowed = 'move';
     event.dataTransfer.setData('text/plain', ids.join(','));
-    event.dataTransfer.setData('application/x-photocat-source', 'audit-available');
+    event.dataTransfer.setData('application/x-zoltag-source', 'audit-available');
   }
 
   // ========================================

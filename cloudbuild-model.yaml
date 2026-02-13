@@ -3,7 +3,7 @@
 steps:
   - name: 'gcr.io/cloud-builders/docker'
     entrypoint: 'bash'
-    args: ['-c', 'docker pull gcr.io/$PROJECT_ID/photocat:model-cache || echo "No model cache found"']
+    args: ['-c', 'docker pull gcr.io/$PROJECT_ID/zoltag:model-cache || echo "No model cache found"']
     id: 'pull-model-cache'
 
   - name: 'gcr.io/cloud-builders/docker'
@@ -11,18 +11,18 @@ steps:
       'build',
       '--build-arg', 'PRELOAD_SIGLIP=1',
       '--build-arg', 'BUILDKIT_INLINE_CACHE=1',
-      '--cache-from', 'gcr.io/$PROJECT_ID/photocat:model-cache',
-      '-t', 'gcr.io/$PROJECT_ID/photocat:model-cache',
+      '--cache-from', 'gcr.io/$PROJECT_ID/zoltag:model-cache',
+      '-t', 'gcr.io/$PROJECT_ID/zoltag:model-cache',
       '.'
     ]
     env:
       - 'DOCKER_BUILDKIT=1'
 
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['push', 'gcr.io/$PROJECT_ID/photocat:model-cache']
+    args: ['push', 'gcr.io/$PROJECT_ID/zoltag:model-cache']
 
 images:
-  - 'gcr.io/$PROJECT_ID/photocat:model-cache'
+  - 'gcr.io/$PROJECT_ID/zoltag:model-cache'
 
 options:
   machineType: 'E2_MEDIUM'

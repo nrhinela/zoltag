@@ -4,9 +4,9 @@ import pytest
 import json
 from sqlalchemy.orm import Session
 
-from photocat.metadata import ImageMetadata, MachineTag, Permatag
-from photocat.models.config import PhotoList, PhotoListItem
-from photocat.routers.filtering import (
+from zoltag.metadata import ImageMetadata, MachineTag, Permatag
+from zoltag.models.config import PhotoList, PhotoListItem
+from zoltag.routers.filtering import (
     apply_list_filter,
     apply_rating_filter,
     apply_hide_zero_rating_filter,
@@ -15,7 +15,7 @@ from photocat.routers.filtering import (
     apply_category_filters,
     calculate_relevance_scores
 )
-from photocat.tenant import Tenant
+from zoltag.tenant import Tenant
 
 
 @pytest.fixture

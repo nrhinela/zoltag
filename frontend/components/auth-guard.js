@@ -10,7 +10,7 @@ import { isVerified, ensureRegistration } from '../services/auth.js';
  *
  * Usage:
  *   <auth-guard>
- *     <photocat-app></photocat-app>
+ *     <zoltag-app></zoltag-app>
  *   </auth-guard>
  */
 export class AuthGuard extends LitElement {
@@ -190,7 +190,7 @@ export class AuthGuard extends LitElement {
       return html`
         <div class="loading-screen">
           <div class="loading-card">
-            <div class="loading-title">PhotoCat</div>
+            <div class="loading-title">Zoltag</div>
             <div class="spinner">
               <div class="spinner-animation"></div>
               <div class="loading-text">Loading workspace...</div>
@@ -205,7 +205,7 @@ export class AuthGuard extends LitElement {
       return html`
         <div class="loading-screen">
           <div class="loading-card">
-            <div class="loading-title">PhotoCat</div>
+            <div class="loading-title">Zoltag</div>
             <div class="spinner">
               <div class="loading-text">Redirecting to login...</div>
             </div>

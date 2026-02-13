@@ -2,7 +2,7 @@
  * Create rating drag handlers - eliminates duplication between explore and audit
  *
  * This factory creates handlers for drag-to-rating-bucket functionality.
- * Used to replace 4+ duplicate methods in photocat-app.js.
+ * Used to replace 4+ duplicate methods in zoltag-app.js.
  *
  * @param {Object} context - Component context (usually `this` from LitElement)
  * @param {Object} config - Configuration object

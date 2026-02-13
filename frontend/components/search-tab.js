@@ -1871,7 +1871,7 @@ export class SearchTab extends LitElement {
       this.searchDragSelection = [image.id];
     }
     event.dataTransfer.setData('text/plain', ids.join(','));
-    event.dataTransfer.setData('application/x-photocat-source', 'search-available');
+    event.dataTransfer.setData('application/x-zoltag-source', 'search-available');
     event.dataTransfer.setData('image-ids', JSON.stringify(ids));
   }
 

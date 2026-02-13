@@ -1,5 +1,5 @@
 {
-  "name": "photocat",
+  "name": "zoltag",
   "version": "1.0.0",
   "description": "Multi-tenant image organization and search utility for Dropbox collections.",
   "main": "index.js",
@@ -16,16 +16,16 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/nrhinela/photocat.git"
+    "url": "git+https://github.com/nrhinela/zoltag.git"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
   "bugs": {
-    "url": "https://github.com/nrhinela/photocat/issues"
+    "url": "https://github.com/nrhinela/zoltag/issues"
   },
-  "homepage": "https://github.com/nrhinela/photocat#readme",
+  "homepage": "https://github.com/nrhinela/zoltag#readme",
   "devDependencies": {
     "autoprefixer": "^10.4.23",
     "eslint": "^9.39.2",

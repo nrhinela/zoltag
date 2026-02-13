@@ -3,7 +3,7 @@
 import pytest
 from PIL import Image
 
-from photocat.image import ImageProcessor, FaceDetector
+from zoltag.image import ImageProcessor, FaceDetector
 
 
 def test_image_processor_creation():

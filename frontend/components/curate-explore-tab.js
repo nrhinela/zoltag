@@ -385,7 +385,7 @@ export class CurateExploreTab extends LitElement {
     this._curateReorderDraggedId = image.id;
     event.dataTransfer.effectAllowed = 'move';
     event.dataTransfer.setData('text/plain', ids.join(','));
-    event.dataTransfer.setData('application/x-photocat-source', 'available');
+    event.dataTransfer.setData('application/x-zoltag-source', 'available');
   }
 
   _handleCurateExploreReorderOver(event, targetImageId) {

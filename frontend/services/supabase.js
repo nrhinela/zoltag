@@ -1,7 +1,7 @@
 /**
  * Supabase client initialization and utility functions.
  *
- * This module provides a singleton Supabase client configured for PhotoCat.
+ * This module provides a singleton Supabase client configured for Zoltag.
  * It handles:
  * - User authentication (signup, login, OAuth)
  * - Session management and token refresh

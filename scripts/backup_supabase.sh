@@ -2,8 +2,8 @@
 set -euo pipefail
 
 : "${DATABASE_URL:?DATABASE_URL is required}"
-: "${GCS_BUCKET:=photocat-backups}"
-: "${BACKUP_PREFIX:=photocat}"
+: "${GCS_BUCKET:=zoltag-backups}"
+: "${BACKUP_PREFIX:=zoltag}"
 : "${PG_DUMP_FORMAT:=custom}"
 
 export PGSSLMODE="${PGSSLMODE:-require}"

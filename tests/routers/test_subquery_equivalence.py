@@ -10,9 +10,9 @@ query performance optimization refactoring.
 import pytest
 from sqlalchemy.orm import Session
 
-from photocat.metadata import ImageMetadata, MachineTag, Permatag
-from photocat.models.config import PhotoList, PhotoListItem, Keyword, KeywordCategory
-from photocat.routers.filtering import (
+from zoltag.metadata import ImageMetadata, MachineTag, Permatag
+from zoltag.models.config import PhotoList, PhotoListItem, Keyword, KeywordCategory
+from zoltag.routers.filtering import (
     # Old materialized functions
     apply_list_filter,
     apply_rating_filter,
@@ -27,7 +27,7 @@ from photocat.routers.filtering import (
     apply_permatag_filter_subquery,
     build_image_query_with_subqueries,
 )
-from photocat.tenant import Tenant
+from zoltag.tenant import Tenant
 
 
 @pytest.fixture

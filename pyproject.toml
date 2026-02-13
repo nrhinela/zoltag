@@ -3,13 +3,13 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "photocat"
+name = "zoltag"
 version = "0.1.0"
 description = "Multi-tenant image organization and search utility for Dropbox"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [
-    {name = "PhotoCat Team"}
+    {name = "Zoltag Team"}
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -65,7 +65,7 @@ dependencies = [
 ]
 
 [project.scripts]
-photocat = "photocat.cli:cli"
+zoltag = "zoltag.cli:cli"
 
 [project.optional-dependencies]
 dev = [
@@ -86,7 +86,7 @@ ml = [
 where = ["src"]
 
 [tool.setuptools.package-data]
-photocat = ["static/*", "static/**/*"]
+zoltag = ["static/*", "static/**/*"]
 
 [tool.black]
 line-length = 100
@@ -125,7 +125,7 @@ python_classes = "Test*"
 python_functions = "test_*"
 addopts = [
     "--strict-markers",
-    "--cov=photocat",
+    "--cov=zoltag",
     "--cov-report=term-missing",
 ]
 asyncio_mode = "auto"

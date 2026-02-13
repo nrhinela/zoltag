@@ -1,5 +1,5 @@
 /**
- * PhotoCat Admin Application Entry Point
+ * Zoltag Admin Application Entry Point
  * Loads and mounts the admin application Lit component
  */
 

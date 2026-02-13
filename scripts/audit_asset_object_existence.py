@@ -18,11 +18,11 @@ from typing import Dict, List, Optional, Sequence, Set, Tuple
 from google.cloud import storage
 from sqlalchemy.orm import Session
 
-import photocat.auth.models  # noqa: F401  # Ensure user_profiles table is registered
-from photocat.database import SessionLocal
-from photocat.metadata import Asset, Tenant as TenantModel
-from photocat.settings import settings
-from photocat.tenant import Tenant as TenantCtx
+import zoltag.auth.models  # noqa: F401  # Ensure user_profiles table is registered
+from zoltag.database import SessionLocal
+from zoltag.metadata import Asset, Tenant as TenantModel
+from zoltag.settings import settings
+from zoltag.tenant import Tenant as TenantCtx
 
 
 @dataclass

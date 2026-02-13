@@ -10,9 +10,9 @@ This module tests people tagging on images:
 import pytest
 from sqlalchemy.orm import Session
 
-from photocat.tenant import Tenant, TenantContext
-from photocat.metadata import Person, ImageMetadata, MachineTag
-from photocat.models.config import Keyword, KeywordCategory
+from zoltag.tenant import Tenant, TenantContext
+from zoltag.metadata import Person, ImageMetadata, MachineTag
+from zoltag.models.config import Keyword, KeywordCategory
 
 
 @pytest.fixture

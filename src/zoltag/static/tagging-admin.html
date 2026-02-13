@@ -1,0 +1,1015 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zoltag - Tagging Administration</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            line-height: 1.6;
+            background: #f5f5f5;
+        }
+
+        .container {
+            max-width: 1280px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+        }
+
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            border-bottom: 2px solid #ddd;
+        }
+
+        .tab {
+            padding: 12px 24px;
+            background: white;
+            border: 1px solid #ddd;
+            border-bottom: none;
+            border-radius: 8px 8px 0 0;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            color: #666;
+            transition: all 0.2s;
+        }
+
+        .tab:hover {
+            background: #f8f9fa;
+            color: #333;
+        }
+
+        .tab.active {
+            background: white;
+            color: #007bff;
+            border-color: #007bff;
+            position: relative;
+            bottom: -2px;
+        }
+
+        .tab-content {
+            display: none;
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            min-height: 500px;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: #007bff;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #0056b3;
+        }
+
+        .btn-secondary {
+            background: #6c757d;
+            color: white;
+        }
+
+        .btn-secondary:hover {
+            background: #5a6268;
+        }
+
+        .btn-danger {
+            background: #dc3545;
+            color: white;
+        }
+
+        .btn-danger:hover {
+            background: #c82333;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+
+        th {
+            background: #f8f9fa;
+            font-weight: 600;
+            color: #333;
+        }
+
+        tr:hover {
+            background: #f8f9fa;
+        }
+
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 12px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+        }
+
+        .success {
+            background: #d4edda;
+            color: #155724;
+            padding: 12px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+
+        .modal.active {
+            display: flex;
+        }
+
+        .modal-content {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            max-width: 500px;
+            width: 90%;
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 500;
+            color: #333;
+        }
+
+        .form-group input,
+        .form-group select,
+        .form-group textarea {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+
+        .tenant-selector {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .tenant-selector label {
+            font-weight: 600;
+            color: #333;
+        }
+
+        .tenant-selector select {
+            flex: 1;
+            max-width: 300px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                    <h1>
+                        <i class="fas fa-tags"></i> Zoltag
+                        <span id="environment-badge" style="font-size: 14px; padding: 4px 12px; border-radius: 4px; font-weight: 600; margin-left: 12px;">...</span>
+                        <span style="font-weight: 400; font-size: 20px; color: #666;">Tagging Administration</span>
+                    </h1>
+                    <p>Configure keywords and manage people for facial recognition</p>
+                </div>
+                <div>
+                    <button class="btn btn-secondary" onclick="window.location.href='/'">
+                        <i class="fas fa-arrow-left"></i> Back
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Current Tenant Display -->
+        <div class="tenant-selector">
+        <label><i class="fas fa-user"></i> Current Tenant:</label>
+        <strong id="current-tenant-name" style="font-size: 16px; color: #333;">Loading...</strong>
+        <span style="margin-left: 20px; color: #666; font-size: 14px;">
+            (To change tenant, <a href="/" style="color: #007bff; text-decoration: none;">go back</a>)
+        </span>
+    </div>
+
+    <!-- Tabs -->
+    <div class="tabs">
+        <div class="tab active" data-tab="keywords"><i class="fas fa-tag"></i> Keywords</div>
+        <div class="tab" data-tab="people"><i class="fas fa-users"></i> People</div>
+    </div>
+
+    <!-- Keywords Tab -->
+    <div id="keywords" class="tab-content active">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <h2><i class="fas fa-tags"></i> Keywords Configuration</h2>
+        </div>
+        <p style="color: #666; margin-bottom: 10px;">Define categories and keywords for image tagging. Keywords are used by the ML model to categorize images.</p>
+
+        <!-- Info Box -->
+        <div style="background: #e7f3ff; border-left: 4px solid #0066cc; padding: 12px 15px; margin-bottom: 20px; border-radius: 4px;">
+            <div style="display: flex; align-items: start; gap: 10px;">
+                <i class="fas fa-info-circle" style="color: #0066cc; margin-top: 2px;"></i>
+                <div style="font-size: 13px; color: #333;">
+                    <strong>How scoring works:</strong> Keywords within the same category are scored relative to each other.
+                    When you improve one keyword's description, it may affect the confidence scores of other keywords in that category.
+                    Keywords in different categories are scored independently.
+                </div>
+            </div>
+        </div>
+
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <div></div>
+            <button class="btn btn-primary" onclick="showCategoryModal()"><i class="fas fa-plus"></i> New Category</button>
+        </div>
+
+        <div id="keywords-list" style="margin-top: 20px;">
+            <!-- Categories will be loaded here -->
+        </div>
+    </div>
+
+    <!-- People Tab -->
+    <div id="people" class="tab-content">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <h2><i class="fas fa-users"></i> People Management</h2>
+            <button class="btn btn-primary" onclick="showPersonModal()"><i class="fas fa-plus"></i> Add Person</button>
+        </div>
+        <p style="color: #666; margin-bottom: 20px;">Manage known people for facial recognition. Each person can have aliases and reference face embeddings.</p>
+        <div id="people-error" class="error" style="display: none;"></div>
+        <div id="people-success" class="success" style="display: none;"></div>
+        <table id="people-table">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Aliases</th>
+                    <th>Face Embedding</th>
+                    <th>Created</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr><td colspan="5" style="text-align: center; color: #999;">Select a tenant to view people</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Person Modal -->
+    <div id="person-modal" class="modal">
+        <div class="modal-content">
+            <h3 style="margin-bottom: 20px;" id="person-modal-title">Add Person</h3>
+            <form id="person-form" onsubmit="savePerson(event)">
+                <input type="hidden" id="person-id">
+                <div class="form-group">
+                    <label>Name *</label>
+                    <input type="text" id="person-name" required>
+                </div>
+                <div class="form-group">
+                    <label>Aliases (comma-separated)</label>
+                    <input type="text" id="person-aliases" placeholder="e.g., Bob, Bobby, Robert">
+                </div>
+                <div class="form-group">
+                    <label>Face Embedding Reference</label>
+                    <input type="text" id="person-face-embedding-ref" placeholder="Cloud Storage path to face encodings">
+                </div>
+                <div style="display: flex; gap: 10px; justify-content: flex-end;">
+                    <button type="button" class="btn btn-secondary" onclick="closePersonModal()">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        // Global state
+        let currentTenantId = null;
+
+        // Tab switching
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                const tabName = tab.dataset.tab;
+
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.tab-content').forEach(tc => tc.classList.remove('active'));
+
+                tab.classList.add('active');
+                document.getElementById(tabName).classList.add('active');
+
+                // Load data when switching tabs
+                if (tabName === 'keywords' && currentTenantId) loadKeywords();
+                if (tabName === 'people' && currentTenantId) loadPeople();
+            });
+        });
+
+        // Load current tenant from gallery selection
+        async function loadCurrentTenant() {
+            try {
+                // Fetch tenant details to display name
+                const response = await fetch('/api/v1/admin/tenants');
+                const tenants = await response.json();
+
+                // Get tenant from localStorage (set by main gallery)
+                let storedTenant = localStorage.getItem('currentTenant');
+
+                // If no tenant stored, default to first active tenant
+                if (!storedTenant) {
+                    const activeTenants = tenants.filter(t => t.active);
+                    if (activeTenants.length > 0) {
+                        storedTenant = activeTenants[0].id;
+                        localStorage.setItem('currentTenant', storedTenant);
+                    } else {
+                        showError('keywords', 'No active tenants found. Please create a tenant first.');
+                        document.getElementById('current-tenant-name').textContent = 'No active tenants';
+                        return;
+                    }
+                }
+
+                const tenant = tenants.find(t => t.id === storedTenant);
+
+                if (!tenant) {
+                    showError('keywords', 'Selected tenant not found. Please select a valid tenant in the gallery.');
+                    document.getElementById('current-tenant-name').textContent = 'Invalid tenant';
+                    return;
+                }
+
+                if (!tenant.active) {
+                    showError('keywords', 'Selected tenant is inactive. Please select an active tenant in the gallery.');
+                    document.getElementById('current-tenant-name').textContent = `${tenant.name} (Inactive)`;
+                    return;
+                }
+
+                // Set current tenant
+                currentTenantId = storedTenant;
+                document.getElementById('current-tenant-name').textContent = tenant.name;
+
+                // Load keywords for the selected tab
+                loadKeywords();
+                loadTaggingModel();
+            } catch (error) {
+                console.error('Error loading tenant:', error);
+                showError('keywords', 'Failed to load tenant: ' + error.message);
+                document.getElementById('current-tenant-name').textContent = 'Error loading tenant';
+            }
+        }
+
+        // Model selection functions
+        async function loadTaggingModel() {
+            try {
+                const response = await fetch('/api/v1/config/tagging-model');
+                if (response.ok) {
+                    const data = await response.json();
+
+                    // Get model from localStorage or use default
+                    const savedModel = localStorage.getItem('taggingModel') || data.default_model;
+
+                    const select = document.getElementById('tagging-model-select');
+                    select.value = savedModel;
+
+                    const statusEl = document.getElementById('model-status');
+                    statusEl.textContent = `Active: ${savedModel}`;
+                }
+            } catch (error) {
+                console.error('Error loading tagging model:', error);
+            }
+        }
+
+        function updateTaggingModel() {
+            const select = document.getElementById('tagging-model-select');
+            const model = select.value;
+
+            // Save to localStorage
+            localStorage.setItem('taggingModel', model);
+
+            const statusEl = document.getElementById('model-status');
+            statusEl.textContent = `✓ Saved! Active: ${model}`;
+            statusEl.style.color = '#28a745';
+
+            setTimeout(() => {
+                statusEl.textContent = `Active: ${model}`;
+                statusEl.style.color = '#28a745';
+            }, 2000);
+        }
+
+        // Keywords functions
+        // ============================================================================
+        // Modern Keyword Management Functions
+        // ============================================================================
+
+        let categories = [];
+        let expandedCategories = new Set();
+
+        async function loadKeywords() {
+            if (!currentTenantId) {
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/v1/admin/keywords/categories', {
+                    headers: { 'X-Tenant-ID': currentTenantId }
+                });
+                categories = await response.json();
+                renderCategories();
+            } catch (error) {
+                console.error('Error loading categories:', error);
+                showError('keywords', 'Failed to load keyword categories');
+            }
+        }
+
+        function renderCategories() {
+            const container = document.getElementById('keywords-list');
+            if (categories.length === 0) {
+                container.innerHTML = '<p style="color: #999; font-style: italic; padding: 20px; background: white; border-radius: 6px;">No categories yet. Click "+ New Category" to create one.</p>';
+                return;
+            }
+
+            container.innerHTML = categories.map(cat => {
+                const isExpanded = expandedCategories.has(cat.id);
+                return `
+                    <div style="background: white; border: 1px solid #ddd; border-radius: 6px; margin-bottom: 15px; overflow: hidden;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; padding: 15px; background: #f8f9fa; cursor: pointer;" onclick="toggleCategory(${cat.id})">
+                            <div style="display: flex; align-items: center; gap: 10px;">
+                                <span style="font-size: 12px;">${isExpanded ? '▼' : '▶'}</span>
+                                <strong>${cat.name}</strong>
+                                <span style="color: #666; font-size: 13px;">(${cat.keyword_count} keywords)</span>
+                            </div>
+                            <div style="display: flex; gap: 8px;" onclick="event.stopPropagation()">
+                                <button class="btn btn-primary" style="padding: 4px 12px; font-size: 12px;" onclick="showKeywordModal(null, ${cat.id})">+ Add Keyword</button>
+                                <button class="btn" style="padding: 4px 12px; font-size: 12px; background: #6c757d; color: white;" onclick="editCategory(${cat.id})">Edit</button>
+                                <button class="btn" style="padding: 4px 12px; font-size: 12px; background: #dc3545; color: white;" onclick="deleteCategory(${cat.id})">Delete</button>
+                            </div>
+                        </div>
+                        <div id="category-keywords-${cat.id}" style="display: ${isExpanded ? 'block' : 'none'}; padding: 15px;">
+                            <!-- Keywords will be loaded here -->
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            // Load keywords for expanded categories
+            expandedCategories.forEach(catId => loadKeywordsForCategory(catId));
+        }
+
+        async function toggleCategory(categoryId) {
+            if (expandedCategories.has(categoryId)) {
+                expandedCategories.delete(categoryId);
+            } else {
+                expandedCategories.add(categoryId);
+                await loadKeywordsForCategory(categoryId);
+            }
+            renderCategories();
+        }
+
+        async function loadKeywordsForCategory(categoryId) {
+            try {
+                const response = await fetch(`/api/v1/admin/keywords/categories/${categoryId}/keywords`);
+                const keywords = await response.json();
+
+                const container = document.getElementById(`category-keywords-${categoryId}`);
+                if (keywords.length === 0) {
+                    container.innerHTML = '<p style="color: #999; font-style: italic;">No keywords in this category yet.</p>';
+                    return;
+                }
+
+                container.innerHTML = `
+                    <table style="width: 100%; border-collapse: collapse;">
+                        <thead>
+                            <tr style="background: #f8f9fa;">
+                                <th style="padding: 10px; text-align: left; border-bottom: 2px solid #dee2e6;">Keyword</th>
+                                <th style="padding: 10px; text-align: left; border-bottom: 2px solid #dee2e6;">Prompt</th>
+                                <th style="padding: 10px; text-align: left; border-bottom: 2px solid #dee2e6; width: 100px;">Order</th>
+                                <th style="padding: 10px; text-align: right; border-bottom: 2px solid #dee2e6; width: 150px;">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${keywords.map((kw, index) => `
+                                <tr style="border-bottom: 1px solid #dee2e6;">
+                                    <td style="padding: 10px;"><strong>${kw.keyword}</strong></td>
+                                    <td style="padding: 10px; color: #666; font-size: 13px;">${kw.prompt.substring(0, 80)}${kw.prompt.length > 80 ? '...' : ''}</td>
+                                    <td style="padding: 10px;">
+                                        <div style="display: flex; gap: 4px; align-items: center;">
+                                            <button onclick="moveKeyword(${kw.id}, ${categoryId}, 'up')" ${index === 0 ? 'disabled' : ''} style="padding: 2px 6px; font-size: 11px; cursor: pointer;">↑</button>
+                                            <span>${kw.sort_order}</span>
+                                            <button onclick="moveKeyword(${kw.id}, ${categoryId}, 'down')" ${index === keywords.length - 1 ? 'disabled' : ''} style="padding: 2px 6px; font-size: 11px; cursor: pointer;">↓</button>
+                                        </div>
+                                    </td>
+                                    <td style="padding: 10px; text-align: right;">
+                                        <button class="btn" style="padding: 4px 12px; font-size: 12px; background: #6c757d; color: white;" onclick="editKeyword(${kw.id})">Edit</button>
+                                        <button class="btn" style="padding: 4px 12px; font-size: 12px; background: #dc3545; color: white;" onclick="deleteKeyword(${kw.id}, ${categoryId})">Delete</button>
+                                    </td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                `;
+            } catch (error) {
+                console.error('Error loading keywords:', error);
+            }
+        }
+
+        // Category Modal Functions
+        function showCategoryModal(categoryId = null) {
+            document.getElementById('category-modal-title').textContent = categoryId ? 'Edit Category' : 'New Category';
+            document.getElementById('category-edit-id').value = categoryId || '';
+            document.getElementById('category-name').value = '';
+
+            if (categoryId) {
+                const category = categories.find(c => c.id === categoryId);
+                if (category) {
+                    document.getElementById('category-name').value = category.name;
+                }
+            }
+
+            document.getElementById('category-modal').style.display = 'block';
+        }
+
+        function closeCategoryModal() {
+            document.getElementById('category-modal').style.display = 'none';
+        }
+
+        function editCategory(categoryId) {
+            showCategoryModal(categoryId);
+        }
+
+        async function saveCategory(event) {
+            event.preventDefault();
+
+            const categoryId = document.getElementById('category-edit-id').value;
+            const name = document.getElementById('category-name').value;
+
+            try {
+                const url = categoryId
+                    ? `/api/v1/admin/keywords/categories/${categoryId}`
+                    : '/api/v1/admin/keywords/categories';
+
+                const method = categoryId ? 'PUT' : 'POST';
+                const headers = { 'Content-Type': 'application/json' };
+
+                if (!categoryId) {
+                    headers['X-Tenant-ID'] = currentTenantId;
+                }
+
+                const response = await fetch(url, {
+                    method,
+                    headers,
+                    body: JSON.stringify({ name })
+                });
+
+                if (!response.ok) throw new Error('Failed to save category');
+
+                closeCategoryModal();
+                await loadKeywords();
+                showSuccess('keywords', 'Category saved successfully!');
+            } catch (error) {
+                console.error('Error saving category:', error);
+                showError('keywords', 'Failed to save category: ' + error.message);
+            }
+        }
+
+        async function deleteCategory(categoryId) {
+            const category = categories.find(c => c.id === categoryId);
+            if (!confirm(`Delete category "${category.name}" and all its keywords? This cannot be undone.`)) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/v1/admin/keywords/categories/${categoryId}`, {
+                    method: 'DELETE'
+                });
+
+                if (!response.ok) throw new Error('Failed to delete category');
+
+                await loadKeywords();
+                showSuccess('keywords', 'Category deleted successfully!');
+            } catch (error) {
+                console.error('Error deleting category:', error);
+                showError('keywords', 'Failed to delete category: ' + error.message);
+            }
+        }
+
+        // Keyword Modal Functions
+        function showKeywordModal(keywordId = null, categoryId = null) {
+            document.getElementById('keyword-modal-title').textContent = keywordId ? 'Edit Keyword' : 'New Keyword';
+            document.getElementById('keyword-edit-id').value = keywordId || '';
+            document.getElementById('keyword-category-id').value = categoryId || '';
+            document.getElementById('keyword-text').value = '';
+            document.getElementById('keyword-prompt').value = '';
+
+            if (keywordId) {
+                loadKeywordData(keywordId);
+            }
+
+            document.getElementById('keyword-modal').style.display = 'block';
+        }
+
+        function closeKeywordModal() {
+            document.getElementById('keyword-modal').style.display = 'none';
+        }
+
+        async function loadKeywordData(keywordId) {
+            for (const cat of categories) {
+                const response = await fetch(`/api/v1/admin/keywords/categories/${cat.id}/keywords`);
+                const keywords = await response.json();
+                const keyword = keywords.find(k => k.id === keywordId);
+
+                if (keyword) {
+                    document.getElementById('keyword-category-id').value = keyword.category_id;
+                    document.getElementById('keyword-text').value = keyword.keyword;
+                    document.getElementById('keyword-prompt').value = keyword.prompt;
+                    break;
+                }
+            }
+        }
+
+        function editKeyword(keywordId) {
+            showKeywordModal(keywordId);
+        }
+
+        async function saveKeyword(event) {
+            event.preventDefault();
+
+            const keywordId = document.getElementById('keyword-edit-id').value;
+            const categoryId = document.getElementById('keyword-category-id').value;
+            const keyword = document.getElementById('keyword-text').value;
+            const prompt = document.getElementById('keyword-prompt').value;
+
+            try {
+                const url = keywordId
+                    ? `/api/v1/admin/keywords/${keywordId}`
+                    : `/api/v1/admin/keywords/categories/${categoryId}/keywords`;
+
+                const method = keywordId ? 'PUT' : 'POST';
+
+                const response = await fetch(url, {
+                    method,
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ keyword, prompt })
+                });
+
+                if (!response.ok) throw new Error('Failed to save keyword');
+
+                closeKeywordModal();
+                await loadKeywordsForCategory(categoryId);
+                await loadKeywords(); // Refresh counts
+                showSuccess('keywords', 'Keyword saved successfully!');
+            } catch (error) {
+                console.error('Error saving keyword:', error);
+                showError('keywords', 'Failed to save keyword: ' + error.message);
+            }
+        }
+
+        async function deleteKeyword(keywordId, categoryId) {
+            if (!confirm('Delete this keyword? This cannot be undone.')) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/v1/admin/keywords/${keywordId}`, {
+                    method: 'DELETE'
+                });
+
+                if (!response.ok) throw new Error('Failed to delete keyword');
+
+                await loadKeywordsForCategory(categoryId);
+                await loadKeywords(); // Refresh counts
+                showSuccess('keywords', 'Keyword deleted successfully!');
+            } catch (error) {
+                console.error('Error deleting keyword:', error);
+                showError('keywords', 'Failed to delete keyword: ' + error.message);
+            }
+        }
+
+        async function moveKeyword(keywordId, categoryId, direction) {
+            try {
+                const response = await fetch(`/api/v1/admin/keywords/categories/${categoryId}/keywords`);
+                const keywords = await response.json();
+
+                const index = keywords.findIndex(k => k.id === keywordId);
+                if (index === -1) return;
+
+                const newIndex = direction === 'up' ? index - 1 : index + 1;
+                if (newIndex < 0 || newIndex >= keywords.length) return;
+
+                const currentKeyword = keywords[index];
+                const otherKeyword = keywords[newIndex];
+
+                await fetch(`/api/v1/admin/keywords/${currentKeyword.id}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ sort_order: otherKeyword.sort_order })
+                });
+
+                await fetch(`/api/v1/admin/keywords/${otherKeyword.id}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ sort_order: currentKeyword.sort_order })
+                });
+
+                await loadKeywordsForCategory(categoryId);
+            } catch (error) {
+                console.error('Error moving keyword:', error);
+                showError('keywords', 'Failed to reorder keyword');
+            }
+        }
+
+        // People functions
+        async function loadPeople() {
+            if (!currentTenantId) {
+                const tbody = document.querySelector('#people-table tbody');
+                tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: #999;">Select a tenant to view people</td></tr>';
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/v1/admin/people?tenant_id=${currentTenantId}`);
+                const people = await response.json();
+
+                const tbody = document.querySelector('#people-table tbody');
+                if (people.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: #999;">No people defined for this tenant</td></tr>';
+                } else {
+                    tbody.innerHTML = people.map(p => `
+                        <tr>
+                            <td>${p.name}</td>
+                            <td>${Array.isArray(p.aliases) ? p.aliases.join(', ') : ''}</td>
+                            <td>${p.face_embedding_ref || '-'}</td>
+                            <td>${p.created_at ? new Date(p.created_at).toLocaleDateString() : '-'}</td>
+                            <td>
+                                <button class="btn btn-secondary" style="padding: 6px 12px; margin-right: 5px;" onclick="editPerson(${p.id})">
+                                    <i class="fas fa-edit"></i> Edit
+                                </button>
+                                <button class="btn btn-danger" style="padding: 6px 12px;" onclick="deletePerson(${p.id})">
+                                    <i class="fas fa-trash"></i> Delete
+                                </button>
+                            </td>
+                        </tr>
+                    `).join('');
+                }
+            } catch (error) {
+                showError('people', 'Failed to load people: ' + error.message);
+            }
+        }
+
+        function showPersonModal(personId = null) {
+            document.getElementById('person-modal').classList.add('active');
+            document.getElementById('person-form').reset();
+            document.getElementById('person-id').value = '';
+            document.getElementById('person-modal-title').textContent = personId ? 'Edit Person' : 'Add Person';
+
+            if (personId) {
+                editPerson(personId);
+            }
+        }
+
+        function closePersonModal() {
+            document.getElementById('person-modal').classList.remove('active');
+            document.getElementById('person-form').reset();
+        }
+
+        async function savePerson(event) {
+            event.preventDefault();
+
+            if (!currentTenantId) {
+                showError('people', 'Please select a tenant first');
+                return;
+            }
+
+            const personId = document.getElementById('person-id').value;
+            const aliases = document.getElementById('person-aliases').value
+                .split(',')
+                .map(a => a.trim())
+                .filter(a => a);
+
+            const data = {
+                tenant_id: currentTenantId,
+                name: document.getElementById('person-name').value,
+                aliases: aliases,
+                face_embedding_ref: document.getElementById('person-face-embedding-ref').value || null
+            };
+
+            try {
+                const url = personId ? `/api/v1/admin/people/${personId}` : '/api/v1/admin/people';
+                const method = personId ? 'PUT' : 'POST';
+
+                const response = await fetch(url, {
+                    method: method,
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(data)
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Failed to save person');
+                }
+
+                closePersonModal();
+                showSuccess('people', 'Person saved successfully');
+                loadPeople();
+            } catch (error) {
+                showError('people', error.message);
+            }
+        }
+
+        async function editPerson(personId) {
+            try {
+                const response = await fetch(`/api/v1/admin/people`);
+                const people = await response.json();
+                const person = people.find(p => p.id === personId);
+
+                if (!person) {
+                    showError('people', 'Person not found');
+                    return;
+                }
+
+                document.getElementById('person-id').value = person.id;
+                document.getElementById('person-name').value = person.name;
+                document.getElementById('person-aliases').value = Array.isArray(person.aliases) ? person.aliases.join(', ') : '';
+                document.getElementById('person-face-embedding-ref').value = person.face_embedding_ref || '';
+
+                showPersonModal(personId);
+            } catch (error) {
+                showError('people', 'Failed to load person: ' + error.message);
+            }
+        }
+
+        async function deletePerson(personId) {
+            if (!confirm('Are you sure you want to delete this person?')) return;
+
+            try {
+                const response = await fetch(`/api/v1/admin/people/${personId}`, {
+                    method: 'DELETE'
+                });
+
+                if (!response.ok) throw new Error('Failed to delete person');
+
+                showSuccess('people', 'Person deleted successfully');
+                loadPeople();
+            } catch (error) {
+                showError('people', error.message);
+            }
+        }
+
+        // Utility functions
+        function showError(tab, message) {
+            const errorDiv = document.getElementById(`${tab}-error`);
+            errorDiv.textContent = message;
+            errorDiv.style.display = 'block';
+            document.getElementById(`${tab}-success`).style.display = 'none';
+            setTimeout(() => errorDiv.style.display = 'none', 5000);
+        }
+
+        function showSuccess(tab, message) {
+            const successDiv = document.getElementById(`${tab}-success`);
+            successDiv.textContent = message;
+            successDiv.style.display = 'block';
+            document.getElementById(`${tab}-error`).style.display = 'none';
+            setTimeout(() => successDiv.style.display = 'none', 3000);
+        }
+
+        // Load environment badge
+        async function loadEnvironment() {
+            try {
+                const response = await fetch('/api/v1/config/system');
+                const systemSettings = await response.json();
+
+                const badge = document.getElementById('environment-badge');
+                const env = systemSettings.environment.toUpperCase();
+                badge.textContent = env;
+
+                // Color-code environment
+                if (systemSettings.environment.toLowerCase() === 'prod') {
+                    badge.style.backgroundColor = '#c53030';
+                    badge.style.color = 'white';
+                } else {
+                    badge.style.backgroundColor = '#38a169';
+                    badge.style.color = 'white';
+                }
+            } catch (error) {
+                console.error('Error loading environment:', error);
+                document.getElementById('environment-badge').textContent = 'ERROR';
+                document.getElementById('environment-badge').style.backgroundColor = '#999';
+                document.getElementById('environment-badge').style.color = 'white';
+            }
+        }
+
+        // Initialize on page load
+        document.addEventListener('DOMContentLoaded', () => {
+            loadEnvironment();
+            loadCurrentTenant();
+        });
+    </script>
+
+    <!-- Category Modal -->
+    <div id="category-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="category-modal-title">New Category</h2>
+                <span class="close" onclick="closeCategoryModal()">&times;</span>
+            </div>
+            <form id="category-form" onsubmit="saveCategory(event)">
+                <input type="hidden" id="category-edit-id">
+                <div class="form-group">
+                    <label>Category Name *</label>
+                    <input type="text" id="category-name" required>
+                </div>
+                <div style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px;">
+                    <button type="button" class="btn btn-secondary" onclick="closeCategoryModal()">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Keyword Modal -->
+    <div id="keyword-modal" class="modal">
+        <div class="modal-content" style="max-width: 600px;">
+            <div class="modal-header">
+                <h2 id="keyword-modal-title">New Keyword</h2>
+                <span class="close" onclick="closeKeywordModal()">&times;</span>
+            </div>
+            <form id="keyword-form" onsubmit="saveKeyword(event)">
+                <input type="hidden" id="keyword-edit-id">
+                <input type="hidden" id="keyword-category-id">
+                <div class="form-group">
+                    <label>Keyword *</label>
+                    <input type="text" id="keyword-text" required placeholder="e.g., juggling">
+                </div>
+                <div class="form-group">
+                    <label>Prompt *</label>
+                    <textarea id="keyword-prompt" required rows="4" placeholder="Describe what to look for in images..." style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; font-family: inherit;"></textarea>
+                    <small style="color: #666;">Describe the visual elements that identify this keyword in images</small>
+                </div>
+                <div style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px;">
+                    <button type="button" class="btn btn-secondary" onclick="closeKeywordModal()">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    </div>
+</body>
+</html>

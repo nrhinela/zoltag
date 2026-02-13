@@ -135,7 +135,7 @@ export function renderRatingButtons(activeRating, onChange, hideDeleted, onHideD
  * Create hotspot handlers - eliminates duplication between explore and audit
  *
  * This factory creates all the handler methods needed for hotspot functionality.
- * Used to replace 15+ duplicate methods in photocat-app.js.
+ * Used to replace 15+ duplicate methods in zoltag-app.js.
  *
  * @param {Object} context - Component context (usually `this` from LitElement)
  * @param {Object} config - Configuration object

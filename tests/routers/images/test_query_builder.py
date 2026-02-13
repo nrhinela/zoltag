@@ -8,10 +8,10 @@ import pytest
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
-from photocat.metadata import ImageMetadata, MachineTag, Permatag
-from photocat.models.config import Keyword, KeywordCategory
-from photocat.routers.images.query_builder import QueryBuilder
-from photocat.tenant import Tenant
+from zoltag.metadata import ImageMetadata, MachineTag, Permatag
+from zoltag.models.config import Keyword, KeywordCategory
+from zoltag.routers.images.query_builder import QueryBuilder
+from zoltag.tenant import Tenant
 
 
 @pytest.fixture

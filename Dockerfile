@@ -27,7 +27,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml ./
-RUN mkdir -p src/photocat && touch src/photocat/__init__.py
+RUN mkdir -p src/zoltag && touch src/zoltag/__init__.py
 
 # Install CPU-only PyTorch to avoid large CUDA wheels on Cloud Run.
 # Pin version since latest torch may not have CPU wheels available yet.
@@ -84,9 +84,9 @@ ENV HF_HOME=/app/.cache/huggingface \
     TRANSFORMERS_CACHE=/app/.cache/huggingface/transformers
 
 # Create non-root user and preserve cache ownership
-RUN useradd -m -u 1000 photocat && chown -R photocat:photocat /app
-USER photocat
+RUN useradd -m -u 1000 zoltag && chown -R zoltag:zoltag /app
+USER zoltag
 
 EXPOSE 8080
 
-CMD uvicorn photocat.api:app --host 0.0.0.0 --port ${PORT:-8080} --workers 2
+CMD uvicorn zoltag.api:app --host 0.0.0.0 --port ${PORT:-8080} --workers 2

@@ -111,7 +111,7 @@ export function renderPaginationControls(offset, limit, total, handlers, loading
  * Create pagination handlers - eliminates duplication between explore and audit
  *
  * This factory creates handlers for pagination controls (prev/next page, limit change).
- * Used to replace 6+ duplicate methods in photocat-app.js.
+ * Used to replace 6+ duplicate methods in zoltag-app.js.
  *
  * @param {Object} context - Component context (usually `this` from LitElement)
  * @param {Object} config - Configuration object

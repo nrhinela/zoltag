@@ -1,7 +1,7 @@
-# PhotoCat - Image Organization & Search Utility
+# Zoltag - Image Organization & Search Utility
 
 ## Project Overview
-PhotoCat is a multi-tenant utility for organizing and finding images within large file collections stored in Dropbox. The system focuses on three core capabilities:
+Zoltag is a multi-tenant utility for organizing and finding images within large file collections stored in Dropbox. The system focuses on three core capabilities:
 1. **Image Processing**: Efficient handling of various image formats from Dropbox
 2. **Metadata Creation**: Extracting and generating searchable metadata (EXIF, visual features, tags)
 3. **Flexible Search**: Fast, multi-dimensional search across image collections
@@ -104,7 +104,7 @@ black . && ruff check .
 ### GCP Deployment
 ```bash
 # Deploy to Cloud Run
-gcloud run deploy photocat \
+gcloud run deploy zoltag \
   --source . \
   --region us-central1 \
   --allow-unauthenticated
@@ -113,7 +113,7 @@ gcloud run deploy photocat \
 cloud-sql-proxy INSTANCE_CONNECTION_NAME
 
 # Deploy background worker
-gcloud run deploy photocat-worker \
+gcloud run deploy zoltag-worker \
   --source . \
   --no-allow-unauthenticated \
   --set-env-vars WORKER_MODE=true

@@ -25,9 +25,9 @@ from google.cloud import storage
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
-sys.path.insert(0, '/Users/ned.rhinelander/Developer/photocat/src')
+sys.path.insert(0, '/Users/ned.rhinelander/Developer/zoltag/src')
 
-from photocat.settings import settings
+from zoltag.settings import settings
 
 
 def migrate_tenant_data(tenant_id: str, dry_run: bool = False, delete_source: bool = False):

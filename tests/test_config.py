@@ -3,7 +3,7 @@
 import pytest
 from pathlib import Path
 
-from photocat.config import TenantConfig, KeywordCategory, Person
+from zoltag.config import TenantConfig, KeywordCategory, Person
 
 
 def test_load_config(test_config: TenantConfig):

@@ -9,8 +9,8 @@ from sqlalchemy import pool
 from alembic import context
 
 # Import all models to ensure they're registered
-from photocat.metadata import Base
-from photocat.settings import settings
+from zoltag.metadata import Base
+from zoltag.settings import settings
 
 # this is the Alembic Config object
 config = context.config

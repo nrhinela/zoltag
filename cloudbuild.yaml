@@ -4,7 +4,7 @@ steps:
   # Pull previous image for caching (continue if not found)
   - name: 'gcr.io/cloud-builders/docker'
     entrypoint: 'bash'
-    args: ['-c', 'docker pull gcr.io/$PROJECT_ID/photocat:latest || echo "No cache found, building from scratch"']
+    args: ['-c', 'docker pull gcr.io/$PROJECT_ID/zoltag:latest || echo "No cache found, building from scratch"']
     id: 'pull-cache'
   
   # Use Node 20 for Vite 7.x compatibility - clean install + build
@@ -21,10 +21,10 @@ steps:
       'build',
       '--build-arg', 'PRELOAD_SIGLIP=0',
       '--build-arg', 'BUILDKIT_INLINE_CACHE=1',
-      '--cache-from', 'gcr.io/$PROJECT_ID/photocat:latest',
-      '--cache-from', 'gcr.io/$PROJECT_ID/photocat:model-cache',
-      '-t', 'gcr.io/$PROJECT_ID/photocat:$_COMMIT_SHA',
-      '-t', 'gcr.io/$PROJECT_ID/photocat:latest',
+      '--cache-from', 'gcr.io/$PROJECT_ID/zoltag:latest',
+      '--cache-from', 'gcr.io/$PROJECT_ID/zoltag:model-cache',
+      '-t', 'gcr.io/$PROJECT_ID/zoltag:$_COMMIT_SHA',
+      '-t', 'gcr.io/$PROJECT_ID/zoltag:latest',
       '.'
     ]
     env:
@@ -32,10 +32,10 @@ steps:
   
   # Push the container image to Container Registry
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['push', 'gcr.io/$PROJECT_ID/photocat:$_COMMIT_SHA']
+    args: ['push', 'gcr.io/$PROJECT_ID/zoltag:$_COMMIT_SHA']
   
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['push', 'gcr.io/$PROJECT_ID/photocat:latest']
+    args: ['push', 'gcr.io/$PROJECT_ID/zoltag:latest']
   
   # Deploy to Cloud Run (API service)
   - name: 'gcr.io/cloud-builders/gcloud'
@@ -43,9 +43,9 @@ steps:
     args:
       - 'run'
       - 'deploy'
-      - 'photocat-api'
+      - 'zoltag-api'
       - '--image'
-      - 'gcr.io/$PROJECT_ID/photocat:$_COMMIT_SHA'
+      - 'gcr.io/$PROJECT_ID/zoltag:$_COMMIT_SHA'
       - '--region'
       - 'us-central1'
       - '--platform'
@@ -67,9 +67,9 @@ steps:
     args:
       - 'run'
       - 'deploy'
-      - 'photocat-worker'
+      - 'zoltag-worker'
       - '--image'
-      - 'gcr.io/$PROJECT_ID/photocat:$_COMMIT_SHA'
+      - 'gcr.io/$PROJECT_ID/zoltag:$_COMMIT_SHA'
       - '--region'
       - 'us-central1'
       - '--platform'
@@ -85,7 +85,7 @@ steps:
       - 'DROPBOX_APP_KEY=dropbox-app-key:latest,DROPBOX_APP_SECRET=dropbox-app-secret:latest,SUPABASE_SERVICE_ROLE_KEY=supabase-service-role-key:latest,SUPABASE_URL=supabase-url:latest,SUPABASE_ANON_KEY=supabase-anon-key:latest,DATABASE_URL=supabase-db-url:latest,GEMINI_API_KEY=gemini-api-key:latest'
 
 images:
-  - 'gcr.io/$PROJECT_ID/photocat:$_COMMIT_SHA'
+  - 'gcr.io/$PROJECT_ID/zoltag:$_COMMIT_SHA'
 
 options:
   machineType: 'E2_MEDIUM'

@@ -1,4 +1,4 @@
-# PhotoCat
+# Zoltag
 
 This application is a web based utility to assist Dropbox owners in categorizing and organizting  photos, using a combination of automated and manual tagging.
 
@@ -15,13 +15,13 @@ This application is a web based utility to assist Dropbox owners in categorizing
 ## Architecture
 
 #### Overview
-The PhotoCat frontend is built using a modern, component-based architecture with Lit, providing a scalable and maintainable foundation for the application.
+The Zoltag frontend is built using a modern, component-based architecture with Lit, providing a scalable and maintainable foundation for the application.
 
 #### Core Backend Architecture
 
 Backend Architecture Summary
 Project Configuration and Dependencies
-The PhotoCat backend is built using Python 3.11 with a comprehensive dependency management system defined in pyproject.toml. The project leverages modern Python packaging with FastAPI as the primary web framework, providing automatic OpenAPI documentation and type safety through Pydantic. The dependency tree includes essential packages for cloud integration (Google Cloud Storage, Secret Manager, Tasks), database operations (SQLAlchemy, PostgreSQL), and image processing (Pillow, OpenCV, piexif). Additional specialized libraries support machine learning capabilities (sentence-transformers, imagehash), search functionality (Whoosh), and utility operations (PyYAML, HTTPX, Click).
+The Zoltag backend is built using Python 3.11 with a comprehensive dependency management system defined in pyproject.toml. The project leverages modern Python packaging with FastAPI as the primary web framework, providing automatic OpenAPI documentation and type safety through Pydantic. The dependency tree includes essential packages for cloud integration (Google Cloud Storage, Secret Manager, Tasks), database operations (SQLAlchemy, PostgreSQL), and image processing (Pillow, OpenCV, piexif). Additional specialized libraries support machine learning capabilities (sentence-transformers, imagehash), search functionality (Whoosh), and utility operations (PyYAML, HTTPX, Click).
 
 Core Architecture Components
 The backend follows a modular structure organized around key functional areas including API endpoints, database models, configuration management, and image processing capabilities. The architecture supports multi-tenant image organization with dedicated services for handling Dropbox integrations, metadata extraction, and search functionality. Key components include authentication systems, image processing pipelines, and data synchronization mechanisms that work together to provide a comprehensive image management solution.
@@ -94,7 +94,7 @@ Maintainability: Small, focused components are easy to understand and modify
 -  Performance: Efficient DOM updates through Lit's reactive system
 - Scalable Architecture: Clear separation of concerns supports future feature additions
 - Developer Experience: Modern tooling and component-based development workflow
-- This architecture provides a solid foundation for continued development and maintenance of the PhotoCat frontend.
+- This architecture provides a solid foundation for continued development and maintenance of the Zoltag frontend.
 
 #### Component Pattern: Light DOM + Tailwind
 
@@ -162,7 +162,7 @@ The preferred method for deploying the application is using the provided `Makefi
 
 ## Supabase Connection
 
-PhotoCat expects `DATABASE_URL` to be set for both local and production use.
+Zoltag expects `DATABASE_URL` to be set for both local and production use.
 If your network is IPv4-only, use the Supabase **Session Pooler** connection
 string (IPv4-compatible) and append `?sslmode=require`.
 

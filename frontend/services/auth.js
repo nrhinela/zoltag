@@ -1,5 +1,5 @@
 /**
- * PhotoCat authentication service
+ * Zoltag authentication service
  *
  * Handles user authentication flows:
  * - Email/password signup and login
@@ -8,7 +8,7 @@
  * - Invitation acceptance
  * - Logout
  *
- * Integrates Supabase Auth (identity) with PhotoCat backend (authorization).
+ * Integrates Supabase Auth (identity) with Zoltag backend (authorization).
  */
 
 import { supabase, getAccessToken } from './supabase.js';
@@ -20,7 +20,7 @@ import { cachedRequest } from './request-cache.js';
  *
  * Flow:
  * 1. Create account in Supabase Auth
- * 2. Complete registration in PhotoCat backend
+ * 2. Complete registration in Zoltag backend
  * 3. Account starts as pending approval (is_active=FALSE)
  * 4. Super admin must approve before user can access tenants
  *
@@ -50,7 +50,7 @@ export async function signUp(email, password, displayName = null) {
 
     console.log('✅ Supabase signup successful', { user: data.user?.id, hasSession: !!data.session });
 
-    // Step 2: Complete registration in PhotoCat backend
+    // Step 2: Complete registration in Zoltag backend
     if (data.user) {
       const token = data.session?.access_token;
       console.log('Token available:', !!token);
@@ -177,7 +177,7 @@ export async function ensureRegistration(displayName = '') {
  *
  * Flow:
  * 1. Open Google consent screen
- * 2. User authorizes PhotoCat
+ * 2. User authorizes Zoltag
  * 3. Redirects back to VITE_SUPABASE_REDIRECT_TO or window.location.origin/auth/callback
  * 4. Supabase completes session setup
  *
@@ -204,10 +204,10 @@ export async function signInWithGoogle() {
 }
 
 /**
- * Get current user info from PhotoCat backend
+ * Get current user info from Zoltag backend
  *
  * This is different from supabase.auth.getUser() which only returns
- * identity information. This returns PhotoCat-specific data:
+ * identity information. This returns Zoltag-specific data:
  * - User approval status (is_active)
  * - Tenant memberships and roles
  * - Tenant access list
@@ -269,7 +269,7 @@ export async function isAuthenticated() {
 }
 
 /**
- * Verify user is approved and can access PhotoCat
+ * Verify user is approved and can access Zoltag
  *
  * Calls backend to verify:
  * 1. User profile exists

@@ -7,7 +7,7 @@ Tests that all routers are properly extracted and integrated.
 import sys
 from pathlib import Path
 
-# Add src to path so we can import photocat
+# Add src to path so we can import zoltag
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 def test_imports():
@@ -19,19 +19,19 @@ def test_imports():
 
     print("Step 4.1: Testing imports...")
     try:
-        from photocat.database import SessionLocal, engine
+        from zoltag.database import SessionLocal, engine
         print("  ✓ database.py imports")
 
-        from photocat.dependencies import get_db, get_tenant, get_secret, store_secret
+        from zoltag.dependencies import get_db, get_tenant, get_secret, store_secret
         print("  ✓ dependencies.py imports")
 
-        from photocat.models.requests import AddPhotoRequest
+        from zoltag.models.requests import AddPhotoRequest
         print("  ✓ models/requests.py imports")
 
-        from photocat.routers import keywords, lists, images, admin_people, admin_tenants, admin_keywords, dropbox, sync
+        from zoltag.routers import keywords, lists, images, admin_people, admin_tenants, admin_keywords, dropbox, sync
         print("  ✓ All 8 routers import successfully")
 
-        from photocat.api import app
+        from zoltag.api import app
         print("  ✓ api.py imports and FastAPI app created")
 
         return True, app
@@ -87,13 +87,13 @@ def test_dependency_injection():
     print("Step 4.3: Testing dependency injection...")
 
     try:
-        from photocat.database import SessionLocal
+        from zoltag.database import SessionLocal
         db = SessionLocal()
         print("  ✓ Can instantiate database session")
         db.close()
 
         # Check that get_db and get_tenant are callable
-        from photocat.dependencies import get_db, get_tenant
+        from zoltag.dependencies import get_db, get_tenant
         print("  ✓ get_db dependency is callable")
         print("  ✓ get_tenant dependency is callable")
 
@@ -107,7 +107,7 @@ def test_file_structure():
     print()
     print("Step 4.4: Verifying file structure...")
 
-    base_path = Path(__file__).parent / "src" / "photocat"
+    base_path = Path(__file__).parent / "src" / "zoltag"
 
     expected_files = {
         "api.py": "Main FastAPI application",
@@ -144,9 +144,9 @@ def test_no_circular_imports():
 
     try:
         # Try importing in different orders
-        from photocat import database
-        from photocat import dependencies
-        from photocat import api
+        from zoltag import database
+        from zoltag import dependencies
+        from zoltag import api
         print("  ✓ No circular imports detected")
         print("  ✓ Import order: database → dependencies → api")
         return True
@@ -161,7 +161,7 @@ def test_router_isolation():
 
     try:
         # Each router should have its own router object
-        from photocat.routers import keywords, lists, images, admin_people, admin_tenants, admin_keywords, dropbox, sync
+        from zoltag.routers import keywords, lists, images, admin_people, admin_tenants, admin_keywords, dropbox, sync
 
         routers = [keywords, lists, images, admin_people, admin_tenants, admin_keywords, dropbox, sync]
 
@@ -182,7 +182,7 @@ def test_line_counts():
     print()
     print("Step 4.7: Verifying file size targets...")
 
-    base_path = Path(__file__).parent / "src" / "photocat"
+    base_path = Path(__file__).parent / "src" / "zoltag"
 
     targets = {
         "api.py": 150,

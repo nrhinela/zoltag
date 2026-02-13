@@ -1,7 +1,7 @@
 import { LitElement, html, css } from 'lit';
 import { signUp, signInWithGoogle } from '../services/auth.js';
 
-const INVITATION_TOKEN_KEY = 'photocat_invitation_token';
+const INVITATION_TOKEN_KEY = 'zoltag_invitation_token';
 
 /**
  * Signup page component
@@ -291,7 +291,7 @@ export class SignupPage extends LitElement {
   render() {
     return html`
       <div class="signup-card">
-        <h1>PhotoCat</h1>
+        <h1>Zoltag</h1>
         <p class="subtitle">Create your account</p>
         ${this.invitationToken ? html`
           <div class="success" style="background:#eff6ff;color:#1d4ed8;">

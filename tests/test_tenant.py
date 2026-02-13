@@ -2,7 +2,7 @@
 
 import pytest
 
-from photocat.tenant import Tenant, TenantContext
+from zoltag.tenant import Tenant, TenantContext
 
 
 def test_tenant_creation():

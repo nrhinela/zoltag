@@ -16,9 +16,9 @@ from typing import Dict, Iterable, Optional, Set, Tuple
 from sqlalchemy import text, tuple_
 from sqlalchemy.orm import Session
 
-from photocat.database import SessionLocal
-import photocat.auth.models  # noqa: F401
-from photocat.metadata import Asset, ImageMetadata
+from zoltag.database import SessionLocal
+import zoltag.auth.models  # noqa: F401
+from zoltag.metadata import Asset, ImageMetadata
 
 
 AssetLookup = Dict[Tuple[str, str, str], Asset]

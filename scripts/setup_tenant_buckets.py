@@ -19,10 +19,10 @@ from google.cloud import storage
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
-# Add parent directory to path to import photocat
-sys.path.insert(0, '/Users/ned.rhinelander/Developer/photocat/src')
+# Add parent directory to path to import zoltag
+sys.path.insert(0, '/Users/ned.rhinelander/Developer/zoltag/src')
 
-from photocat.settings import settings
+from zoltag.settings import settings
 
 
 def create_bucket_if_not_exists(storage_client, bucket_name, make_public=False):
@@ -56,8 +56,8 @@ def setup_tenant_buckets(tenant_id: str):
     db_url = settings.database_url
     env = settings.environment
 
-    if db_url == "postgresql://localhost/photocat":
-        print("⚠️  Using LOCAL database (postgresql://localhost/photocat)")
+    if db_url == "postgresql://localhost/zoltag":
+        print("⚠️  Using LOCAL database (postgresql://localhost/zoltag)")
         confirm = input("Is this correct? Type 'yes' to continue: ")
         if confirm.lower() != 'yes':
             print("Aborted. Set DATABASE_URL environment variable to target the correct database.")

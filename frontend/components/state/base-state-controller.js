@@ -12,7 +12,7 @@
  */
 export class BaseStateController {
   /**
-   * @param {LitElement} host - The host component (photocat-app)
+   * @param {LitElement} host - The host component (zoltag-app)
    */
   constructor(host) {
     this.host = host;

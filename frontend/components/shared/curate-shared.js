@@ -89,7 +89,7 @@
  * `)}
  * ```
  *
- * REQUIRED PROPS FROM PARENT (photocat-app.js):
+ * REQUIRED PROPS FROM PARENT (zoltag-app.js):
  * - renderCurateRatingWidget: Function (bound method)
  * - renderCurateRatingStatic: Function (bound method)
  * - formatCurateDate: Function (bound method)
@@ -103,13 +103,13 @@
  * REFERENCE IMPLEMENTATIONS:
  * - search-tab.js (lines 136-149, 369-410, 479-507) - Complete example
  * - curate-explore-tab.js - Original curate implementation
- * - photocat-app.js - Parent component with render helpers
+ * - zoltag-app.js - Parent component with render helpers
  */
 
-if (!globalThis.__PHOTOCAT_CURATE_SHARED_DEPRECATED__) {
-  globalThis.__PHOTOCAT_CURATE_SHARED_DEPRECATED__ = true;
+if (!globalThis.__ZOLTAG_CURATE_SHARED_DEPRECATED__) {
+  globalThis.__ZOLTAG_CURATE_SHARED_DEPRECATED__ = true;
   console.error(
-    '[photocat] Deprecated import: frontend/components/shared/curate-shared.js. ' +
+    '[zoltag] Deprecated import: frontend/components/shared/curate-shared.js. ' +
     'Use specific modules under frontend/components/shared/* instead.'
   );
 }

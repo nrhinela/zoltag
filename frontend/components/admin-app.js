@@ -8,7 +8,7 @@ import './cli-commands.js';
 import { getTenants } from '../services/api.js';
 
 /**
- * PhotoCat Admin Application
+ * Zoltag Admin Application
  * Main shell for tenant management and system administration
  */
 class AdminApp extends LitElement {
@@ -181,7 +181,7 @@ class AdminApp extends LitElement {
         <div class="header">
           <div class="header-content">
             <div>
-              <h1><i class="fas fa-cog"></i> PhotoCat System Administration</h1>
+              <h1><i class="fas fa-cog"></i> Zoltag System Administration</h1>
               <p class="header-subtitle">Tenant configuration, user management, and system settings</p>
             </div>
             <div>

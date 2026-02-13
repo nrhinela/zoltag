@@ -13,10 +13,10 @@ from typing import Optional, Tuple
 
 from sqlalchemy.orm import Session
 
-from photocat.database import SessionLocal
+from zoltag.database import SessionLocal
 # Ensure auth models (user_profiles) are registered with SQLAlchemy metadata
-import photocat.auth.models  # noqa: F401
-from photocat.metadata import ImageMetadata, Asset
+import zoltag.auth.models  # noqa: F401
+from zoltag.metadata import ImageMetadata, Asset
 
 
 def parse_args() -> argparse.Namespace:

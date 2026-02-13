@@ -118,7 +118,7 @@ class CliCommands extends LitElement {
   }
 
   async _copyUsage(command) {
-    const usage = command.usage || `photocat ${command.name}`;
+    const usage = command.usage || `zoltag ${command.name}`;
     try {
       await navigator.clipboard.writeText(usage);
     } catch (error) {
@@ -142,13 +142,13 @@ class CliCommands extends LitElement {
             const options = command.params || [];
             const optionCount = options.length;
             const requiredCount = options.filter((param) => param.required).length;
-            const usage = command.usage || `photocat ${command.name}`;
+            const usage = command.usage || `zoltag ${command.name}`;
             return html`
             <div class="command-card">
               <div class="command-header">
                 <div>
                   <div class="text-sm text-gray-500 uppercase">Command</div>
-                  <div class="text-lg font-semibold text-gray-900">photocat ${command.name}</div>
+                  <div class="text-lg font-semibold text-gray-900">zoltag ${command.name}</div>
                 </div>
                 <button
                   class="text-xs text-blue-600 border border-blue-200 px-3 py-1.5 rounded-lg hover:bg-blue-50"

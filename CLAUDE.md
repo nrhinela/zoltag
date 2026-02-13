@@ -2,7 +2,7 @@
 @README.md for project overview
 @docs/DEPLOYMENT.md for deployment instructions.
 @docs/refactoring_plan.md for the frontend refactoring plan, in case some legacy code is observed
-- @src/photocat/static contains some legacy html files that were the source of the latest front-end conversion.
+- @src/zoltag/static contains some legacy html files that were the source of the latest front-end conversion.
 - Originally designed to accomodate multiple categorization models, currently only one is supported.
 
 ## Additional Instructions for Claude:
@@ -19,9 +19,9 @@
 
 ## Key Entry Points
 
-- Frontend: frontend/main.js → frontend/components/photocat-app.js
-- Backend API: src/photocat/api.py
-- Database models: src/photocat/models.py
+- Frontend: frontend/main.js → frontend/components/zoltag-app.js
+- Backend API: src/zoltag/api.py
+- Database models: src/zoltag/models.py
 
 ## Component Architecture
 
@@ -76,7 +76,7 @@ export class MyComponent extends LitElement {
 import { createSelectionHandlers } from './shared/selection-handlers.js';
 ```
 
-**Required props from parent** (photocat-app.js):
+**Required props from parent** (zoltag-app.js):
 ```javascript
 .renderCurateRatingWidget=${this._renderCurateRatingWidget}
 .renderCurateRatingStatic=${this._renderCurateRatingStatic}
@@ -173,7 +173,7 @@ ${this.searchImages.map((image, index) => html`
 
 ### State Controller Architecture
 
-**IMPORTANT**: Complex state management in PhotoCat uses Lit's `ReactiveController` pattern to extract state logic from large components.
+**IMPORTANT**: Complex state management in Zoltag uses Lit's `ReactiveController` pattern to extract state logic from large components.
 
 **When to use State Controllers**:
 - ✅ Complex state with 10+ related methods
@@ -240,7 +240,7 @@ export class MyStateController extends BaseStateController {
 ```javascript
 import { MyStateController } from './state/my-state-controller.js';
 
-export class PhotocatApp extends LitElement {
+export class ZoltagApp extends LitElement {
   constructor() {
     super();
     this._myState = new MyStateController(this);
@@ -274,7 +274,7 @@ frontend/components/
 │   ├── selection-handlers.js (factory pattern)
 │   ├── hotspot-handlers.js   (factory pattern)
 │   └── rating-drag-handlers.js (factory pattern)
-└── photocat-app.js          # Main component (delegates to state controllers)
+└── zoltag-app.js          # Main component (delegates to state controllers)
 ```
 
 **Ownership Rules**:

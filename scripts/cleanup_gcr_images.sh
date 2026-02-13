@@ -6,10 +6,10 @@ set -euo pipefail
 
 PROJECT_ID="${PROJECT_ID:-photocat-483622}"
 REGION="${REGION:-us-central1}"
-IMAGE="gcr.io/${PROJECT_ID}/photocat"
+IMAGE="gcr.io/${PROJECT_ID}/zoltag"
 RUN="${RUN:-0}"
 
-services=(photocat-api photocat-worker photocat)
+services=(zoltag-api zoltag-worker)
 
 echo "Project: ${PROJECT_ID}"
 echo "Region: ${REGION}"

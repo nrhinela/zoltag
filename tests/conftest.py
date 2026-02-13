@@ -5,15 +5,15 @@ from pathlib import Path
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
 
-from photocat.metadata import Base
-from photocat.tenant import Tenant, TenantContext
-from photocat.config import TenantConfig
+from zoltag.metadata import Base
+from zoltag.tenant import Tenant, TenantContext
+from zoltag.config import TenantConfig
 
 
 @pytest.fixture
 def test_db():
     """Create test database."""
-    from photocat.models.config import Base as ConfigBase
+    from zoltag.models.config import Base as ConfigBase
 
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)

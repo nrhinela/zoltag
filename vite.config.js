@@ -1,10 +1,12 @@
 const { defineConfig } = require('vite');
 const path = require('path');
 
+const proxyTarget = process.env.VITE_PROXY_TARGET || 'http://127.0.0.1:8000';
+
 module.exports = defineConfig({
   root: 'frontend',
   build: {
-    outDir: '../src/photocat/static/dist',
+    outDir: '../src/zoltag/static/dist',
     rollupOptions: {
       input: {
         main: path.resolve(__dirname, 'frontend/index.html'),
@@ -16,26 +18,26 @@ module.exports = defineConfig({
     proxy: {
       // Proxy API requests to the backend during development
       '/api': {
-        target: 'http://localhost:8000',
+        target: proxyTarget,
         changeOrigin: true,
       },
       // Note: /admin is NOT proxied - Vite serves admin.html directly for dev
       '/tagging-admin': {
-        target: 'http://localhost:8000',
+        target: proxyTarget,
         changeOrigin: true,
       },
       // Proxy OAuth and webhooks
       '/oauth': {
-        target: 'http://localhost:8000',
+        target: proxyTarget,
         changeOrigin: true,
       },
       '/webhooks': {
-        target: 'http://localhost:8000',
+        target: proxyTarget,
         changeOrigin: true,
       },
       // Proxy static assets
       '/static': {
-        target: 'http://localhost:8000',
+        target: proxyTarget,
         changeOrigin: true,
       },
     },

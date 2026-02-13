@@ -194,7 +194,7 @@ class AppHeader extends LitElement {
   async _handleLogout() {
       try {
           await supabase.auth.signOut();
-          localStorage.removeItem('photocat_user');
+          localStorage.removeItem('zoltag_user');
           window.location.href = '/login';
       } catch (error) {
           console.error('Logout error:', error);
@@ -319,7 +319,7 @@ class AppHeader extends LitElement {
                 <div class="flex justify-between items-start">
                     <div class="flex items-center space-x-2">
                         <i class="fas fa-camera text-blue-600 text-2xl"></i>
-                        <h1 class="text-2xl font-bold text-gray-800">PhotoCat</h1>
+                        <h1 class="text-2xl font-bold text-gray-800">Zoltag</h1>
                         <span class="text-sm px-3 py-1 rounded font-semibold text-white" style="background-color: ${this.environment === 'PROD' ? '#b91c1c' : '#16a34a'}">${this.environment}</span>
                     </div>
                     <div class="flex items-start space-x-4">
