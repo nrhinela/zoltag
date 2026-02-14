@@ -10,7 +10,8 @@ class Tenant:
 
     id: str
     name: str
-    tenant_uuid: Optional[str] = None
+    identifier: Optional[str] = None
+    key_prefix: Optional[str] = None
     active: bool = True
     dropbox_token_secret: Optional[str] = None  # Secret Manager reference
     dropbox_app_key: Optional[str] = None  # Dropbox app key (public, stored in DB)
@@ -24,10 +25,26 @@ class Tenant:
     
     def __post_init__(self) -> None:
         """Validate tenant data."""
+        self.id = str(self.id).strip()
         if not self.id:
             raise ValueError("Tenant ID is required")
         if not self.name:
             raise ValueError("Tenant name is required")
+        if not self.identifier:
+            self.identifier = self.id
+        if not self.key_prefix:
+            self.key_prefix = self.id
+
+    @property
+    def secret_scope(self) -> str:
+        """Stable prefix for secret names and object keys."""
+        value = (self.key_prefix or "").strip()
+        if value:
+            return value
+        value = (self.identifier or "").strip()
+        if value:
+            return value
+        return self.id
 
     def get_storage_bucket(self, settings) -> str:
         """
@@ -61,9 +78,9 @@ class Tenant:
             path_type: Path category (e.g., 'thumbnails', 'images', 'originals')
 
         Returns:
-            Path in format: {tenant_id}/{path_type}/{filename}
+            Path in format: {tenant_key_prefix}/{path_type}/{filename}
         """
-        return f"{self.id}/{path_type}/{filename}"
+        return f"{self.secret_scope}/{path_type}/{filename}"
 
     def get_thumbnail_url(self, settings, thumbnail_path: Optional[str]) -> Optional[str]:
         """Build a public thumbnail URL using CDN when configured."""
@@ -85,37 +102,37 @@ class Tenant:
         Build the canonical source object key.
 
         Format:
-        tenants/{tenant_id}/assets/{asset_id}/{original_filename}
+        tenants/{tenant_key_prefix}/assets/{asset_id}/{original_filename}
         """
         safe_name = self._sanitize_storage_filename(original_filename, fallback="file")
-        return f"tenants/{self.id}/assets/{asset_id}/{safe_name}"
+        return f"tenants/{self.secret_scope}/assets/{asset_id}/{safe_name}"
 
     def get_asset_derivative_key(self, derivative_id: str, filename: str) -> str:
         """
         Build a derivative object key.
 
         Format:
-        tenants/{tenant_id}/derivatives/{derivative_id}/{filename}
+        tenants/{tenant_key_prefix}/derivatives/{derivative_id}/{filename}
         """
         safe_name = self._sanitize_storage_filename(filename, fallback="derivative")
-        return f"tenants/{self.id}/derivatives/{derivative_id}/{safe_name}"
+        return f"tenants/{self.secret_scope}/derivatives/{derivative_id}/{safe_name}"
 
     def get_asset_thumbnail_key(self, asset_id: str, filename: str = "default-256.jpg") -> str:
         """
         Build a thumbnail object key for a specific asset.
 
         Format:
-        tenants/{tenant_id}/assets/{asset_id}/thumbnails/{filename}
+        tenants/{tenant_key_prefix}/assets/{asset_id}/thumbnails/{filename}
         """
         safe_name = self._sanitize_storage_filename(filename, fallback="default-256.jpg")
-        return f"tenants/{self.id}/assets/{asset_id}/thumbnails/{safe_name}"
+        return f"tenants/{self.secret_scope}/assets/{asset_id}/thumbnails/{safe_name}"
 
     def get_asset_file_path(self, asset_id: str, asset_file_id: str, original_filename: str) -> str:
         """
         Backward-compatible alias for the old helper signature.
 
         asset_file_id is intentionally ignored now that source keys are:
-        tenants/{tenant_id}/assets/{asset_id}/{original_filename}
+        tenants/{tenant_key_prefix}/assets/{asset_id}/{original_filename}
         """
         _ = asset_file_id
         return self.get_asset_source_key(asset_id=asset_id, original_filename=original_filename)

@@ -1,6 +1,7 @@
 """Pydantic schemas for authentication requests and responses."""
 
 from datetime import datetime
+from uuid import UUID
 from typing import Optional, List, Literal
 from pydantic import BaseModel, UUID4, Field
 
@@ -27,7 +28,7 @@ class UserProfileResponse(BaseModel):
 class TenantMembershipResponse(BaseModel):
     """User's tenant membership response."""
 
-    tenant_id: str = Field(..., description="Tenant ID")
+    tenant_id: UUID = Field(..., description="Tenant UUID")
     tenant_name: str = Field(..., description="Tenant display name")
     role: TenantRole = Field(..., description="User's role in tenant (admin|editor|user)")
     accepted_at: Optional[datetime] = Field(None, description="When membership was accepted")
@@ -76,7 +77,7 @@ class CreateInvitationRequest(BaseModel):
     """Create invitation request body."""
 
     email: str = Field(..., description="Email address to invite")
-    tenant_id: str = Field(..., description="Tenant ID")
+    tenant_id: str = Field(..., description="Tenant identifier or UUID")
     role: TenantRole = Field("user", description="Role (admin|editor|user)")
 
     class Config:
@@ -92,7 +93,7 @@ class CreateInvitationRequest(BaseModel):
 class ApproveUserRequest(BaseModel):
     """Approve pending user request body."""
 
-    tenant_id: Optional[str] = Field(None, description="Optionally assign to tenant")
+    tenant_id: Optional[str] = Field(None, description="Optionally assign to tenant (identifier or UUID)")
     role: TenantRole = Field("user", description="Role (admin|editor|user)")
 
     class Config:
@@ -122,7 +123,7 @@ class InvitationResponse(BaseModel):
 
     id: UUID4 = Field(..., description="Invitation ID")
     email: str = Field(..., description="Invited email")
-    tenant_id: str = Field(..., description="Tenant ID")
+    tenant_id: UUID = Field(..., description="Tenant UUID")
     role: str = Field(..., description="Role in tenant")
     expires_at: datetime = Field(..., description="Expiration time")
     accepted_at: Optional[datetime] = Field(None, description="When accepted")

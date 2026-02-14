@@ -1,12 +1,14 @@
 """Base command class for shared CLI setup/teardown."""
 
 import click
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from photocat.database import get_engine_kwargs
 from photocat.settings import settings
 from photocat.tenant import Tenant, TenantContext
+from photocat.metadata import Tenant as TenantModel
+from photocat.tenant_scope import tenant_column_filter_for_values, tenant_reference_filter
 
 
 class CliCommand:
@@ -37,23 +39,42 @@ class CliCommand:
         if not self.db:
             raise click.ClickException("Database not initialized")
 
-        result = self.db.execute(
-            text("SELECT id, name, storage_bucket, thumbnail_bucket FROM tenants WHERE id = :tenant_id"),
-            {"tenant_id": tenant_id}
+        tenant_row = self.db.query(TenantModel).filter(
+            tenant_reference_filter(TenantModel, tenant_id)
         ).first()
 
-        if not result:
+        if not tenant_row:
             raise click.ClickException(f"Tenant {tenant_id} not found in database")
 
+        canonical_tenant_id = str(tenant_row.id)
         tenant = Tenant(
-            id=result[0],
-            name=result[1],
-            storage_bucket=result[2],
-            thumbnail_bucket=result[3]
+            id=canonical_tenant_id,
+            name=tenant_row.name,
+            identifier=getattr(tenant_row, "identifier", None) or canonical_tenant_id,
+            key_prefix=getattr(tenant_row, "key_prefix", None) or canonical_tenant_id,
+            dropbox_app_key=tenant_row.dropbox_app_key,
+            storage_bucket=tenant_row.storage_bucket,
+            thumbnail_bucket=tenant_row.thumbnail_bucket,
+            settings=tenant_row.settings,
         )
+
+        # Normalize user-provided tenant references (id or uuid) to canonical tenant ID.
+        if hasattr(self, "tenant_id"):
+            self.tenant_id = tenant.id
+
         TenantContext.set(tenant)
         self.tenant = tenant
         return tenant
+
+    def tenant_filter(self, model, include_legacy_fallback: bool = True):
+        """Build a tenant filter for the current command tenant."""
+        if not self.tenant:
+            raise click.ClickException("Tenant not loaded")
+        return tenant_column_filter_for_values(
+            model=model,
+            tenant_id=self.tenant.id,
+            include_legacy_fallback=include_legacy_fallback,
+        )
 
     def run(self):
         """Execute command - override in subclasses."""

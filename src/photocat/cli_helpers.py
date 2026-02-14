@@ -4,12 +4,14 @@ Consolidates common patterns like database setup, tenant loading, and tag proces
 to reduce duplication across CLI commands.
 """
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from photocat.database import get_engine_kwargs
+from photocat.metadata import Tenant as TenantModel
 from photocat.settings import settings
 from photocat.tenant import Tenant, TenantContext
+from photocat.tenant_scope import tenant_reference_filter
 
 
 def setup_database_and_tenant(tenant_id: str):
@@ -35,20 +37,21 @@ def setup_database_and_tenant(tenant_id: str):
     session = SessionLocal()
 
     # Load tenant from database
-    result = session.execute(
-        text("SELECT id, name, storage_bucket, thumbnail_bucket FROM tenants WHERE id = :tenant_id"),
-        {"tenant_id": tenant_id}
+    tenant_row = session.query(TenantModel).filter(
+        tenant_reference_filter(TenantModel, tenant_id)
     ).first()
-
-    if not result:
+    if not tenant_row:
         session.close()
         raise ValueError(f"Tenant {tenant_id} not found in database")
 
+    canonical_tenant_id = str(tenant_row.id)
     tenant = Tenant(
-        id=result[0],
-        name=result[1],
-        storage_bucket=result[2],
-        thumbnail_bucket=result[3]
+        id=canonical_tenant_id,
+        name=tenant_row.name,
+        identifier=getattr(tenant_row, "identifier", None) or canonical_tenant_id,
+        key_prefix=getattr(tenant_row, "key_prefix", None) or canonical_tenant_id,
+        storage_bucket=tenant_row.storage_bucket,
+        thumbnail_bucket=tenant_row.thumbnail_bucket,
     )
     TenantContext.set(tenant)
 

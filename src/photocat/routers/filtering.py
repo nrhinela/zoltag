@@ -21,6 +21,7 @@ from photocat.metadata import Asset, ImageMetadata, MachineTag, Permatag
 from photocat.models.config import PhotoList, PhotoListItem, Keyword, KeywordCategory
 from photocat.dependencies import get_tenant_setting
 from photocat.routers.filter_builder import FilterBuilder
+from photocat.tenant_scope import tenant_column_filter
 
 
 def apply_list_filter(
@@ -41,7 +42,10 @@ def apply_list_filter(
     Raises:
         HTTPException: If list not found
     """
-    lst = db.query(PhotoList).filter_by(id=list_id, tenant_id=tenant.id).first()
+    lst = db.query(PhotoList).filter(
+        PhotoList.id == list_id,
+        tenant_column_filter(PhotoList, tenant),
+    ).first()
     if not lst:
         raise HTTPException(status_code=404, detail="List not found")
 
@@ -50,7 +54,7 @@ def apply_list_filter(
         PhotoListItem.asset_id == ImageMetadata.asset_id,
     ).filter(
         PhotoListItem.list_id == list_id,
-        ImageMetadata.tenant_id == tenant.id,
+        tenant_column_filter(ImageMetadata, tenant),
     ).all()
     return {row[0] for row in list_image_ids}
 
@@ -94,14 +98,14 @@ def apply_hide_zero_rating_filter(
         Set of image IDs excluding zero-rated images
     """
     zero_rating_ids = db.query(ImageMetadata.id).filter(
-        ImageMetadata.tenant_id == tenant.id,
+        tenant_column_filter(ImageMetadata, tenant),
         ImageMetadata.rating == 0
     ).all()
     zero_ids = {row[0] for row in zero_rating_ids}
 
     if existing_filter is None:
         all_image_ids = db.query(ImageMetadata.id).filter(
-            ImageMetadata.tenant_id == tenant.id
+            tenant_column_filter(ImageMetadata, tenant)
         ).all()
         return {row[0] for row in all_image_ids} - zero_ids
     else:
@@ -129,14 +133,14 @@ def apply_reviewed_filter(
     reviewed_rows = db.query(ImageMetadata.id).join(
         Permatag, Permatag.asset_id == ImageMetadata.asset_id
     ).filter(
-        ImageMetadata.tenant_id == tenant.id,
-        Permatag.tenant_id == tenant.id,
+        tenant_column_filter(ImageMetadata, tenant),
+        tenant_column_filter(Permatag, tenant),
     ).distinct().all()
     reviewed_ids = {row[0] for row in reviewed_rows}
 
     if existing_filter is None:
         all_image_ids = db.query(ImageMetadata.id).filter(
-            ImageMetadata.tenant_id == tenant.id
+            tenant_column_filter(ImageMetadata, tenant)
         ).all()
         base_ids = {row[0] for row in all_image_ids}
         return reviewed_ids if reviewed else (base_ids - reviewed_ids)
@@ -173,7 +177,7 @@ def apply_permatag_filter(
 
     # Look up keyword by name (case-insensitive)
     keyword_query = db.query(Keyword).filter(
-        Keyword.tenant_id == tenant.id,
+        tenant_column_filter(Keyword, tenant),
         func.lower(Keyword.keyword) == normalized_keyword
     )
 
@@ -183,7 +187,7 @@ def apply_permatag_filter(
             KeywordCategory, Keyword.category_id == KeywordCategory.id
         ).filter(
             KeywordCategory.name == category,
-            KeywordCategory.tenant_id == tenant.id
+            tenant_column_filter(KeywordCategory, tenant)
         )
 
     keyword_obj = keyword_query.first()
@@ -194,7 +198,7 @@ def apply_permatag_filter(
             # Return all images (since the keyword doesn't exist, nothing is missing)
             if existing_filter is None:
                 all_image_ids = db.query(ImageMetadata.id).filter(
-                    ImageMetadata.tenant_id == tenant.id
+                    tenant_column_filter(ImageMetadata, tenant)
                 ).all()
                 return {row[0] for row in all_image_ids}
             return existing_filter
@@ -205,7 +209,7 @@ def apply_permatag_filter(
     # Query matching assets by keyword_id, then map back to image ids.
     permatag_assets = db.query(Permatag.asset_id).filter(
         Permatag.keyword_id == keyword_obj.id,
-        Permatag.tenant_id == tenant.id,
+        tenant_column_filter(Permatag, tenant),
         Permatag.asset_id.is_not(None),
     )
     if signum is not None:
@@ -214,7 +218,7 @@ def apply_permatag_filter(
     permatag_asset_ids = [row[0] for row in permatag_asset_rows]
     if permatag_asset_ids:
         permatag_rows = db.query(ImageMetadata.id).filter(
-            ImageMetadata.tenant_id == tenant.id,
+            tenant_column_filter(ImageMetadata, tenant),
             ImageMetadata.asset_id.in_(permatag_asset_ids),
         ).all()
         permatag_ids = {row[0] for row in permatag_rows}
@@ -224,7 +228,7 @@ def apply_permatag_filter(
     if missing:
         if existing_filter is None:
             all_image_ids = db.query(ImageMetadata.id).filter(
-                ImageMetadata.tenant_id == tenant.id
+                tenant_column_filter(ImageMetadata, tenant)
             ).all()
             return {row[0] for row in all_image_ids} - permatag_ids
         return existing_filter - permatag_ids
@@ -255,7 +259,7 @@ def compute_current_tags_for_images(
         return {}
 
     image_asset_rows = db.query(ImageMetadata.id, ImageMetadata.asset_id).filter(
-        ImageMetadata.tenant_id == tenant.id,
+        tenant_column_filter(ImageMetadata, tenant),
         ImageMetadata.id.in_(image_ids),
         ImageMetadata.asset_id.is_not(None),
     ).all()
@@ -268,14 +272,14 @@ def compute_current_tags_for_images(
 
     # Get all machine tags for these assets (from primary algorithm only)
     all_tags = db.query(MachineTag).filter(
-        MachineTag.tenant_id == tenant.id,
+        tenant_column_filter(MachineTag, tenant),
         MachineTag.asset_id.in_(asset_ids),
         MachineTag.tag_type == active_tag_type
     ).all()
 
     # Get all permatags for these assets
     all_permatags = db.query(Permatag).filter(
-        Permatag.tenant_id == tenant.id,
+        tenant_column_filter(Permatag, tenant),
         Permatag.asset_id.in_(asset_ids)
     ).all()
 
@@ -348,7 +352,7 @@ def compute_permatag_tags_for_images(
         return {}
 
     image_asset_rows = db.query(ImageMetadata.id, ImageMetadata.asset_id).filter(
-        ImageMetadata.tenant_id == tenant.id,
+        tenant_column_filter(ImageMetadata, tenant),
         ImageMetadata.id.in_(image_ids),
         ImageMetadata.asset_id.is_not(None),
     ).all()
@@ -357,7 +361,7 @@ def compute_permatag_tags_for_images(
 
     # Get positive permatags for these assets.
     all_permatags = db.query(Permatag).filter(
-        Permatag.tenant_id == tenant.id,
+        tenant_column_filter(Permatag, tenant),
         Permatag.asset_id.in_(asset_ids),
         Permatag.signum == 1
     ).all() if asset_ids else []
@@ -422,7 +426,7 @@ def apply_category_filters(
                 continue
 
             keyword_id_rows = db.query(Keyword.id).filter(
-                Keyword.tenant_id == tenant.id,
+                tenant_column_filter(Keyword, tenant),
                 Keyword.keyword.in_(category_keywords),
             ).all()
             keyword_ids = [row[0] for row in keyword_id_rows]
@@ -433,9 +437,9 @@ def apply_category_filters(
                     Permatag,
                     Permatag.asset_id == ImageMetadata.asset_id,
                 ).filter(
-                    ImageMetadata.tenant_id == tenant.id,
+                    tenant_column_filter(ImageMetadata, tenant),
                     ImageMetadata.asset_id.is_not(None),
-                    Permatag.tenant_id == tenant.id,
+                    tenant_column_filter(Permatag, tenant),
                     Permatag.asset_id.is_not(None),
                     Permatag.signum == 1,
                     Permatag.keyword_id.in_(keyword_ids),
@@ -472,7 +476,9 @@ def apply_category_filters(
     if existing_filter is not None:
         all_image_ids = list(existing_filter)
     else:
-        all_images = db.query(ImageMetadata.id).filter_by(tenant_id=tenant.id).all()
+        all_images = db.query(ImageMetadata.id).filter(
+            tenant_column_filter(ImageMetadata, tenant)
+        ).all()
         all_image_ids = [img[0] for img in all_images]
 
     # Get active tag type from tenant config for filtering
@@ -548,7 +554,7 @@ def calculate_relevance_scores(
     # Look up keyword IDs for the given keyword names
     keyword_ids = db.query(Keyword.id).filter(
         Keyword.keyword.in_(keywords),
-        Keyword.tenant_id == tenant.id
+        tenant_column_filter(Keyword, tenant)
     ).all()
     keyword_id_list = [kw[0] for kw in keyword_ids]
 
@@ -556,7 +562,7 @@ def calculate_relevance_scores(
         return {}
 
     image_asset_rows = db.query(ImageMetadata.id, ImageMetadata.asset_id).filter(
-        ImageMetadata.tenant_id == tenant.id,
+        tenant_column_filter(ImageMetadata, tenant),
         ImageMetadata.id.in_(image_ids),
         ImageMetadata.asset_id.is_not(None),
     ).all()
@@ -571,7 +577,7 @@ def calculate_relevance_scores(
     ).filter(
         MachineTag.asset_id.in_(asset_ids),
         MachineTag.keyword_id.in_(keyword_id_list),
-        MachineTag.tenant_id == tenant.id,
+        tenant_column_filter(MachineTag, tenant),
         MachineTag.tag_type == active_tag_type
     ).group_by(
         MachineTag.asset_id
@@ -610,7 +616,10 @@ def apply_list_filter_subquery(
     Raises:
         HTTPException: If list not found
     """
-    lst = db.query(PhotoList).filter_by(id=list_id, tenant_id=tenant.id).first()
+    lst = db.query(PhotoList).filter(
+        PhotoList.id == list_id,
+        tenant_column_filter(PhotoList, tenant),
+    ).first()
     if not lst:
         raise HTTPException(status_code=404, detail="List not found")
 
@@ -619,7 +628,7 @@ def apply_list_filter_subquery(
         PhotoListItem.asset_id == ImageMetadata.asset_id,
     ).filter(
         PhotoListItem.list_id == list_id,
-        ImageMetadata.tenant_id == tenant.id,
+        tenant_column_filter(ImageMetadata, tenant),
     ).subquery()
 
 
@@ -641,7 +650,7 @@ def apply_rating_filter_subquery(
         SQLAlchemy subquery object (not executed)
     """
     query = db.query(ImageMetadata.id).filter(
-        ImageMetadata.tenant_id == tenant.id
+        tenant_column_filter(ImageMetadata, tenant)
     )
 
     if operator == "is_null":
@@ -671,7 +680,7 @@ def apply_hide_zero_rating_filter_subquery(
     """
     from sqlalchemy import or_
     return db.query(ImageMetadata.id).filter(
-        ImageMetadata.tenant_id == tenant.id,
+        tenant_column_filter(ImageMetadata, tenant),
         or_(ImageMetadata.rating != 0, ImageMetadata.rating.is_(None))
     ).subquery()
 
@@ -694,23 +703,23 @@ def apply_reviewed_filter_subquery(
     if reviewed:
         # Images with at least one permatag (reviewed), via asset_id bridge.
         permatag_assets = db.query(Permatag.asset_id).filter(
-            Permatag.tenant_id == tenant.id,
+            tenant_column_filter(Permatag, tenant),
             Permatag.asset_id.is_not(None),
         ).distinct().subquery()
 
         return db.query(ImageMetadata.id).filter(
-            ImageMetadata.tenant_id == tenant.id,
+            tenant_column_filter(ImageMetadata, tenant),
             ImageMetadata.asset_id.in_(select(permatag_assets.c.asset_id))
         ).subquery()
     else:
         # Images without any permatag (unreviewed) - use NOT IN subquery
         reviewed_assets = db.query(Permatag.asset_id).filter(
-            Permatag.tenant_id == tenant.id,
+            tenant_column_filter(Permatag, tenant),
             Permatag.asset_id.is_not(None),
         ).distinct().subquery()
 
         return db.query(ImageMetadata.id).filter(
-            ImageMetadata.tenant_id == tenant.id,
+            tenant_column_filter(ImageMetadata, tenant),
             ~ImageMetadata.asset_id.in_(select(reviewed_assets.c.asset_id))
         ).subquery()
 
@@ -728,12 +737,12 @@ def apply_permatag_filter_subquery(
     if not normalized_keyword:
         # Empty keyword returns all images for tenant
         return db.query(ImageMetadata.id).filter(
-            ImageMetadata.tenant_id == tenant.id
+            tenant_column_filter(ImageMetadata, tenant)
         ).subquery()
 
     # Look up keyword by name (case-insensitive)
     keyword_query = db.query(Keyword).filter(
-        Keyword.tenant_id == tenant.id,
+        tenant_column_filter(Keyword, tenant),
         func.lower(Keyword.keyword) == normalized_keyword
     )
 
@@ -743,7 +752,7 @@ def apply_permatag_filter_subquery(
             KeywordCategory, Keyword.category_id == KeywordCategory.id
         ).filter(
             KeywordCategory.name == category,
-            KeywordCategory.tenant_id == tenant.id
+            tenant_column_filter(KeywordCategory, tenant)
         )
 
     keyword_obj = keyword_query.first()
@@ -753,7 +762,7 @@ def apply_permatag_filter_subquery(
         if missing:
             # Return all images (keyword doesn't exist so nothing is missing)
             return db.query(ImageMetadata.id).filter(
-                ImageMetadata.tenant_id == tenant.id
+                tenant_column_filter(ImageMetadata, tenant)
             ).subquery()
         else:
             # Return empty subquery
@@ -762,7 +771,7 @@ def apply_permatag_filter_subquery(
     # Query permatag asset IDs
     permatag_subquery = db.query(Permatag.asset_id).filter(
         Permatag.keyword_id == keyword_obj.id,
-        Permatag.tenant_id == tenant.id,
+        tenant_column_filter(Permatag, tenant),
         Permatag.asset_id.is_not(None),
     )
     if signum is not None:
@@ -772,13 +781,13 @@ def apply_permatag_filter_subquery(
     if missing:
         # Exclude images with this permatag
         return db.query(ImageMetadata.id).filter(
-            ImageMetadata.tenant_id == tenant.id,
+            tenant_column_filter(ImageMetadata, tenant),
             ~ImageMetadata.asset_id.in_(select(permatag_subquery.c.asset_id))
         ).subquery()
     else:
         # Include images with this permatag
         return db.query(ImageMetadata.id).filter(
-            ImageMetadata.tenant_id == tenant.id,
+            tenant_column_filter(ImageMetadata, tenant),
             ImageMetadata.asset_id.in_(select(permatag_subquery.c.asset_id))
         ).subquery()
 
@@ -786,12 +795,12 @@ def apply_permatag_filter_subquery(
 def apply_no_positive_permatag_filter_subquery(db: Session, tenant: Tenant):
     """Return subquery of images with no positive permatags."""
     permatag_subquery = db.query(Permatag.asset_id).filter(
-        Permatag.tenant_id == tenant.id,
+        tenant_column_filter(Permatag, tenant),
         Permatag.signum == 1,
         Permatag.asset_id.is_not(None),
     ).subquery()
     return db.query(ImageMetadata.id).filter(
-        ImageMetadata.tenant_id == tenant.id,
+        tenant_column_filter(ImageMetadata, tenant),
         ~ImageMetadata.asset_id.in_(select(permatag_subquery.c.asset_id))
     ).subquery()
 
@@ -826,7 +835,7 @@ def apply_ml_tag_type_filter_subquery(
     """
     # Look up keyword by name (case-insensitive)
     keyword_obj = db.query(Keyword).filter(
-        Keyword.tenant_id == tenant.id,
+        tenant_column_filter(Keyword, tenant),
         func.lower(Keyword.keyword) == func.lower(keyword.strip())
     ).first()
 
@@ -838,12 +847,12 @@ def apply_ml_tag_type_filter_subquery(
     ml_images = db.query(MachineTag.asset_id).filter(
         MachineTag.keyword_id == keyword_obj.id,
         MachineTag.tag_type == tag_type,
-        MachineTag.tenant_id == tenant.id,
+        tenant_column_filter(MachineTag, tenant),
         MachineTag.asset_id.is_not(None),
     ).distinct().subquery()
 
     return db.query(ImageMetadata.id).filter(
-        ImageMetadata.tenant_id == tenant.id,
+        tenant_column_filter(ImageMetadata, tenant),
         ImageMetadata.asset_id.in_(select(ml_images.c.asset_id))
     ).subquery()
 
@@ -901,7 +910,7 @@ def build_image_query_with_subqueries(
     """
     # Start with base query for tenant
     base_query = db.query(ImageMetadata).filter(
-        ImageMetadata.tenant_id == tenant.id
+        tenant_column_filter(ImageMetadata, tenant)
     )
     
     subqueries_list = []
@@ -977,8 +986,8 @@ def build_image_query_with_subqueries(
                 db.query(ImageMetadata.id)
                 .join(Asset, Asset.id == ImageMetadata.asset_id)
                 .filter(
-                    ImageMetadata.tenant_id == tenant.id,
-                    Asset.tenant_id == tenant.id,
+                    tenant_column_filter(ImageMetadata, tenant),
+                    tenant_column_filter(Asset, tenant),
                     Asset.source_provider == "dropbox",
                     or_(*[
                         Asset.source_key.ilike(f"{prefix}%")
@@ -995,7 +1004,7 @@ def build_image_query_with_subqueries(
             filename_subquery = (
                 db.query(ImageMetadata.id)
                 .filter(
-                    ImageMetadata.tenant_id == tenant.id,
+                    tenant_column_filter(ImageMetadata, tenant),
                     ImageMetadata.filename.ilike(f"%{normalized_filename_query}%"),
                 )
                 .subquery()

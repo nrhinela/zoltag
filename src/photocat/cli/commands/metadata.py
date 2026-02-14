@@ -14,7 +14,7 @@ from photocat.exif import (
     parse_exif_str,
 )
 from photocat.image import ImageProcessor
-from photocat.metadata import Asset, ImageMetadata, Tenant as TenantModel
+from photocat.metadata import Asset, ImageMetadata
 from photocat.dependencies import get_secret
 from photocat.dropbox import DropboxClient
 from photocat.cli.base import CliCommand
@@ -126,26 +126,23 @@ class RefreshMetadataCommand(CliCommand):
 
     def _refresh_metadata(self):
         """Refresh missing EXIF-derived metadata from Dropbox."""
-        # Load tenant
-        tenant_row = self.db.query(TenantModel).filter(TenantModel.id == self.tenant_id).first()
-        if not tenant_row:
-            raise click.ClickException(f"Tenant {self.tenant_id} not found in database")
-        if not tenant_row.dropbox_app_key:
+        self.tenant = self.load_tenant(self.tenant_id)
+        if not self.tenant.dropbox_app_key:
             raise click.ClickException("Dropbox app key not configured for tenant")
 
         try:
-            refresh_token = get_secret(f"dropbox-token-{self.tenant_id}")
+            refresh_token = get_secret(f"dropbox-token-{self.tenant.secret_scope}")
         except Exception as exc:
             raise click.ClickException(f"Dropbox token not found: {exc}")
 
         try:
-            app_secret = get_secret(f"dropbox-app-secret-{self.tenant_id}")
+            app_secret = get_secret(f"dropbox-app-secret-{self.tenant.secret_scope}")
         except Exception as exc:
             raise click.ClickException(f"Dropbox app secret not found: {exc}")
 
         dbx = Dropbox(
             oauth2_refresh_token=refresh_token,
-            app_key=tenant_row.dropbox_app_key,
+            app_key=self.tenant.dropbox_app_key,
             app_secret=app_secret
         )
 
@@ -166,7 +163,7 @@ class RefreshMetadataCommand(CliCommand):
         )
 
         base_query = self.db.query(ImageMetadata).filter(
-            ImageMetadata.tenant_id == self.tenant_id,
+            self.tenant_filter(ImageMetadata),
             missing_filter
         ).order_by(ImageMetadata.id.desc())
 
@@ -196,7 +193,10 @@ class RefreshMetadataCommand(CliCommand):
             asset_ids = [img.asset_id for img in batch if img.asset_id is not None]
             assets_by_id = {}
             if asset_ids:
-                assets = self.db.query(Asset).filter(Asset.id.in_(asset_ids)).all()
+                assets = self.db.query(Asset).filter(
+                    self.tenant_filter(Asset),
+                    Asset.id.in_(asset_ids)
+                ).all()
                 assets_by_id = {str(asset.id): asset for asset in assets}
             for image in batch:
                 processed += 1
@@ -384,30 +384,28 @@ class BackfillCaptureTimestampCommand(CliCommand):
 
     def _backfill_capture_timestamp(self):
         """Backfill capture_timestamp using Dropbox media_info only."""
-        tenant_row = self.db.query(TenantModel).filter(TenantModel.id == self.tenant_id).first()
-        if not tenant_row:
-            raise click.ClickException(f"Tenant {self.tenant_id} not found in database")
-        if not tenant_row.dropbox_app_key:
+        self.tenant = self.load_tenant(self.tenant_id)
+        if not self.tenant.dropbox_app_key:
             raise click.ClickException("Dropbox app key not configured for tenant")
 
         try:
-            refresh_token = get_secret(f"dropbox-token-{self.tenant_id}")
+            refresh_token = get_secret(f"dropbox-token-{self.tenant.secret_scope}")
         except Exception as exc:
             raise click.ClickException(f"Dropbox token not found: {exc}")
 
         try:
-            app_secret = get_secret(f"dropbox-app-secret-{self.tenant_id}")
+            app_secret = get_secret(f"dropbox-app-secret-{self.tenant.secret_scope}")
         except Exception as exc:
             raise click.ClickException(f"Dropbox app secret not found: {exc}")
 
         dropbox_client = DropboxClient(
             refresh_token=refresh_token,
-            app_key=tenant_row.dropbox_app_key,
+            app_key=self.tenant.dropbox_app_key,
             app_secret=app_secret,
         )
 
         base_query = self.db.query(ImageMetadata).filter(
-            ImageMetadata.tenant_id == self.tenant_id,
+            self.tenant_filter(ImageMetadata),
             ImageMetadata.capture_timestamp.is_(None),
         ).order_by(ImageMetadata.id.desc())
 
@@ -442,7 +440,10 @@ class BackfillCaptureTimestampCommand(CliCommand):
             asset_ids = [img.asset_id for img in batch if img.asset_id is not None]
             assets_by_id = {}
             if asset_ids:
-                assets = self.db.query(Asset).filter(Asset.id.in_(asset_ids)).all()
+                assets = self.db.query(Asset).filter(
+                    self.tenant_filter(Asset),
+                    Asset.id.in_(asset_ids)
+                ).all()
                 assets_by_id = {str(asset.id): asset for asset in assets}
 
             for image in batch:

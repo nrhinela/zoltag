@@ -8,13 +8,18 @@ from sqlalchemy.orm import Session
 
 from photocat.dependencies import get_db
 from photocat.auth.dependencies import require_super_admin
-from photocat.metadata import Person
+from photocat.metadata import Person, Tenant as TenantModel
+from photocat.tenant_scope import tenant_column_filter_for_values, tenant_reference_filter
 
 router = APIRouter(
     prefix="/api/v1/admin/people",
     tags=["admin-people"],
     dependencies=[Depends(require_super_admin)],
 )
+
+
+def _resolve_tenant(db: Session, tenant_ref: str):
+    return db.query(TenantModel).filter(tenant_reference_filter(TenantModel, tenant_ref)).first()
 
 
 @router.get("", response_model=list)
@@ -25,7 +30,16 @@ async def list_people(
     """List people (optionally filtered by tenant)."""
     query = db.query(Person)
     if tenant_id:
-        query = query.filter(Person.tenant_id == tenant_id)
+        tenant_row = _resolve_tenant(db, tenant_id)
+        if tenant_row:
+            query = query.filter(
+                tenant_column_filter_for_values(
+                    Person,
+                    str(tenant_row.id),
+                )
+            )
+        else:
+            query = query.filter(tenant_column_filter_for_values(Person, tenant_id))
 
     people = query.all()
     return [{
@@ -49,9 +63,13 @@ async def create_person(
     if not person_data.get("tenant_id") or not person_data.get("name"):
         raise HTTPException(status_code=400, detail="tenant_id and name are required")
 
+    tenant_row = _resolve_tenant(db, person_data["tenant_id"])
+    if not tenant_row:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
     # Create person
     person = Person(
-        tenant_id=person_data["tenant_id"],
+        tenant_id=tenant_row.id,
         name=person_data["name"],
         aliases=person_data.get("aliases", []),
         face_embedding_ref=person_data.get("face_embedding_ref")

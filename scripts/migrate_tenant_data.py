@@ -30,7 +30,7 @@ sys.path.insert(0, '/Users/ned.rhinelander/Developer/photocat/src')
 from photocat.settings import settings
 
 
-def migrate_tenant_data(tenant_id: str, dry_run: bool = False, delete_source: bool = False):
+def migrate_tenant_data(tenant_ref: str, dry_run: bool = False, delete_source: bool = False):
     """Migrate tenant images from shared bucket to tenant-specific buckets."""
 
     # Setup database
@@ -40,24 +40,34 @@ def migrate_tenant_data(tenant_id: str, dry_run: bool = False, delete_source: bo
 
     # Get tenant info
     result = session.execute(
-        text("SELECT id, name, storage_bucket, thumbnail_bucket FROM tenants WHERE id = :tenant_id"),
-        {"tenant_id": tenant_id}
+        text(
+            """
+            SELECT id, name, storage_bucket, thumbnail_bucket, identifier
+            FROM tenants
+            WHERE id::text = :tenant_ref
+               OR identifier = :tenant_ref
+            LIMIT 1
+            """
+        ),
+        {"tenant_ref": tenant_ref}
     ).first()
 
     if not result:
-        print(f"✗ Tenant {tenant_id} not found in database")
+        print(f"✗ Tenant {tenant_ref} not found in database")
         return False
 
+    tenant_id = str(result[0])
     tenant_name = result[1]
     target_storage_bucket = result[2]
     target_thumbnail_bucket = result[3]
+    tenant_identifier = result[4] or tenant_id
 
     if not target_storage_bucket or not target_thumbnail_bucket:
-        print(f"✗ Tenant {tenant_id} does not have buckets configured")
+        print(f"✗ Tenant {tenant_identifier} ({tenant_id}) does not have buckets configured")
         print("  Run: python scripts/setup_tenant_buckets.py --tenant-id", tenant_id)
         return False
 
-    print(f"\n=== Migrating data for tenant: {tenant_name} ({tenant_id}) ===")
+    print(f"\n=== Migrating data for tenant: {tenant_name} ({tenant_identifier}, {tenant_id}) ===")
     print(f"Source bucket: {settings.storage_bucket_name}")
     print(f"Target storage bucket: {target_storage_bucket}")
     print(f"Target thumbnail bucket: {target_thumbnail_bucket}")
@@ -75,7 +85,7 @@ def migrate_tenant_data(tenant_id: str, dry_run: bool = False, delete_source: bo
     ).fetchall()
 
     if not images:
-        print(f"No images found for tenant {tenant_id}")
+        print(f"No images found for tenant {tenant_identifier} ({tenant_id})")
         return True
 
     print(f"Found {len(images)} images to migrate")

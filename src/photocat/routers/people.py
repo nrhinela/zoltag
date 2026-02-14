@@ -10,17 +10,25 @@ from photocat.dependencies import get_db, get_tenant
 from photocat.tenant import Tenant
 from photocat.metadata import Person, Permatag
 from photocat.models.config import Keyword, KeywordCategory
+from photocat.tenant_scope import assign_tenant_scope, tenant_column_filter, tenant_column_filter_for_values
 
 router = APIRouter(prefix="/api/v1/people", tags=["people"])
 
-def _get_person_keyword(db: Session, tenant_id: str, person_id: int) -> Optional[Keyword]:
+
+def _tenant_filter(model, tenant: Tenant | str):
+    if isinstance(tenant, Tenant):
+        return tenant_column_filter(model, tenant)
+    return tenant_column_filter_for_values(model, tenant, tenant)
+
+
+def _get_person_keyword(db: Session, tenant: Tenant | str, person_id: int) -> Optional[Keyword]:
     """Resolve the canonical keyword row backing a person tag.
 
     Prefer tag_type='person' rows, but fall back to any keyword linked to the
     person to support legacy data.
     """
     keyword = db.query(Keyword).filter(
-        Keyword.tenant_id == tenant_id,
+        _tenant_filter(Keyword, tenant),
         Keyword.person_id == person_id,
         Keyword.tag_type == "person",
     ).first()
@@ -28,18 +36,18 @@ def _get_person_keyword(db: Session, tenant_id: str, person_id: int) -> Optional
         return keyword
 
     return db.query(Keyword).filter(
-        Keyword.tenant_id == tenant_id,
+        _tenant_filter(Keyword, tenant),
         Keyword.person_id == person_id,
     ).order_by(Keyword.id.asc()).first()
 
 
-def _count_person_tagged_images(db: Session, tenant_id: str, keyword_id: int) -> int:
+def _count_person_tagged_images(db: Session, tenant: Tenant | str, keyword_id: int) -> int:
     """Count distinct assets tagged for this person within tenant scope.
 
     Counts only positive permatags attached to the person's keyword.
     """
     count = db.query(func.count(distinct(Permatag.asset_id))).filter(
-        Permatag.tenant_id == tenant_id,
+        _tenant_filter(Permatag, tenant),
         Permatag.keyword_id == keyword_id,
         Permatag.signum == 1,
     ).scalar()
@@ -105,7 +113,7 @@ async def create_person(
     """
     # Check if person already exists
     existing = db.query(Person).filter(
-        Person.tenant_id == tenant.id,
+        tenant_column_filter(Person, tenant),
         Person.name == request.name
     ).first()
 
@@ -117,39 +125,36 @@ async def create_person(
 
     try:
         # Create person record
-        person = Person(
-            tenant_id=tenant.id,
+        person = assign_tenant_scope(Person(
             name=request.name,
             instagram_url=request.instagram_url
-        )
+        ), tenant)
         db.add(person)
         db.flush()  # Get person.id before creating keyword
 
         # Find or create keyword category for people
         keyword_cat = db.query(KeywordCategory).filter(
-            KeywordCategory.tenant_id == tenant.id,
+            tenant_column_filter(KeywordCategory, tenant),
             KeywordCategory.is_people_category == True
         ).first()
 
         if not keyword_cat:
             # Create keyword category for people
-            keyword_cat = KeywordCategory(
-                tenant_id=tenant.id,
+            keyword_cat = assign_tenant_scope(KeywordCategory(
                 name="people",
                 is_people_category=True,
                 sort_order=0
-            )
+            ), tenant)
             db.add(keyword_cat)
             db.flush()
 
         # Create keyword for this person
-        keyword = Keyword(
-            tenant_id=tenant.id,
+        keyword = assign_tenant_scope(Keyword(
             category_id=keyword_cat.id,
             keyword=request.name,
             person_id=person.id,
             tag_type="person"
-        )
+        ), tenant)
         db.add(keyword)
         db.commit()
         db.refresh(person)
@@ -177,7 +182,7 @@ async def list_people(
 ):
     """List all people for a tenant."""
 
-    query = db.query(Person).filter(Person.tenant_id == tenant.id)
+    query = db.query(Person).filter(tenant_column_filter(Person, tenant))
     people = query.order_by(Person.name).offset(skip).limit(limit).all()
     if not people:
         return []
@@ -190,7 +195,7 @@ async def list_people(
         Keyword.id,
         Keyword.person_id,
     ).filter(
-        Keyword.tenant_id == tenant.id,
+        tenant_column_filter(Keyword, tenant),
         Keyword.person_id.in_(person_ids),
     ).order_by(
         Keyword.person_id.asc(),
@@ -211,7 +216,7 @@ async def list_people(
             Permatag.keyword_id,
             func.count(distinct(Permatag.asset_id)).label("tag_count"),
         ).filter(
-            Permatag.tenant_id == tenant.id,
+            tenant_column_filter(Permatag, tenant),
             Permatag.keyword_id.in_(keyword_ids),
             Permatag.signum == 1,
         ).group_by(
@@ -249,20 +254,20 @@ async def get_person(
     """Get details for a specific person."""
     person = db.query(Person).filter(
         Person.id == person_id,
-        Person.tenant_id == tenant.id
+        tenant_column_filter(Person, tenant),
     ).first()
 
     if not person:
         raise HTTPException(status_code=404, detail="Person not found")
 
     # Get the keyword for this person
-    keyword = _get_person_keyword(db, tenant.id, person.id)
+    keyword = _get_person_keyword(db, tenant, person.id)
 
     tag_count = 0
     keyword_id = None
     if keyword:
         keyword_id = keyword.id
-        tag_count = _count_person_tagged_images(db, tenant.id, keyword.id)
+        tag_count = _count_person_tagged_images(db, tenant, keyword.id)
 
     return PersonResponse(
         id=person.id,
@@ -286,7 +291,7 @@ async def update_person(
     """Update a person's details."""
     person = db.query(Person).filter(
         Person.id == person_id,
-        Person.tenant_id == tenant.id
+        tenant_column_filter(Person, tenant),
     ).first()
 
     if not person:
@@ -294,7 +299,7 @@ async def update_person(
 
     try:
         # Get the keyword for this person
-        keyword = _get_person_keyword(db, tenant.id, person.id)
+        keyword = _get_person_keyword(db, tenant, person.id)
 
         # Update person fields
         if request.name is not None:
@@ -313,7 +318,7 @@ async def update_person(
         keyword_id = None
         if keyword:
             keyword_id = keyword.id
-            tag_count = _count_person_tagged_images(db, tenant.id, keyword.id)
+            tag_count = _count_person_tagged_images(db, tenant, keyword.id)
 
         return PersonResponse(
             id=person.id,
@@ -339,7 +344,7 @@ async def delete_person(
     """Delete a person and associated keyword/tags."""
     person = db.query(Person).filter(
         Person.id == person_id,
-        Person.tenant_id == tenant.id
+        tenant_column_filter(Person, tenant),
     ).first()
 
     if not person:
@@ -347,7 +352,7 @@ async def delete_person(
 
     try:
         # Get the keyword for this person
-        keyword = _get_person_keyword(db, tenant.id, person.id)
+        keyword = _get_person_keyword(db, tenant, person.id)
 
         # Delete associated keyword (cascade will delete related tags)
         if keyword:
@@ -377,19 +382,19 @@ async def get_person_stats(
     """Get statistics for a person (how many images tagged, etc.)."""
     person = db.query(Person).filter(
         Person.id == person_id,
-        Person.tenant_id == tenant.id
+        tenant_column_filter(Person, tenant),
     ).first()
 
     if not person:
         raise HTTPException(status_code=404, detail="Person not found")
 
     # Get the keyword for this person
-    keyword = _get_person_keyword(db, tenant.id, person.id)
+    keyword = _get_person_keyword(db, tenant, person.id)
 
     # Count tags if keyword exists
     tag_count = 0
     if keyword:
-        tag_count = _count_person_tagged_images(db, tenant.id, keyword.id)
+        tag_count = _count_person_tagged_images(db, tenant, keyword.id)
 
     return PersonStatsResponse(
         id=person.id,
@@ -406,47 +411,53 @@ async def get_person_stats(
 
 def get_or_create_person_keyword(
     db: Session,
-    tenant_id: str,
+    tenant: Tenant | str,
     person_id: int
 ) -> Optional[Keyword]:
     """Get person's keyword, creating it if missing."""
     person = db.query(Person).filter(
         Person.id == person_id,
-        Person.tenant_id == tenant_id
+        _tenant_filter(Person, tenant),
     ).first()
 
     if not person:
         return None
 
     # Check if keyword already exists for this person
-    existing_keyword = _get_person_keyword(db, tenant_id, person.id)
+    existing_keyword = _get_person_keyword(db, tenant, person.id)
 
     if existing_keyword:
         return existing_keyword
 
     # Create keyword if missing
     keyword_cat = db.query(KeywordCategory).filter(
-        KeywordCategory.tenant_id == tenant_id,
+        _tenant_filter(KeywordCategory, tenant),
         KeywordCategory.is_people_category == True
     ).first()
 
     if not keyword_cat:
         # Create people category
         keyword_cat = KeywordCategory(
-            tenant_id=tenant_id,
             name="people",
             is_people_category=True
         )
+        if isinstance(tenant, Tenant):
+            assign_tenant_scope(keyword_cat, tenant)
+        else:
+            keyword_cat.tenant_id = tenant
         db.add(keyword_cat)
         db.flush()
 
     keyword = Keyword(
-        tenant_id=tenant_id,
         category_id=keyword_cat.id,
         keyword=person.name,
         person_id=person.id,
         tag_type="person"
     )
+    if isinstance(tenant, Tenant):
+        assign_tenant_scope(keyword, tenant)
+    else:
+        keyword.tenant_id = tenant
     db.add(keyword)
     db.commit()
 

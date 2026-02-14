@@ -10,6 +10,7 @@ from photocat.database import get_db
 from photocat.auth.jwt import verify_supabase_jwt, get_supabase_uid_from_token
 from photocat.auth.models import UserProfile, UserTenant
 from photocat.metadata import Tenant as TenantModel
+from photocat.tenant_scope import tenant_column_filter_for_values, tenant_reference_filter
 
 
 ROLE_PRIORITY = {
@@ -17,6 +18,16 @@ ROLE_PRIORITY = {
     "editor": 2,
     "admin": 3,
 }
+
+
+def _resolve_tenant_scope(db: Session, tenant_ref: str) -> Optional[str]:
+    """Resolve tenant identifier from id, identifier, or UUID."""
+    row = db.query(TenantModel.id).filter(
+        tenant_reference_filter(TenantModel, tenant_ref)
+    ).first()
+    if not row:
+        return None
+    return str(row[0])
 
 
 def _validate_role_name(required_role: str) -> None:
@@ -192,9 +203,10 @@ def require_tenant_access(tenant_id: str) -> Callable:
             return user
 
         # Check if user is a member of the tenant
+        scope_tenant_id = _resolve_tenant_scope(db, tenant_id) or tenant_id
         membership = db.query(UserTenant).filter(
             UserTenant.supabase_uid == user.supabase_uid,
-            UserTenant.tenant_id == tenant_id,
+            tenant_column_filter_for_values(UserTenant, scope_tenant_id),
             UserTenant.accepted_at.isnot(None)  # Must have accepted invitation
         ).first()
 
@@ -243,9 +255,10 @@ def require_tenant_role(tenant_id: str, required_role: str = "user") -> Callable
             return user
 
         # Check membership and role
+        scope_tenant_id = _resolve_tenant_scope(db, tenant_id) or tenant_id
         membership = db.query(UserTenant).filter(
             UserTenant.supabase_uid == user.supabase_uid,
-            UserTenant.tenant_id == tenant_id,
+            tenant_column_filter_for_values(UserTenant, scope_tenant_id),
             UserTenant.accepted_at.isnot(None)
         ).first()
 
@@ -278,9 +291,10 @@ def require_tenant_role_from_header(required_role: str = "admin") -> Callable:
         if user.is_super_admin:
             return user
 
+        scope_tenant_id = _resolve_tenant_scope(db, x_tenant_id) or x_tenant_id
         membership = db.query(UserTenant).filter(
             UserTenant.supabase_uid == user.supabase_uid,
-            UserTenant.tenant_id == x_tenant_id,
+            tenant_column_filter_for_values(UserTenant, scope_tenant_id),
             UserTenant.accepted_at.isnot(None)
         ).first()
 

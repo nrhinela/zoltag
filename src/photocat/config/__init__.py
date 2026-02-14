@@ -1,7 +1,10 @@
 """Configuration models for tenant-specific settings."""
 
 from typing import List
+from pathlib import Path
+
 from pydantic import BaseModel, Field
+import yaml
 
 
 class KeywordCategory(BaseModel):
@@ -63,6 +66,43 @@ class TenantConfig(BaseModel):
             if any(alias.lower() == name_lower for alias in person.aliases):
                 return person
         return None
+
+    @classmethod
+    def load(cls, tenant_id: str, config_root: Path) -> "TenantConfig":
+        """Load tenant config from YAML files under <config_root>/<tenant_id>/."""
+        tenant_dir = Path(config_root) / tenant_id
+        if not tenant_dir.exists():
+            raise FileNotFoundError(f"Tenant config directory not found: {tenant_dir}")
+
+        keywords_path = tenant_dir / "keywords.yaml"
+        people_path = tenant_dir / "people.yaml"
+
+        keyword_payload = yaml.safe_load(keywords_path.read_text()) if keywords_path.exists() else []
+        people_payload = yaml.safe_load(people_path.read_text()) if people_path.exists() else []
+
+        def _parse_category(raw: dict) -> KeywordCategory:
+            return KeywordCategory(
+                name=raw.get("name", ""),
+                keywords=raw.get("keywords", []) or [],
+                subcategories=[_parse_category(sub) for sub in (raw.get("subcategories", []) or [])],
+                is_attribution=bool(raw.get("is_attribution", False)),
+            )
+
+        keywords = [
+            _parse_category(entry)
+            for entry in (keyword_payload or [])
+            if isinstance(entry, dict)
+        ]
+        people = [
+            Person(
+                name=entry.get("name", ""),
+                aliases=entry.get("aliases", []) or [],
+                face_embedding_ref=entry.get("face_embedding_ref"),
+            )
+            for entry in (people_payload or [])
+            if isinstance(entry, dict)
+        ]
+        return cls(keywords=keywords, people=people)
 
 
 # Enable forward references for recursive model

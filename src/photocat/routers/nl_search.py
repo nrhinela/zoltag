@@ -15,6 +15,7 @@ from photocat.metadata import Person
 from photocat.models.config import Keyword, KeywordCategory
 from photocat.settings import settings
 from photocat.tenant import Tenant
+from photocat.tenant_scope import tenant_column_filter
 
 
 router = APIRouter(prefix="/api/v1/search", tags=["search"])
@@ -62,13 +63,13 @@ def _wants_quality_sort(query: str) -> bool:
     return any(token in tokens for token in ("best", "great", "good", "excellent", "amazing", "awesome"))
 
 
-def _build_vocab(db: Session, tenant_id: str) -> Dict[str, Any]:
+def _build_vocab(db: Session, tenant: Tenant) -> Dict[str, Any]:
     categories = db.query(
         KeywordCategory.id,
         KeywordCategory.name,
         KeywordCategory.is_people_category,
     ).filter(
-        KeywordCategory.tenant_id == tenant_id
+        tenant_column_filter(KeywordCategory, tenant)
     ).order_by(
         KeywordCategory.sort_order,
         KeywordCategory.name,
@@ -81,7 +82,7 @@ def _build_vocab(db: Session, tenant_id: str) -> Dict[str, Any]:
         Keyword.category_id,
         Keyword.person_id,
     ).filter(
-        Keyword.tenant_id == tenant_id
+        tenant_column_filter(Keyword, tenant)
     ).order_by(
         Keyword.keyword
     ).all()
@@ -104,7 +105,7 @@ def _build_vocab(db: Session, tenant_id: str) -> Dict[str, Any]:
             })
 
     people_rows = db.query(Person.id, Person.name).filter(
-        Person.tenant_id == tenant_id
+        tenant_column_filter(Person, tenant)
     ).order_by(Person.name).all()
     person_name_by_id = {str(person_id): name for person_id, name in people_rows}
 
@@ -358,7 +359,7 @@ async def nl_search(
     if not api_key:
         raise HTTPException(status_code=500, detail="Gemini API key not configured.")
 
-    vocab = _build_vocab(db, tenant.id)
+    vocab = _build_vocab(db, tenant)
     prompt = _build_prompt(request, vocab)
 
     payload = {

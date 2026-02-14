@@ -49,7 +49,7 @@ def create_bucket_if_not_exists(storage_client, bucket_name, make_public=False):
         return bucket
 
 
-def setup_tenant_buckets(tenant_id: str):
+def setup_tenant_buckets(tenant_ref: str):
     """Setup dedicated thumbnail bucket for a tenant using environment-aware naming."""
 
     # Verify DATABASE_URL is set and looks valid
@@ -79,27 +79,52 @@ def setup_tenant_buckets(tenant_id: str):
     # Initialize storage client
     storage_client = storage.Client(project=settings.gcp_project_id)
 
-    # Generate bucket name using environment-aware convention (lowercase for GCS)
-    project_id = settings.gcp_project_id
-    env = settings.environment.lower()
-    thumbnail_bucket_name = f"{project_id}-{env}-{tenant_id}"
-
-    print(f"\n=== Setting up dedicated bucket for tenant: {tenant_id} ===")
-    print(f"Environment: {env}")
-    print(f"Bucket name: {thumbnail_bucket_name}")
-    print(f"Convention: {{project}}-{{env}}-{{tenant_id}}")
-    print()
-
-    # Create thumbnail bucket (public for CDN access)
-    create_bucket_if_not_exists(storage_client, thumbnail_bucket_name, make_public=True)
-
     # Update database
-    print("\nUpdating tenant record in database...")
+    print("\nResolving tenant in database...")
     engine = create_engine(settings.database_url)
     Session = sessionmaker(bind=engine)
     session = Session()
 
     try:
+        tenant_row = session.execute(
+            text(
+                """
+                SELECT id, identifier, key_prefix
+                FROM tenants
+                WHERE id::text = :tenant_ref
+                   OR identifier = :tenant_ref
+                LIMIT 1
+                """
+            ),
+            {"tenant_ref": tenant_ref},
+        ).first()
+
+        if tenant_row is None:
+            print(f"✗ Tenant {tenant_ref} not found in database!")
+            session.close()
+            return False
+
+        tenant_id = tenant_row.id
+        tenant_identifier = tenant_row.identifier or tenant_row.id
+        key_prefix = tenant_row.key_prefix or tenant_row.id
+
+        # Generate bucket name using environment-aware convention (lowercase for GCS)
+        project_id = settings.gcp_project_id
+        env = settings.environment.lower()
+        thumbnail_bucket_name = f"{project_id}-{env}-{key_prefix}"
+
+        print(f"\n=== Setting up dedicated bucket for tenant: {tenant_identifier} ===")
+        print(f"Internal UUID: {tenant_id}")
+        print(f"Key prefix: {key_prefix}")
+        print(f"Environment: {env}")
+        print(f"Bucket name: {thumbnail_bucket_name}")
+        print(f"Convention: {{project}}-{{env}}-{{tenant_key_prefix}}")
+        print()
+
+        # Create thumbnail bucket (public for CDN access)
+        create_bucket_if_not_exists(storage_client, thumbnail_bucket_name, make_public=True)
+
+        print("\nUpdating tenant record in database...")
         # Update tenant with bucket name (only thumbnail_bucket, storage_bucket stays null)
         result = session.execute(
             text("""
@@ -115,12 +140,12 @@ def setup_tenant_buckets(tenant_id: str):
         )
 
         if result.rowcount == 0:
-            print(f"✗ Tenant {tenant_id} not found in database!")
+            print(f"✗ Tenant {tenant_ref} not found in database!")
             session.close()
             return False
 
         session.commit()
-        print(f"✓ Updated tenant {tenant_id} with thumbnail bucket")
+        print(f"✓ Updated tenant {tenant_identifier} with thumbnail bucket")
 
     except Exception as e:
         print(f"✗ Database error: {e}")
@@ -132,11 +157,11 @@ def setup_tenant_buckets(tenant_id: str):
     print("\n=== Setup complete! ===")
     print(f"\nDedicated bucket created: {thumbnail_bucket_name}")
     print(f"Thumbnail URLs will be:")
-    print(f"  https://storage.googleapis.com/{thumbnail_bucket_name}/{{tenant_id}}/thumbnails/{{filename}}")
-    print(f"\nExample path: {tenant_id}/thumbnails/image_thumb.jpg")
+    print(f"  https://storage.googleapis.com/{thumbnail_bucket_name}/{{tenant_key_prefix}}/thumbnails/{{filename}}")
+    print(f"\nExample path: {key_prefix}/thumbnails/image_thumb.jpg")
     print(f"\nNote:")
-    print(f"  - Bucket name follows convention: {{project}}-{{env}}-{{tenant_id}}")
-    print(f"  - Paths always include tenant ID prefix: {{tenant_id}}/thumbnails/...")
+    print(f"  - Bucket name follows convention: {{project}}-{{env}}-{{tenant_key_prefix}}")
+    print(f"  - Paths always include tenant key prefix: {{tenant_key_prefix}}/thumbnails/...")
     print(f"  - Full-size images are not stored in GCS (only thumbnails)")
 
     return True
@@ -144,7 +169,7 @@ def setup_tenant_buckets(tenant_id: str):
 
 def main():
     parser = argparse.ArgumentParser(description="Setup GCS thumbnail bucket for a tenant")
-    parser.add_argument("--tenant-id", required=True, help="Tenant ID")
+    parser.add_argument("--tenant-id", required=True, help="Tenant identifier or UUID")
 
     args = parser.parse_args()
 

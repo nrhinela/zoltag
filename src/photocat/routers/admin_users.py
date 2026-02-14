@@ -25,9 +25,20 @@ from photocat.auth.schemas import (
 )
 from photocat.metadata import Tenant as TenantModel
 from photocat.settings import settings
+from photocat.tenant_scope import tenant_column_filter_for_values, tenant_reference_filter
 
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
+
+
+def _resolve_tenant(db: Session, tenant_ref: str) -> Optional[TenantModel]:
+    return db.query(TenantModel).filter(tenant_reference_filter(TenantModel, tenant_ref)).first()
+
+
+def _tenant_filter(db: Session, model, tenant_ref: str):
+    tenant = _resolve_tenant(db, tenant_ref)
+    tenant_id = tenant.id if tenant else tenant_ref
+    return tenant_column_filter_for_values(model, tenant_id)
 
 
 # ============================================================================
@@ -123,7 +134,7 @@ async def list_tenant_users(
     """List users assigned to the tenant in X-Tenant-ID (tenant admin or super admin)."""
 
     memberships = db.query(UserTenant).filter(
-        UserTenant.tenant_id == x_tenant_id,
+        _tenant_filter(db, UserTenant, x_tenant_id),
         UserTenant.accepted_at.isnot(None),
     ).all()
 
@@ -195,16 +206,14 @@ async def approve_user(
     # Optionally assign to tenant
     if body.tenant_id:
         # Verify tenant exists
-        tenant = db.query(TenantModel).filter(
-            TenantModel.id == body.tenant_id
-        ).first()
+        tenant = _resolve_tenant(db, body.tenant_id)
         if not tenant:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
 
         # Create membership
         membership = UserTenant(
             supabase_uid=user.supabase_uid,
-            tenant_id=body.tenant_id,
+            tenant_id=tenant.id,
             role=body.role,
             invited_by=admin.supabase_uid,
             invited_at=datetime.utcnow(),
@@ -253,16 +262,14 @@ async def assign_user_to_tenant(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tenant ID is required")
 
     # Verify tenant exists
-    tenant = db.query(TenantModel).filter(
-        TenantModel.id == request.tenant_id
-    ).first()
+    tenant = _resolve_tenant(db, request.tenant_id)
     if not tenant:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
 
     # Check if already assigned
     existing = db.query(UserTenant).filter(
         UserTenant.supabase_uid == user.supabase_uid,
-        UserTenant.tenant_id == request.tenant_id
+        _tenant_filter(db, UserTenant, request.tenant_id),
     ).first()
 
     if existing:
@@ -274,7 +281,7 @@ async def assign_user_to_tenant(
     # Create membership
     membership = UserTenant(
         supabase_uid=user.supabase_uid,
-        tenant_id=request.tenant_id,
+        tenant_id=tenant.id,
         role=request.role,
         invited_by=admin.supabase_uid,
         invited_at=datetime.utcnow(),
@@ -298,7 +305,7 @@ async def update_user_tenant_membership(
 
     membership = db.query(UserTenant).filter(
         UserTenant.supabase_uid == supabase_uid,
-        UserTenant.tenant_id == tenant_id,
+        _tenant_filter(db, UserTenant, tenant_id),
         UserTenant.accepted_at.isnot(None),
     ).first()
 
@@ -314,7 +321,7 @@ async def update_user_tenant_membership(
     return {
         "message": "Tenant role updated",
         "user_id": supabase_uid,
-        "tenant_id": tenant_id,
+        "tenant_id": membership.tenant_id,
         "role": membership.role,
     }
 
@@ -330,7 +337,7 @@ async def remove_user_tenant_membership(
 
     membership = db.query(UserTenant).filter(
         UserTenant.supabase_uid == supabase_uid,
-        UserTenant.tenant_id == tenant_id,
+        _tenant_filter(db, UserTenant, tenant_id),
         UserTenant.accepted_at.isnot(None),
     ).first()
 
@@ -346,7 +353,7 @@ async def remove_user_tenant_membership(
     return {
         "message": "Tenant membership removed",
         "user_id": supabase_uid,
-        "tenant_id": tenant_id,
+        "tenant_id": membership.tenant_id,
     }
 
 
@@ -362,7 +369,7 @@ async def update_tenant_user_role(
 
     membership = db.query(UserTenant).filter(
         UserTenant.supabase_uid == supabase_uid,
-        UserTenant.tenant_id == x_tenant_id,
+        _tenant_filter(db, UserTenant, x_tenant_id),
         UserTenant.accepted_at.isnot(None),
     ).first()
 
@@ -400,7 +407,7 @@ async def update_tenant_user_role(
     return {
         "message": "Tenant role updated",
         "user_id": supabase_uid,
-        "tenant_id": x_tenant_id,
+        "tenant_id": membership.tenant_id,
         "role": membership.role,
     }
 
@@ -416,7 +423,7 @@ async def remove_tenant_user(
 
     membership = db.query(UserTenant).filter(
         UserTenant.supabase_uid == supabase_uid,
-        UserTenant.tenant_id == x_tenant_id,
+        _tenant_filter(db, UserTenant, x_tenant_id),
         UserTenant.accepted_at.isnot(None),
     ).first()
 
@@ -448,7 +455,7 @@ async def remove_tenant_user(
     return {
         "message": "Tenant membership removed",
         "user_id": supabase_uid,
-        "tenant_id": x_tenant_id,
+        "tenant_id": membership.tenant_id,
     }
 
 
@@ -669,11 +676,18 @@ async def create_invitation(
             detail="Email is required",
         )
 
+    tenant = _resolve_tenant(db, body.tenant_id)
+    if not tenant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Tenant not found",
+        )
+
     # Verify admin has access to tenant
     if not user.is_super_admin:
         membership = db.query(UserTenant).filter(
             UserTenant.supabase_uid == user.supabase_uid,
-            UserTenant.tenant_id == body.tenant_id,
+            _tenant_filter(db, UserTenant, body.tenant_id),
             UserTenant.role == "admin"
         ).first()
 
@@ -691,7 +705,7 @@ async def create_invitation(
         now = datetime.utcnow()
         existing_membership = db.query(UserTenant).filter(
             UserTenant.supabase_uid == existing_user.supabase_uid,
-            UserTenant.tenant_id == body.tenant_id,
+            _tenant_filter(db, UserTenant, body.tenant_id),
         ).first()
 
         if existing_membership:
@@ -705,7 +719,7 @@ async def create_invitation(
             db.add(
                 UserTenant(
                     supabase_uid=existing_user.supabase_uid,
-                    tenant_id=body.tenant_id,
+                    tenant_id=tenant.id,
                     role=body.role,
                     invited_by=user.supabase_uid,
                     invited_at=now,
@@ -716,7 +730,7 @@ async def create_invitation(
         # Remove stale pending invitations for this tenant/email.
         stale_invitations = db.query(Invitation).filter(
             func.lower(Invitation.email) == normalized_email,
-            Invitation.tenant_id == body.tenant_id,
+            _tenant_filter(db, Invitation, body.tenant_id),
             Invitation.accepted_at.is_(None),
         ).all()
         for stale in stale_invitations:
@@ -734,7 +748,7 @@ async def create_invitation(
     # Check for existing invitation
     existing = db.query(Invitation).filter(
         func.lower(Invitation.email) == normalized_email,
-        Invitation.tenant_id == body.tenant_id,
+        _tenant_filter(db, Invitation, body.tenant_id),
         Invitation.accepted_at.is_(None),
         Invitation.expires_at > datetime.utcnow()
     ).first()
@@ -751,7 +765,7 @@ async def create_invitation(
     # Create invitation
     invitation = Invitation(
         email=normalized_email,
-        tenant_id=body.tenant_id,
+        tenant_id=tenant.id,
         role=body.role,
         invited_by=user.supabase_uid,
         token=token,
@@ -807,16 +821,16 @@ async def list_invitations(
         # Verify admin access
         membership = db.query(UserTenant).filter(
             UserTenant.supabase_uid == user.supabase_uid,
-            UserTenant.tenant_id == tenant_id,
+            _tenant_filter(db, UserTenant, tenant_id),
             UserTenant.role == "admin"
         ).first()
 
         if not membership:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
-        query = query.filter(Invitation.tenant_id == tenant_id)
+        query = query.filter(_tenant_filter(db, Invitation, tenant_id))
     elif tenant_id:
-        query = query.filter(Invitation.tenant_id == tenant_id)
+        query = query.filter(_tenant_filter(db, Invitation, tenant_id))
 
     invitations = query.order_by(Invitation.created_at.desc()).all()
 
@@ -856,7 +870,7 @@ async def cancel_invitation(
     if not user.is_super_admin:
         membership = db.query(UserTenant).filter(
             UserTenant.supabase_uid == user.supabase_uid,
-            UserTenant.tenant_id == invitation.tenant_id,
+            _tenant_filter(db, UserTenant, invitation.tenant_id),
             UserTenant.role == "admin"
         ).first()
 

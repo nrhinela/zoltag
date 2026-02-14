@@ -310,6 +310,14 @@ export class AdminStorageSetup extends LitElement {
     }
   }
 
+  get secretScope() {
+    return this.tenant?.key_prefix || this.tenant?.id || '';
+  }
+
+  get tenantRef() {
+    return this.tenant?.identifier || this.tenant?.id || '';
+  }
+
   handleAppKeyChange(e) {
     this.dropboxAppKey = e.detail.value;
   }
@@ -430,7 +438,6 @@ export class AdminStorageSetup extends LitElement {
 
     try {
       const data = {
-        id: this.tenant.id,
         dropbox_app_key: this.dropboxAppKey
       };
 
@@ -495,8 +502,8 @@ export class AdminStorageSetup extends LitElement {
     try {
       const settingsPatch = {
         gdrive_client_id: this.gdriveClientId.trim(),
-        gdrive_client_secret: this.gdriveClientSecret.trim() || `gdrive-client-secret-${this.tenant.id}`,
-        gdrive_token_secret: this.gdriveTokenSecret.trim() || `gdrive-token-${this.tenant.id}`,
+        gdrive_client_secret: this.gdriveClientSecret.trim() || `gdrive-client-secret-${this.secretScope}`,
+        gdrive_token_secret: this.gdriveTokenSecret.trim() || `gdrive-token-${this.secretScope}`,
         gdrive_sync_folders: this.gdriveSyncFolders,
       };
 
@@ -530,8 +537,8 @@ export class AdminStorageSetup extends LitElement {
     try {
       const settingsPatch = {
         flickr_api_key: this.flickrApiKey.trim(),
-        flickr_api_secret: this.flickrApiSecret.trim() || `flickr-api-secret-${this.tenant.id}`,
-        flickr_token_secret: this.flickrTokenSecret.trim() || `flickr-token-${this.tenant.id}`,
+        flickr_api_secret: this.flickrApiSecret.trim() || `flickr-api-secret-${this.secretScope}`,
+        flickr_token_secret: this.flickrTokenSecret.trim() || `flickr-token-${this.secretScope}`,
         flickr_sync_albums: this.flickrSyncAlbums,
       };
 
@@ -564,7 +571,7 @@ export class AdminStorageSetup extends LitElement {
     this.connectionStatus = 'Opening authentication window...';
 
     const authWindow = window.open(
-      `/oauth/dropbox/authorize?tenant=${this.tenant.id}`,
+      `/oauth/dropbox/authorize?tenant=${this.tenantRef}`,
       'dropbox_oauth',
       'width=800,height=600'
     );
@@ -590,7 +597,7 @@ export class AdminStorageSetup extends LitElement {
     this.gdriveConnectionStatus = 'Opening authentication window...';
 
     const authWindow = window.open(
-      `/oauth/gdrive/authorize?tenant=${this.tenant.id}`,
+      `/oauth/gdrive/authorize?tenant=${this.tenantRef}`,
       'gdrive_oauth',
       'width=900,height=700'
     );
@@ -725,7 +732,7 @@ export class AdminStorageSetup extends LitElement {
             <li>Copy your App Secret from the Dropbox console</li>
             <li>Create App Secret in Secret Manager (replace YOUR_APP_SECRET with actual value):
               <pre>echo -n "YOUR_APP_SECRET" | \
-  gcloud secrets create dropbox-app-secret-${this.tenant.id} \
+  gcloud secrets create dropbox-app-secret-${this.secretScope} \
   --data-file=- \
   --project=photocat-483622</pre>
             </li>
@@ -756,7 +763,7 @@ export class AdminStorageSetup extends LitElement {
             <admin-form-group
               label="Google Client Secret Name (Secret Manager)"
               type="text"
-              placeholder="gdrive-client-secret-${this.tenant.id}"
+              placeholder="gdrive-client-secret-${this.secretScope}"
               .value="${this.gdriveClientSecret}"
               @input-changed="${this.handleGdriveClientSecretChange}"
               helper-text="Secret name only; full path is shown below"
@@ -765,7 +772,7 @@ export class AdminStorageSetup extends LitElement {
             <admin-form-group
               label="Google Refresh Token Secret Name (Secret Manager)"
               type="text"
-              placeholder="gdrive-token-${this.tenant.id}"
+              placeholder="gdrive-token-${this.secretScope}"
               .value="${this.gdriveTokenSecret}"
               @input-changed="${this.handleGdriveTokenSecretChange}"
               helper-text="Secret name for OAuth refresh token"
@@ -905,7 +912,7 @@ export class AdminStorageSetup extends LitElement {
             <admin-form-group
               label="Flickr API Secret Name (Secret Manager)"
               type="text"
-              placeholder="flickr-api-secret-${this.tenant.id}"
+              placeholder="flickr-api-secret-${this.secretScope}"
               .value="${this.flickrApiSecret}"
               @input-changed="${this.handleFlickrApiSecretChange}"
               helper-text="Secret name only; full path is shown below"
@@ -914,7 +921,7 @@ export class AdminStorageSetup extends LitElement {
             <admin-form-group
               label="Flickr OAuth Token Secret Name (Secret Manager)"
               type="text"
-              placeholder="flickr-token-${this.tenant.id}"
+              placeholder="flickr-token-${this.secretScope}"
               .value="${this.flickrTokenSecret}"
               @input-changed="${this.handleFlickrTokenSecretChange}"
               helper-text="Secret name for OAuth access token and secret"
@@ -1015,14 +1022,14 @@ export class AdminStorageSetup extends LitElement {
     }
 
     const projectId = this.systemSettings.gcp_project_id;
-    const appSecretPath = `projects/${projectId}/secrets/dropbox-app-secret-${this.tenant.id}/versions/latest`;
-    const tokenPath = `projects/${projectId}/secrets/dropbox-token-${this.tenant.id}/versions/latest`;
-    const gdriveClientSecretName = this.gdriveClientSecret.trim() || `gdrive-client-secret-${this.tenant.id}`;
-    const gdriveTokenSecretName = this.gdriveTokenSecret.trim() || `gdrive-token-${this.tenant.id}`;
+    const appSecretPath = `projects/${projectId}/secrets/dropbox-app-secret-${this.secretScope}/versions/latest`;
+    const tokenPath = `projects/${projectId}/secrets/dropbox-token-${this.secretScope}/versions/latest`;
+    const gdriveClientSecretName = this.gdriveClientSecret.trim() || `gdrive-client-secret-${this.secretScope}`;
+    const gdriveTokenSecretName = this.gdriveTokenSecret.trim() || `gdrive-token-${this.secretScope}`;
     const gdriveClientSecretPath = `projects/${projectId}/secrets/${gdriveClientSecretName}/versions/latest`;
     const gdriveTokenPath = `projects/${projectId}/secrets/${gdriveTokenSecretName}/versions/latest`;
-    const flickrApiSecretName = this.flickrApiSecret.trim() || `flickr-api-secret-${this.tenant.id}`;
-    const flickrTokenSecretName = this.flickrTokenSecret.trim() || `flickr-token-${this.tenant.id}`;
+    const flickrApiSecretName = this.flickrApiSecret.trim() || `flickr-api-secret-${this.secretScope}`;
+    const flickrTokenSecretName = this.flickrTokenSecret.trim() || `flickr-token-${this.secretScope}`;
     const flickrApiSecretPath = `projects/${projectId}/secrets/${flickrApiSecretName}/versions/latest`;
     const flickrTokenPath = `projects/${projectId}/secrets/${flickrTokenSecretName}/versions/latest`;
     const storageTabs = [

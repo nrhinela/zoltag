@@ -11,24 +11,30 @@ from photocat.dependencies import get_db, get_secret, store_secret
 from photocat.metadata import Tenant as TenantModel
 from photocat.settings import settings
 from photocat.dropbox import DropboxWebhookValidator
+from photocat.tenant_scope import tenant_reference_filter
 
 router = APIRouter(
     tags=["dropbox"]
 )
 
 
+def _resolve_tenant(db: Session, tenant_ref: str):
+    return db.query(TenantModel).filter(tenant_reference_filter(TenantModel, tenant_ref)).first()
+
+
 @router.get("/oauth/dropbox/authorize")
 async def dropbox_authorize(tenant: str, db: Session = Depends(get_db)):
     """Redirect user to Dropbox OAuth."""
     # Get tenant's app key from database
-    tenant_obj = db.query(TenantModel).filter(TenantModel.id == tenant).first()
+    tenant_obj = _resolve_tenant(db, tenant)
     if not tenant_obj or not tenant_obj.dropbox_app_key:
         raise HTTPException(status_code=400, detail="Tenant not found or app key not configured")
 
     app_key = tenant_obj.dropbox_app_key
     redirect_uri = f"{settings.app_url}/oauth/dropbox/callback"
 
-    state = oauth_state.generate(tenant)
+    # Persist canonical tenant ID so callback resolution is stable.
+    state = oauth_state.generate(tenant_obj.id)
     oauth_url = (
         f"https://www.dropbox.com/oauth2/authorize"
         f"?client_id={app_key}"
@@ -44,18 +50,19 @@ async def dropbox_authorize(tenant: str, db: Session = Depends(get_db)):
 @router.get("/oauth/dropbox/callback")
 async def dropbox_callback(code: str, state: str, db: Session = Depends(get_db)):
     """Handle Dropbox OAuth callback."""
-    tenant_id = oauth_state.consume(state)
-    if not tenant_id:
+    tenant_ref = oauth_state.consume(state)
+    if not tenant_ref:
         raise HTTPException(status_code=400, detail="Invalid or expired OAuth state")
 
     # Get tenant's app key from database
-    tenant_obj = db.query(TenantModel).filter(TenantModel.id == tenant_id).first()
+    tenant_obj = _resolve_tenant(db, tenant_ref)
     if not tenant_obj or not tenant_obj.dropbox_app_key:
         raise HTTPException(status_code=400, detail="Tenant not found or app key not configured")
 
     # Exchange code for tokens
+    key_prefix = (getattr(tenant_obj, "key_prefix", None) or tenant_obj.id).strip()
     app_key = tenant_obj.dropbox_app_key
-    app_secret = get_secret(f"dropbox-app-secret-{tenant_id}")
+    app_secret = get_secret(f"dropbox-app-secret-{key_prefix}")
     redirect_uri = f"{settings.app_url}/oauth/dropbox/callback"
 
     response = requests.post(
@@ -75,7 +82,7 @@ async def dropbox_callback(code: str, state: str, db: Session = Depends(get_db))
     tokens = response.json()
 
     # Store refresh token in Secret Manager
-    store_secret(f"dropbox-token-{tenant_id}", tokens['refresh_token'])
+    store_secret(f"dropbox-token-{key_prefix}", tokens['refresh_token'])
 
     return HTMLResponse("""
         <html>

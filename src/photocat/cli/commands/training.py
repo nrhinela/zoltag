@@ -85,11 +85,11 @@ class TrainKeywordModelsCommand(CliCommand):
 
         result = build_keyword_models(
             self.db,
-            tenant_id=self.tenant_id,
+            tenant_id=self.tenant.id,
             model_name=model_name,
             model_version=model_version,
             min_positive=self.min_positive or settings.keyword_model_min_positive,
-            min_negative=self.min_negative or settings.keyword_model_min_negative
+            min_negative=self.min_negative or settings.keyword_model_min_negative,
         )
         self.db.commit()
         click.echo(f"✓ Trained: {result['trained']} · Skipped: {result['skipped']}")
@@ -134,7 +134,7 @@ class RecomputeTrainedTagsCommand(CliCommand):
         for kw in all_keywords:
             by_category.setdefault(kw['category'], []).append(kw)
         keyword_id_map = dict(self.db.query(Keyword.keyword, Keyword.id).filter(
-            Keyword.tenant_id == self.tenant.id
+            self.tenant_filter(Keyword)
         ).all())
 
         # Get latest trained model
@@ -142,7 +142,7 @@ class RecomputeTrainedTagsCommand(CliCommand):
             KeywordModel.model_name,
             KeywordModel.model_version
         ).filter(
-            KeywordModel.tenant_id == self.tenant.id
+            self.tenant_filter(KeywordModel)
         ).order_by(
             func.coalesce(KeywordModel.updated_at, KeywordModel.created_at).desc()
         ).first()
@@ -153,7 +153,11 @@ class RecomputeTrainedTagsCommand(CliCommand):
 
         model_name, model_version = model_row
 
-        keyword_models = load_keyword_models(self.db, self.tenant.id, model_name)
+        keyword_models = load_keyword_models(
+            self.db,
+            self.tenant.id,
+            model_name,
+        )
         if not keyword_models:
             click.echo("No keyword models found. Train models before recomputing.")
             return
@@ -163,14 +167,14 @@ class RecomputeTrainedTagsCommand(CliCommand):
         thumbnail_bucket = storage_client.bucket(self.tenant.get_thumbnail_bucket(settings))
 
         # Process images in batches
-        base_query = self.db.query(ImageMetadata).filter_by(tenant_id=self.tenant.id)
+        base_query = self.db.query(ImageMetadata).filter(self.tenant_filter(ImageMetadata))
         if self.older_than_days is not None:
             cutoff = datetime.utcnow() - timedelta(days=self.older_than_days)
             last_tagged_subquery = self.db.query(
                 MachineTag.asset_id.label('asset_id'),
                 func.max(MachineTag.created_at).label('last_tagged_at')
             ).filter(
-                MachineTag.tenant_id == self.tenant.id,
+                self.tenant_filter(MachineTag),
                 MachineTag.tag_type == 'trained',
                 MachineTag.model_name == model_name,
                 MachineTag.asset_id.is_not(None),
@@ -231,7 +235,7 @@ class RecomputeTrainedTagsCommand(CliCommand):
                         continue
                     if not self.replace:
                         existing = self.db.query(MachineTag.id).filter(
-                            MachineTag.tenant_id == self.tenant.id,
+                            self.tenant_filter(MachineTag),
                             MachineTag.asset_id == image.asset_id,
                             MachineTag.tag_type == 'trained',
                             MachineTag.model_name == model_name
@@ -240,7 +244,7 @@ class RecomputeTrainedTagsCommand(CliCommand):
                             skipped += 1
                             continue
                     embedding_row = self.db.query(ImageEmbedding).filter(
-                        ImageEmbedding.tenant_id == self.tenant.id,
+                        self.tenant_filter(ImageEmbedding),
                         ImageEmbedding.asset_id == image.asset_id
                     ).first()
                     if embedding_row:

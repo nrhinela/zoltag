@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from photocat.dependencies import get_db, get_tenant
 from photocat.tenant import Tenant
 from photocat.metadata import ImageMetadata
+from photocat.tenant_scope import tenant_column_filter
 
 router = APIRouter()
 
@@ -20,7 +21,10 @@ async def update_image_rating(
     """Update the rating for an image (0-3)."""
     if rating is not None and (rating < 0 or rating > 3):
         raise HTTPException(status_code=400, detail="Rating must be between 0 and 3.")
-    image = db.query(ImageMetadata).filter_by(id=image_id, tenant_id=tenant.id).first()
+    image = db.query(ImageMetadata).filter(
+        ImageMetadata.id == image_id,
+        tenant_column_filter(ImageMetadata, tenant),
+    ).first()
     if not image:
         raise HTTPException(status_code=404, detail="Image not found")
     image.rating = rating

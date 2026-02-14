@@ -8,22 +8,30 @@ This module tests people tagging on images:
 """
 
 import pytest
+import uuid
 from sqlalchemy.orm import Session
 
 from photocat.tenant import Tenant, TenantContext
-from photocat.metadata import Person, ImageMetadata, MachineTag
+from photocat.metadata import Asset, Person, ImageMetadata, MachineTag
 from photocat.models.config import Keyword, KeywordCategory
+
+
+TEST_TENANT_IDENTIFIER = "test_tenant"
+TEST_TENANT_ID = uuid.uuid5(uuid.NAMESPACE_DNS, TEST_TENANT_IDENTIFIER)
 
 
 @pytest.fixture
 def tenant():
     """Create a test tenant."""
     tenant = Tenant(
-        id="test_tenant",
+        id=str(TEST_TENANT_ID),
         name="Test Tenant",
+        identifier=TEST_TENANT_IDENTIFIER,
+        key_prefix=TEST_TENANT_IDENTIFIER,
         active=True,
         dropbox_token_secret="test-secret"
     )
+    tenant.id = TEST_TENANT_ID
     TenantContext.set(tenant)
     yield tenant
     TenantContext.clear()
@@ -74,18 +82,42 @@ def setup_people_and_images(test_db: Session, tenant: Tenant):
     test_db.add(bob_keyword)
     test_db.flush()
 
-    # Create images
-    image1 = ImageMetadata(
+    # Create assets and images
+    asset1 = Asset(
         tenant_id=tenant.id,
         filename="photo1.jpg",
-        location="gs://bucket/photo1.jpg",
-        thumbnail_path="thumbnails/photo1.jpg"
+        source_provider="test",
+        source_key="/test/photo1.jpg",
+        thumbnail_key="thumbnails/photo1.jpg",
+    )
+    asset2 = Asset(
+        tenant_id=tenant.id,
+        filename="photo2.jpg",
+        source_provider="test",
+        source_key="/test/photo2.jpg",
+        thumbnail_key="thumbnails/photo2.jpg",
+    )
+    test_db.add(asset1)
+    test_db.add(asset2)
+    test_db.flush()
+
+    image1 = ImageMetadata(
+        tenant_id=tenant.id,
+        asset_id=asset1.id,
+        filename="photo1.jpg",
+        file_size=1024,
+        width=100,
+        height=100,
+        format="JPEG",
     )
     image2 = ImageMetadata(
         tenant_id=tenant.id,
+        asset_id=asset2.id,
         filename="photo2.jpg",
-        location="gs://bucket/photo2.jpg",
-        thumbnail_path="thumbnails/photo2.jpg"
+        file_size=1024,
+        width=100,
+        height=100,
+        format="JPEG",
     )
     test_db.add(image1)
     test_db.add(image2)
@@ -115,7 +147,7 @@ class TestTagPersonOnImage:
 
         # Tag person on image
         tag = MachineTag(
-            image_id=image.id,
+            asset_id=image.asset_id,
             tenant_id=tenant.id,
             keyword_id=keyword.id,
             confidence=1.0,
@@ -129,7 +161,7 @@ class TestTagPersonOnImage:
 
         # Verify tag was created
         assert tag.id is not None
-        assert tag.image_id == image.id
+        assert tag.asset_id == image.asset_id
         assert tag.keyword_id == keyword.id
         assert tag.tag_type == "manual_person"
         assert tag.confidence == 1.0
@@ -143,11 +175,13 @@ class TestTagPersonOnImage:
 
         # Create first tag
         tag1 = MachineTag(
-            image_id=image.id,
+            asset_id=image.asset_id,
             tenant_id=tenant.id,
             keyword_id=keyword.id,
             confidence=0.8,
-            tag_type="manual_person"
+            tag_type="manual_person",
+            model_name="manual",
+            model_version="1.0",
         )
         test_db.add(tag1)
         test_db.commit()
@@ -159,7 +193,7 @@ class TestTagPersonOnImage:
 
         # Verify only one tag exists
         tags = test_db.query(MachineTag).filter(
-            MachineTag.image_id == image.id,
+            MachineTag.asset_id == image.asset_id,
             MachineTag.keyword_id == keyword.id,
             MachineTag.tag_type == "manual_person"
         ).all()
@@ -176,18 +210,22 @@ class TestTagPersonOnImage:
 
         # Tag both people
         tag_alice = MachineTag(
-            image_id=image.id,
+            asset_id=image.asset_id,
             tenant_id=tenant.id,
             keyword_id=alice_keyword.id,
             confidence=1.0,
-            tag_type="manual_person"
+            tag_type="manual_person",
+            model_name="manual",
+            model_version="1.0",
         )
         tag_bob = MachineTag(
-            image_id=image.id,
+            asset_id=image.asset_id,
             tenant_id=tenant.id,
             keyword_id=bob_keyword.id,
             confidence=0.9,
-            tag_type="manual_person"
+            tag_type="manual_person",
+            model_name="manual",
+            model_version="1.0",
         )
         test_db.add(tag_alice)
         test_db.add(tag_bob)
@@ -195,7 +233,7 @@ class TestTagPersonOnImage:
 
         # Verify both tags exist
         tags = test_db.query(MachineTag).filter(
-            MachineTag.image_id == image.id,
+            MachineTag.asset_id == image.asset_id,
             MachineTag.tag_type == "manual_person"
         ).all()
 
@@ -209,11 +247,13 @@ class TestTagPersonOnImage:
 
         # Tag with custom confidence
         tag = MachineTag(
-            image_id=image.id,
+            asset_id=image.asset_id,
             tenant_id=tenant.id,
             keyword_id=keyword.id,
             confidence=0.75,
-            tag_type="manual_person"
+            tag_type="manual_person",
+            model_name="manual",
+            model_version="1.0",
         )
         test_db.add(tag)
         test_db.commit()
@@ -237,11 +277,13 @@ class TestRemovePersonTag:
 
         # Create tag
         tag = MachineTag(
-            image_id=image.id,
+            asset_id=image.asset_id,
             tenant_id=tenant.id,
             keyword_id=keyword.id,
             confidence=1.0,
-            tag_type="manual_person"
+            tag_type="manual_person",
+            model_name="manual",
+            model_version="1.0",
         )
         test_db.add(tag)
         test_db.commit()
@@ -270,7 +312,7 @@ class TestRemovePersonTag:
 
         # Try to remove non-existent tag
         deleted = test_db.query(MachineTag).filter(
-            MachineTag.image_id == image.id,
+            MachineTag.asset_id == image.asset_id,
             MachineTag.keyword_id == keyword.id,
             MachineTag.tag_type == "manual_person"
         ).delete()
@@ -286,18 +328,22 @@ class TestRemovePersonTag:
 
         # Create both tags
         tag_alice = MachineTag(
-            image_id=image.id,
+            asset_id=image.asset_id,
             tenant_id=tenant.id,
             keyword_id=alice_keyword.id,
             confidence=1.0,
-            tag_type="manual_person"
+            tag_type="manual_person",
+            model_name="manual",
+            model_version="1.0",
         )
         tag_bob = MachineTag(
-            image_id=image.id,
+            asset_id=image.asset_id,
             tenant_id=tenant.id,
             keyword_id=bob_keyword.id,
             confidence=1.0,
-            tag_type="manual_person"
+            tag_type="manual_person",
+            model_name="manual",
+            model_version="1.0",
         )
         test_db.add(tag_alice)
         test_db.add(tag_bob)
@@ -305,7 +351,7 @@ class TestRemovePersonTag:
 
         # Remove Alice tag
         deleted = test_db.query(MachineTag).filter(
-            MachineTag.image_id == image.id,
+            MachineTag.asset_id == image.asset_id,
             MachineTag.keyword_id == alice_keyword.id,
             MachineTag.tag_type == "manual_person"
         ).delete()
@@ -315,7 +361,7 @@ class TestRemovePersonTag:
 
         # Verify Bob tag still exists
         remaining = test_db.query(MachineTag).filter(
-            MachineTag.image_id == image.id,
+            MachineTag.asset_id == image.asset_id,
             MachineTag.tag_type == "manual_person"
         ).all()
 
@@ -336,7 +382,7 @@ class TestGetImagePeopleTags:
         image = data["images"]["image1"]
 
         tags = test_db.query(MachineTag).filter(
-            MachineTag.image_id == image.id,
+            MachineTag.asset_id == image.asset_id,
             MachineTag.tag_type == "manual_person"
         ).all()
 
@@ -350,18 +396,20 @@ class TestGetImagePeopleTags:
 
         # Create tag
         tag = MachineTag(
-            image_id=image.id,
+            asset_id=image.asset_id,
             tenant_id=tenant.id,
             keyword_id=keyword.id,
             confidence=1.0,
-            tag_type="manual_person"
+            tag_type="manual_person",
+            model_name="manual",
+            model_version="1.0",
         )
         test_db.add(tag)
         test_db.commit()
 
         # Get tags
         tags = test_db.query(MachineTag).filter(
-            MachineTag.image_id == image.id,
+            MachineTag.asset_id == image.asset_id,
             MachineTag.tag_type == "manual_person"
         ).all()
 
@@ -377,18 +425,22 @@ class TestGetImagePeopleTags:
 
         # Create both tags
         tag_alice = MachineTag(
-            image_id=image.id,
+            asset_id=image.asset_id,
             tenant_id=tenant.id,
             keyword_id=alice_keyword.id,
             confidence=1.0,
-            tag_type="manual_person"
+            tag_type="manual_person",
+            model_name="manual",
+            model_version="1.0",
         )
         tag_bob = MachineTag(
-            image_id=image.id,
+            asset_id=image.asset_id,
             tenant_id=tenant.id,
             keyword_id=bob_keyword.id,
             confidence=0.9,
-            tag_type="manual_person"
+            tag_type="manual_person",
+            model_name="manual",
+            model_version="1.0",
         )
         test_db.add(tag_alice)
         test_db.add(tag_bob)
@@ -396,7 +448,7 @@ class TestGetImagePeopleTags:
 
         # Get tags
         tags = test_db.query(MachineTag).filter(
-            MachineTag.image_id == image.id,
+            MachineTag.asset_id == image.asset_id,
             MachineTag.tag_type == "manual_person"
         ).all()
 
@@ -418,11 +470,13 @@ class TestUpdatePersonTagConfidence:
 
         # Create tag
         tag = MachineTag(
-            image_id=image.id,
+            asset_id=image.asset_id,
             tenant_id=tenant.id,
             keyword_id=keyword.id,
             confidence=0.5,
-            tag_type="manual_person"
+            tag_type="manual_person",
+            model_name="manual",
+            model_version="1.0",
         )
         test_db.add(tag)
         test_db.commit()
@@ -442,11 +496,13 @@ class TestUpdatePersonTagConfidence:
 
         # Create tag
         tag = MachineTag(
-            image_id=image.id,
+            asset_id=image.asset_id,
             tenant_id=tenant.id,
             keyword_id=keyword.id,
             confidence=0.5,
-            tag_type="manual_person"
+            tag_type="manual_person",
+            model_name="manual",
+            model_version="1.0",
         )
         test_db.add(tag)
         test_db.commit()
@@ -472,18 +528,22 @@ class TestUpdatePersonTagConfidence:
 
         # Create both tags
         tag_alice = MachineTag(
-            image_id=image.id,
+            asset_id=image.asset_id,
             tenant_id=tenant.id,
             keyword_id=alice_keyword.id,
             confidence=0.5,
-            tag_type="manual_person"
+            tag_type="manual_person",
+            model_name="manual",
+            model_version="1.0",
         )
         tag_bob = MachineTag(
-            image_id=image.id,
+            asset_id=image.asset_id,
             tenant_id=tenant.id,
             keyword_id=bob_keyword.id,
             confidence=0.6,
-            tag_type="manual_person"
+            tag_type="manual_person",
+            model_name="manual",
+            model_version="1.0",
         )
         test_db.add(tag_alice)
         test_db.add(tag_bob)

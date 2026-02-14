@@ -11,6 +11,7 @@ from photocat.tenant import Tenant
 from photocat.metadata import Asset, AssetDerivative, ImageMetadata
 from photocat.models.config import Keyword
 from photocat.settings import settings
+from photocat.tenant_scope import tenant_column_filter
 
 
 def _serialize_asset_variant(
@@ -69,7 +70,7 @@ def _build_user_name_map(db: Session, user_ids: set) -> dict:
 def _get_image_and_asset_or_409(db: Session, tenant: Tenant, image_id: int):
     image = db.query(ImageMetadata).filter(
         ImageMetadata.id == image_id,
-        ImageMetadata.tenant_id == tenant.id,
+        tenant_column_filter(ImageMetadata, tenant),
     ).first()
     if not image:
         raise HTTPException(status_code=404, detail="Image not found")
@@ -78,7 +79,7 @@ def _get_image_and_asset_or_409(db: Session, tenant: Tenant, image_id: int):
 
     asset = db.query(Asset).filter(
         Asset.id == image.asset_id,
-        Asset.tenant_id == tenant.id,
+        tenant_column_filter(Asset, tenant),
     ).first()
     if not asset:
         raise HTTPException(

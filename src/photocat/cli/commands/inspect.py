@@ -43,11 +43,14 @@ class ListImagesCommand(CliCommand):
 
     def _list_images(self):
         """List processed images."""
-        images = self.db.query(ImageMetadata).filter_by(
-            tenant_id=self.tenant_id
-        ).limit(self.limit).all()
+        images = (
+            self.db.query(ImageMetadata)
+            .filter(self.tenant_filter(ImageMetadata))
+            .limit(self.limit)
+            .all()
+        )
 
-        click.echo(f"\nImages for tenant {self.tenant_id}:")
+        click.echo(f"\nImages for tenant {self.tenant.id}:")
         click.echo("-" * 80)
 
         for img in images:
@@ -58,7 +61,7 @@ class ListImagesCommand(CliCommand):
             click.echo(f"  Hash: {img.perceptual_hash[:16]}...")
             click.echo()
 
-        total = self.db.query(ImageMetadata).filter_by(tenant_id=self.tenant_id).count()
+        total = self.db.query(ImageMetadata).filter(self.tenant_filter(ImageMetadata)).count()
         click.echo(f"Total: {total} images")
 
 
@@ -80,11 +83,11 @@ class ShowConfigCommand(CliCommand):
 
     def _show_config(self):
         """Show tenant configuration."""
-        manager = ConfigManager(self.db, self.tenant_id)
+        manager = ConfigManager(self.db, self.tenant.id)
         keywords = manager.get_all_keywords()
         people = manager.get_people()
 
-        click.echo(f"\nConfiguration for tenant: {self.tenant_id}")
+        click.echo(f"\nConfiguration for tenant: {self.tenant.id}")
         click.echo("=" * 80)
 
         categories = {}

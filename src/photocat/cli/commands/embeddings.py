@@ -68,7 +68,7 @@ class BuildEmbeddingsCommand(CliCommand):
         model_version = getattr(tagger, "model_version", model_name)
 
         # Query for images needing embeddings
-        query = self.db.query(ImageMetadata).filter_by(tenant_id=self.tenant.id)
+        query = self.db.query(ImageMetadata).filter(self.tenant_filter(ImageMetadata))
         query = query.filter(or_(ImageMetadata.rating.is_(None), ImageMetadata.rating != 0))
         if not self.force:
             query = query.filter(ImageMetadata.embedding_generated.is_(False))

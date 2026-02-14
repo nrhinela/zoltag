@@ -10,23 +10,32 @@ This module tests the people management operations:
 """
 
 import pytest
+import uuid
 from sqlalchemy.orm import Session
 
 from photocat.tenant import Tenant, TenantContext
-from photocat.metadata import Person, MachineTag, ImageMetadata
+from photocat.metadata import Asset, Person, MachineTag, ImageMetadata
 from photocat.models.config import Keyword, KeywordCategory
 from photocat.routers.people import get_or_create_person_keyword
+
+
+TEST_TENANT_IDENTIFIER = "test_tenant"
+TEST_TENANT_ID = uuid.uuid5(uuid.NAMESPACE_DNS, TEST_TENANT_IDENTIFIER)
+OTHER_TENANT_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "other_tenant")
 
 
 @pytest.fixture
 def tenant():
     """Create a test tenant."""
     tenant = Tenant(
-        id="test_tenant",
+        id=str(TEST_TENANT_ID),
         name="Test Tenant",
+        identifier=TEST_TENANT_IDENTIFIER,
+        key_prefix=TEST_TENANT_IDENTIFIER,
         active=True,
         dropbox_token_secret="test-secret"
     )
+    tenant.id = TEST_TENANT_ID
     TenantContext.set(tenant)
     yield tenant
     TenantContext.clear()
@@ -137,14 +146,14 @@ class TestListPeople:
         """Test that people are isolated by tenant."""
         # Create person for test_tenant
         person1 = Person(
-            tenant_id="test_tenant",
+            tenant_id=tenant.id,
             name="Alice"
         )
         test_db.add(person1)
 
         # Create person for different tenant
         person2 = Person(
-            tenant_id="other_tenant",
+            tenant_id=OTHER_TENANT_ID,
             name="Bob"
         )
         test_db.add(person2)
@@ -152,7 +161,7 @@ class TestListPeople:
 
         # List people for test_tenant only
         people = test_db.query(Person).filter(
-            Person.tenant_id == "test_tenant"
+            Person.tenant_id == tenant.id
         ).all()
 
         assert len(people) == 1
@@ -263,8 +272,12 @@ class TestUpdatePerson:
 
         # Update person name
         person.name = "Ivan Awesome"
-        if person.keyword:
-            person.keyword.keyword = person.name
+        linked_keyword = test_db.query(Keyword).filter(
+            Keyword.person_id == person.id,
+            Keyword.tenant_id == tenant.id,
+        ).first()
+        if linked_keyword:
+            linked_keyword.keyword = person.name
         test_db.commit()
         test_db.refresh(person)
         test_db.refresh(keyword)
@@ -338,9 +351,8 @@ class TestDeletePerson:
             Keyword.id == keyword_id
         ).first()
 
-        # Keyword should still exist but person_id is now NULL
-        if retrieved_keyword:
-            assert retrieved_keyword.person_id is None
+        # Keyword row should remain; unlinking is an endpoint-level behavior.
+        assert retrieved_keyword is not None
 
 
 class TestPersonStatistics:
@@ -394,22 +406,37 @@ class TestPersonStatistics:
         test_db.flush()
 
         # Create image
-        image = ImageMetadata(
+        asset = Asset(
             tenant_id=tenant.id,
             filename="test.jpg",
-            location="gs://bucket/test.jpg",
-            thumbnail_path="thumbnails/test.jpg"
+            source_provider="test",
+            source_key="/test/test.jpg",
+            thumbnail_key="thumbnails/test.jpg",
+        )
+        test_db.add(asset)
+        test_db.flush()
+
+        image = ImageMetadata(
+            tenant_id=tenant.id,
+            asset_id=asset.id,
+            filename="test.jpg",
+            file_size=1024,
+            width=100,
+            height=100,
+            format="JPEG",
         )
         test_db.add(image)
         test_db.flush()
 
         # Create tag
         tag = MachineTag(
-            image_id=image.id,
+            asset_id=image.asset_id,
             tenant_id=tenant.id,
             keyword_id=keyword.id,
             confidence=1.0,
-            tag_type="manual_person"
+            tag_type="manual_person",
+            model_name="manual",
+            model_version="1.0",
         )
         test_db.add(tag)
         test_db.commit()

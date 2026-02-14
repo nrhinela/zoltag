@@ -11,6 +11,7 @@ from sqlalchemy.sql.selectable import Selectable
 
 from photocat.metadata import ImageMetadata, KeywordModel, MachineTag
 from photocat.tenant import Tenant
+from photocat.tenant_scope import tenant_column_filter
 
 
 class FilterBuilder:
@@ -42,7 +43,7 @@ class FilterBuilder:
     def _base_query(self):
         """Get base query filtered by tenant."""
         return self.db.query(ImageMetadata.id).filter(
-            ImageMetadata.tenant_id == self.tenant.id
+            tenant_column_filter(ImageMetadata, self.tenant)
         )
 
     def _apply_filter_logic(self, query, logic_func):

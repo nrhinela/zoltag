@@ -242,14 +242,14 @@ export class AdminTenantList extends LitElement {
   async handleCreateTenant(e) {
     e.preventDefault();
 
-    // Validate tenant ID format
+    // Validate tenant identifier format
     if (!/^[a-z0-9-]+$/.test(this.newTenantId)) {
-      this.errorMessage = 'Tenant ID must contain only lowercase letters, numbers, and hyphens';
+      this.errorMessage = 'Tenant identifier must contain only lowercase letters, numbers, and hyphens';
       return;
     }
 
     if (this.newTenantId.trim().length === 0 || this.newTenantName.trim().length === 0) {
-      this.errorMessage = 'Both Tenant ID and Display Name are required';
+      this.errorMessage = 'Both tenant identifier and display name are required';
       return;
     }
 
@@ -259,7 +259,7 @@ export class AdminTenantList extends LitElement {
 
     try {
       const data = {
-        id: this.newTenantId.toLowerCase(),
+        identifier: this.newTenantId.toLowerCase(),
         name: this.newTenantName.trim(),
         active: true
       };
@@ -326,9 +326,9 @@ export class AdminTenantList extends LitElement {
                   <div>
                     <admin-form-group
                       id="new-tenant-id"
-                      label="Tenant ID"
+                      label="Tenant Identifier"
                       type="text"
-                      placeholder="ID"
+                      placeholder="identifier"
                       .value="${this.newTenantId}"
                       @input-changed="${this.handleTenantIdChange}"
                       helper-text="Lowercase letters, numbers, and hyphens only"
@@ -374,7 +374,8 @@ export class AdminTenantList extends LitElement {
             : html`<table>
                 <thead>
                   <tr>
-                    <th>ID</th>
+                    <th>Identifier</th>
+                    <th>UUID</th>
                     <th>Name</th>
                     <th>Status</th>
                     <th>Storage</th>
@@ -387,6 +388,7 @@ export class AdminTenantList extends LitElement {
                   ${this.tenants.map(
                     t =>
                       html`<tr>
+                        <td><code>${t.identifier || t.id}</code></td>
                         <td><code>${t.id}</code></td>
                         <td>${t.name}</td>
                         <td>

@@ -30,6 +30,7 @@ from photocat.image import ImageProcessor
 from photocat.config.db_config import ConfigManager
 from photocat.tagging import get_tagger
 from photocat.learning import ensure_image_embedding, score_keywords_for_categories
+from photocat.tenant_scope import assign_tenant_scope, tenant_column_filter
 
 # Sub-router with no prefix/tags (inherits from parent)
 router = APIRouter()
@@ -196,7 +197,7 @@ async def upload_and_ingest_image(
         existing = (
             db.query(ImageMetadata)
             .filter(
-                ImageMetadata.tenant_id == tenant.id,
+                tenant_column_filter(ImageMetadata, tenant),
                 ImageMetadata.content_hash == content_hash,
             )
             .order_by(ImageMetadata.id.asc())
@@ -258,9 +259,8 @@ async def upload_and_ingest_image(
         if not mime_type and features.get("format"):
             mime_type = f"image/{str(features.get('format')).lower()}"
 
-        asset = Asset(
+        asset = assign_tenant_scope(Asset(
             id=asset_id,
-            tenant_id=tenant.id,
             filename=filename,
             source_provider="managed",
             source_key=source_key,
@@ -271,12 +271,11 @@ async def upload_and_ingest_image(
             height=features.get("height"),
             duration_ms=None,
             created_by=current_user.supabase_uid,
-        )
+        ), tenant)
         db.add(asset)
 
-        metadata = ImageMetadata(
+        metadata = assign_tenant_scope(ImageMetadata(
             asset_id=asset.id,
-            tenant_id=tenant.id,
             filename=filename,
             file_size=len(file_bytes),
             content_hash=content_hash,
@@ -301,7 +300,7 @@ async def upload_and_ingest_image(
             faces_detected=False,
             tags_applied=False,
             dropbox_properties=None,
-        )
+        ), tenant)
         if settings.asset_write_legacy_fields and hasattr(ImageMetadata, "thumbnail_path"):
             setattr(metadata, "thumbnail_path", thumbnail_key)
         db.add(metadata)
@@ -362,7 +361,7 @@ async def analyze_image_keywords(
     # Get the image
     image = db.query(ImageMetadata).filter(
         ImageMetadata.id == image_id,
-        ImageMetadata.tenant_id == tenant.id
+        tenant_column_filter(ImageMetadata, tenant)
     ).first()
 
     if not image:
@@ -442,7 +441,7 @@ async def retag_single_image(
     # Get the image
     image = db.query(ImageMetadata).filter(
         ImageMetadata.id == image_id,
-        ImageMetadata.tenant_id == tenant.id
+        tenant_column_filter(ImageMetadata, tenant)
     ).first()
 
     if not image:
@@ -481,7 +480,7 @@ async def retag_single_image(
         # Delete existing tags
         db.query(MachineTag).filter(
             MachineTag.asset_id == image.asset_id,
-            MachineTag.tenant_id == tenant.id,
+            tenant_column_filter(MachineTag, tenant),
             MachineTag.tag_type == 'siglip'
         ).delete()
 
@@ -501,7 +500,7 @@ async def retag_single_image(
 
         # Create new tags - look up keyword_ids from database
         db_keywords = db.query(Keyword).filter(
-            Keyword.tenant_id == tenant.id
+            tenant_column_filter(Keyword, tenant)
         ).all()
         keyword_to_id = {kw.keyword: kw.id for kw in db_keywords}
 
@@ -511,15 +510,14 @@ async def retag_single_image(
                 print(f"Warning: Keyword '{keyword}' not found in keyword config")
                 continue
 
-            tag = MachineTag(
+            tag = assign_tenant_scope(MachineTag(
                 asset_id=image.asset_id,
-                tenant_id=tenant.id,
                 keyword_id=keyword_id,
                 confidence=confidence,
                 tag_type='siglip',
                 model_name=model_name,
                 model_version=model_version
-            )
+            ), tenant)
             db.add(tag)
 
         # Update tags_applied flag
@@ -564,7 +562,7 @@ async def retag_all_images(
 
     # Get all images
     images = db.query(ImageMetadata).filter(
-        ImageMetadata.tenant_id == tenant.id
+        tenant_column_filter(ImageMetadata, tenant)
     ).all()
     assets_by_id = load_assets_for_images(db, images)
 
@@ -578,7 +576,7 @@ async def retag_all_images(
 
     # Build keyword name to ID mapping once, before processing images
     db_keywords = db.query(Keyword).filter(
-        Keyword.tenant_id == tenant.id
+        tenant_column_filter(Keyword, tenant)
     ).all()
     keyword_to_id = {kw.keyword: kw.id for kw in db_keywords}
 
@@ -601,7 +599,7 @@ async def retag_all_images(
             # Delete existing tags
             db.query(MachineTag).filter(
                 MachineTag.asset_id == image.asset_id,
-                MachineTag.tenant_id == tenant.id,
+                tenant_column_filter(MachineTag, tenant),
                 MachineTag.tag_type == 'siglip'
             ).delete()
 
@@ -626,15 +624,14 @@ async def retag_all_images(
                     print(f"Warning: Keyword '{keyword}' not found in keyword config")
                     continue
 
-                tag = MachineTag(
+                tag = assign_tenant_scope(MachineTag(
                     asset_id=image.asset_id,
-                    tenant_id=tenant.id,
                     keyword_id=keyword_id,
                     confidence=confidence,
                     tag_type='siglip',
                     model_name=model_name,
                     model_version=model_version
-                )
+                ), tenant)
                 db.add(tag)
 
             # Update tags_applied flag

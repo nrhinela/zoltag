@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from photocat.models.config import KeywordCategory as DBKeywordCategory, Keyword as DBKeyword
 from photocat.metadata import Person as DBPerson
+from photocat.tenant_scope import tenant_column_filter_for_values
 
 
 class ConfigManager:
@@ -15,6 +16,9 @@ class ConfigManager:
         """Initialize config manager."""
         self.session = session
         self.tenant_id = tenant_id
+
+    def _tenant_filter(self, model):
+        return tenant_column_filter_for_values(model, self.tenant_id)
     
     def get_all_keywords(self, include_people: bool = False) -> List[dict]:
         """Get all keywords from database."""
@@ -30,7 +34,7 @@ class ConfigManager:
         
         # Try database first
         person = self.session.query(DBPerson).filter(
-            DBPerson.tenant_id == self.tenant_id,
+            self._tenant_filter(DBPerson),
             DBPerson.name.ilike(name)
         ).first()
         
@@ -39,7 +43,7 @@ class ConfigManager:
         
         # Check aliases in database
         people = self.session.query(DBPerson).filter(
-            DBPerson.tenant_id == self.tenant_id
+            self._tenant_filter(DBPerson)
         ).all()
         
         for person in people:
@@ -52,7 +56,7 @@ class ConfigManager:
         """Save keyword structure to database."""
         # Delete existing keywords for tenant
         self.session.query(DBKeywordCategory).filter(
-            DBKeywordCategory.tenant_id == self.tenant_id
+            self._tenant_filter(DBKeywordCategory)
         ).delete()
         
         # Create new structure
@@ -65,7 +69,7 @@ class ConfigManager:
         """Save people to database."""
         # Delete existing people for tenant
         self.session.query(DBPerson).filter(
-            DBPerson.tenant_id == self.tenant_id
+            self._tenant_filter(DBPerson)
         ).delete()
         
         # Create new people
@@ -83,7 +87,7 @@ class ConfigManager:
     def _get_keywords_from_db(self, include_people: bool = False) -> List[dict]:
         """Fetch keywords from database."""
         categories = self.session.query(DBKeywordCategory).filter(
-            DBKeywordCategory.tenant_id == self.tenant_id,
+            self._tenant_filter(DBKeywordCategory),
             DBKeywordCategory.parent_id == None
         ).order_by(DBKeywordCategory.sort_order).all()
         
@@ -131,7 +135,7 @@ class ConfigManager:
     def _get_people_from_db(self) -> List[dict]:
         """Fetch people from database."""
         people = self.session.query(DBPerson).filter(
-            DBPerson.tenant_id == self.tenant_id
+            self._tenant_filter(DBPerson)
         ).all()
         
         return [p.to_dict() for p in people]
@@ -152,12 +156,14 @@ class ConfigManager:
         for i, kw_data in enumerate(cat_data.get('keywords', [])):
             if isinstance(kw_data, str):
                 keyword = DBKeyword(
+                    tenant_id=self.tenant_id,
                     category_id=category.id,
                     keyword=kw_data,
                     sort_order=i
                 )
             else:
                 keyword = DBKeyword(
+                    tenant_id=self.tenant_id,
                     category_id=category.id,
                     keyword=kw_data['keyword'],
                     prompt=kw_data.get('prompt'),

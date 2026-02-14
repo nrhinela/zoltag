@@ -8,11 +8,12 @@ from sqlalchemy.orm import Session
 
 from photocat.dependencies import get_db, get_secret, get_tenant
 from photocat.image import ImageProcessor
-from photocat.metadata import Asset, Tenant as TenantModel
+from photocat.metadata import Asset
 from photocat.settings import settings
 from photocat.storage import ProviderEntry, create_storage_provider
 from photocat.sync_pipeline import process_storage_entry
 from photocat.tenant import Tenant
+from photocat.tenant_scope import tenant_column_filter
 
 router = APIRouter(
     prefix="/api/v1",
@@ -49,8 +50,7 @@ async def trigger_sync(
         except Exception as exc:
             raise HTTPException(status_code=400, detail=f"Unable to initialize {provider_name} provider: {exc}")
 
-        tenant_row = db.query(TenantModel).filter(TenantModel.id == tenant.id).first()
-        tenant_settings = tenant_row.settings if tenant_row and tenant_row.settings else {}
+        tenant_settings = tenant.settings or {}
 
         sync_folder_key = "dropbox_sync_folders" if storage_provider.provider_name == "dropbox" else "gdrive_sync_folders"
         sync_folders = tenant_settings.get(sync_folder_key, [])
@@ -61,7 +61,7 @@ async def trigger_sync(
                 row[0]
                 for row in db.query(Asset.source_key)
                 .filter(
-                    Asset.tenant_id == tenant.id,
+                    tenant_column_filter(Asset, tenant),
                     Asset.source_provider == storage_provider.provider_name,
                 )
                 .all()

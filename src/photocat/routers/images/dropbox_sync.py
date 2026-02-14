@@ -27,6 +27,7 @@ from photocat.exif import (
     parse_exif_int,
     parse_exif_str,
 )
+from photocat.tenant_scope import tenant_column_filter
 from photocat.routers.images._shared import (
     _resolve_storage_or_409,
     _resolve_dropbox_ref,
@@ -51,8 +52,8 @@ async def list_dropbox_folders(
         db.query(folder_expr.label("folder"))
         .join(ImageMetadata, ImageMetadata.asset_id == Asset.id)
         .filter(
-            ImageMetadata.tenant_id == tenant.id,
-            Asset.tenant_id == tenant.id,
+            tenant_column_filter(ImageMetadata, tenant),
+            tenant_column_filter(Asset, tenant),
             Asset.source_provider == "dropbox",
             Asset.source_key.isnot(None),
         )
@@ -76,7 +77,8 @@ async def refresh_image_metadata(
     """Re-download image and refresh EXIF metadata without changing tags."""
     image = db.query(ImageMetadata).filter_by(
         id=image_id,
-        tenant_id=tenant.id
+    ).filter(
+        tenant_column_filter(ImageMetadata, tenant)
     ).first()
     if not image:
         raise HTTPException(status_code=404, detail="Image not found")
@@ -212,7 +214,8 @@ async def propagate_dropbox_tags(
     """Apply calculated tags to Dropbox for a single image."""
     image = db.query(ImageMetadata).filter_by(
         id=image_id,
-        tenant_id=tenant.id
+    ).filter(
+        tenant_column_filter(ImageMetadata, tenant)
     ).first()
     if not image:
         raise HTTPException(status_code=404, detail="Image not found")
@@ -240,7 +243,7 @@ async def propagate_dropbox_tags(
 
     permatags = db.query(Permatag).filter(
         Permatag.asset_id == image.asset_id,
-        Permatag.tenant_id == tenant.id,
+        tenant_column_filter(Permatag, tenant),
     ).all()
     keyword_ids = {tag.keyword_id for tag in permatags}
     keywords_map = load_keywords_map(db, tenant.id, keyword_ids)

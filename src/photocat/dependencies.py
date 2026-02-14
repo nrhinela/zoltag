@@ -1,5 +1,7 @@
 """Shared dependencies for FastAPI endpoints."""
 
+from typing import Optional
+
 from fastapi import Header, HTTPException, Depends, status
 from sqlalchemy.orm import Session
 from google.cloud import secretmanager
@@ -10,6 +12,12 @@ from photocat.metadata import Tenant as TenantModel
 from photocat.settings import settings
 from photocat.auth.dependencies import get_current_user
 from photocat.auth.models import UserProfile, UserTenant
+from photocat.tenant_scope import tenant_column_filter_for_values, tenant_reference_filter
+
+
+def _resolve_tenant(db: Session, tenant_ref: str) -> Optional[TenantModel]:
+    """Resolve tenant by id, identifier, or UUID."""
+    return db.query(TenantModel).filter(tenant_reference_filter(TenantModel, tenant_ref)).first()
 
 
 async def get_tenant(
@@ -23,7 +31,7 @@ async def get_tenant(
     unless the user is a super admin.
 
     Args:
-        x_tenant_id: Tenant ID from X-Tenant-ID header
+        x_tenant_id: Tenant ID or UUID from X-Tenant-ID header
         user: Authenticated user
         db: Database session
 
@@ -33,46 +41,44 @@ async def get_tenant(
     Raises:
         HTTPException 404: Tenant not found
     """
+    tenant_row = _resolve_tenant(db, x_tenant_id)
+    if not tenant_row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Tenant {x_tenant_id} not found")
+
     if not user.is_super_admin:
-        # Single JOIN: verify membership and load tenant in one query
-        tenant_row = (
-            db.query(TenantModel)
-            .join(UserTenant, UserTenant.tenant_id == TenantModel.id)
-            .filter(
-                UserTenant.supabase_uid == user.supabase_uid,
-                UserTenant.tenant_id == x_tenant_id,
-                UserTenant.accepted_at.isnot(None),
-                TenantModel.id == x_tenant_id,
-            )
-            .first()
-        )
-        if not tenant_row:
-            exists = db.query(TenantModel.id).filter(TenantModel.id == x_tenant_id).scalar()
-            if not exists:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Tenant {x_tenant_id} not found")
+        canonical_tenant_id = str(tenant_row.id)
+        membership = db.query(UserTenant).filter(
+            UserTenant.supabase_uid == user.supabase_uid,
+            tenant_column_filter_for_values(
+                UserTenant,
+                canonical_tenant_id,
+            ),
+            UserTenant.accepted_at.isnot(None),
+        ).first()
+        if not membership:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"No access to tenant {x_tenant_id}"
             )
-    else:
-        tenant_row = db.query(TenantModel).filter(TenantModel.id == x_tenant_id).first()
-        if not tenant_row:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Tenant {x_tenant_id} not found")
 
     tenant_settings = tenant_row.settings or {}
 
     # Convert database row to Tenant dataclass
+    canonical_tenant_id = str(tenant_row.id)
+    key_prefix = (getattr(tenant_row, "key_prefix", None) or canonical_tenant_id).strip()
+
     tenant = Tenant(
-        id=tenant_row.id,
+        id=canonical_tenant_id,
         name=tenant_row.name,
-        tenant_uuid=str(getattr(tenant_row, "tenant_uuid", "") or ""),
+        identifier=getattr(tenant_row, "identifier", None) or canonical_tenant_id,
+        key_prefix=key_prefix,
         active=tenant_row.active,
-        dropbox_token_secret=f"dropbox-token-{tenant_row.id}",
+        dropbox_token_secret=f"dropbox-token-{key_prefix}",
         dropbox_app_key=tenant_row.dropbox_app_key,
-        dropbox_app_secret=f"dropbox-app-secret-{tenant_row.id}",
+        dropbox_app_secret=f"dropbox-app-secret-{key_prefix}",
         gdrive_client_id=tenant_settings.get("gdrive_client_id"),
-        gdrive_token_secret=tenant_settings.get("gdrive_token_secret") or f"gdrive-token-{tenant_row.id}",
-        gdrive_client_secret=tenant_settings.get("gdrive_client_secret") or f"gdrive-client-secret-{tenant_row.id}",
+        gdrive_token_secret=tenant_settings.get("gdrive_token_secret") or f"gdrive-token-{key_prefix}",
+        gdrive_client_secret=tenant_settings.get("gdrive_client_secret") or f"gdrive-client-secret-{key_prefix}",
         storage_bucket=tenant_row.storage_bucket,
         thumbnail_bucket=tenant_row.thumbnail_bucket,
         settings=tenant_settings,
@@ -124,14 +130,14 @@ def get_tenant_setting(db: Session, tenant_id: str, key: str, default=None):
 
     Args:
         db: Database session
-        tenant_id: Tenant ID
+        tenant_id: Tenant ID or UUID
         key: Setting key (e.g., 'active_machine_tag_type')
         default: Fallback value if not found (default: None)
 
     Returns:
         Setting value or default if not found
     """
-    tenant = db.query(TenantModel).filter_by(id=tenant_id).first()
+    tenant = _resolve_tenant(db, tenant_id)
     if not tenant:
         return default
 

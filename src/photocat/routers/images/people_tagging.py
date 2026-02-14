@@ -10,6 +10,7 @@ from photocat.tenant import Tenant
 from photocat.metadata import ImageMetadata, MachineTag, Person
 from photocat.models.config import Keyword
 from photocat.routers.people import get_or_create_person_keyword
+from photocat.tenant_scope import assign_tenant_scope, tenant_column_filter
 
 # Sub-router with no prefix/tags (inherits from parent)
 router = APIRouter()
@@ -60,7 +61,7 @@ async def tag_person_on_image(
     # Get the image
     image = db.query(ImageMetadata).filter(
         ImageMetadata.id == image_id,
-        ImageMetadata.tenant_id == tenant.id
+        tenant_column_filter(ImageMetadata, tenant)
     ).first()
 
     if not image:
@@ -69,7 +70,7 @@ async def tag_person_on_image(
     # Get the person
     person = db.query(Person).filter(
         Person.id == request.person_id,
-        Person.tenant_id == tenant.id
+        tenant_column_filter(Person, tenant)
     ).first()
 
     if not person:
@@ -77,7 +78,7 @@ async def tag_person_on_image(
 
     try:
         # Get or create keyword for this person
-        keyword = get_or_create_person_keyword(db, tenant.id, request.person_id)
+        keyword = get_or_create_person_keyword(db, tenant, request.person_id)
 
         if not keyword:
             raise HTTPException(status_code=500, detail="Failed to create keyword for person")
@@ -86,7 +87,7 @@ async def tag_person_on_image(
         existing_tag = db.query(MachineTag).filter(
             MachineTag.asset_id == image.asset_id,
             MachineTag.keyword_id == keyword.id,
-            MachineTag.tenant_id == tenant.id,
+            tenant_column_filter(MachineTag, tenant),
             MachineTag.tag_type == 'manual_person'
         ).first()
 
@@ -98,15 +99,14 @@ async def tag_person_on_image(
             tag = existing_tag
         else:
             # Create new tag
-            tag = MachineTag(
+            tag = assign_tenant_scope(MachineTag(
                 asset_id=image.asset_id,
-                tenant_id=tenant.id,
                 keyword_id=keyword.id,
                 confidence=request.confidence,
                 tag_type='manual_person',
                 model_name='manual',
                 model_version='1.0'
-            )
+            ), tenant)
             db.add(tag)
             db.commit()
             db.refresh(tag)
@@ -138,7 +138,7 @@ async def remove_person_tag(
     # Get the image
     image = db.query(ImageMetadata).filter(
         ImageMetadata.id == image_id,
-        ImageMetadata.tenant_id == tenant.id
+        tenant_column_filter(ImageMetadata, tenant)
     ).first()
 
     if not image:
@@ -147,7 +147,7 @@ async def remove_person_tag(
     # Get the person
     person = db.query(Person).filter(
         Person.id == person_id,
-        Person.tenant_id == tenant.id
+        tenant_column_filter(Person, tenant)
     ).first()
 
     if not person:
@@ -166,7 +166,7 @@ async def remove_person_tag(
         deleted_count = db.query(MachineTag).filter(
             MachineTag.asset_id == image.asset_id,
             MachineTag.keyword_id == keyword.id,
-            MachineTag.tenant_id == tenant.id,
+            tenant_column_filter(MachineTag, tenant),
             MachineTag.tag_type == 'manual_person'
         ).delete()
 
@@ -199,7 +199,7 @@ async def get_image_people_tags(
     # Get the image
     image = db.query(ImageMetadata).filter(
         ImageMetadata.id == image_id,
-        ImageMetadata.tenant_id == tenant.id
+        tenant_column_filter(ImageMetadata, tenant)
     ).first()
 
     if not image:
@@ -213,7 +213,7 @@ async def get_image_people_tags(
     ).filter(
         MachineTag.asset_id == image.asset_id,
         MachineTag.tag_type == 'manual_person',
-        MachineTag.tenant_id == tenant.id
+        tenant_column_filter(MachineTag, tenant)
     ).all()
 
     tags = []
@@ -245,7 +245,7 @@ async def update_person_tag_confidence(
     # Get the image
     image = db.query(ImageMetadata).filter(
         ImageMetadata.id == image_id,
-        ImageMetadata.tenant_id == tenant.id
+        tenant_column_filter(ImageMetadata, tenant)
     ).first()
 
     if not image:
@@ -254,7 +254,7 @@ async def update_person_tag_confidence(
     # Get the person
     person = db.query(Person).filter(
         Person.id == person_id,
-        Person.tenant_id == tenant.id
+        tenant_column_filter(Person, tenant)
     ).first()
 
     if not person:
@@ -273,7 +273,7 @@ async def update_person_tag_confidence(
         tag = db.query(MachineTag).filter(
             MachineTag.asset_id == image.asset_id,
             MachineTag.keyword_id == keyword.id,
-            MachineTag.tenant_id == tenant.id,
+            tenant_column_filter(MachineTag, tenant),
             MachineTag.tag_type == 'manual_person'
         ).first()
 

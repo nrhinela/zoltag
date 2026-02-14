@@ -13,6 +13,7 @@ from photocat.metadata import ImageEmbedding, ImageMetadata, KeywordModel, Perma
 from photocat.models.config import Keyword
 from photocat.settings import settings
 from photocat.tagging import get_image_embedding, get_tagger
+from photocat.tenant_scope import tenant_column_filter_for_values
 
 
 def _is_transient_disconnect(exc: OperationalError) -> bool:
@@ -34,7 +35,7 @@ def _load_embedding_with_retry(
     while True:
         try:
             return db.query(ImageEmbedding).filter(
-                ImageEmbedding.tenant_id == tenant_id,
+                tenant_column_filter_for_values(ImageEmbedding, tenant_id),
                 ImageEmbedding.asset_id == asset_id
             ).first()
         except OperationalError as exc:
@@ -60,7 +61,7 @@ def ensure_image_embedding(
     """
     image = db.query(ImageMetadata).filter(
         ImageMetadata.id == image_id,
-        ImageMetadata.tenant_id == tenant_id
+        tenant_column_filter_for_values(ImageMetadata, tenant_id)
     ).first()
     resolved_asset_id = asset_id if asset_id is not None else (image.asset_id if image else None)
     if resolved_asset_id is None:
@@ -70,7 +71,12 @@ def ensure_image_embedding(
         )
 
     # Try to fetch existing embedding first
-    existing = _load_embedding_with_retry(db, tenant_id, resolved_asset_id, retries=1)
+    existing = _load_embedding_with_retry(
+        db,
+        tenant_id,
+        resolved_asset_id,
+        retries=1,
+    )
     if existing:
         if existing.asset_id is None and resolved_asset_id is not None:
             existing.asset_id = resolved_asset_id
@@ -96,7 +102,7 @@ def ensure_image_embedding(
         if "duplicate key" in str(e).lower() or "unique" in str(e).lower():
             db.rollback()
             existing = db.query(ImageEmbedding).filter(
-                ImageEmbedding.tenant_id == tenant_id,
+                tenant_column_filter_for_values(ImageEmbedding, tenant_id),
                 ImageEmbedding.asset_id == resolved_asset_id
             ).first()
             if existing:
@@ -115,13 +121,13 @@ def ensure_image_embedding(
 def load_keyword_models(
     db: Session,
     tenant_id: str,
-    model_name: str
+    model_name: str,
 ) -> Dict[str, KeywordModel]:
     """Load keyword models for a tenant."""
     rows = db.query(KeywordModel, Keyword.keyword).join(
         Keyword, Keyword.id == KeywordModel.keyword_id
     ).filter(
-        KeywordModel.tenant_id == tenant_id,
+        tenant_column_filter_for_values(KeywordModel, tenant_id),
         KeywordModel.model_name == model_name
     ).all()
     return {keyword_name: model_row for model_row, keyword_name in rows}
@@ -218,7 +224,7 @@ def recompute_trained_tags_for_image(
     trained_tags.sort(key=lambda x: x["confidence"], reverse=True)
 
     db.query(MachineTag).filter(
-        MachineTag.tenant_id == tenant_id,
+        tenant_column_filter_for_values(MachineTag, tenant_id),
         MachineTag.asset_id == asset_id,
         MachineTag.tag_type == 'trained',
         MachineTag.model_name == model_name
@@ -226,7 +232,7 @@ def recompute_trained_tags_for_image(
 
     if asset_id is None:
         image_row = db.query(ImageMetadata.asset_id).filter(
-            ImageMetadata.tenant_id == tenant_id,
+            tenant_column_filter_for_values(ImageMetadata, tenant_id),
             ImageMetadata.id == image_id,
         ).first()
         asset_id = image_row[0] if image_row else None
@@ -236,7 +242,7 @@ def recompute_trained_tags_for_image(
         tag_names = [t["keyword"] for t in trained_tags]
         keyword_id_map = dict(
             db.query(Keyword.keyword, Keyword.id).filter(
-                Keyword.tenant_id == tenant_id,
+                tenant_column_filter_for_values(Keyword, tenant_id),
                 Keyword.keyword.in_(tag_names)
             ).all()
         )
@@ -296,11 +302,11 @@ def build_keyword_models(
     model_name: str,
     model_version: str,
     min_positive: int = 2,
-    min_negative: int = 2
+    min_negative: int = 2,
 ) -> Dict[str, int]:
     """Create or update keyword models using permatag labels."""
     permatags = db.query(Permatag).filter(
-        Permatag.tenant_id == tenant_id,
+        tenant_column_filter_for_values(Permatag, tenant_id),
         Permatag.asset_id.is_not(None),
     ).all()
 
@@ -322,7 +328,6 @@ def build_keyword_models(
 
     trained = 0
     skipped = 0
-
     for keyword, pos_ids in positive_ids.items():
         neg_ids = negative_ids.get(keyword, [])
         # Require minimum positive examples, but allow zero negative examples
@@ -344,14 +349,14 @@ def build_keyword_models(
         # Look up keyword_id for this keyword name
         keyword_obj = db.query(Keyword).filter(
             Keyword.keyword == keyword,
-            Keyword.tenant_id == tenant_id
+            tenant_column_filter_for_values(Keyword, tenant_id)
         ).first()
         if not keyword_obj:
             skipped += 1
             continue
 
         existing = db.query(KeywordModel).filter(
-            KeywordModel.tenant_id == tenant_id,
+            tenant_column_filter_for_values(KeywordModel, tenant_id),
             KeywordModel.keyword_id == keyword_obj.id,
             KeywordModel.model_name == model_name
         ).first()
@@ -379,10 +384,10 @@ def build_keyword_models(
 def _fetch_embeddings(
     db: Session,
     tenant_id: str,
-    asset_ids: List[str]
+    asset_ids: List[str],
 ) -> List[List[float]]:
     rows = db.query(ImageEmbedding).filter(
-        ImageEmbedding.tenant_id == tenant_id,
+        tenant_column_filter_for_values(ImageEmbedding, tenant_id),
         ImageEmbedding.asset_id.in_(asset_ids)
     ).all()
     return [row.embedding for row in rows]

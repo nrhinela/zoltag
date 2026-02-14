@@ -87,11 +87,10 @@ class UserTenant(Base):
         nullable=False
     )
     tenant_id = Column(
-        String(255),
+        UUID(as_uuid=True),
         ForeignKey("tenants.id", ondelete="CASCADE"),
         nullable=False
     )
-    tenant_uuid = Column(UUID(as_uuid=True), nullable=True, index=True)
 
     role = Column(String(50), nullable=False, default="user")
 
@@ -166,11 +165,10 @@ class Invitation(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     email = Column(String(255), nullable=False, index=True)
     tenant_id = Column(
-        String(255),
+        UUID(as_uuid=True),
         ForeignKey("tenants.id", ondelete="CASCADE"),
         nullable=False
     )
-    tenant_uuid = Column(UUID(as_uuid=True), nullable=True, index=True)
     role = Column(String(50), nullable=False, default="user")
 
     invited_by = Column(

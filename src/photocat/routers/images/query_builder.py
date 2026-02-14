@@ -19,6 +19,7 @@ from sqlalchemy.sql import Selectable
 from photocat.tenant import Tenant
 from photocat.metadata import ImageMetadata, MachineTag, KeywordModel
 from photocat.dependencies import get_tenant_setting
+from photocat.tenant_scope import tenant_column_filter
 
 
 class QueryBuilder:
@@ -175,7 +176,7 @@ class QueryBuilder:
         model_name = None
         if ml_tag_type.strip().lower() == 'trained':
             model_row = self.db.query(KeywordModel.model_name).filter(
-                KeywordModel.tenant_id == self.tenant.id
+                tenant_column_filter(KeywordModel, self.tenant)
             ).order_by(
                 func.coalesce(KeywordModel.updated_at, KeywordModel.created_at).desc()
             ).first()
@@ -188,7 +189,7 @@ class QueryBuilder:
             func.max(MachineTag.confidence).label('ml_score')
         ).filter(
             MachineTag.keyword_id == ml_keyword_id,
-            MachineTag.tenant_id == self.tenant.id,
+            tenant_column_filter(MachineTag, self.tenant),
             MachineTag.tag_type == ml_tag_type,
             MachineTag.asset_id.is_not(None),
             *([MachineTag.model_name == model_name] if model_name else [])

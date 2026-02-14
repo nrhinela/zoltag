@@ -13,9 +13,18 @@ from photocat.metadata import ImageMetadata, Tenant as TenantModel
 from photocat.settings import settings
 from photocat.storage import create_storage_provider
 from photocat.image import ImageProcessor
+from photocat.tenant_scope import tenant_column_filter
 from photocat.routers.images._shared import _resolve_storage_or_409, _resolve_provider_ref
 
 router = APIRouter()
+
+
+def _resolve_tenant_for_image(db: Session, image: ImageMetadata):
+    """Resolve tenant row for an image via canonical tenant_id."""
+    image_tenant_id = getattr(image, "tenant_id", None)
+    if image_tenant_id is None:
+        return None
+    return db.query(TenantModel).filter(TenantModel.id == image_tenant_id).first()
 
 
 @router.get("/images/{image_id}/thumbnail", operation_id="get_thumbnail")
@@ -32,17 +41,19 @@ async def get_thumbnail(
         raise HTTPException(status_code=404, detail="Thumbnail not found")
 
     # Get tenant to determine correct bucket
-    tenant_row = db.query(TenantModel).filter(TenantModel.id == image.tenant_id).first()
+    tenant_row = _resolve_tenant_for_image(db, image)
     if not tenant_row:
-        raise HTTPException(status_code=404, detail=f"Tenant {image.tenant_id} not found")
+        raise HTTPException(status_code=404, detail="Tenant not found")
 
     tenant = Tenant(
-        id=tenant_row.id,
+        id=str(tenant_row.id),
         name=tenant_row.name,
+        identifier=getattr(tenant_row, "identifier", None) or str(tenant_row.id),
+        key_prefix=getattr(tenant_row, "key_prefix", None) or str(tenant_row.id),
         active=tenant_row.active,
-        dropbox_token_secret=f"dropbox-token-{tenant_row.id}",
-        dropbox_app_key=f"dropbox-app-key-{tenant_row.id}",
-        dropbox_app_secret=f"dropbox-app-secret-{tenant_row.id}",
+        dropbox_token_secret=f"dropbox-token-{(getattr(tenant_row, 'key_prefix', None) or str(tenant_row.id)).strip()}",
+        dropbox_app_key=tenant_row.dropbox_app_key,
+        dropbox_app_secret=f"dropbox-app-secret-{(getattr(tenant_row, 'key_prefix', None) or str(tenant_row.id)).strip()}",
         storage_bucket=tenant_row.storage_bucket,
         thumbnail_bucket=tenant_row.thumbnail_bucket
     )
@@ -86,9 +97,9 @@ async def get_full_image(
     db: Session = Depends(get_db)
 ):
     """Stream full-size image from configured storage provider without persisting it."""
-    image = db.query(ImageMetadata).filter_by(
-        id=image_id,
-        tenant_id=tenant.id
+    image = db.query(ImageMetadata).filter(
+        ImageMetadata.id == image_id,
+        tenant_column_filter(ImageMetadata, tenant),
     ).first()
 
     if not image:

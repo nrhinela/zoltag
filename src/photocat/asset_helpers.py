@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from photocat.metadata import Asset, ImageMetadata
 from photocat.settings import settings
 from photocat.tenant import Tenant
+from photocat.tenant_scope import assign_tenant_scope, tenant_column_filter
 
 
 class AssetReadinessError(RuntimeError):
@@ -125,7 +126,7 @@ def ensure_asset_for_image(
         asset = (
             db.query(Asset)
             .filter(
-                Asset.tenant_id == tenant.id,
+                tenant_column_filter(Asset, tenant),
                 Asset.source_provider == source_provider,
                 Asset.source_key == source_key_value,
             )
@@ -139,9 +140,8 @@ def ensure_asset_for_image(
         mime_type = f"image/{str(image.format).lower()}"
 
     if asset is None:
-        thumbnail_key = legacy_thumbnail_key or f"legacy:{tenant.id}:{image.id}:thumbnail"
-        asset = Asset(
-            tenant_id=tenant.id,
+        thumbnail_key = legacy_thumbnail_key or f"legacy:{tenant.secret_scope}:{image.id}:thumbnail"
+        asset = assign_tenant_scope(Asset(
             filename=image.filename or f"image_{image.id}",
             source_provider=source_provider,
             source_key=source_key_value,
@@ -151,7 +151,7 @@ def ensure_asset_for_image(
             width=image.width,
             height=image.height,
             duration_ms=None,
-        )
+        ), tenant)
         db.add(asset)
         db.flush()
     else:

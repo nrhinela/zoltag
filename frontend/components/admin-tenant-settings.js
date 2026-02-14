@@ -250,6 +250,7 @@ export class AdminTenantSettings extends LitElement {
   updated(changedProperties) {
     if (changedProperties.has('tenant')) {
       this.formData = {
+        identifier: this.tenant?.identifier || this.tenant?.id || '',
         name: this.tenant?.name || '',
         active: this.tenant?.active || false
       };
@@ -263,12 +264,17 @@ export class AdminTenantSettings extends LitElement {
 
     const env = this.systemSettings.environment.toLowerCase();
     const projectId = this.systemSettings.gcp_project_id;
+    const keyPrefix = this.tenant.key_prefix || this.tenant.id;
 
     if (this.useDedicatedBucket) {
-      this.computedBucketName = `${projectId}-${env}-${this.tenant.id}`;
+      this.computedBucketName = `${projectId}-${env}-${keyPrefix}`;
     } else {
       this.computedBucketName = `${projectId}-${env}-shared`;
     }
+  }
+
+  handleIdentifierChange(e) {
+    this.formData = { ...this.formData, identifier: e.detail.value };
   }
 
   handleNameChange(e) {
@@ -296,8 +302,15 @@ export class AdminTenantSettings extends LitElement {
     this.successMessage = '';
 
     try {
+      const identifier = (this.formData.identifier || '').trim().toLowerCase();
+      if (!/^[a-z0-9-]+$/.test(identifier)) {
+        this.errorMessage = 'Identifier must contain only lowercase letters, numbers, and hyphens';
+        this.isSaving = false;
+        return;
+      }
+
       const data = {
-        id: this.tenant.id,
+        identifier,
         name: this.formData.name,
         active: this.formData.active,
         thumbnail_bucket: this.useDedicatedBucket ? this.computedBucketName : null
@@ -405,11 +418,28 @@ export class AdminTenantSettings extends LitElement {
         <h3>Tenant Details</h3>
         <form @submit="${this.handleSaveTenantSettings}">
           <admin-form-group
-            label="Tenant ID"
+            label="Tenant UUID"
             type="text"
             .value="${this.tenant.id}"
             readonly
-            helper-text="Cannot be changed after creation"
+            helper-text="Internal immutable tenant ID"
+          ></admin-form-group>
+
+          <admin-form-group
+            label="Identifier"
+            type="text"
+            .value="${this.formData.identifier || ''}"
+            @input-changed="${this.handleIdentifierChange}"
+            helper-text="Human-facing label used in CLI and manual entry points"
+            required
+          ></admin-form-group>
+
+          <admin-form-group
+            label="Key Prefix"
+            type="text"
+            .value="${this.tenant.key_prefix || this.tenant.id}"
+            readonly
+            helper-text="Immutable secret/object-key prefix"
           ></admin-form-group>
 
           <admin-form-group
@@ -433,11 +463,11 @@ export class AdminTenantSettings extends LitElement {
             <p style="margin: 0;"><strong>Storage Bucket Convention:</strong></p>
             <ul>
               <li><strong>Shared bucket (default):</strong> <code>${this.systemSettings.gcp_project_id}-${this.systemSettings.environment.toLowerCase()}-shared</code></li>
-              <li><strong>Tenant-specific:</strong> <code>${this.systemSettings.gcp_project_id}-${this.systemSettings.environment.toLowerCase()}-${this.tenant.id}</code></li>
-              <li>Paths always include tenant ID: <code>${this.tenant.id}/thumbnails/image.jpg</code></li>
+              <li><strong>Tenant-specific:</strong> <code>${this.systemSettings.gcp_project_id}-${this.systemSettings.environment.toLowerCase()}-${this.tenant.key_prefix || this.tenant.id}</code></li>
+              <li>Paths always include tenant key prefix: <code>${this.tenant.key_prefix || this.tenant.id}/thumbnails/image.jpg</code></li>
             </ul>
             <p style="margin: 8px 0 0 0; color: #666; font-size: 13px;">To set up a dedicated bucket, check the box below and run:</p>
-            <code style="display: block; margin-top: 8px; padding: 8px; background: white; border-radius: 4px; font-family: monospace; font-size: 12px;">python scripts/setup_tenant_buckets.py --tenant-id ${this.tenant.id}</code>
+            <code style="display: block; margin-top: 8px; padding: 8px; background: white; border-radius: 4px; font-family: monospace; font-size: 12px;">python scripts/setup_tenant_buckets.py --tenant-id ${this.tenant.identifier || this.tenant.id}</code>
           </div>
 
           <admin-form-group

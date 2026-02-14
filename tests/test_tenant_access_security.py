@@ -14,7 +14,13 @@ from photocat.metadata import Tenant as TenantModel
 
 
 def _create_tenant(db: Session, tenant_id: str = "tenant_a") -> TenantModel:
-    tenant = TenantModel(id=tenant_id, name=f"Tenant {tenant_id}")
+    tenant_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, tenant_id)
+    tenant = TenantModel(
+        id=tenant_uuid,
+        identifier=tenant_id,
+        key_prefix=tenant_id,
+        name=f"Tenant {tenant_id}",
+    )
     db.add(tenant)
     db.commit()
     db.refresh(tenant)
@@ -63,9 +69,9 @@ def test_get_tenant_allows_member_access(test_db: Session):
     user = _create_user(test_db, email="member@example.com")
     _add_membership(test_db, user=user, tenant_id=tenant.id, accepted=True)
 
-    resolved = asyncio.run(get_tenant(x_tenant_id=tenant.id, user=user, db=test_db))
+    resolved = asyncio.run(get_tenant(x_tenant_id=str(tenant.id), user=user, db=test_db))
 
-    assert resolved.id == tenant.id
+    assert resolved.id == str(tenant.id)
 
 
 def test_get_tenant_blocks_non_member(test_db: Session):
@@ -73,7 +79,7 @@ def test_get_tenant_blocks_non_member(test_db: Session):
     user = _create_user(test_db, email="outsider@example.com")
 
     with pytest.raises(HTTPException) as exc:
-        asyncio.run(get_tenant(x_tenant_id=tenant.id, user=user, db=test_db))
+        asyncio.run(get_tenant(x_tenant_id=str(tenant.id), user=user, db=test_db))
 
     assert exc.value.status_code == 403
     assert "No access to tenant" in str(exc.value.detail)
@@ -87,9 +93,9 @@ def test_get_tenant_allows_super_admin_without_membership(test_db: Session):
         email="superadmin@example.com",
     )
 
-    resolved = asyncio.run(get_tenant(x_tenant_id=tenant.id, user=admin, db=test_db))
+    resolved = asyncio.run(get_tenant(x_tenant_id=str(tenant.id), user=admin, db=test_db))
 
-    assert resolved.id == tenant.id
+    assert resolved.id == str(tenant.id)
 
 
 def test_get_tenant_requires_existing_tenant(test_db: Session):

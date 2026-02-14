@@ -36,6 +36,7 @@ from photocat.learning import (
 from photocat.tagging import get_tagger
 from photocat.dependencies import get_secret
 from photocat.dropbox import DropboxClient
+from photocat.tenant_scope import assign_tenant_scope, tenant_column_filter, tenant_reference_filter
 
 
 @click.group()
@@ -69,23 +70,7 @@ def ingest(directory: str, tenant_id: str, recursive: bool):
     Session = sessionmaker(bind=engine)
     session = Session()
 
-    # Load tenant from database
-    from sqlalchemy import text
-    result = session.execute(
-        text("SELECT id, name, storage_bucket, thumbnail_bucket FROM tenants WHERE id = :tenant_id"),
-        {"tenant_id": tenant_id}
-    ).first()
-
-    if not result:
-        click.echo(f"Error: Tenant {tenant_id} not found in database", err=True)
-        return
-
-    tenant = Tenant(
-        id=result[0],
-        name=result[1],
-        storage_bucket=result[2],
-        thumbnail_bucket=result[3]
-    )
+    tenant = _load_tenant(session, tenant_id)
     TenantContext.set(tenant)
 
     click.echo(f"Using tenant: {tenant.name}")
@@ -93,7 +78,7 @@ def ingest(directory: str, tenant_id: str, recursive: bool):
     click.echo(f"  Thumbnail bucket: {tenant.get_thumbnail_bucket(settings)}")
 
     # Load tenant config from DB
-    config_mgr = ConfigManager(session, tenant_id)
+    config_mgr = ConfigManager(session, tenant.id)
     keywords = config_mgr.get_all_keywords()
     people = config_mgr.get_people()
     click.echo(f"  Keywords: {len(keywords)} total")
@@ -141,21 +126,25 @@ def ingest(directory: str, tenant_id: str, recursive: bool):
     click.echo(f"\n✓ Successfully processed {len(image_files)} images")
 
 
-def _load_tenant(session, tenant_id: str) -> Tenant:
-    from sqlalchemy import text
-    result = session.execute(
-        text("SELECT id, name, storage_bucket, thumbnail_bucket FROM tenants WHERE id = :tenant_id"),
-        {"tenant_id": tenant_id}
-    ).first()
+def _resolve_tenant_row(session, tenant_ref: str):
+    return session.query(TenantModel).filter(tenant_reference_filter(TenantModel, tenant_ref)).first()
 
-    if not result:
+
+def _load_tenant(session, tenant_id: str) -> Tenant:
+    tenant_row = _resolve_tenant_row(session, tenant_id)
+    if not tenant_row:
         raise click.ClickException(f"Tenant {tenant_id} not found in database")
 
+    canonical_tenant_id = str(tenant_row.id)
     return Tenant(
-        id=result[0],
-        name=result[1],
-        storage_bucket=result[2],
-        thumbnail_bucket=result[3]
+        id=canonical_tenant_id,
+        name=tenant_row.name,
+        identifier=getattr(tenant_row, "identifier", None) or canonical_tenant_id,
+        key_prefix=getattr(tenant_row, "key_prefix", None) or canonical_tenant_id,
+        dropbox_app_key=tenant_row.dropbox_app_key,
+        storage_bucket=tenant_row.storage_bucket,
+        thumbnail_bucket=tenant_row.thumbnail_bucket,
+        settings=tenant_row.settings,
     )
 
 
@@ -214,20 +203,20 @@ def refresh_metadata(
     Session = sessionmaker(bind=engine)
     session = Session()
 
-    tenant_row = session.query(TenantModel).filter(TenantModel.id == tenant_id).first()
-    if not tenant_row:
-        raise click.ClickException(f"Tenant {tenant_id} not found in database")
     tenant = _load_tenant(session, tenant_id)
-    if not tenant_row.dropbox_app_key:
+    TenantContext.set(tenant)
+    tenant_id = tenant.id
+    secret_scope = tenant.secret_scope
+    if not tenant.dropbox_app_key:
         raise click.ClickException("Dropbox app key not configured for tenant")
 
     try:
-        refresh_token = get_secret(f"dropbox-token-{tenant_id}")
+        refresh_token = get_secret(f"dropbox-token-{secret_scope}")
     except Exception as exc:
         raise click.ClickException(f"Dropbox token not found: {exc}")
 
     try:
-        app_secret = get_secret(f"dropbox-app-secret-{tenant_id}")
+        app_secret = get_secret(f"dropbox-app-secret-{secret_scope}")
     except Exception as exc:
         raise click.ClickException(f"Dropbox app secret not found: {exc}")
 
@@ -235,7 +224,7 @@ def refresh_metadata(
 
     dbx = Dropbox(
         oauth2_refresh_token=refresh_token,
-        app_key=tenant_row.dropbox_app_key,
+        app_key=tenant.dropbox_app_key,
         app_secret=app_secret
     )
 
@@ -255,7 +244,7 @@ def refresh_metadata(
     )
 
     base_query = session.query(ImageMetadata).filter(
-        ImageMetadata.tenant_id == tenant_id,
+        tenant_column_filter(ImageMetadata, tenant),
         missing_filter
     ).order_by(ImageMetadata.id.desc())
 
@@ -470,8 +459,7 @@ def process_image(
     local_source_key = f"/local/{image_path.relative_to(image_path.parent.parent)}"
 
     # Create canonical asset first so thumbnail key follows the new naming scheme.
-    asset = Asset(
-        tenant_id=tenant.id,
+    asset = assign_tenant_scope(Asset(
         filename=image_path.name,
         source_provider="local",
         source_key=local_source_key,
@@ -481,7 +469,7 @@ def process_image(
         width=features.get('width'),
         height=features.get('height'),
         duration_ms=None,
-    )
+    ), tenant)
     session.add(asset)
     session.flush()
 
@@ -502,7 +490,6 @@ def process_image(
     
     metadata_kwargs = {
         "asset_id": asset.id,
-        "tenant_id": tenant.id,
         "filename": image_path.name,
         "file_size": image_path.stat().st_size,
         "content_hash": None,  # Could add hash computation
@@ -532,7 +519,7 @@ def process_image(
         metadata_kwargs["dropbox_id"] = f"local_{image_path.stem}"
     if hasattr(ImageMetadata, "thumbnail_path"):
         metadata_kwargs["thumbnail_path"] = thumbnail_key
-    metadata = ImageMetadata(**metadata_kwargs)
+    metadata = assign_tenant_scope(ImageMetadata(**metadata_kwargs), tenant)
     
     session.add(metadata)
 
@@ -572,7 +559,7 @@ def build_embeddings(tenant_id: str, limit: Optional[int], force: bool):
     model_name = getattr(tagger, "model_name", settings.tagging_model)
     model_version = getattr(tagger, "model_version", model_name)
 
-    query = session.query(ImageMetadata).filter_by(tenant_id=tenant.id)
+    query = session.query(ImageMetadata).filter(tenant_column_filter(ImageMetadata, tenant))
     query = query.filter(or_(ImageMetadata.rating.is_(None), ImageMetadata.rating != 0))
     if not force:
         query = query.filter(ImageMetadata.embedding_generated.is_(False))
@@ -638,18 +625,18 @@ def train_keyword_models(tenant_id: str, min_positive: Optional[int], min_negati
     Session = sessionmaker(bind=engine)
     session = Session()
 
-    _ = _load_tenant(session, tenant_id)
+    tenant = _load_tenant(session, tenant_id)
     tagger = get_tagger(model_type=settings.tagging_model)
     model_name = getattr(tagger, "model_name", settings.tagging_model)
     model_version = getattr(tagger, "model_version", model_name)
 
     result = build_keyword_models(
         session,
-        tenant_id=tenant_id,
+        tenant_id=tenant.id,
         model_name=model_name,
         model_version=model_version,
         min_positive=min_positive or settings.keyword_model_min_positive,
-        min_negative=min_negative or settings.keyword_model_min_negative
+        min_negative=min_negative or settings.keyword_model_min_negative,
     )
     session.commit()
     click.echo(f"✓ Trained: {result['trained']} · Skipped: {result['skipped']}")
@@ -698,7 +685,7 @@ def recompute_trained_tags(tenant_id: str, batch_size: int, limit: Optional[int]
         KeywordModel.model_name,
         KeywordModel.model_version
     ).filter(
-        KeywordModel.tenant_id == tenant.id
+        tenant_column_filter(KeywordModel, tenant)
     ).order_by(
         func.coalesce(KeywordModel.updated_at, KeywordModel.created_at).desc()
     ).first()
@@ -709,7 +696,11 @@ def recompute_trained_tags(tenant_id: str, batch_size: int, limit: Optional[int]
 
     model_name, model_version = model_row
 
-    keyword_models = load_keyword_models(session, tenant.id, model_name)
+    keyword_models = load_keyword_models(
+        session,
+        tenant.id,
+        model_name,
+    )
     if not keyword_models:
         click.echo("No keyword models found. Train models before recomputing.")
         return
@@ -717,14 +708,14 @@ def recompute_trained_tags(tenant_id: str, batch_size: int, limit: Optional[int]
     storage_client = storage.Client(project=settings.gcp_project_id)
     thumbnail_bucket = storage_client.bucket(tenant.get_thumbnail_bucket(settings))
 
-    base_query = session.query(ImageMetadata).filter_by(tenant_id=tenant.id)
+    base_query = session.query(ImageMetadata).filter(tenant_column_filter(ImageMetadata, tenant))
     if older_than_days is not None:
         cutoff = datetime.utcnow() - timedelta(days=older_than_days)
         last_tagged_subquery = session.query(
             MachineTag.asset_id.label('asset_id'),
             func.max(MachineTag.created_at).label('last_tagged_at')
         ).filter(
-            MachineTag.tenant_id == tenant.id,
+            tenant_column_filter(MachineTag, tenant),
             MachineTag.tag_type == 'trained',
             MachineTag.model_name == model_name,
             MachineTag.asset_id.is_not(None),
@@ -767,7 +758,7 @@ def recompute_trained_tags(tenant_id: str, batch_size: int, limit: Optional[int]
                 continue
             if not replace:
                 existing = session.query(MachineTag.id).filter(
-                    MachineTag.tenant_id == tenant.id,
+                    tenant_column_filter(MachineTag, tenant),
                     MachineTag.asset_id == image.asset_id,
                     MachineTag.tag_type == 'trained',
                     MachineTag.model_name == model_name
@@ -830,9 +821,13 @@ def list_images(tenant_id: str, limit: int):
     Session = sessionmaker(bind=engine)
     session = Session()
     
-    images = session.query(ImageMetadata).filter_by(
-        tenant_id=tenant_id
-    ).limit(limit).all()
+    tenant = _load_tenant(session, tenant_id)
+    images = (
+        session.query(ImageMetadata)
+        .filter(tenant_column_filter(ImageMetadata, tenant))
+        .limit(limit)
+        .all()
+    )
     
     click.echo(f"\nImages for tenant {tenant_id}:")
     click.echo("-" * 80)
@@ -845,7 +840,7 @@ def list_images(tenant_id: str, limit: int):
         click.echo(f"  Hash: {img.perceptual_hash[:16]}...")
         click.echo()
     
-    total = session.query(ImageMetadata).filter_by(tenant_id=tenant_id).count()
+    total = session.query(ImageMetadata).filter(tenant_column_filter(ImageMetadata, tenant)).count()
     click.echo(f"Total: {total} images")
 
 
@@ -867,11 +862,12 @@ def show_config(tenant_id: str):
     Session = sessionmaker(bind=engine)
     session = Session()
     try:
-        config_mgr = ConfigManager(session, tenant_id)
+        tenant = _load_tenant(session, tenant_id)
+        config_mgr = ConfigManager(session, tenant.id)
         keywords = config_mgr.get_all_keywords()
         people = config_mgr.get_people()
 
-        click.echo(f"\nConfiguration for tenant: {tenant_id}")
+        click.echo(f"\nConfiguration for tenant: {tenant.id}")
         click.echo("=" * 80)
 
         categories = {}
@@ -960,14 +956,17 @@ def sync_dropbox(tenant_id: str, count: int):
 
     try:
         # Load tenant
-        tenant = db.query(TenantModel).filter(TenantModel.id == tenant_id).first()
+        tenant = _resolve_tenant_row(db, tenant_id)
         if not tenant:
             click.echo(f"Error: Tenant {tenant_id} not found", err=True)
             return
+        tenant_id = str(tenant.id)
 
         tenant_ctx = Tenant(
-            id=tenant.id,
+            id=tenant_id,
             name=tenant.name,
+            identifier=getattr(tenant, "identifier", None) or tenant_id,
+            key_prefix=getattr(tenant, "key_prefix", None) or tenant_id,
             storage_bucket=tenant.storage_bucket,
             thumbnail_bucket=tenant.thumbnail_bucket
         )
@@ -977,7 +976,7 @@ def sync_dropbox(tenant_id: str, count: int):
 
         # Get Dropbox credentials
         try:
-            dropbox_token = get_secret(f"dropbox-token-{tenant_id}")
+            dropbox_token = get_secret(f"dropbox-token-{tenant_ctx.secret_scope}")
         except Exception as exc:
             click.echo(f"Error: No Dropbox refresh token configured ({exc})", err=True)
             return
@@ -986,7 +985,7 @@ def sync_dropbox(tenant_id: str, count: int):
             click.echo("Error: Dropbox app key not configured", err=True)
             return
         try:
-            dropbox_app_secret = get_secret(f"dropbox-app-secret-{tenant_id}")
+            dropbox_app_secret = get_secret(f"dropbox-app-secret-{tenant_ctx.secret_scope}")
         except Exception as exc:
             click.echo(f"Error: Dropbox app secret not configured ({exc})", err=True)
             return
@@ -1000,10 +999,10 @@ def sync_dropbox(tenant_id: str, count: int):
 
         # Get sync folders from tenant config or use root
         config_mgr = ConfigManager(db, tenant_id)
-        tenant_config = db.query(TenantModel).filter(TenantModel.id == tenant_id).first()
         sync_folders = []
-        if tenant_config.config_data and 'sync_folders' in tenant_config.config_data:
-            sync_folders = tenant_config.config_data['sync_folders']
+        tenant_config = tenant.settings or {}
+        if tenant_config and 'sync_folders' in tenant_config:
+            sync_folders = tenant_config['sync_folders']
 
         if not sync_folders:
             sync_folders = ['']  # Root if no folders configured
@@ -1058,14 +1057,14 @@ def sync_dropbox(tenant_id: str, count: int):
                     if not dropbox_path:
                         continue
                     existing = db.query(Asset.id).filter(
-                        Asset.tenant_id == tenant_id,
+                        tenant_column_filter(Asset, tenant_ctx),
                         Asset.source_provider == 'dropbox',
                         Asset.source_key == dropbox_path
                     ).first()
                     legacy_dropbox_path_col = getattr(ImageMetadata, "dropbox_path", None)
                     if not existing and legacy_dropbox_path_col is not None:
                         existing = db.query(ImageMetadata.id).filter(
-                            ImageMetadata.tenant_id == tenant_id,
+                            tenant_column_filter(ImageMetadata, tenant_ctx),
                             legacy_dropbox_path_col == dropbox_path
                         ).first()
 
@@ -1115,8 +1114,7 @@ def sync_dropbox(tenant_id: str, count: int):
                         pass
 
                     # Create metadata record
-                    asset = Asset(
-                        tenant_id=tenant_id,
+                    asset = assign_tenant_scope(Asset(
                         filename=entry.get('name', ''),
                         source_provider='dropbox',
                         source_key=dropbox_path,
@@ -1126,7 +1124,7 @@ def sync_dropbox(tenant_id: str, count: int):
                         width=features['width'],
                         height=features['height'],
                         duration_ms=None,
-                    )
+                    ), tenant_ctx)
                     db.add(asset)
                     db.flush()
 
@@ -1139,7 +1137,6 @@ def sync_dropbox(tenant_id: str, count: int):
 
                     metadata_kwargs = {
                         "asset_id": asset.id,
-                        "tenant_id": tenant_id,
                         "filename": entry.get('name', ''),
                         "width": features['width'],
                         "height": features['height'],
@@ -1157,7 +1154,7 @@ def sync_dropbox(tenant_id: str, count: int):
                         metadata_kwargs["dropbox_path"] = dropbox_path
                     if hasattr(ImageMetadata, "thumbnail_path"):
                         metadata_kwargs["thumbnail_path"] = thumbnail_key
-                    metadata = ImageMetadata(**metadata_kwargs)
+                    metadata = assign_tenant_scope(ImageMetadata(**metadata_kwargs), tenant_ctx)
                     db.add(metadata)
                     db.commit()
                     db.refresh(metadata)
@@ -1183,7 +1180,7 @@ def sync_dropbox(tenant_id: str, count: int):
 
                     # Delete existing tags
                     db.query(MachineTag).filter(
-                        MachineTag.tenant_id == tenant_id,
+                        tenant_column_filter(MachineTag, tenant_ctx),
                         MachineTag.asset_id == metadata.asset_id,
                         MachineTag.tag_type == 'siglip'
                     ).delete()
@@ -1201,22 +1198,21 @@ def sync_dropbox(tenant_id: str, count: int):
                     # Create tag records
                     for keyword_str, confidence in all_tags:
                         keyword_record = db.query(Keyword).filter(
-                            Keyword.tenant_id == tenant_id,
+                            tenant_column_filter(Keyword, tenant_ctx),
                             Keyword.keyword == keyword_str
                         ).first()
 
                         if not keyword_record:
                             continue
 
-                        tag = MachineTag(
+                        tag = assign_tenant_scope(MachineTag(
                             asset_id=metadata.asset_id,
-                            tenant_id=tenant_id,
                             keyword_id=keyword_record.id,
                             confidence=confidence,
                             tag_type='siglip',
                             model_name=model_name,
                             model_version=model_version
-                        )
+                        ), tenant_ctx)
                         db.add(tag)
 
                     metadata.tags_applied = len(all_tags) > 0

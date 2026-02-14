@@ -16,6 +16,7 @@ from photocat.exif import (
 )
 from photocat.metadata import Asset, ImageMetadata
 from photocat.cli.base import CliCommand
+from photocat.tenant_scope import assign_tenant_scope
 
 
 @click.command(name='ingest')
@@ -63,7 +64,7 @@ class IngestCommand(CliCommand):
         click.echo(f"  Thumbnail bucket: {self.tenant.get_thumbnail_bucket(settings)}")
 
         # Load tenant config from DB
-        config_mgr = ConfigManager(self.db, self.tenant_id)
+        config_mgr = ConfigManager(self.db, self.tenant.id)
         keywords = config_mgr.get_all_keywords()
         people = config_mgr.get_people()
         click.echo(f"  Keywords: {len(keywords)} total")
@@ -116,7 +117,7 @@ class IngestCommand(CliCommand):
         asset = (
             self.db.query(Asset)
             .filter(
-                Asset.tenant_id == self.tenant.id,
+                self.tenant_filter(Asset),
                 Asset.source_provider == source_provider,
                 Asset.source_key == source_key,
             )
@@ -125,18 +126,17 @@ class IngestCommand(CliCommand):
         )
         if asset is None:
             mime_type = f"image/{str(features.get('format', '')).lower()}" if features.get("format") else None
-            asset = Asset(
-                tenant_id=self.tenant.id,
+            asset = assign_tenant_scope(Asset(
                 filename=image_path.name,
                 source_provider=source_provider,
                 source_key=source_key,
                 source_rev=None,
-                thumbnail_key=f"legacy:{self.tenant.id}:{image_path.name}:thumbnail",
+                thumbnail_key=f"legacy:{self.tenant.secret_scope}:{image_path.name}:thumbnail",
                 mime_type=mime_type,
                 width=features.get("width"),
                 height=features.get("height"),
                 duration_ms=None,
-            )
+            ), self.tenant)
             self.db.add(asset)
             self.db.flush()
 
@@ -157,7 +157,6 @@ class IngestCommand(CliCommand):
 
         metadata_kwargs = {
             "asset_id": asset.id,
-            "tenant_id": self.tenant.id,
             "filename": image_path.name,
             "file_size": image_path.stat().st_size,
             "content_hash": None,
@@ -185,6 +184,6 @@ class IngestCommand(CliCommand):
         if hasattr(ImageMetadata, "thumbnail_path"):
             metadata_kwargs["thumbnail_path"] = thumbnail_path
 
-        metadata = ImageMetadata(**metadata_kwargs)
+        metadata = assign_tenant_scope(ImageMetadata(**metadata_kwargs), self.tenant)
 
         self.db.add(metadata)

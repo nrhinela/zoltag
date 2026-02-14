@@ -10,6 +10,7 @@ from photocat.config.db_config import ConfigManager
 from photocat.tenant import Tenant
 from photocat.metadata import ImageMetadata, Permatag, KeywordModel, MachineTag
 from photocat.models.config import PhotoList, PhotoListItem, Keyword, KeywordCategory
+from photocat.tenant_scope import tenant_column_filter
 
 router = APIRouter(
     prefix="/api/v1",
@@ -37,12 +38,15 @@ async def get_available_keywords(
     all_keywords = config_mgr.get_all_keywords(include_people=include_people)
 
     image_assets_query = db.query(ImageMetadata.asset_id).filter(
-        ImageMetadata.tenant_id == tenant.id,
+        tenant_column_filter(ImageMetadata, tenant),
         ImageMetadata.asset_id.is_not(None),
     )
 
     if list_id is not None:
-        lst = db.query(PhotoList).filter_by(id=list_id, tenant_id=tenant.id).first()
+        lst = db.query(PhotoList).filter(
+            PhotoList.id == list_id,
+            tenant_column_filter(PhotoList, tenant),
+        ).first()
         if not lst:
             return {"tenant_id": tenant.id, "keywords_by_category": {}, "all_keywords": []}
         list_assets_subq = db.query(PhotoListItem.asset_id).filter(
@@ -64,7 +68,7 @@ async def get_available_keywords(
 
     if reviewed is not None:
         reviewed_subq = db.query(distinct(Permatag.asset_id)).filter(
-            Permatag.tenant_id == tenant.id,
+            tenant_column_filter(Permatag, tenant),
             Permatag.asset_id.is_not(None),
         )
         if reviewed:
@@ -90,7 +94,7 @@ async def get_available_keywords(
         ).join(
             image_assets_subq, image_assets_subq.c.asset_id == Permatag.asset_id
         ).filter(
-            Permatag.tenant_id == tenant.id,
+            tenant_column_filter(Permatag, tenant),
             Permatag.signum == 1
         ).group_by(
             Keyword.keyword, KeywordCategory.name
@@ -107,7 +111,7 @@ async def get_available_keywords(
             & (Permatag.keyword_id == MachineTag.keyword_id)
             & (Permatag.signum == -1)
         ).filter(
-            MachineTag.tenant_id == tenant.id,
+            tenant_column_filter(MachineTag, tenant),
             MachineTag.tag_type == active_tag_type,
             MachineTag.asset_id.is_not(None),
             Permatag.id.is_(None)
@@ -119,7 +123,7 @@ async def get_available_keywords(
         ).join(
             image_assets_subq, image_assets_subq.c.asset_id == Permatag.asset_id
         ).filter(
-            Permatag.tenant_id == tenant.id,
+            tenant_column_filter(Permatag, tenant),
             Permatag.asset_id.is_not(None),
             Permatag.signum == 1
         )
@@ -175,7 +179,7 @@ async def get_tag_stats(
     ).join(
         KeywordCategory, Keyword.category_id == KeywordCategory.id
     ).filter(
-        Keyword.tenant_id == tenant.id
+        tenant_column_filter(Keyword, tenant)
     ).all()
 
     # Build mapping from keyword_id to keyword info
@@ -192,7 +196,7 @@ async def get_tag_stats(
         MachineTag.keyword_id,
         func.count(distinct(MachineTag.asset_id)).label("count")
     ).filter(
-        MachineTag.tenant_id == tenant.id,
+        tenant_column_filter(MachineTag, tenant),
         MachineTag.tag_type == 'siglip',
         MachineTag.asset_id.is_not(None),
     ).group_by(
@@ -201,7 +205,7 @@ async def get_tag_stats(
 
     # Get latest keyword model name
     model_row = db.query(KeywordModel.model_name).filter(
-        KeywordModel.tenant_id == tenant.id
+        tenant_column_filter(KeywordModel, tenant)
     ).order_by(
         func.coalesce(KeywordModel.updated_at, KeywordModel.created_at).desc()
     ).first()
@@ -213,7 +217,7 @@ async def get_tag_stats(
             MachineTag.keyword_id,
             func.count(distinct(MachineTag.asset_id)).label("count")
         ).filter(
-            MachineTag.tenant_id == tenant.id,
+            tenant_column_filter(MachineTag, tenant),
             MachineTag.tag_type == 'trained',
             MachineTag.model_name == model_row.model_name,
             MachineTag.asset_id.is_not(None),
@@ -225,7 +229,7 @@ async def get_tag_stats(
         Permatag.keyword_id,
         func.count(distinct(Permatag.asset_id)).label("count")
     ).filter(
-        Permatag.tenant_id == tenant.id,
+        tenant_column_filter(Permatag, tenant),
         Permatag.asset_id.is_not(None),
         Permatag.signum == 1
     ).group_by(

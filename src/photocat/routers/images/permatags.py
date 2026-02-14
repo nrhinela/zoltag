@@ -15,6 +15,7 @@ from photocat.config.db_config import ConfigManager
 from photocat.config.db_utils import load_keywords_map
 from photocat.auth.dependencies import require_tenant_role_from_header
 from photocat.auth.models import UserProfile
+from photocat.tenant_scope import assign_tenant_scope, tenant_column_filter
 
 # Sub-router with no prefix/tags (inherits from parent)
 router = APIRouter()
@@ -42,9 +43,9 @@ async def get_permatags(
     db: Session = Depends(get_db)
 ):
     """Get all permatags for an image."""
-    image = db.query(ImageMetadata).filter_by(
-        id=image_id,
-        tenant_id=tenant.id
+    image = db.query(ImageMetadata).filter(
+        ImageMetadata.id == image_id,
+        tenant_column_filter(ImageMetadata, tenant),
     ).first()
 
     if not image:
@@ -52,7 +53,7 @@ async def get_permatags(
 
     permatags = db.query(Permatag).filter(
         Permatag.asset_id == image.asset_id,
-        Permatag.tenant_id == tenant.id
+        tenant_column_filter(Permatag, tenant)
     ).all()
 
     # Load keyword info in bulk using utility function
@@ -94,9 +95,9 @@ async def add_permatag(
     if signum not in [-1, 1]:
         raise HTTPException(status_code=400, detail="signum must be -1 or 1")
 
-    image = db.query(ImageMetadata).filter_by(
-        id=image_id,
-        tenant_id=tenant.id
+    image = db.query(ImageMetadata).filter(
+        ImageMetadata.id == image_id,
+        tenant_column_filter(ImageMetadata, tenant),
     ).first()
 
     if not image:
@@ -105,7 +106,7 @@ async def add_permatag(
     # Look up keyword by name
     keyword = db.query(Keyword).filter(
         Keyword.keyword == keyword_name,
-        Keyword.tenant_id == tenant.id
+        tenant_column_filter(Keyword, tenant)
     ).first()
 
     if not keyword:
@@ -115,7 +116,7 @@ async def add_permatag(
     existing = db.query(Permatag).filter(
         Permatag.asset_id == image.asset_id,
         Permatag.keyword_id == keyword.id,
-        Permatag.tenant_id == tenant.id
+        tenant_column_filter(Permatag, tenant)
     ).first()
 
     if existing:
@@ -128,13 +129,12 @@ async def add_permatag(
         permatag = existing
     else:
         # Create new permatag
-        permatag = Permatag(
+        permatag = assign_tenant_scope(Permatag(
             asset_id=image.asset_id,
-            tenant_id=tenant.id,
             keyword_id=keyword.id,
             signum=signum,
             created_by=current_user.supabase_uid
-        )
+        ), tenant)
         db.add(permatag)
 
     db.commit()
@@ -196,7 +196,7 @@ async def bulk_permatags(
         raise HTTPException(status_code=400, detail="no valid operations provided")
 
     valid_images = db.query(ImageMetadata.id, ImageMetadata.asset_id).filter(
-        ImageMetadata.tenant_id == tenant.id,
+        tenant_column_filter(ImageMetadata, tenant),
         ImageMetadata.id.in_(image_ids)
     ).all()
     valid_image_ids = {row[0] for row in valid_images}
@@ -205,7 +205,7 @@ async def bulk_permatags(
     # Look up keyword IDs
     keywords = db.query(Keyword).filter(
         Keyword.keyword.in_(keyword_names),
-        Keyword.tenant_id == tenant.id
+        tenant_column_filter(Keyword, tenant)
     ).all()
     keyword_name_to_id = {kw.keyword: kw.id for kw in keywords}
 
@@ -214,7 +214,7 @@ async def bulk_permatags(
     existing_rows = db.query(Permatag).filter(
         Permatag.asset_id.in_(list(image_id_to_asset_id.values())),
         Permatag.keyword_id.in_(keyword_ids),
-        Permatag.tenant_id == tenant.id
+        tenant_column_filter(Permatag, tenant)
     ).all()
     existing_map = {(row.asset_id, row.keyword_id): row for row in existing_rows}
 
@@ -250,13 +250,12 @@ async def bulk_permatags(
                 existing.asset_id = image_asset_id
             updated += 1
         else:
-            permatag = Permatag(
+            permatag = assign_tenant_scope(Permatag(
                 asset_id=image_asset_id,
-                tenant_id=tenant.id,
                 keyword_id=keyword_id,
                 signum=op["signum"],
                 created_by=current_user.supabase_uid
-            )
+            ), tenant)
             db.add(permatag)
             created += 1
 
@@ -280,9 +279,9 @@ async def delete_permatag(
 ):
     """Delete a permatag."""
     # Verify image belongs to tenant
-    image = db.query(ImageMetadata).filter_by(
-        id=image_id,
-        tenant_id=tenant.id
+    image = db.query(ImageMetadata).filter(
+        ImageMetadata.id == image_id,
+        tenant_column_filter(ImageMetadata, tenant),
     ).first()
 
     if not image:
@@ -291,7 +290,7 @@ async def delete_permatag(
     permatag = db.query(Permatag).filter(
         Permatag.id == permatag_id,
         Permatag.asset_id == image.asset_id,
-        Permatag.tenant_id == tenant.id
+        tenant_column_filter(Permatag, tenant)
     ).first()
 
     if not permatag:
@@ -311,9 +310,9 @@ async def accept_all_tags(
     current_user: UserProfile = Depends(require_tenant_role_from_header("editor"))
 ):
     """Accept all current tags as positive permatags and create negative permatags for all other keywords."""
-    image = db.query(ImageMetadata).filter_by(
-        id=image_id,
-        tenant_id=tenant.id
+    image = db.query(ImageMetadata).filter(
+        ImageMetadata.id == image_id,
+        tenant_column_filter(ImageMetadata, tenant),
     ).first()
 
     if not image:
@@ -323,13 +322,13 @@ async def accept_all_tags(
     active_tag_type = get_tenant_setting(db, tenant.id, 'active_machine_tag_type', default='siglip')
     current_tags = db.query(MachineTag).filter(
         MachineTag.asset_id == image.asset_id,
-        MachineTag.tenant_id == tenant.id,
+        tenant_column_filter(MachineTag, tenant),
         MachineTag.tag_type == active_tag_type
     ).all()
 
     # Get all keyword IDs from database
     db_keywords = db.query(Keyword).filter(
-        Keyword.tenant_id == tenant.id
+        tenant_column_filter(Keyword, tenant)
     ).all()
 
     # Build set of current tag keyword IDs
@@ -343,30 +342,28 @@ async def accept_all_tags(
     db.query(Permatag).filter(
         Permatag.asset_id == image.asset_id,
         Permatag.keyword_id.in_(list(all_keyword_ids)),
-        Permatag.tenant_id == tenant.id
+        tenant_column_filter(Permatag, tenant)
     ).delete(synchronize_session=False)
 
     # Create positive permatags for all current tags
     for tag in current_tags:
-        permatag = Permatag(
+        permatag = assign_tenant_scope(Permatag(
             asset_id=image.asset_id,
-            tenant_id=tenant.id,
             keyword_id=tag.keyword_id,
             signum=1,
             created_by=current_user.supabase_uid
-        )
+        ), tenant)
         db.add(permatag)
 
     # Create negative permatags for all keywords NOT in current tags
     for keyword_id in all_keyword_ids:
         if keyword_id not in current_keyword_ids:
-            permatag = Permatag(
+            permatag = assign_tenant_scope(Permatag(
                 asset_id=image.asset_id,
-                tenant_id=tenant.id,
                 keyword_id=keyword_id,
                 signum=-1,
                 created_by=current_user.supabase_uid
-            )
+            ), tenant)
             db.add(permatag)
 
     db.commit()
@@ -390,23 +387,23 @@ async def freeze_permatags(
     current_user: UserProfile = Depends(require_tenant_role_from_header("editor"))
 ):
     """Create permatags for all keywords without existing permatags."""
-    image = db.query(ImageMetadata).filter_by(
-        id=image_id,
-        tenant_id=tenant.id
+    image = db.query(ImageMetadata).filter(
+        ImageMetadata.id == image_id,
+        tenant_column_filter(ImageMetadata, tenant),
     ).first()
     if not image:
         raise HTTPException(status_code=404, detail="Image not found")
 
     # Get all keyword IDs from database
     db_keywords = db.query(Keyword).filter(
-        Keyword.tenant_id == tenant.id
+        tenant_column_filter(Keyword, tenant)
     ).all()
     all_keyword_ids = {kw.id for kw in db_keywords}
 
     active_tag_type = get_tenant_setting(db, tenant.id, 'active_machine_tag_type', default='siglip')
     machine_tags = db.query(MachineTag).filter(
         MachineTag.asset_id == image.asset_id,
-        MachineTag.tenant_id == tenant.id,
+        tenant_column_filter(MachineTag, tenant),
         MachineTag.tag_type == active_tag_type
     ).all()
     machine_tag_ids = {tag.keyword_id for tag in machine_tags}
@@ -414,7 +411,7 @@ async def freeze_permatags(
     existing_permatags = db.query(Permatag).filter(
         Permatag.asset_id == image.asset_id,
         Permatag.keyword_id.in_(list(all_keyword_ids)),
-        Permatag.tenant_id == tenant.id
+        tenant_column_filter(Permatag, tenant)
     ).all()
     existing_keyword_ids = {p.keyword_id for p in existing_permatags}
 
@@ -424,13 +421,12 @@ async def freeze_permatags(
         if keyword_id in existing_keyword_ids:
             continue
         signum = 1 if keyword_id in machine_tag_ids else -1
-        permatag = Permatag(
+        permatag = assign_tenant_scope(Permatag(
             asset_id=image.asset_id,
-            tenant_id=tenant.id,
             keyword_id=keyword_id,
             signum=signum,
             created_by=current_user.supabase_uid
-        )
+        ), tenant)
         db.add(permatag)
         if signum == 1:
             positive_count += 1

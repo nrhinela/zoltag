@@ -1,6 +1,7 @@
 """Test configuration and fixtures."""
 
 import pytest
+import uuid
 from pathlib import Path
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
@@ -32,12 +33,18 @@ def test_db():
 @pytest.fixture
 def test_tenant():
     """Create test tenant."""
+    tenant_identifier = "test_tenant"
+    tenant_id = uuid.uuid5(uuid.NAMESPACE_DNS, tenant_identifier)
     tenant = Tenant(
-        id="test_tenant",
+        id=str(tenant_id),
         name="Test Tenant",
+        identifier=tenant_identifier,
+        key_prefix=tenant_identifier,
         active=True,
         dropbox_token_secret="test-secret"
     )
+    # SQLAlchemy UUID(as_uuid=True) bindings in tests require UUID objects.
+    tenant.id = tenant_id
     TenantContext.set(tenant)
     
     yield tenant

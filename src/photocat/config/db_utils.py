@@ -4,12 +4,17 @@ This module consolidates repeated query patterns to reduce duplication
 and improve maintainability across the application.
 """
 
-from typing import Dict, List, Set, Tuple, Optional
+from typing import Dict, List, Set
 from sqlalchemy.orm import Session
 from photocat.models.config import Keyword, KeywordCategory
+from photocat.tenant_scope import tenant_column_filter_for_values
 
 
-def load_keywords_map(db: Session, tenant_id: str, keyword_ids: Set[int]) -> Dict[int, Dict]:
+def load_keywords_map(
+    db: Session,
+    tenant_id: str,
+    keyword_ids: Set[int],
+) -> Dict[int, Dict]:
     """
     Load keyword name and category for multiple keyword IDs.
 
@@ -41,7 +46,7 @@ def load_keywords_map(db: Session, tenant_id: str, keyword_ids: Set[int]) -> Dic
         ).join(
             KeywordCategory, Keyword.category_id == KeywordCategory.id
         ).filter(
-            Keyword.tenant_id == tenant_id,
+            tenant_column_filter_for_values(Keyword, tenant_id),
             Keyword.id.in_(chunk)
         ).all()
 
@@ -55,7 +60,9 @@ def load_keywords_map(db: Session, tenant_id: str, keyword_ids: Set[int]) -> Dic
 
 
 def load_keyword_info_by_name(
-    db: Session, tenant_id: str, keyword_names: List[str]
+    db: Session,
+    tenant_id: str,
+    keyword_names: List[str],
 ) -> Dict[str, Dict]:
     """
     Load keyword info (id, category) by keyword string.
@@ -78,7 +85,7 @@ def load_keyword_info_by_name(
     ).join(
         KeywordCategory, Keyword.category_id == KeywordCategory.id
     ).filter(
-        Keyword.tenant_id == tenant_id,
+        tenant_column_filter_for_values(Keyword, tenant_id),
         Keyword.keyword.in_(keyword_names)
     ).all()
 

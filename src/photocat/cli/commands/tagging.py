@@ -13,7 +13,7 @@ from photocat.metadata import ImageMetadata, MachineTag, ImageEmbedding
 from photocat.learning import ensure_image_embedding
 from photocat.asset_helpers import load_assets_for_images, resolve_image_storage
 from photocat.config.db_utils import load_keyword_info_by_name
-from photocat.tenant import Tenant, TenantContext
+from photocat.tenant_scope import assign_tenant_scope
 from photocat.cli.base import CliCommand
 
 
@@ -79,12 +79,10 @@ class RecomputeSiglipTagsCommand(CliCommand):
 
     def _retag_images(self):
         """Reprocess all images to regenerate SigLIP tags with current keywords."""
-        # Set tenant context
-        tenant = Tenant(id=self.tenant_id, name=self.tenant_id, active=True)
-        TenantContext.set(tenant)
+        self.tenant = self.load_tenant(self.tenant_id)
 
         # Load config
-        config_mgr = ConfigManager(self.db, self.tenant_id)
+        config_mgr = ConfigManager(self.db, self.tenant.id)
         all_keywords = config_mgr.get_all_keywords()
         if not all_keywords:
             click.echo("No keywords configured for this tenant.")
@@ -96,7 +94,11 @@ class RecomputeSiglipTagsCommand(CliCommand):
                 by_category[cat] = []
             by_category[cat].append(kw)
         keyword_names = [kw['keyword'] for kw in all_keywords]
-        keyword_info_by_name = load_keyword_info_by_name(self.db, self.tenant_id, keyword_names)
+        keyword_info_by_name = load_keyword_info_by_name(
+            self.db,
+            self.tenant.id,
+            keyword_names,
+        )
 
         # Setup tagger and storage
         tagger = get_tagger()
@@ -108,10 +110,10 @@ class RecomputeSiglipTagsCommand(CliCommand):
             if keywords_list:
                 text_embeddings_by_category[category] = (keywords_list, text_embeddings)
         storage_client = storage.Client(project=settings.gcp_project_id)
-        thumbnail_bucket = storage_client.bucket(settings.thumbnail_bucket)
+        thumbnail_bucket = storage_client.bucket(self.tenant.get_thumbnail_bucket(settings))
 
         base_query = self.db.query(ImageMetadata).filter(
-            ImageMetadata.tenant_id == self.tenant_id
+            self.tenant_filter(ImageMetadata)
         )
         if self.older_than_days is not None:
             cutoff = datetime.utcnow() - timedelta(days=self.older_than_days)
@@ -119,7 +121,7 @@ class RecomputeSiglipTagsCommand(CliCommand):
                 MachineTag.asset_id.label('asset_id'),
                 func.max(MachineTag.created_at).label('last_tagged_at')
             ).filter(
-                MachineTag.tenant_id == self.tenant_id,
+                self.tenant_filter(MachineTag),
                 MachineTag.tag_type == 'siglip',
                 MachineTag.model_name == model_name,
                 MachineTag.asset_id.is_not(None),
@@ -169,7 +171,7 @@ class RecomputeSiglipTagsCommand(CliCommand):
                     try:
                         storage_info = resolve_image_storage(
                             image=image,
-                            tenant=tenant,
+                            tenant=self.tenant,
                             db=None,
                             assets_by_id=assets_by_id,
                             strict=False,
@@ -181,7 +183,7 @@ class RecomputeSiglipTagsCommand(CliCommand):
                             continue
                         if not self.replace:
                             existing = self.db.query(MachineTag.id).filter(
-                                MachineTag.tenant_id == self.tenant_id,
+                                self.tenant_filter(MachineTag),
                                 MachineTag.asset_id == image.asset_id,
                                 MachineTag.tag_type == 'siglip',
                                 MachineTag.model_name == model_name
@@ -192,14 +194,14 @@ class RecomputeSiglipTagsCommand(CliCommand):
                                 continue
                         # Delete existing SigLIP tags
                         self.db.query(MachineTag).filter(
-                            MachineTag.tenant_id == self.tenant_id,
+                            self.tenant_filter(MachineTag),
                             MachineTag.asset_id == image.asset_id,
                             MachineTag.tag_type == 'siglip',
                             MachineTag.model_name == model_name
                         ).delete()
 
                         embedding_row = self.db.query(ImageEmbedding).filter(
-                            ImageEmbedding.tenant_id == self.tenant_id,
+                            self.tenant_filter(ImageEmbedding),
                             ImageEmbedding.asset_id == image.asset_id
                         ).first()
                         if embedding_row:
@@ -215,7 +217,7 @@ class RecomputeSiglipTagsCommand(CliCommand):
                             image_data = blob.download_as_bytes()
                             embedding_record = ensure_image_embedding(
                                 self.db,
-                                self.tenant_id,
+                                self.tenant.id,
                                 image.id,
                                 image_data,
                                 model_name,
@@ -244,15 +246,14 @@ class RecomputeSiglipTagsCommand(CliCommand):
                             if not keyword_info:
                                 click.echo(f"\n  Skipping tag '{keyword}': keyword not found in DB")
                                 continue
-                            tag = MachineTag(
+                            tag = assign_tenant_scope(MachineTag(
                                 asset_id=image.asset_id,
-                                tenant_id=self.tenant_id,
                                 keyword_id=keyword_info["id"],
                                 confidence=confidence,
                                 tag_type='siglip',
                                 model_name=model_name,
                                 model_version=model_version
-                            )
+                            ), self.tenant)
                             self.db.add(tag)
 
                         # Update tags_applied flag

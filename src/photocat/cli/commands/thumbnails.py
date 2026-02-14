@@ -9,8 +9,7 @@ from google.cloud import storage
 
 from photocat.settings import settings
 from photocat.dependencies import get_secret
-from photocat.metadata import Asset, ImageMetadata, Tenant as TenantModel
-from photocat.tenant import Tenant, TenantContext
+from photocat.metadata import Asset, ImageMetadata
 from photocat.dropbox import DropboxClient
 from photocat.image import ImageProcessor
 from photocat.cli.base import CliCommand
@@ -80,35 +79,27 @@ class BackfillThumbnailsCommand(CliCommand):
 
     def _backfill_thumbnails(self):
         """Backfill missing thumbnails for images."""
-        tenant_row = self.db.query(TenantModel).filter(TenantModel.id == self.tenant_id).first()
-        if not tenant_row:
-            raise click.ClickException(f"Tenant {self.tenant_id} not found in database")
-        if not tenant_row.dropbox_app_key:
+        self.tenant = self.load_tenant(self.tenant_id)
+        tenant_context = self.tenant
+
+        if not tenant_context.dropbox_app_key:
             raise click.ClickException("Dropbox app key not configured for tenant")
 
         try:
-            refresh_token = get_secret(f"dropbox-token-{self.tenant_id}")
+            refresh_token = get_secret(f"dropbox-token-{tenant_context.secret_scope}")
         except Exception as exc:
             raise click.ClickException(f"Dropbox token not found: {exc}")
 
         try:
-            app_secret = get_secret(f"dropbox-app-secret-{self.tenant_id}")
+            app_secret = get_secret(f"dropbox-app-secret-{tenant_context.secret_scope}")
         except Exception as exc:
             raise click.ClickException(f"Dropbox app secret not found: {exc}")
 
         dropbox_client = DropboxClient(
             refresh_token=refresh_token,
-            app_key=tenant_row.dropbox_app_key,
+            app_key=tenant_context.dropbox_app_key,
             app_secret=app_secret,
         )
-
-        tenant_context = Tenant(
-            id=tenant_row.id,
-            name=tenant_row.name,
-            storage_bucket=tenant_row.storage_bucket,
-            thumbnail_bucket=tenant_row.thumbnail_bucket,
-        )
-        TenantContext.set(tenant_context)
 
         storage_client = storage.Client(project=settings.gcp_project_id)
         thumbnail_bucket = storage_client.bucket(tenant_context.get_thumbnail_bucket(settings))
@@ -116,7 +107,10 @@ class BackfillThumbnailsCommand(CliCommand):
         query = (
             self.db.query(ImageMetadata, Asset)
             .join(Asset, Asset.id == ImageMetadata.asset_id)
-            .filter(ImageMetadata.tenant_id == self.tenant_id)
+            .filter(
+                self.tenant_filter(ImageMetadata),
+                self.tenant_filter(Asset),
+            )
             .order_by(ImageMetadata.id.asc())
         )
         if not self.regenerate_all:

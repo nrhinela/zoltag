@@ -25,6 +25,7 @@ from photocat.storage import (
     StorageProvider,
 )
 from photocat.tenant import Tenant
+from photocat.tenant_scope import assign_tenant_scope, tenant_column_filter
 
 
 @dataclass
@@ -147,8 +148,8 @@ def process_storage_entry(
         db.query(ImageMetadata)
         .join(Asset, Asset.id == ImageMetadata.asset_id)
         .filter(
-            ImageMetadata.tenant_id == tenant.id,
-            Asset.tenant_id == tenant.id,
+            tenant_column_filter(ImageMetadata, tenant),
+            tenant_column_filter(Asset, tenant),
             Asset.source_provider == provider.provider_name,
             Asset.source_key == entry.source_key,
         )
@@ -166,7 +167,7 @@ def process_storage_entry(
     asset = (
         db.query(Asset)
         .filter(
-            Asset.tenant_id == tenant.id,
+            tenant_column_filter(Asset, tenant),
             Asset.source_provider == provider.provider_name,
             Asset.source_key == entry.source_key,
         )
@@ -174,18 +175,17 @@ def process_storage_entry(
         .first()
     )
     if asset is None:
-        asset = Asset(
-            tenant_id=tenant.id,
+        asset = assign_tenant_scope(Asset(
             filename=entry.name,
             source_provider=provider.provider_name,
             source_key=entry.source_key,
             source_rev=entry.revision,
-            thumbnail_key=f"legacy:{tenant.id}:{entry.source_key}:thumbnail",
+            thumbnail_key=f"legacy:{tenant.secret_scope}:{entry.source_key}:thumbnail",
             mime_type=mime_type,
             width=features.get("width"),
             height=features.get("height"),
             duration_ms=None,
-        )
+        ), tenant)
         db.add(asset)
         db.flush()
     else:
@@ -205,9 +205,9 @@ def process_storage_entry(
     blob.upload_from_string(features["thumbnail"], content_type="image/jpeg")
     asset.thumbnail_key = thumbnail_key
 
-    metadata = existing or ImageMetadata(tenant_id=tenant.id)
+    metadata = existing or assign_tenant_scope(ImageMetadata(), tenant)
     metadata.asset_id = asset.id
-    metadata.tenant_id = tenant.id
+    assign_tenant_scope(metadata, tenant)
     metadata.filename = entry.name
     metadata.file_size = entry.size
     metadata.content_hash = entry.content_hash

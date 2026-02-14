@@ -9,6 +9,7 @@ from photocat.dependencies import get_tenant, get_tenant_setting
 from photocat.tenant import Tenant
 from photocat.metadata import ImageMetadata, MachineTag, Permatag
 from photocat.models.config import Keyword, KeywordCategory, PhotoList
+from photocat.tenant_scope import tenant_column_filter_for_values
 
 router = APIRouter()
 
@@ -49,7 +50,7 @@ def _compute_image_stats(tenant_id: str, include_ratings: bool) -> dict:
             func.sum(case((ImageMetadata.rating == 3, 1), else_=0)),
             func.sum(case((ImageMetadata.rating > 0, 1), else_=0)),
         ).filter(
-            ImageMetadata.tenant_id == tenant_id
+            tenant_column_filter_for_values(ImageMetadata, tenant_id)
         ).one()
 
         image_count = int(img_row[0] or 0)
@@ -79,7 +80,7 @@ def _compute_image_stats(tenant_id: str, include_ratings: bool) -> dict:
             func.min(case((Permatag.signum == 1, Permatag.created_at))),
             func.max(case((Permatag.signum == 1, Permatag.created_at))),
         ).filter(
-            Permatag.tenant_id == tenant_id,
+            tenant_column_filter_for_values(Permatag, tenant_id),
             Permatag.asset_id.is_not(None),
         ).one()
 
@@ -93,27 +94,27 @@ def _compute_image_stats(tenant_id: str, include_ratings: bool) -> dict:
         active_tag_type = get_tenant_setting(db, tenant_id, 'active_machine_tag_type', default='siglip')
 
         ml_tag_count = db.query(func.count(distinct(MachineTag.asset_id))).filter(
-            MachineTag.tenant_id == tenant_id,
+            tenant_column_filter_for_values(MachineTag, tenant_id),
             MachineTag.tag_type == active_tag_type,
             MachineTag.asset_id.is_not(None),
         ).scalar() or 0
 
         keyword_count = db.query(func.count(Keyword.id)).filter(
-            Keyword.tenant_id == tenant_id
+            tenant_column_filter_for_values(Keyword, tenant_id)
         ).scalar() or 0
 
         category_count = db.query(func.count(KeywordCategory.id)).filter(
-            KeywordCategory.tenant_id == tenant_id
+            tenant_column_filter_for_values(KeywordCategory, tenant_id)
         ).scalar() or 0
 
         list_count = db.query(func.count(PhotoList.id)).filter(
-            PhotoList.tenant_id == tenant_id
+            tenant_column_filter_for_values(PhotoList, tenant_id)
         ).scalar() or 0
 
         rating_by_category = {}
         if include_ratings:
             categories = db.query(KeywordCategory.id, KeywordCategory.name).filter(
-                KeywordCategory.tenant_id == tenant_id
+                tenant_column_filter_for_values(KeywordCategory, tenant_id)
             ).order_by(KeywordCategory.name).all()
 
             category_ids = [cat_id for cat_id, _ in categories]
@@ -135,7 +136,7 @@ def _compute_image_stats(tenant_id: str, include_ratings: bool) -> dict:
                     Keyword.category_id
                 ).filter(
                     Keyword.category_id.in_(category_ids),
-                    Keyword.tenant_id == tenant_id
+                    tenant_column_filter_for_values(Keyword, tenant_id)
                 ).all()
 
             keyword_ids = []
@@ -162,7 +163,7 @@ def _compute_image_stats(tenant_id: str, include_ratings: bool) -> dict:
                     Permatag.keyword_id,
                     func.count(distinct(Permatag.asset_id))
                 ).filter(
-                    Permatag.tenant_id == tenant_id,
+                    tenant_column_filter_for_values(Permatag, tenant_id),
                     Permatag.asset_id.is_not(None),
                     Permatag.signum == 1,
                     Permatag.keyword_id.in_(keyword_ids)
@@ -182,8 +183,8 @@ def _compute_image_stats(tenant_id: str, include_ratings: bool) -> dict:
                 ).join(
                     ImageMetadata, ImageMetadata.asset_id == Permatag.asset_id
                 ).filter(
-                    Permatag.tenant_id == tenant_id,
-                    ImageMetadata.tenant_id == tenant_id,
+                    tenant_column_filter_for_values(Permatag, tenant_id),
+                    tenant_column_filter_for_values(ImageMetadata, tenant_id),
                     Permatag.asset_id.is_not(None),
                     Permatag.signum == 1,
                     Permatag.keyword_id.in_(keyword_ids),
@@ -225,12 +226,12 @@ def _compute_image_stats(tenant_id: str, include_ratings: bool) -> dict:
                 ).join(
                     ImageMetadata, ImageMetadata.asset_id == Permatag.asset_id
                 ).filter(
-                    Permatag.tenant_id == tenant_id,
-                    ImageMetadata.tenant_id == tenant_id,
+                    tenant_column_filter_for_values(Permatag, tenant_id),
+                    tenant_column_filter_for_values(ImageMetadata, tenant_id),
                     Permatag.asset_id.is_not(None),
                     Permatag.signum == 1,
                     Keyword.category_id.in_(category_ids),
-                    Keyword.tenant_id == tenant_id,
+                    tenant_column_filter_for_values(Keyword, tenant_id),
                     ImageMetadata.rating.in_([0, 1, 2, 3])
                 ).group_by(
                     Keyword.category_id,

@@ -11,6 +11,7 @@ from photocat.dependencies import get_db, get_tenant
 from photocat.metadata import Person
 from photocat.models.config import KeywordCategory, Keyword
 from photocat.tenant import Tenant
+from photocat.tenant_scope import assign_tenant_scope, tenant_column_filter
 
 router = APIRouter(
     prefix="/api/v1/admin/keywords",
@@ -26,11 +27,11 @@ def _normalize_instagram_url(value: str | None) -> str | None:
     return value or None
 
 
-def _load_people_by_id(db: Session, tenant_id: str, person_ids: list[int]) -> dict[int, Person]:
+def _load_people_by_id(db: Session, tenant: Tenant, person_ids: list[int]) -> dict[int, Person]:
     if not person_ids:
         return {}
     people = db.query(Person).filter(
-        Person.tenant_id == tenant_id,
+        tenant_column_filter(Person, tenant),
         Person.id.in_(person_ids)
     ).all()
     return {person.id: person for person in people}
@@ -71,7 +72,7 @@ def _upsert_person(
     if person_id:
         person = db.query(Person).filter(
             Person.id == person_id,
-            Person.tenant_id == tenant.id
+            tenant_column_filter(Person, tenant),
         ).first()
         if not person:
             raise HTTPException(status_code=404, detail="Person not found")
@@ -88,11 +89,10 @@ def _upsert_person(
     if not isinstance(name, str) or not name.strip():
         raise HTTPException(status_code=400, detail="person.name is required")
 
-    person = Person(
-        tenant_id=tenant.id,
+    person = assign_tenant_scope(Person(
         name=name.strip(),
         instagram_url=instagram_url
-    )
+    ), tenant)
     db.add(person)
     db.flush()
     return person
@@ -118,7 +118,7 @@ async def list_keyword_categories(
 ):
     """List all keyword categories for a tenant."""
     categories = db.query(KeywordCategory).filter(
-        KeywordCategory.tenant_id == tenant.id
+        tenant_column_filter(KeywordCategory, tenant)
     ).order_by(KeywordCategory.sort_order).all()
 
     return [{
@@ -146,20 +146,19 @@ async def create_keyword_category(
 
     # Get max sort_order for this tenant
     max_sort = db.query(func.max(KeywordCategory.sort_order)).filter(
-        KeywordCategory.tenant_id == tenant.id
+        tenant_column_filter(KeywordCategory, tenant)
     ).scalar() or -1
 
     slug = _normalize_slug(category_data.get("slug"))
 
-    category = KeywordCategory(
-        tenant_id=tenant.id,
+    category = assign_tenant_scope(KeywordCategory(
         name=category_data["name"],
         slug=slug,
         parent_id=category_data.get("parent_id"),
         is_people_category=category_data.get("is_people_category", False),
         is_attribution=category_data.get("is_attribution", False),
         sort_order=category_data.get("sort_order", max_sort + 1)
-    )
+    ), tenant)
 
     db.add(category)
     db.commit()
@@ -181,10 +180,14 @@ async def create_keyword_category(
 async def update_keyword_category(
     category_id: int,
     category_data: dict,
+    tenant: Tenant = Depends(get_tenant),
     db: Session = Depends(get_db)
 ):
     """Update a keyword category."""
-    category = db.query(KeywordCategory).filter(KeywordCategory.id == category_id).first()
+    category = db.query(KeywordCategory).filter(
+        KeywordCategory.id == category_id,
+        tenant_column_filter(KeywordCategory, tenant),
+    ).first()
     if not category:
         raise HTTPException(status_code=404, detail="Category not found")
 
@@ -219,15 +222,22 @@ async def update_keyword_category(
 @router.delete("/categories/{category_id}", response_model=dict)
 async def delete_keyword_category(
     category_id: int,
+    tenant: Tenant = Depends(get_tenant),
     db: Session = Depends(get_db)
 ):
     """Delete a keyword category and all its keywords."""
-    category = db.query(KeywordCategory).filter(KeywordCategory.id == category_id).first()
+    category = db.query(KeywordCategory).filter(
+        KeywordCategory.id == category_id,
+        tenant_column_filter(KeywordCategory, tenant),
+    ).first()
     if not category:
         raise HTTPException(status_code=404, detail="Category not found")
 
     # Delete all keywords in this category
-    db.query(Keyword).filter(Keyword.category_id == category_id).delete()
+    db.query(Keyword).filter(
+        Keyword.category_id == category_id,
+        tenant_column_filter(Keyword, tenant),
+    ).delete()
 
     # Delete the category
     db.delete(category)
@@ -249,11 +259,11 @@ async def list_keywords_in_category(
     """List all keywords in a category."""
     keywords = db.query(Keyword).filter(
         Keyword.category_id == category_id,
-        Keyword.tenant_id == tenant.id
+        tenant_column_filter(Keyword, tenant)
     ).order_by(Keyword.sort_order).all()
 
     person_ids = [kw.person_id for kw in keywords if kw.person_id]
-    people_by_id = _load_people_by_id(db, tenant.id, person_ids)
+    people_by_id = _load_people_by_id(db, tenant, person_ids)
 
     return [
         _serialize_keyword(kw, people_by_id.get(kw.person_id))
@@ -275,7 +285,7 @@ async def create_keyword(
     # Verify category exists
     category = db.query(KeywordCategory).filter(
         KeywordCategory.id == category_id,
-        KeywordCategory.tenant_id == tenant.id
+        tenant_column_filter(KeywordCategory, tenant),
     ).first()
     if not category:
         raise HTTPException(status_code=404, detail="Category not found")
@@ -283,7 +293,7 @@ async def create_keyword(
     # Get max sort_order for this category
     max_sort = db.query(func.max(Keyword.sort_order)).filter(
         Keyword.category_id == category_id,
-        Keyword.tenant_id == tenant.id
+        tenant_column_filter(Keyword, tenant),
     ).scalar() or -1
 
     person = None
@@ -294,15 +304,14 @@ async def create_keyword(
         person = _upsert_person(db, tenant, person_payload)
         _ensure_person_not_linked(db, person)
 
-    keyword = Keyword(
-        tenant_id=tenant.id,
+    keyword = assign_tenant_scope(Keyword(
         category_id=category_id,
         keyword=keyword_data["keyword"],
         prompt=keyword_data.get("prompt", ""),
         sort_order=keyword_data.get("sort_order", max_sort + 1),
         tag_type="person" if category.is_people_category else "keyword",
         person_id=person.id if person else None
-    )
+    ), tenant)
 
     db.add(keyword)
     db.commit()
@@ -321,7 +330,7 @@ async def update_keyword(
     """Update a keyword."""
     keyword = db.query(Keyword).filter(
         Keyword.id == keyword_id,
-        Keyword.tenant_id == tenant.id
+        tenant_column_filter(Keyword, tenant)
     ).first()
     if not keyword:
         raise HTTPException(status_code=404, detail="Keyword not found")
@@ -329,7 +338,7 @@ async def update_keyword(
     target_category_id = keyword_data.get("category_id", keyword.category_id)
     category = db.query(KeywordCategory).filter(
         KeywordCategory.id == target_category_id,
-        KeywordCategory.tenant_id == tenant.id
+        tenant_column_filter(KeywordCategory, tenant),
     ).first()
     if not category:
         raise HTTPException(status_code=404, detail="Category not found")
@@ -372,7 +381,7 @@ async def update_keyword(
     if keyword.person_id and person is None:
         person = db.query(Person).filter(
             Person.id == keyword.person_id,
-            Person.tenant_id == tenant.id
+            tenant_column_filter(Person, tenant),
         ).first()
 
     return _serialize_keyword(keyword, person)
@@ -381,10 +390,14 @@ async def update_keyword(
 @router.delete("/{keyword_id}", response_model=dict)
 async def delete_keyword(
     keyword_id: int,
+    tenant: Tenant = Depends(get_tenant),
     db: Session = Depends(get_db)
 ):
     """Delete a keyword."""
-    keyword = db.query(Keyword).filter(Keyword.id == keyword_id).first()
+    keyword = db.query(Keyword).filter(
+        Keyword.id == keyword_id,
+        tenant_column_filter(Keyword, tenant),
+    ).first()
     if not keyword:
         raise HTTPException(status_code=404, detail="Keyword not found")
 

@@ -11,16 +11,21 @@ from photocat import oauth_state
 from photocat.dependencies import get_db, get_secret, store_secret
 from photocat.metadata import Tenant as TenantModel
 from photocat.settings import settings
+from photocat.tenant_scope import tenant_reference_filter
 
 router = APIRouter(
     tags=["gdrive"],
 )
 
 
+def _resolve_tenant(db: Session, tenant_ref: str):
+    return db.query(TenantModel).filter(tenant_reference_filter(TenantModel, tenant_ref)).first()
+
+
 @router.get("/oauth/gdrive/authorize")
 async def gdrive_authorize(tenant: str, db: Session = Depends(get_db)):
     """Redirect user to Google OAuth consent for Drive access."""
-    tenant_obj = db.query(TenantModel).filter(TenantModel.id == tenant).first()
+    tenant_obj = _resolve_tenant(db, tenant)
     if not tenant_obj:
         raise HTTPException(status_code=400, detail="Tenant not found")
 
@@ -30,7 +35,8 @@ async def gdrive_authorize(tenant: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Google Drive client ID not configured")
 
     redirect_uri = f"{settings.app_url}/oauth/gdrive/callback"
-    state = oauth_state.generate(tenant)
+    # Persist canonical tenant ID so callback resolution is stable.
+    state = oauth_state.generate(tenant_obj.id)
     params = {
         "client_id": client_id,
         "redirect_uri": redirect_uri,
@@ -48,18 +54,19 @@ async def gdrive_authorize(tenant: str, db: Session = Depends(get_db)):
 @router.get("/oauth/gdrive/callback")
 async def gdrive_callback(code: str, state: str, db: Session = Depends(get_db)):
     """Handle Google OAuth callback and persist refresh token."""
-    tenant_id = oauth_state.consume(state)
-    if not tenant_id:
+    tenant_ref = oauth_state.consume(state)
+    if not tenant_ref:
         raise HTTPException(status_code=400, detail="Invalid or expired OAuth state")
 
-    tenant_obj = db.query(TenantModel).filter(TenantModel.id == tenant_id).first()
+    tenant_obj = _resolve_tenant(db, tenant_ref)
     if not tenant_obj:
         raise HTTPException(status_code=400, detail="Tenant not found")
 
+    key_prefix = (getattr(tenant_obj, "key_prefix", None) or tenant_obj.id).strip()
     tenant_settings = tenant_obj.settings or {}
     client_id = tenant_settings.get("gdrive_client_id")
-    client_secret_secret = tenant_settings.get("gdrive_client_secret") or f"gdrive-client-secret-{tenant_id}"
-    token_secret = tenant_settings.get("gdrive_token_secret") or f"gdrive-token-{tenant_id}"
+    client_secret_secret = tenant_settings.get("gdrive_client_secret") or f"gdrive-client-secret-{key_prefix}"
+    token_secret = tenant_settings.get("gdrive_token_secret") or f"gdrive-token-{key_prefix}"
 
     if not client_id:
         raise HTTPException(status_code=400, detail="Google Drive client ID not configured")

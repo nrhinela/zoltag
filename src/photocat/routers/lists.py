@@ -17,6 +17,7 @@ from photocat.settings import settings
 from photocat.auth.dependencies import get_current_user
 from photocat.auth.models import UserProfile
 from photocat.routers.images._shared import _build_source_url
+from photocat.tenant_scope import assign_tenant_scope, tenant_column_filter, tenant_column_filter_for_values
 
 router = APIRouter(
     prefix="/api/v1/lists",
@@ -37,9 +38,17 @@ def _resolve_storage_or_409(*, image: ImageMetadata, tenant: Tenant, db: Session
         raise HTTPException(status_code=409, detail=str(exc))
 
 
-def get_most_recent_list(db: Session, tenant_id: str):
+def _tenant_filter(model, tenant: Tenant | str):
+    if isinstance(tenant, Tenant):
+        return tenant_column_filter(model, tenant)
+    return tenant_column_filter_for_values(model, tenant, tenant)
+
+
+def get_most_recent_list(db: Session, tenant: Tenant | str):
     """Get the most recently created list for a tenant."""
-    return db.query(PhotoList).filter_by(tenant_id=tenant_id).order_by(PhotoList.created_at.desc()).first()
+    return db.query(PhotoList).filter(
+        _tenant_filter(PhotoList, tenant)
+    ).order_by(PhotoList.created_at.desc()).first()
 
 
 @router.get("/recent", response_model=dict)
@@ -48,7 +57,7 @@ async def get_recent_list(
     db: Session = Depends(get_db)
 ):
     """Get the most recently created list for the tenant (if any)."""
-    recent = get_most_recent_list(db, tenant.id)
+    recent = get_most_recent_list(db, tenant)
     if not recent:
         return {}
     return {
@@ -68,7 +77,10 @@ async def get_list(
     db: Session = Depends(get_db)
 ):
     """Get a single list by ID for the tenant."""
-    lst = db.query(PhotoList).filter_by(id=list_id, tenant_id=tenant.id).first()
+    lst = db.query(PhotoList).filter(
+        PhotoList.id == list_id,
+        tenant_column_filter(PhotoList, tenant),
+    ).first()
     if not lst:
         raise HTTPException(status_code=404, detail="List not found")
     item_count = db.query(func.count(PhotoListItem.id)).filter(
@@ -92,7 +104,12 @@ async def delete_list_item(
     db: Session = Depends(get_db)
 ):
     """Remove a photo from a list by PhotoListItem ID (must belong to tenant)."""
-    item = db.query(PhotoListItem).join(PhotoList, PhotoListItem.list_id == PhotoList.id).filter(PhotoListItem.id == item_id, PhotoList.tenant_id == tenant.id).first()
+    item = db.query(PhotoListItem).join(
+        PhotoList, PhotoListItem.list_id == PhotoList.id
+    ).filter(
+        PhotoListItem.id == item_id,
+        tenant_column_filter(PhotoList, tenant),
+    ).first()
     if not item:
         raise HTTPException(status_code=404, detail="List item not found")
     db.delete(item)
@@ -109,12 +126,11 @@ async def create_list(
     current_user: UserProfile = Depends(get_current_user)
 ):
     """Create a new list."""
-    new_list = PhotoList(
-        tenant_id=tenant.id,
+    new_list = assign_tenant_scope(PhotoList(
         title=title,
         notebox=notebox,
         created_by_uid=current_user.supabase_uid if current_user else None
-    )
+    ), tenant)
     db.add(new_list)
     db.commit()
     db.refresh(new_list)
@@ -127,11 +143,13 @@ async def list_lists(
     db: Session = Depends(get_db)
 ):
     """List all lists for the tenant."""
-    lists = db.query(PhotoList).filter_by(tenant_id=tenant.id).order_by(PhotoList.created_at.asc()).all()
+    lists = db.query(PhotoList).filter(
+        tenant_column_filter(PhotoList, tenant)
+    ).order_by(PhotoList.created_at.asc()).all()
     counts = dict(
         db.query(PhotoListItem.list_id, func.count(PhotoListItem.id))
         .join(PhotoList, PhotoListItem.list_id == PhotoList.id)
-        .filter(PhotoList.tenant_id == tenant.id)
+        .filter(tenant_column_filter(PhotoList, tenant))
         .group_by(PhotoListItem.list_id)
         .all()
     )
@@ -168,7 +186,10 @@ async def edit_list(
     db: Session = Depends(get_db)
 ):
     """Edit a list (title and/or notebox)."""
-    lst = db.query(PhotoList).filter_by(id=list_id, tenant_id=tenant.id).first()
+    lst = db.query(PhotoList).filter(
+        PhotoList.id == list_id,
+        tenant_column_filter(PhotoList, tenant),
+    ).first()
     if not lst:
         raise HTTPException(status_code=404, detail="List not found")
     if title is not None:
@@ -205,7 +226,10 @@ async def delete_list(
     db: Session = Depends(get_db)
 ):
     """Delete a list and its items."""
-    lst = db.query(PhotoList).filter_by(id=list_id, tenant_id=tenant.id).first()
+    lst = db.query(PhotoList).filter(
+        PhotoList.id == list_id,
+        tenant_column_filter(PhotoList, tenant),
+    ).first()
     if not lst:
         raise HTTPException(status_code=404, detail="List not found")
     db.delete(lst)
@@ -221,7 +245,10 @@ async def get_list_items(
     db: Session = Depends(get_db)
 ):
     """Get all items in a list, ordered by added_at ascending."""
-    lst = db.query(PhotoList).filter_by(id=list_id, tenant_id=tenant.id).first()
+    lst = db.query(PhotoList).filter(
+        PhotoList.id == list_id,
+        tenant_column_filter(PhotoList, tenant),
+    ).first()
     if not lst:
         raise HTTPException(status_code=404, detail="List not found")
     if ids_only:
@@ -237,10 +264,10 @@ async def get_list_items(
                 ImageMetadata,
                 and_(
                     PhotoListItem.asset_id == ImageMetadata.asset_id,
-                    ImageMetadata.tenant_id == tenant.id,
+                    tenant_column_filter(ImageMetadata, tenant),
                 ),
             )
-            .filter(PhotoListItem.list_id == list_id, PhotoList.tenant_id == tenant.id)
+            .filter(PhotoListItem.list_id == list_id, tenant_column_filter(PhotoList, tenant))
             .order_by(PhotoListItem.added_at.asc())
             .all()
         )
@@ -254,7 +281,7 @@ async def get_list_items(
             ImageMetadata,
             and_(
                 PhotoListItem.asset_id == ImageMetadata.asset_id,
-                ImageMetadata.tenant_id == tenant.id,
+                tenant_column_filter(ImageMetadata, tenant),
             ),
         )
         .filter(
@@ -270,12 +297,12 @@ async def get_list_items(
     active_tag_type = get_tenant_setting(db, tenant.id, 'active_machine_tag_type', default='siglip')
     tags = db.query(MachineTag).filter(
         MachineTag.asset_id.in_(asset_ids),
-        MachineTag.tenant_id == tenant.id,
+        tenant_column_filter(MachineTag, tenant),
         MachineTag.tag_type == active_tag_type
     ).all() if asset_ids else []
     permatags = db.query(Permatag).filter(
         Permatag.asset_id.in_(asset_ids),
-        Permatag.tenant_id == tenant.id
+        tenant_column_filter(Permatag, tenant)
     ).all() if asset_ids else []
     variant_count_by_asset = {
         asset_id: int(count or 0)
@@ -402,13 +429,16 @@ async def add_photo_to_specific_list(
     photo_id = req.photo_id
 
     # Verify list belongs to tenant
-    lst = db.query(PhotoList).filter_by(id=list_id, tenant_id=tenant.id).first()
+    lst = db.query(PhotoList).filter(
+        PhotoList.id == list_id,
+        tenant_column_filter(PhotoList, tenant),
+    ).first()
     if not lst:
         raise HTTPException(status_code=404, detail="List not found")
 
     image = db.query(ImageMetadata.id, ImageMetadata.asset_id).filter(
         ImageMetadata.id == photo_id,
-        ImageMetadata.tenant_id == tenant.id
+        tenant_column_filter(ImageMetadata, tenant)
     ).first()
     if not image:
         raise HTTPException(status_code=404, detail="Image not found")
@@ -454,7 +484,7 @@ async def add_photo_to_list(
     photo_id = req.photo_id
     image = db.query(ImageMetadata.id, ImageMetadata.asset_id).filter(
         ImageMetadata.id == photo_id,
-        ImageMetadata.tenant_id == tenant.id
+        tenant_column_filter(ImageMetadata, tenant)
     ).first()
     if not image:
         raise HTTPException(status_code=404, detail="Image not found")
@@ -462,13 +492,12 @@ async def add_photo_to_list(
     if asset_id is None:
         raise HTTPException(status_code=409, detail="Image has no asset_id")
 
-    recent = get_most_recent_list(db, tenant.id)
+    recent = get_most_recent_list(db, tenant)
     if not recent:
         # Auto-create new list
-        recent = PhotoList(
-            tenant_id=tenant.id,
+        recent = assign_tenant_scope(PhotoList(
             title="Untitled List"
-        )
+        ), tenant)
         db.add(recent)
         db.commit()
         db.refresh(recent)

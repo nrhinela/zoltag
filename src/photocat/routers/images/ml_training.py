@@ -19,6 +19,7 @@ from photocat.learning import (
     load_keyword_models,
     recompute_trained_tags_for_image,
 )
+from photocat.tenant_scope import tenant_column_filter, tenant_column_filter_for_values
 
 # Sub-router with no prefix/tags (inherits from parent)
 router = APIRouter()
@@ -54,7 +55,9 @@ async def list_ml_training_images(
     db: Session = Depends(get_db)
 ):
     """List images with permatags, ML tags, and trained-ML tags for comparison."""
-    images_query = db.query(ImageMetadata).filter_by(tenant_id=tenant.id)
+    images_query = db.query(ImageMetadata).filter(
+        tenant_column_filter(ImageMetadata, tenant)
+    )
     total = images_query.count()
     images = images_query.order_by(ImageMetadata.id.desc()).limit(limit).offset(offset).all()
     assets_by_id = load_assets_for_images(db, images)
@@ -69,19 +72,19 @@ async def list_ml_training_images(
     active_tag_type = get_tenant_setting(db, tenant.id, 'active_machine_tag_type', default='siglip')
 
     tags = db.query(MachineTag).filter(
-        MachineTag.tenant_id == tenant.id,
+        tenant_column_filter(MachineTag, tenant),
         MachineTag.asset_id.in_(asset_ids),
         MachineTag.tag_type == active_tag_type
     ).all() if asset_ids else []
 
     permatags = db.query(Permatag).filter(
         Permatag.asset_id.in_(asset_ids),
-        Permatag.tenant_id == tenant.id,
+        tenant_column_filter(Permatag, tenant),
     ).all() if asset_ids else []
 
     # Get latest keyword model name
     model_row = db.query(KeywordModel.model_name).filter(
-        KeywordModel.tenant_id == tenant.id
+        tenant_column_filter(KeywordModel, tenant)
     ).order_by(
         func.coalesce(KeywordModel.updated_at, KeywordModel.created_at).desc()
     ).first()
@@ -89,7 +92,7 @@ async def list_ml_training_images(
     cached_trained = []
     if model_row:
         cached_trained = db.query(MachineTag).filter(
-            MachineTag.tenant_id == tenant.id,
+            tenant_column_filter(MachineTag, tenant),
             MachineTag.asset_id.in_(asset_ids),
             MachineTag.tag_type == 'trained',
             MachineTag.model_name == model_row.model_name
@@ -161,7 +164,11 @@ async def list_ml_training_images(
     # unless refresh=true to keep listing lightweight in production.
     model_name = model_row.model_name if model_row else settings.tagging_model
     model_version = model_name
-    keyword_models = load_keyword_models(db, tenant.id, model_name) if model_name else {}
+    keyword_models = load_keyword_models(
+        db,
+        tenant.id,
+        model_name,
+    ) if model_name else {}
     if refresh and keyword_models:
         try:
             tagger = get_tagger(model_type=settings.tagging_model)
@@ -250,11 +257,11 @@ def _compute_ml_training_stats(tenant_id: str) -> dict:
 
         # Single pass over image_metadata and embeddings
         image_count = db.query(func.count(ImageMetadata.id)).filter(
-            ImageMetadata.tenant_id == tenant_id
+            tenant_column_filter_for_values(ImageMetadata, tenant_id)
         ).scalar() or 0
 
         embedding_count = db.query(func.count(ImageEmbedding.id)).filter(
-            ImageEmbedding.tenant_id == tenant_id
+            tenant_column_filter_for_values(ImageEmbedding, tenant_id)
         ).scalar() or 0
 
         # Two targeted queries on machine_tags - kept separate to use (tenant_id, asset_id, tag_type) index
@@ -263,7 +270,7 @@ def _compute_ml_training_stats(tenant_id: str) -> dict:
             func.min(MachineTag.created_at),
             func.max(MachineTag.created_at),
         ).filter(
-            MachineTag.tenant_id == tenant_id,
+            tenant_column_filter_for_values(MachineTag, tenant_id),
             MachineTag.tag_type == active_tag_type,
             MachineTag.asset_id.is_not(None),
         ).one()
@@ -274,7 +281,7 @@ def _compute_ml_training_stats(tenant_id: str) -> dict:
             func.min(MachineTag.created_at),
             func.max(MachineTag.created_at),
         ).filter(
-            MachineTag.tenant_id == tenant_id,
+            tenant_column_filter_for_values(MachineTag, tenant_id),
             MachineTag.tag_type == 'trained',
             MachineTag.asset_id.is_not(None),
         ).one()
@@ -292,7 +299,7 @@ def _compute_ml_training_stats(tenant_id: str) -> dict:
             func.count(KeywordModel.id),
             func.max(func.coalesce(KeywordModel.updated_at, KeywordModel.created_at)),
         ).filter(
-            KeywordModel.tenant_id == tenant_id
+            tenant_column_filter_for_values(KeywordModel, tenant_id)
         ).one()
 
         model_count = int(km_row[0] or 0)

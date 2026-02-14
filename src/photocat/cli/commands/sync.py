@@ -6,8 +6,7 @@ from google.cloud import storage
 
 from photocat.settings import settings
 from photocat.dependencies import get_secret
-from photocat.metadata import Tenant as TenantModel, Asset
-from photocat.tenant import Tenant, TenantContext
+from photocat.metadata import Asset
 from photocat.dropbox import DropboxClient
 from photocat.image import ImageProcessor
 from photocat.sync_pipeline import process_dropbox_entry
@@ -54,33 +53,20 @@ class SyncDropboxCommand(CliCommand):
 
     def _sync_dropbox(self):
         """Sync images from Dropbox."""
-        # Load tenant
-        tenant = self.db.query(TenantModel).filter(TenantModel.id == self.tenant_id).first()
-        if not tenant:
-            click.echo(f"Error: Tenant {self.tenant_id} not found", err=True)
-            return
-
-        tenant_context = Tenant(
-            id=tenant.id,
-            name=tenant.name,
-            storage_bucket=tenant.storage_bucket,
-            thumbnail_bucket=tenant.thumbnail_bucket
-        )
-        TenantContext.set(tenant_context)
-
-        click.echo(f"Syncing from Dropbox for tenant: {tenant.name}")
+        tenant_context = self.load_tenant(self.tenant_id)
+        click.echo(f"Syncing from Dropbox for tenant: {tenant_context.name}")
 
         # Get Dropbox credentials
         try:
-            dropbox_token = get_secret(f"dropbox-token-{self.tenant_id}")
+            dropbox_token = get_secret(f"dropbox-token-{tenant_context.secret_scope}")
         except Exception as exc:
             click.echo(f"Error: No Dropbox refresh token configured ({exc})", err=True)
             return
-        if not tenant.dropbox_app_key:
+        if not tenant_context.dropbox_app_key:
             click.echo("Error: Dropbox app key not configured", err=True)
             return
         try:
-            dropbox_app_secret = get_secret(f"dropbox-app-secret-{self.tenant_id}")
+            dropbox_app_secret = get_secret(f"dropbox-app-secret-{tenant_context.secret_scope}")
         except Exception as exc:
             click.echo(f"Error: Dropbox app secret not configured ({exc})", err=True)
             return
@@ -88,12 +74,12 @@ class SyncDropboxCommand(CliCommand):
         # Initialize Dropbox client
         dropbox_client = DropboxClient(
             refresh_token=dropbox_token,
-            app_key=tenant.dropbox_app_key,
+            app_key=tenant_context.dropbox_app_key,
             app_secret=dropbox_app_secret,
         )
 
         # Get sync folders from tenant config or use root
-        sync_folders = (tenant.settings or {}).get('dropbox_sync_folders', [])
+        sync_folders = (tenant_context.settings or {}).get('dropbox_sync_folders', [])
 
         if not sync_folders:
             sync_folders = ['']  # Root if no folders configured
@@ -106,7 +92,7 @@ class SyncDropboxCommand(CliCommand):
                 row[0]
                 for row in self.db.query(Asset.source_key)
                 .filter(
-                    Asset.tenant_id == self.tenant_id,
+                    self.tenant_filter(Asset),
                     Asset.source_provider == "dropbox",
                 )
                 .all()

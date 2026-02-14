@@ -25,6 +25,7 @@ from photocat.models.config import Keyword, PhotoListItem
 from photocat.tagging import calculate_tags
 from photocat.config.db_utils import load_keywords_map
 from photocat.settings import settings
+from photocat.tenant_scope import tenant_column_filter
 from photocat.routers.images._shared import (
     _build_source_url,
     _resolve_storage_or_409,
@@ -105,7 +106,7 @@ async def list_images(
         if normalized_keyword:
             keyword_row = db.query(Keyword.id).filter(
                 func.lower(Keyword.keyword) == normalized_keyword,
-                Keyword.tenant_id == tenant.id
+                tenant_column_filter(Keyword, tenant)
             ).first()
             if keyword_row:
                 ml_keyword_id = keyword_row[0]
@@ -333,7 +334,9 @@ async def list_images(
         except (json.JSONDecodeError, KeyError, TypeError) as e:
             print(f"Error parsing category_filters: {e}")
             # Fall back to returning all images
-            query = db.query(ImageMetadata).filter_by(tenant_id=tenant.id)
+            query = db.query(ImageMetadata).filter(
+                tenant_column_filter(ImageMetadata, tenant)
+            )
             total = int(query.order_by(None).count() or 0)
             query = query.order_by(*order_by_clauses)
             offset = resolve_anchor_offset(query, offset)
@@ -354,7 +357,7 @@ async def list_images(
             # Find keyword IDs for the given keyword names
             keyword_ids = db.query(Keyword.id).filter(
                 Keyword.keyword.in_(keyword_list),
-                Keyword.tenant_id == tenant.id
+                tenant_column_filter(Keyword, tenant)
             ).all()
             keyword_id_list = [kw[0] for kw in keyword_ids]
 
@@ -366,7 +369,7 @@ async def list_images(
                 # Use subquery to get asset IDs that match keywords.
                 matching_asset_ids = db.query(MachineTag.asset_id).filter(
                     MachineTag.keyword_id.in_(keyword_id_list),
-                    MachineTag.tenant_id == tenant.id,
+                    tenant_column_filter(MachineTag, tenant),
                     MachineTag.tag_type == active_tag_type,
                     MachineTag.asset_id.is_not(None),
                 ).distinct().subquery()
@@ -381,11 +384,11 @@ async def list_images(
                     and_(
                         MachineTag.asset_id == ImageMetadata.asset_id,
                         MachineTag.keyword_id.in_(keyword_id_list),
-                        MachineTag.tenant_id == tenant.id,
+                        tenant_column_filter(MachineTag, tenant),
                         MachineTag.tag_type == active_tag_type
                     )
                 ).filter(
-                    ImageMetadata.tenant_id == tenant.id,
+                    tenant_column_filter(ImageMetadata, tenant),
                     ImageMetadata.asset_id.in_(matching_asset_ids)
                 ).group_by(
                     ImageMetadata.id
@@ -411,7 +414,7 @@ async def list_images(
             # Find keyword IDs for the given keyword names
             keyword_ids = db.query(Keyword.id).filter(
                 Keyword.keyword.in_(keyword_list),
-                Keyword.tenant_id == tenant.id
+                tenant_column_filter(Keyword, tenant)
             ).all()
             keyword_id_list = [kw[0] for kw in keyword_ids]
 
@@ -421,13 +424,15 @@ async def list_images(
                 total = 0
             else:
                 # Start with images that have tenant_id
-                and_query = db.query(ImageMetadata.id).filter_by(tenant_id=tenant.id)
+                and_query = db.query(ImageMetadata.id).filter(
+                    tenant_column_filter(ImageMetadata, tenant)
+                )
 
                 # For each keyword, filter images that have that keyword
                 for keyword_id in keyword_id_list:
                     keyword_subquery = db.query(MachineTag.asset_id).filter(
                         MachineTag.keyword_id == keyword_id,
-                        MachineTag.tenant_id == tenant.id,
+                        tenant_column_filter(MachineTag, tenant),
                         MachineTag.tag_type == active_tag_type,
                         MachineTag.asset_id.is_not(None),
                     ).subquery()
@@ -450,11 +455,11 @@ async def list_images(
                     and_(
                         MachineTag.asset_id == ImageMetadata.asset_id,
                         MachineTag.keyword_id.in_(keyword_id_list),
-                        MachineTag.tenant_id == tenant.id,
+                        tenant_column_filter(MachineTag, tenant),
                         MachineTag.tag_type == active_tag_type
                     )
                 ).filter(
-                    ImageMetadata.tenant_id == tenant.id,
+                    tenant_column_filter(ImageMetadata, tenant),
                     ImageMetadata.id.in_(matching_image_ids)
                 ).group_by(
                     ImageMetadata.id
@@ -525,14 +530,14 @@ async def list_images(
     tag_type_filter = ml_tag_type if ml_tag_type else get_tenant_setting(db, tenant.id, 'active_machine_tag_type', default='siglip')
     tags = db.query(MachineTag).filter(
         MachineTag.asset_id.in_(asset_ids),
-        MachineTag.tenant_id == tenant.id,
+        tenant_column_filter(MachineTag, tenant),
         MachineTag.tag_type == tag_type_filter
     ).all() if asset_ids else []
 
     # Get permatags for all images
     permatags = db.query(Permatag).filter(
         Permatag.asset_id.in_(asset_ids),
-        Permatag.tenant_id == tenant.id
+        tenant_column_filter(Permatag, tenant)
     ).all() if asset_ids else []
     variant_count_by_asset = {
         asset_id: int(count or 0)
@@ -694,11 +699,11 @@ async def list_duplicate_images(
         ImageEmbedding,
         and_(
             ImageEmbedding.asset_id == ImageMetadata.asset_id,
-            ImageEmbedding.tenant_id == tenant.id,
+            tenant_column_filter(ImageEmbedding, tenant),
             ImageEmbedding.asset_id.is_not(None),
         ),
     ).filter(
-        ImageMetadata.tenant_id == tenant.id,
+        tenant_column_filter(ImageMetadata, tenant),
     ).subquery()
 
     duplicate_groups = db.query(
@@ -763,7 +768,7 @@ async def list_duplicate_images(
 
     permatags = db.query(Permatag).filter(
         Permatag.asset_id.in_(asset_ids),
-        Permatag.tenant_id == tenant.id
+        tenant_column_filter(Permatag, tenant)
     ).all() if asset_ids else []
     variant_count_by_asset = {
         asset_id: int(count or 0)
@@ -848,9 +853,9 @@ async def get_image(
     db: Session = Depends(get_db)
 ):
     """Get image details with signed thumbnail URL."""
-    image = db.query(ImageMetadata).filter_by(
-        id=image_id,
-        tenant_id=tenant.id
+    image = db.query(ImageMetadata).filter(
+        ImageMetadata.id == image_id,
+        tenant_column_filter(ImageMetadata, tenant),
     ).first()
 
     if not image:
@@ -860,13 +865,13 @@ async def get_image(
     active_tag_type = get_tenant_setting(db, tenant.id, 'active_machine_tag_type', default='siglip')
     tags = db.query(MachineTag).filter(
         MachineTag.asset_id == image.asset_id,
-        MachineTag.tenant_id == tenant.id
+        tenant_column_filter(MachineTag, tenant)
     ).all()
 
     # Get permatags
     permatags = db.query(Permatag).filter(
         Permatag.asset_id == image.asset_id,
-        Permatag.tenant_id == tenant.id,
+        tenant_column_filter(Permatag, tenant),
     ).all()
 
     # Load keyword info for all tags
@@ -916,7 +921,7 @@ async def get_image(
     calculated_tags = calculate_tags(machine_tags_list, permatags_list)
     reviewed_at = db.query(func.max(Permatag.created_at)).filter(
         Permatag.asset_id == image.asset_id,
-        Permatag.tenant_id == tenant.id,
+        tenant_column_filter(Permatag, tenant),
     ).scalar()
 
     storage_info = _resolve_storage_or_409(image=image, tenant=tenant, db=db)
@@ -966,9 +971,9 @@ async def get_image_asset(
     db: Session = Depends(get_db),
 ):
     """Get resolved asset info for an image, with fallback to image_metadata fields."""
-    image = db.query(ImageMetadata).filter_by(
-        id=image_id,
-        tenant_id=tenant.id,
+    image = db.query(ImageMetadata).filter(
+        ImageMetadata.id == image_id,
+        tenant_column_filter(ImageMetadata, tenant),
     ).first()
     if not image:
         raise HTTPException(status_code=404, detail="Image not found")
@@ -1003,7 +1008,7 @@ async def get_asset(
     """Get canonical asset details for a tenant."""
     asset = db.query(Asset).filter(
         Asset.id == asset_id,
-        Asset.tenant_id == tenant.id,
+        tenant_column_filter(Asset, tenant),
     ).first()
     if not asset:
         raise HTTPException(status_code=404, detail="Asset not found")
@@ -1012,7 +1017,7 @@ async def get_asset(
         row[0]
         for row in db.query(ImageMetadata.id)
         .filter(
-            ImageMetadata.tenant_id == tenant.id,
+            tenant_column_filter(ImageMetadata, tenant),
             ImageMetadata.asset_id == asset.id,
         )
         .order_by(ImageMetadata.id.asc())
@@ -1048,7 +1053,7 @@ async def delete_image(
     """Delete an asset image and related tenant-scoped records."""
     image = db.query(ImageMetadata).filter(
         ImageMetadata.id == image_id,
-        ImageMetadata.tenant_id == tenant.id,
+        tenant_column_filter(ImageMetadata, tenant),
     ).first()
     if not image:
         raise HTTPException(status_code=404, detail="Image not found")
@@ -1063,7 +1068,7 @@ async def delete_image(
     if asset_id is not None:
         asset = db.query(Asset).filter(
             Asset.id == asset_id,
-            Asset.tenant_id == tenant.id,
+            tenant_column_filter(Asset, tenant),
         ).first()
         if asset:
             source_provider = (asset.source_provider or "").strip().lower() or None
@@ -1080,15 +1085,15 @@ async def delete_image(
         ]
 
         db.query(Permatag).filter(
-            Permatag.tenant_id == tenant.id,
+            tenant_column_filter(Permatag, tenant),
             Permatag.asset_id == asset_id,
         ).delete(synchronize_session=False)
         db.query(MachineTag).filter(
-            MachineTag.tenant_id == tenant.id,
+            tenant_column_filter(MachineTag, tenant),
             MachineTag.asset_id == asset_id,
         ).delete(synchronize_session=False)
         db.query(ImageEmbedding).filter(
-            ImageEmbedding.tenant_id == tenant.id,
+            tenant_column_filter(ImageEmbedding, tenant),
             ImageEmbedding.asset_id == asset_id,
         ).delete(synchronize_session=False)
         db.query(PhotoListItem).filter(
@@ -1100,12 +1105,12 @@ async def delete_image(
 
     db.query(ImageMetadata).filter(
         ImageMetadata.id == image_id,
-        ImageMetadata.tenant_id == tenant.id,
+        tenant_column_filter(ImageMetadata, tenant),
     ).delete(synchronize_session=False)
     if asset is not None:
         db.query(Asset).filter(
             Asset.id == asset_id,
-            Asset.tenant_id == tenant.id,
+            tenant_column_filter(Asset, tenant),
         ).delete(synchronize_session=False)
     db.commit()
 
