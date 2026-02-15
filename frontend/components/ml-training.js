@@ -1,6 +1,6 @@
 import { LitElement, html, css } from 'lit';
 import { tailwind } from './tailwind-lit.js';
-import { getMlTrainingImages, getMlTrainingStats } from '../services/api.js';
+import { getMlTrainingImages, getMlTrainingStats, getSystemSettings } from '../services/api.js';
 
 class MlTraining extends LitElement {
   static styles = [tailwind, css`
@@ -84,11 +84,7 @@ class MlTraining extends LitElement {
 
   async fetchSystemConfig() {
     try {
-      const response = await fetch('/api/v1/config/system');
-      if (!response.ok) {
-        throw new Error('Failed to fetch system config');
-      }
-      const data = await response.json();
+      const data = await getSystemSettings();
       this.useKeywordModels = data.use_keyword_models ?? null;
     } catch (error) {
       console.error('Failed to fetch ML training config:', error);

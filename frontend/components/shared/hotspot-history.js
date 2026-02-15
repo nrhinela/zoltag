@@ -1,6 +1,7 @@
 const DRAG_IMAGE_PAYLOAD_TYPE = 'application/x-zoltag-images';
 const DEFAULT_HISTORY_BATCH_INCREMENT = 5;
 const MAX_HISTORY_BATCHES = 250;
+const HOTSPOT_HISTORY_SESSION_STORE = new Map();
 
 function normalizeId(value) {
   const parsed = Number.parseInt(String(value ?? '').trim(), 10);
@@ -150,3 +151,59 @@ export function loadPreviousHistoryBatchCount(current, increment = DEFAULT_HISTO
   return currentValue + step;
 }
 
+function cloneHistoryImage(image) {
+  if (!image || typeof image !== 'object') return null;
+  const cloned = { ...image };
+  if (Array.isArray(image.permatags)) {
+    cloned.permatags = image.permatags.map((tag) => ({ ...tag }));
+  }
+  return cloned;
+}
+
+function cloneHistoryBatch(batch) {
+  if (!batch || typeof batch !== 'object') return null;
+  return {
+    ...batch,
+    ids: Array.isArray(batch.ids) ? [...batch.ids] : [],
+    images: Array.isArray(batch.images)
+      ? batch.images.map((image) => cloneHistoryImage(image)).filter(Boolean)
+      : [],
+  };
+}
+
+function normalizeHistoryState(state, { fallbackView = 'results' } = {}) {
+  const fallback = {
+    view: fallbackView === 'history' ? 'history' : 'results',
+    visibleCount: 1,
+    batches: [],
+  };
+  if (!state || typeof state !== 'object') {
+    return fallback;
+  }
+  const view = state.view === 'history' ? 'history' : 'results';
+  const visibleCount = Math.max(1, Number(state.visibleCount) || 1);
+  const batches = Array.isArray(state.batches)
+    ? state.batches.map((batch) => cloneHistoryBatch(batch)).filter(Boolean)
+    : [];
+  return { view, visibleCount, batches };
+}
+
+export function buildHotspotHistorySessionKey(scope, tenant = '') {
+  const safeScope = String(scope || 'default').trim() || 'default';
+  const safeTenant = String(tenant || 'global').trim() || 'global';
+  return `${safeScope}::${safeTenant}`;
+}
+
+export function saveHotspotHistorySessionState(sessionKey, state) {
+  const key = String(sessionKey || '').trim();
+  if (!key) return;
+  HOTSPOT_HISTORY_SESSION_STORE.set(key, normalizeHistoryState(state));
+}
+
+export function loadHotspotHistorySessionState(sessionKey, { fallbackView = 'results' } = {}) {
+  const key = String(sessionKey || '').trim();
+  if (!key || !HOTSPOT_HISTORY_SESSION_STORE.has(key)) {
+    return normalizeHistoryState(null, { fallbackView });
+  }
+  return normalizeHistoryState(HOTSPOT_HISTORY_SESSION_STORE.get(key), { fallbackView });
+}

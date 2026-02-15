@@ -46,7 +46,7 @@ router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
 
 @router.post("/register", response_model=dict, status_code=201)
-@limiter.limit("10/minute")
+@limiter.limit("120/minute")
 async def register(
     request: Request,
     body: RegisterRequest,

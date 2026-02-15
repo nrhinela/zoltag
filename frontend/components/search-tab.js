@@ -15,14 +15,17 @@ import {
 } from './shared/keyword-utils.js';
 import { createSelectionHandlers } from './shared/selection-handlers.js';
 import { renderResultsPagination } from './shared/pagination-controls.js';
-import { renderImageGrid } from './shared/image-grid.js';
+import { renderSelectableImageGrid } from './shared/selectable-image-grid.js';
 import {
+  buildHotspotHistorySessionKey,
   createHotspotHistoryBatch,
   getVisibleHistoryBatches,
+  loadHotspotHistorySessionState,
   loadPreviousHistoryBatchCount,
   parseDraggedImageIds,
   prependHistoryBatch,
   readDragImagePayload,
+  saveHotspotHistorySessionState,
   setDragImagePayload,
 } from './shared/hotspot-history.js';
 import './shared/widgets/filter-chips.js';
@@ -247,6 +250,8 @@ export class SearchTab extends LitElement {
     this._searchInitialLoadPending = false;
     this._searchBrowseOrder = null;
     this._searchBrowseGroupKey = null;
+    this._searchHistoryOrder = null;
+    this._searchHistoryGroupKey = null;
     this._searchFilterPanelHandlers = null;
     this._folderBrowserPanelHandlers = null;
     this._searchDropboxFetchTimer = null;
@@ -279,6 +284,9 @@ export class SearchTab extends LitElement {
       suppressClickProperty: '_searchSuppressClick',
       dragSelectOnMove: true,
       getOrder: () => {
+        if (this.searchResultsView === 'history') {
+          return this._searchHistoryOrder || [];
+        }
         if (this.searchSubTab === 'browse-by-folder') {
           return this._searchBrowseOrder || [];
         }
@@ -316,6 +324,7 @@ export class SearchTab extends LitElement {
 
   connectedCallback() {
     super.connectedCallback();
+    this._restoreSearchHistorySessionState();
     if (!this.searchListId && !this.searchListTitle) {
       this._resetSearchListDraft();
     }
@@ -348,6 +357,8 @@ export class SearchTab extends LitElement {
         this.searchDragStartIndex = null;
         this.searchDragEndIndex = null;
       }
+      this._searchBrowseGroupKey = null;
+      this._searchHistoryGroupKey = null;
     };
 
     document.addEventListener('pointerdown', this._handleSearchGlobalPointerDown);
@@ -414,9 +425,7 @@ export class SearchTab extends LitElement {
       this._listDragTargetId = null;
       this._lastListFetchTime = 0;
       this.searchLists = [];
-      this.searchResultsView = 'results';
-      this._searchHotspotHistoryBatches = [];
-      this._searchHotspotHistoryVisibleBatches = 1;
+      this._restoreSearchHistorySessionState();
       this._fetchSearchLists({ force: true });
     }
     if (changedProps.has('searchFilterPanel')) {
@@ -470,6 +479,15 @@ export class SearchTab extends LitElement {
       if (this.browseByFolderOffset >= total && total > 0) {
         this.browseByFolderOffset = 0;
       }
+    }
+
+    if (
+      changedProps.has('tenant')
+      || changedProps.has('searchResultsView')
+      || changedProps.has('_searchHotspotHistoryBatches')
+      || changedProps.has('_searchHotspotHistoryVisibleBatches')
+    ) {
+      this._persistSearchHistorySessionState();
     }
   }
 
@@ -1875,8 +1893,21 @@ export class SearchTab extends LitElement {
     return this._handleSearchPointerDown(event, index, imageId);
   }
 
-  _handleBrowseByFolderSelectHover(index, groupKey) {
+  _handleBrowseByFolderSelectHover(index, _order, groupKey) {
     if (this._searchBrowseGroupKey !== groupKey) {
+      return;
+    }
+    return this._handleSearchSelectHover(index);
+  }
+
+  _handleSearchHistoryPointerDown(event, index, imageId, order, groupKey) {
+    this._searchHistoryOrder = order;
+    this._searchHistoryGroupKey = groupKey;
+    return this._handleSearchPointerDown(event, index, imageId);
+  }
+
+  _handleSearchHistorySelectHover(index, _order, groupKey) {
+    if (this._searchHistoryGroupKey !== groupKey) {
       return;
     }
     return this._handleSearchSelectHover(index);
@@ -1927,9 +1958,34 @@ export class SearchTab extends LitElement {
     setDragImagePayload(event.dataTransfer, ids, [imageSet || this.searchImages || []]);
   }
 
+  _getSearchHistorySessionKey() {
+    return buildHotspotHistorySessionKey('search', this.tenant);
+  }
+
+  _restoreSearchHistorySessionState() {
+    const state = loadHotspotHistorySessionState(this._getSearchHistorySessionKey(), {
+      fallbackView: 'results',
+    });
+    this.searchResultsView = state.view;
+    this._searchHotspotHistoryBatches = state.batches;
+    this._searchHotspotHistoryVisibleBatches = state.visibleCount;
+  }
+
+  _persistSearchHistorySessionState() {
+    saveHotspotHistorySessionState(this._getSearchHistorySessionKey(), {
+      view: this.searchResultsView,
+      batches: this._searchHotspotHistoryBatches,
+      visibleCount: this._searchHotspotHistoryVisibleBatches,
+    });
+  }
+
   _setSearchResultsView(nextView) {
     this.searchResultsView = nextView === 'history' ? 'history' : 'results';
     this.searchDragSelection = [];
+    if (this.searchResultsView !== 'history') {
+      this._searchHistoryOrder = null;
+      this._searchHistoryGroupKey = null;
+    }
     if (this.searchResultsView === 'history' && this._searchHotspotHistoryVisibleBatches < 1) {
       this._searchHotspotHistoryVisibleBatches = 1;
     }
@@ -1984,22 +2040,24 @@ export class SearchTab extends LitElement {
     if (!visibleBatches.length) {
       return html`
         <div class="p-6 text-center text-sm text-gray-500">
-          No hotspot history yet. Drag images to a hotspot, then open History.
+          No hotspot history yet. Drag images to a hotspot, then open Hotspot History.
         </div>
       `;
     }
     const canLoadPrevious = visibleBatches.length < this._searchHotspotHistoryBatches.length;
     return html`
       <div class="hotspot-history-pane">
-        ${visibleBatches.map((batch, index) => html`
-          <div class="hotspot-history-batch">
+        ${visibleBatches.map((batch, index) => {
+          const order = (batch.images || []).map((image) => image.id);
+          return html`
+          <div class="hotspot-history-batch" data-history-batch-id=${batch.batchId}>
             <div class="hotspot-history-batch-header">
               <span class="hotspot-history-batch-title">${index === 0 ? 'Latest Batch' : `Batch ${index + 1}`}</span>
               <span class="hotspot-history-batch-meta">${batch.images.length} items · ${batch.targetLabel}</span>
             </div>
-            ${renderImageGrid({
+            ${renderSelectableImageGrid({
               images: batch.images,
-              selection: [],
+              selection: this.searchDragSelection,
               flashSelectionIds: this._searchFlashSelectionIds,
               selectionHandlers: this._searchSelectionHandlers,
               renderFunctions: {
@@ -2008,9 +2066,16 @@ export class SearchTab extends LitElement {
                 renderCuratePermatagSummary: this.renderCuratePermatagSummary || this._renderSearchPermatagSummary.bind(this),
                 formatCurateDate: this.formatCurateDate,
               },
-              eventHandlers: {
-                onImageClick: (dragEvent, image) => this._handleSearchImageClick(dragEvent, image, batch.images),
-                onDragStart: (dragEvent, image) => this._handleSearchDragStart(dragEvent, image, batch.images),
+              onImageClick: (dragEvent, image) => this._handleSearchImageClick(dragEvent, image, batch.images),
+              onDragStart: (dragEvent, image) => this._handleSearchDragStart(dragEvent, image, batch.images),
+              selectionEvents: {
+                pointerDown: (dragEvent, itemIndex, imageId, imageOrder, groupKey) =>
+                  this._handleSearchHistoryPointerDown(dragEvent, itemIndex, imageId, imageOrder, groupKey),
+                pointerMove: (dragEvent) => this._handleSearchPointerMove(dragEvent),
+                pointerEnter: (itemIndex, imageOrder, groupKey) =>
+                  this._handleSearchHistorySelectHover(itemIndex, imageOrder, groupKey),
+                order,
+                groupKey: batch.batchId,
               },
               options: {
                 enableReordering: false,
@@ -2020,7 +2085,8 @@ export class SearchTab extends LitElement {
               },
             })}
           </div>
-        `)}
+        `;
+        })}
         <div class="hotspot-history-footer">
           <button
             class="curate-pane-action secondary"
@@ -2331,7 +2397,7 @@ export class SearchTab extends LitElement {
                         class=${this.searchResultsView === 'history' ? 'active' : ''}
                         @click=${() => this._setSearchResultsView('history')}
                       >
-                        History
+                        Hotspot History
                       </button>
                     </div>
                   </div>
@@ -2342,7 +2408,7 @@ export class SearchTab extends LitElement {
                       ${searchPagination}
                     </div>
                     ${this.searchImages && this.searchImages.length > 0 ? html`
-                      ${renderImageGrid({
+                      ${renderSelectableImageGrid({
                         images: this.searchImages,
                         selection: this.searchDragSelection,
                         flashSelectionIds: this._searchFlashSelectionIds,
@@ -2353,12 +2419,12 @@ export class SearchTab extends LitElement {
                           renderCuratePermatagSummary: this.renderCuratePermatagSummary || this._renderSearchPermatagSummary.bind(this),
                           formatCurateDate: this.formatCurateDate,
                         },
-                        eventHandlers: {
-                          onImageClick: (event, image) => this._handleSearchImageClick(event, image, this.searchImages),
-                          onDragStart: (event, image) => this._handleSearchDragStart(event, image, this.searchImages),
-                          onPointerDown: (event, index, imageId) => this._handleSearchPointerDown(event, index, imageId),
-                          onPointerMove: (event) => this._handleSearchPointerMove(event),
-                          onPointerEnter: (index) => this._handleSearchSelectHover(index),
+                        onImageClick: (event, image) => this._handleSearchImageClick(event, image, this.searchImages),
+                        onDragStart: (event, image) => this._handleSearchDragStart(event, image, this.searchImages),
+                        selectionEvents: {
+                          pointerDown: (event, index, imageId) => this._handleSearchPointerDown(event, index, imageId),
+                          pointerMove: (event) => this._handleSearchPointerMove(event),
+                          pointerEnter: (index) => this._handleSearchSelectHover(index),
                         },
                         options: {
                           enableReordering: false,
@@ -2403,7 +2469,7 @@ export class SearchTab extends LitElement {
                         class=${this.searchResultsView === 'history' ? 'active' : ''}
                         @click=${() => this._setSearchResultsView('history')}
                       >
-                        History
+                        Hotspot History
                       </button>
                     </div>
                   </div>
@@ -2536,7 +2602,7 @@ export class SearchTab extends LitElement {
                                 ` : folder}
                                 <span class="text-xs text-gray-500 font-normal">(${images.length} images)</span>
                               </div>
-                              ${sortedImages.length ? renderImageGrid({
+                              ${sortedImages.length ? renderSelectableImageGrid({
                                 images: sortedImages,
                                 selection: this.searchDragSelection,
                                 flashSelectionIds: this._searchFlashSelectionIds,
@@ -2547,12 +2613,16 @@ export class SearchTab extends LitElement {
                                   renderCuratePermatagSummary: this.renderCuratePermatagSummary || this._renderSearchPermatagSummary.bind(this),
                                   formatCurateDate: this.formatCurateDate,
                                 },
-                                eventHandlers: {
-                                  onImageClick: (event, image) => this._handleSearchImageClick(event, image, sortedImages),
-                                  onDragStart: (event, image) => this._handleSearchDragStart(event, image, sortedImages),
-                                  onPointerDown: (event, index, imageId) => this._handleBrowseByFolderPointerDown(event, index, imageId, order, folder),
-                                  onPointerMove: (event) => this._handleSearchPointerMove(event),
-                                  onPointerEnter: (index) => this._handleBrowseByFolderSelectHover(index, folder),
+                                onImageClick: (event, image) => this._handleSearchImageClick(event, image, sortedImages),
+                                onDragStart: (event, image) => this._handleSearchDragStart(event, image, sortedImages),
+                                selectionEvents: {
+                                  pointerDown: (event, index, imageId, imageOrder, groupKey) =>
+                                    this._handleBrowseByFolderPointerDown(event, index, imageId, imageOrder, groupKey),
+                                  pointerMove: (event) => this._handleSearchPointerMove(event),
+                                  pointerEnter: (index, imageOrder, groupKey) =>
+                                    this._handleBrowseByFolderSelectHover(index, imageOrder, groupKey),
+                                  order,
+                                  groupKey: folder,
                                 },
                                 options: {
                                   enableReordering: false,

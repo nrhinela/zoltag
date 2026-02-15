@@ -24,7 +24,7 @@ export class AppShellStateController extends BaseStateController {
 
   async loadCurrentUser() {
     try {
-      this.host.currentUser = await getCurrentUser({ force: true });
+      this.host.currentUser = await getCurrentUser();
       const canonicalTenant = this.resolveTenantRef(this.host.tenant);
       if (canonicalTenant && canonicalTenant !== this.host.tenant) {
         this.host.tenant = canonicalTenant;
@@ -292,7 +292,9 @@ export class AppShellStateController extends BaseStateController {
       }
     }
     if (changedProperties.has('activeTab')) {
-      this.initializeTab(this.host.activeTab);
+      if (this.host._appBootstrapReady) {
+        this.initializeTab(this.host.activeTab);
+      }
     }
     if ((changedProperties.has('currentUser') || changedProperties.has('tenant'))
       && this.host.activeTab === 'curate'

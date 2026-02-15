@@ -28,6 +28,7 @@ class KeywordDropdown extends LitElement {
     disabled: { type: Boolean },
     compact: { type: Boolean },
     open: { type: Boolean, state: true },
+    searchQuery: { type: String, state: true },
   };
 
   constructor() {
@@ -42,6 +43,7 @@ class KeywordDropdown extends LitElement {
     this.disabled = false;
     this.compact = false;
     this.open = false;
+    this.searchQuery = '';
     this._handleOutsideClick = this._handleOutsideClick.bind(this);
   }
 
@@ -60,18 +62,23 @@ class KeywordDropdown extends LitElement {
     const path = event.composedPath ? event.composedPath() : [];
     if (!path.includes(this)) {
       this.open = false;
+      this.searchQuery = '';
     }
   }
 
   _toggleOpen(event) {
     event?.stopPropagation?.();
     if (this.disabled) return;
+    if (!this.open) {
+      this.searchQuery = '';
+    }
     this.open = !this.open;
   }
 
   _selectValue(value) {
     this.value = value;
     this.open = false;
+    this.searchQuery = '';
     this.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
     this.dispatchEvent(new CustomEvent('keyword-selected', {
       detail: { value },
@@ -123,14 +130,63 @@ class KeywordDropdown extends LitElement {
     return count ? `${keyword} (${count})` : keyword;
   }
 
+  _setSearchQuery(event) {
+    this.searchQuery = String(event?.target?.value || '');
+  }
+
+  _normalize(value) {
+    return String(value || '').trim().toLowerCase();
+  }
+
+  _getFilteredCategories() {
+    const categories = this._getKeywordsByCategory();
+    const query = this._normalize(this.searchQuery);
+    if (!query) return categories;
+    return categories
+      .map(([category, keywords]) => {
+        const categoryMatch = this._normalize(category).includes(query);
+        const filteredKeywords = categoryMatch
+          ? keywords
+          : (keywords || []).filter((kw) => this._normalize(kw?.keyword).includes(query));
+        return [category, filteredKeywords];
+      })
+      .filter(([, keywords]) => Array.isArray(keywords) && keywords.length > 0);
+  }
+
+  _showUntaggedInResults() {
+    if (!this.includeUntagged) return false;
+    const query = this._normalize(this.searchQuery);
+    if (!query) return true;
+    return 'untagged'.includes(query);
+  }
+
   _renderMenu() {
     if (!this.open) return html``;
-    const categories = this._getKeywordsByCategory();
+    const categories = this._getFilteredCategories();
     const untaggedCount = this.imageStats?.untagged_positive_count || 0;
+    const showUntagged = this._showUntaggedInResults();
+    const hasResults = showUntagged || categories.length > 0;
 
     return html`
       <div class="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-50 min-w-[300px] max-w-[400px] max-h-[400px] overflow-y-auto">
-        ${this.includeUntagged ? html`
+        <div class="sticky top-0 bg-white border-b border-gray-100 p-2">
+          <input
+            type="text"
+            class="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            placeholder="Search keywords..."
+            autofocus
+            .value=${this.searchQuery}
+            @input=${this._setSearchQuery}
+            @keydown=${(event) => {
+              if (event.key === 'Escape') {
+                event.stopPropagation();
+                this.open = false;
+                this.searchQuery = '';
+              }
+            }}
+          />
+        </div>
+        ${showUntagged ? html`
           <div
             class="px-4 py-2 cursor-pointer border-b border-gray-50 last:border-b-0 hover:bg-gray-100 transition-colors"
             @click=${() => this._selectValue('__untagged__')}
@@ -151,6 +207,9 @@ class KeywordDropdown extends LitElement {
             </div>
           `)}
         `)}
+        ${!hasResults ? html`
+          <div class="px-4 py-3 text-sm text-gray-500">No keywords match your search.</div>
+        ` : ''}
       </div>
     `;
   }

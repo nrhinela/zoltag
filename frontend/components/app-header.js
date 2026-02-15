@@ -1,6 +1,5 @@
 import { LitElement, html } from 'lit';
-import { getTenantsPublic } from '../services/api.js';
-import { getCurrentUser } from '../services/auth.js';
+import { getSystemSettings, getTenantsPublic } from '../services/api.js';
 import { supabase } from '../services/supabase.js';
 import './app-header.css';
 
@@ -38,8 +37,6 @@ class AppHeader extends LitElement {
       this.fetchEnvironment();
       if (this.currentUser) {
           this._syncTenantsForCurrentUser();
-      } else {
-          this.fetchCurrentUser();
       }
       document.addEventListener('click', this._handleDocumentClick);
   }
@@ -52,17 +49,6 @@ class AppHeader extends LitElement {
   willUpdate(changedProperties) {
       if (changedProperties.has('currentUser')) {
           this._syncTenantsForCurrentUser();
-      }
-  }
-
-  async fetchCurrentUser() {
-      try {
-          const user = await getCurrentUser({ force: true });
-          this.currentUser = user;
-          this._syncTenantsForCurrentUser();
-      } catch (error) {
-          console.error('Error fetching current user:', error);
-          this.currentUser = null;
       }
   }
 
@@ -88,11 +74,8 @@ class AppHeader extends LitElement {
 
   async fetchEnvironment() {
       try {
-          const response = await fetch('/api/v1/config/system');
-          if (response.ok) {
-              const data = await response.json();
-              this.environment = data.environment?.toUpperCase() || 'UNKNOWN';
-          }
+          const data = await getSystemSettings();
+          this.environment = data?.environment?.toUpperCase() || 'UNKNOWN';
       } catch (error) {
           console.error('Error fetching environment:', error);
           this.environment = 'ERROR';

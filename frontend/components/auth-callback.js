@@ -1,6 +1,6 @@
 import { LitElement, html, css } from 'lit';
 import { getSession, onAuthStateChange } from '../services/supabase.js';
-import { acceptInvitation } from '../services/auth.js';
+import { acceptInvitation, ensureRegistration } from '../services/auth.js';
 
 const INVITATION_TOKEN_KEY = 'zoltag_invitation_token';
 
@@ -154,31 +154,14 @@ export class AuthCallback extends LitElement {
       }
 
       this.message = 'Completing registration...';
-      console.log('Calling /api/v1/auth/register with OAuth token...');
-
-      const response = await fetch('/api/v1/auth/register', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ display_name: session.user?.user_metadata?.name || '' }),
-      });
-
-      console.log('Register response:', { status: response.status, ok: response.ok });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ detail: 'Registration failed' }));
-        console.error('Backend error response:', {
-          status: response.status,
-          detail: errorData.detail,
-          raw: errorData
-        });
-        throw new Error(`Registration failed (${response.status}): ${errorData.detail}`);
+      const didRegister = await ensureRegistration(
+        session.user?.user_metadata?.name || '',
+        { token, force: true }
+      );
+      if (!didRegister) {
+        throw new Error('Registration failed');
       }
-
-      const result = await response.json();
-      console.log('✅ Registration complete:', result);
+      console.log('✅ Registration complete');
 
       let invitationToken = '';
       try {

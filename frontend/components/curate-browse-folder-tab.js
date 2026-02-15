@@ -8,14 +8,17 @@ import {
   getKeywordsByCategoryFromList,
 } from './shared/keyword-utils.js';
 import { renderResultsPagination } from './shared/pagination-controls.js';
-import { renderImageGrid } from './shared/image-grid.js';
+import { renderSelectableImageGrid } from './shared/selectable-image-grid.js';
 import {
+  buildHotspotHistorySessionKey,
   createHotspotHistoryBatch,
   getVisibleHistoryBatches,
+  loadHotspotHistorySessionState,
   loadPreviousHistoryBatchCount,
   parseDraggedImageIds,
   prependHistoryBatch,
   readDragImagePayload,
+  saveHotspotHistorySessionState,
   setDragImagePayload,
 } from './shared/hotspot-history.js';
 import FolderBrowserPanel from './folder-browser-panel.js';
@@ -204,6 +207,7 @@ export class CurateBrowseFolderTab extends LitElement {
 
   connectedCallback() {
     super.connectedCallback();
+    this._restoreBrowseHistorySessionState();
     this._setupFolderBrowserPanel();
     if (this.tenant) {
       this.folderBrowserPanel.setTenant(this.tenant);
@@ -232,6 +236,7 @@ export class CurateBrowseFolderTab extends LitElement {
         this.browseDragStartIndex = null;
         this.browseDragEndIndex = null;
       }
+      this._browseGroupKey = null;
     };
 
     document.addEventListener('pointerdown', this._handleBrowseGlobalPointerDown);
@@ -261,9 +266,7 @@ export class CurateBrowseFolderTab extends LitElement {
       this.browseByFolderSelection = [];
       this.browseByFolderAppliedSelection = [];
       this.browseByFolderData = {};
-      this.browseResultsView = 'results';
-      this._browseHotspotHistoryBatches = [];
-      this._browseHotspotHistoryVisibleBatches = 1;
+      this._restoreBrowseHistorySessionState();
       this.folderBrowserPanel?.setTenant(this.tenant);
       this.folderBrowserPanel?.loadFolders({ force: true });
       this._lists = [];
@@ -274,6 +277,14 @@ export class CurateBrowseFolderTab extends LitElement {
       if (this.browseByFolderOffset >= total && total > 0) {
         this.browseByFolderOffset = 0;
       }
+    }
+    if (
+      changedProps.has('tenant')
+      || changedProps.has('browseResultsView')
+      || changedProps.has('_browseHotspotHistoryBatches')
+      || changedProps.has('_browseHotspotHistoryVisibleBatches')
+    ) {
+      this._persistBrowseHistorySessionState();
     }
   }
 
@@ -492,7 +503,7 @@ export class CurateBrowseFolderTab extends LitElement {
     return this._browseSelectionHandlers.handlePointerDown(event, index, imageId);
   }
 
-  _handleBrowseSelectHover(index, groupKey) {
+  _handleBrowseSelectHover(index, _order, groupKey) {
     if (this._browseGroupKey !== groupKey) {
       return;
     }
@@ -552,9 +563,33 @@ export class CurateBrowseFolderTab extends LitElement {
     setDragImagePayload(event.dataTransfer, ids, [imageSet || []]);
   }
 
+  _getBrowseHistorySessionKey() {
+    return buildHotspotHistorySessionKey('curate-browse', this.tenant);
+  }
+
+  _restoreBrowseHistorySessionState() {
+    const state = loadHotspotHistorySessionState(this._getBrowseHistorySessionKey(), {
+      fallbackView: 'results',
+    });
+    this.browseResultsView = state.view;
+    this._browseHotspotHistoryBatches = state.batches;
+    this._browseHotspotHistoryVisibleBatches = state.visibleCount;
+  }
+
+  _persistBrowseHistorySessionState() {
+    saveHotspotHistorySessionState(this._getBrowseHistorySessionKey(), {
+      view: this.browseResultsView,
+      batches: this._browseHotspotHistoryBatches,
+      visibleCount: this._browseHotspotHistoryVisibleBatches,
+    });
+  }
+
   _setBrowseResultsView(nextView) {
     this.browseResultsView = nextView === 'history' ? 'history' : 'results';
     this.browseDragSelection = [];
+    if (this.browseResultsView !== 'history') {
+      this._browseGroupKey = null;
+    }
     if (this.browseResultsView === 'history' && this._browseHotspotHistoryVisibleBatches < 1) {
       this._browseHotspotHistoryVisibleBatches = 1;
     }
@@ -606,22 +641,24 @@ export class CurateBrowseFolderTab extends LitElement {
     if (!visibleBatches.length) {
       return html`
         <div class="p-6 text-center text-sm text-gray-500">
-          No hotspot history yet. Drag images to a hotspot, then open History.
+          No hotspot history yet. Drag images to a hotspot, then open Hotspot History.
         </div>
       `;
     }
     const canLoadPrevious = visibleBatches.length < this._browseHotspotHistoryBatches.length;
     return html`
       <div class="hotspot-history-pane">
-        ${visibleBatches.map((batch, index) => html`
-          <div class="hotspot-history-batch">
+        ${visibleBatches.map((batch, index) => {
+          const order = (batch.images || []).map((image) => image.id);
+          return html`
+          <div class="hotspot-history-batch" data-history-batch-id=${batch.batchId}>
             <div class="hotspot-history-batch-header">
               <span class="hotspot-history-batch-title">${index === 0 ? 'Latest Batch' : `Batch ${index + 1}`}</span>
               <span class="hotspot-history-batch-meta">${batch.images.length} items · ${batch.targetLabel}</span>
             </div>
-            ${renderImageGrid({
+            ${renderSelectableImageGrid({
               images: batch.images,
-              selection: [],
+              selection: this.browseDragSelection,
               flashSelectionIds: this._browseFlashSelectionIds,
               selectionHandlers: this._browseSelectionHandlers,
               renderFunctions: {
@@ -630,9 +667,16 @@ export class CurateBrowseFolderTab extends LitElement {
                 renderCuratePermatagSummary: this.renderCuratePermatagSummary,
                 formatCurateDate: this.formatCurateDate,
               },
-              eventHandlers: {
-                onImageClick: (dragEvent, image) => this._handleBrowseImageClick(dragEvent, image, batch.images),
-                onDragStart: (dragEvent, image) => this._handleBrowseDragStart(dragEvent, image, batch.images),
+              onImageClick: (dragEvent, image) => this._handleBrowseImageClick(dragEvent, image, batch.images),
+              onDragStart: (dragEvent, image) => this._handleBrowseDragStart(dragEvent, image, batch.images),
+              selectionEvents: {
+                pointerDown: (dragEvent, itemIndex, imageId, imageOrder, groupKey) =>
+                  this._handleBrowsePointerDown(dragEvent, itemIndex, imageId, imageOrder, groupKey),
+                pointerMove: (dragEvent) => this._handleBrowsePointerMove(dragEvent),
+                pointerEnter: (itemIndex, imageOrder, groupKey) =>
+                  this._handleBrowseSelectHover(itemIndex, imageOrder, groupKey),
+                order,
+                groupKey: batch.batchId,
               },
               options: {
                 showPermatags: true,
@@ -640,7 +684,8 @@ export class CurateBrowseFolderTab extends LitElement {
               },
             })}
           </div>
-        `)}
+        `;
+        })}
         <div class="hotspot-history-footer">
           <button
             class="curate-pane-action secondary"
@@ -656,18 +701,6 @@ export class CurateBrowseFolderTab extends LitElement {
 
   _handleBrowsePointerMove(event) {
     return this._browseSelectionHandlers.handlePointerMove(event);
-  }
-
-  _handleBrowsePointerDownStart(event, index, imageId) {
-    return this._browseSelectionHandlers.handlePointerDown(event, index, imageId);
-  }
-
-  _handleBrowseSelectStart(event, index, imageId) {
-    return this._browseSelectionHandlers.handleSelectStart(event, index, imageId);
-  }
-
-  _handleBrowseSelectHover(index) {
-    return this._browseSelectionHandlers.handleSelectHover(index);
   }
 
   _getBrowseByFolderPaginationState() {
@@ -1272,7 +1305,7 @@ export class CurateBrowseFolderTab extends LitElement {
                   class=${this.browseResultsView === 'history' ? 'active' : ''}
                   @click=${() => this._setBrowseResultsView('history')}
                 >
-                  History
+                  Hotspot History
                 </button>
               </div>
             </div>
@@ -1381,7 +1414,7 @@ export class CurateBrowseFolderTab extends LitElement {
                           ` : folder}
                           <span class="text-xs text-gray-500 font-normal">(${images.length} images)</span>
                         </div>
-                        ${sortedImages.length ? renderImageGrid({
+                        ${sortedImages.length ? renderSelectableImageGrid({
                           images: sortedImages,
                           selection: this.browseDragSelection,
                           flashSelectionIds: this._browseFlashSelectionIds,
@@ -1392,12 +1425,16 @@ export class CurateBrowseFolderTab extends LitElement {
                             renderCuratePermatagSummary: this.renderCuratePermatagSummary,
                             formatCurateDate: this.formatCurateDate,
                           },
-                          eventHandlers: {
-                            onImageClick: (event, image) => this._handleBrowseImageClick(event, image, images),
-                            onDragStart: (event, image) => this._handleBrowseDragStart(event, image, sortedImages),
-                            onPointerDown: (event, index, imageId) => this._handleBrowsePointerDown(event, index, imageId, order, folder),
-                            onPointerMove: (event) => this._handleBrowsePointerMove(event),
-                            onPointerEnter: (index) => this._handleBrowseSelectHover(index, folder),
+                          onImageClick: (event, image) => this._handleBrowseImageClick(event, image, images),
+                          onDragStart: (event, image) => this._handleBrowseDragStart(event, image, sortedImages),
+                          selectionEvents: {
+                            pointerDown: (event, index, imageId, imageOrder, groupKey) =>
+                              this._handleBrowsePointerDown(event, index, imageId, imageOrder, groupKey),
+                            pointerMove: (event) => this._handleBrowsePointerMove(event),
+                            pointerEnter: (index, imageOrder, groupKey) =>
+                              this._handleBrowseSelectHover(index, imageOrder, groupKey),
+                            order,
+                            groupKey: folder,
                           },
                           options: {
                             showPermatags: true,

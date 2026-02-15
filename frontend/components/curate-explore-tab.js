@@ -3,14 +3,17 @@ import { enqueueCommand } from '../services/command-queue.js';
 import { getDropboxFolders, getLists, createList, getListItems } from '../services/api.js';
 import { createSelectionHandlers } from './shared/selection-handlers.js';
 import { renderResultsPagination } from './shared/pagination-controls.js';
-import { renderImageGrid } from './shared/image-grid.js';
+import { renderSelectableImageGrid } from './shared/selectable-image-grid.js';
 import {
+  buildHotspotHistorySessionKey,
   createHotspotHistoryBatch,
   getVisibleHistoryBatches,
+  loadHotspotHistorySessionState,
   loadPreviousHistoryBatchCount,
   parseDraggedImageIds,
   prependHistoryBatch,
   readDragImagePayload,
+  saveHotspotHistorySessionState,
   setDragImagePayload,
 } from './shared/hotspot-history.js';
 import {
@@ -223,6 +226,7 @@ export class CurateExploreTab extends LitElement {
     this._curateExploreRatingDragTarget = null;
     this._curateReorderDraggedId = null;
     this._curateLeftOrder = [];
+    this._curateHistoryGroupKey = null;
     this._curateSuppressClick = false;
     this.curateResultsView = 'results';
     this._curateHotspotHistoryBatches = [];
@@ -269,6 +273,7 @@ export class CurateExploreTab extends LitElement {
         this.dragEndIndex = null;
       }
       const hadLongPress = this._curateLongPressTriggered;
+      this._curateHistoryGroupKey = null;
       this._curateSelectionHandlers.cancelPressState();
       if (hadLongPress) {
         this._curateSuppressClick = true;
@@ -278,6 +283,7 @@ export class CurateExploreTab extends LitElement {
 
   connectedCallback() {
     super.connectedCallback();
+    this._restoreCurateHistorySessionState();
     // Listen for pointer/key release to end selection
     window.addEventListener('pointerup', this._handleCurateSelectionEnd);
     window.addEventListener('keyup', this._handleCurateSelectionEnd);
@@ -320,6 +326,18 @@ export class CurateExploreTab extends LitElement {
   _handleCurateSelectHoverWithOrder(index, order) {
     this._curateLeftOrder = order;
     this._curateSelectionHandlers.handleSelectHover(index);
+  }
+
+  _handleCurateHistoryPointerDown(event, index, imageId, order, groupKey) {
+    this._curateHistoryGroupKey = groupKey;
+    this._handleCuratePointerDownWithOrder(event, index, imageId, order);
+  }
+
+  _handleCurateHistorySelectHover(index, order, groupKey) {
+    if (this._curateHistoryGroupKey !== groupKey) {
+      return;
+    }
+    this._handleCurateSelectHoverWithOrder(index, order);
   }
 
   _handleCurateImageClick(event, image, imageSet) {
@@ -527,15 +545,21 @@ export class CurateExploreTab extends LitElement {
       this.curateExploreRatingTargets = [{ id: 'rating-1', rating: '', count: 0 }];
       this._curateExploreRatingNextId = 2;
       this._curateExploreRatingDragTarget = null;
-      this.curateResultsView = 'results';
-      this._curateHotspotHistoryBatches = [];
-      this._curateHotspotHistoryVisibleBatches = 1;
+      this._restoreCurateHistorySessionState();
       if (this.rightPanelTool === 'lists') {
         this._ensureListsLoaded({ force: true });
       }
     }
     if (changedProperties.has('rightPanelTool') && this.rightPanelTool === 'lists') {
       this._ensureListsLoaded();
+    }
+    if (
+      changedProperties.has('tenant')
+      || changedProperties.has('curateResultsView')
+      || changedProperties.has('_curateHotspotHistoryBatches')
+      || changedProperties.has('_curateHotspotHistoryVisibleBatches')
+    ) {
+      this._persistCurateHistorySessionState();
     }
   }
 
@@ -1161,9 +1185,33 @@ export class CurateExploreTab extends LitElement {
     }));
   }
 
+  _getCurateHistorySessionKey() {
+    return buildHotspotHistorySessionKey('curate-explore', this.tenant);
+  }
+
+  _restoreCurateHistorySessionState() {
+    const state = loadHotspotHistorySessionState(this._getCurateHistorySessionKey(), {
+      fallbackView: 'results',
+    });
+    this.curateResultsView = state.view;
+    this._curateHotspotHistoryBatches = state.batches;
+    this._curateHotspotHistoryVisibleBatches = state.visibleCount;
+  }
+
+  _persistCurateHistorySessionState() {
+    saveHotspotHistorySessionState(this._getCurateHistorySessionKey(), {
+      view: this.curateResultsView,
+      batches: this._curateHotspotHistoryBatches,
+      visibleCount: this._curateHotspotHistoryVisibleBatches,
+    });
+  }
+
   _setCurateResultsView(nextView) {
     this.curateResultsView = nextView === 'history' ? 'history' : 'results';
     this.dragSelection = [];
+    if (this.curateResultsView !== 'history') {
+      this._curateHistoryGroupKey = null;
+    }
     if (this.curateResultsView === 'history' && this._curateHotspotHistoryVisibleBatches < 1) {
       this._curateHotspotHistoryVisibleBatches = 1;
     }
@@ -1208,22 +1256,24 @@ export class CurateExploreTab extends LitElement {
     if (!visibleBatches.length) {
       return html`
         <div class="p-6 text-center text-sm text-gray-500">
-          No hotspot history yet. Drag images to a hotspot, then open History.
+          No hotspot history yet. Drag images to a hotspot, then open Hotspot History.
         </div>
       `;
     }
     const canLoadPrevious = visibleBatches.length < this._curateHotspotHistoryBatches.length;
     return html`
       <div class="hotspot-history-pane">
-        ${visibleBatches.map((batch, index) => html`
-          <div class="hotspot-history-batch">
+        ${visibleBatches.map((batch, index) => {
+          const order = (batch.images || []).map((image) => image.id);
+          return html`
+          <div class="hotspot-history-batch" data-history-batch-id=${batch.batchId}>
             <div class="hotspot-history-batch-header">
               <span class="hotspot-history-batch-title">${index === 0 ? 'Latest Batch' : `Batch ${index + 1}`}</span>
               <span class="hotspot-history-batch-meta">${batch.images.length} items · ${batch.targetLabel}</span>
             </div>
-            ${renderImageGrid({
+            ${renderSelectableImageGrid({
               images: batch.images,
-              selection: [],
+              selection: this.dragSelection,
               flashSelectionIds: this._curateFlashSelectionIds,
               selectionHandlers: this._curateSelectionHandlers,
               renderFunctions: {
@@ -1233,9 +1283,16 @@ export class CurateExploreTab extends LitElement {
                 renderCurateAiMLScore: this.renderCurateAiMLScore,
                 formatCurateDate: this.formatCurateDate,
               },
-              eventHandlers: {
-                onImageClick: (dragEvent, image) => this._handleCurateImageClick(dragEvent, image, batch.images),
-                onDragStart: (dragEvent, image) => this._handleCurateExploreReorderStart(dragEvent, image, batch.images),
+              onImageClick: (dragEvent, image) => this._handleCurateImageClick(dragEvent, image, batch.images),
+              onDragStart: (dragEvent, image) => this._handleCurateExploreReorderStart(dragEvent, image, batch.images),
+              selectionEvents: {
+                pointerDown: (dragEvent, itemIndex, imageId, imageOrder, groupKey) =>
+                  this._handleCurateHistoryPointerDown(dragEvent, itemIndex, imageId, imageOrder, groupKey),
+                pointerMove: (dragEvent) => this._handleCuratePointerMove(dragEvent),
+                pointerEnter: (itemIndex, imageOrder, groupKey) =>
+                  this._handleCurateHistorySelectHover(itemIndex, imageOrder, groupKey),
+                order,
+                groupKey: batch.batchId,
               },
               options: {
                 enableReordering: false,
@@ -1245,7 +1302,8 @@ export class CurateExploreTab extends LitElement {
               },
             })}
           </div>
-        `)}
+        `;
+        })}
         <div class="hotspot-history-footer">
           <button
             class="curate-pane-action secondary"
@@ -1357,7 +1415,7 @@ export class CurateExploreTab extends LitElement {
                         class=${this.curateResultsView === 'history' ? 'active' : ''}
                         @click=${() => this._setCurateResultsView('history')}
                       >
-                        History
+                        Hotspot History
                       </button>
                     </div>
                     ${this.curateResultsView === 'results' ? renderResultsPagination({
@@ -1381,7 +1439,7 @@ export class CurateExploreTab extends LitElement {
                   ${this.curateResultsView === 'history' ? html`
                     ${this._renderCurateHistoryPane()}
                   ` : html`
-                    ${renderImageGrid({
+                    ${renderSelectableImageGrid({
                       images: leftImages,
                       selection: this.dragSelection,
                       flashSelectionIds: this._curateFlashSelectionIds,
@@ -1393,14 +1451,18 @@ export class CurateExploreTab extends LitElement {
                         renderCurateAiMLScore: this.renderCurateAiMLScore,
                         formatCurateDate: this.formatCurateDate,
                       },
-                      eventHandlers: {
-                        onImageClick: (event, image) => this._handleCurateImageClick(event, image, leftImages),
-                        onDragStart: (event, image) => this._handleCurateExploreReorderStart(event, image, leftImages),
+                      onImageClick: (event, image) => this._handleCurateImageClick(event, image, leftImages),
+                      onDragStart: (event, image) => this._handleCurateExploreReorderStart(event, image, leftImages),
+                      dragHandlers: {
                         onDragOver: (event, targetImageId) => this._handleCurateExploreReorderOver(event, targetImageId),
                         onDragEnd: (event) => this._handleCurateExploreReorderEnd(event),
-                        onPointerDown: (event, index, imageId) => this._handleCuratePointerDownWithOrder(event, index, imageId, this._curateLeftOrder),
-                        onPointerMove: (event) => this._handleCuratePointerMove(event),
-                        onPointerEnter: (index) => this._handleCurateSelectHoverWithOrder(index, this._curateLeftOrder),
+                      },
+                      selectionEvents: {
+                        pointerDown: (event, index, imageId, imageOrder) =>
+                          this._handleCuratePointerDownWithOrder(event, index, imageId, imageOrder),
+                        pointerMove: (event) => this._handleCuratePointerMove(event),
+                        pointerEnter: (index, imageOrder) => this._handleCurateSelectHoverWithOrder(index, imageOrder),
+                        order: this._curateLeftOrder,
                       },
                       options: {
                         enableReordering: true,
