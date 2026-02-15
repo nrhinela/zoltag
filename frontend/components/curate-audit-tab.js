@@ -5,6 +5,15 @@ import { createSelectionHandlers } from './shared/selection-handlers.js';
 import { renderResultsPagination } from './shared/pagination-controls.js';
 import { renderImageGrid } from './shared/image-grid.js';
 import { getKeywordsByCategory, getKeywordsByCategoryFromList } from './shared/keyword-utils.js';
+import {
+  createHotspotHistoryBatch,
+  getVisibleHistoryBatches,
+  loadPreviousHistoryBatchCount,
+  parseDraggedImageIds,
+  prependHistoryBatch,
+  readDragImagePayload,
+  setDragImagePayload,
+} from './shared/hotspot-history.js';
 import './shared/widgets/filter-chips.js';
 
 /**
@@ -84,6 +93,9 @@ export class CurateAuditTab extends LitElement {
     _auditRatingDragTarget: { type: Boolean, state: true },
     _auditLeftOrder: { type: Array, state: true },
     _auditSuppressClick: { type: Boolean, state: true },
+    auditResultsView: { type: String, state: true },
+    _auditHotspotHistoryBatches: { type: Array, state: true },
+    _auditHotspotHistoryVisibleBatches: { type: Number, state: true },
   };
 
   constructor() {
@@ -135,6 +147,9 @@ export class CurateAuditTab extends LitElement {
     this._auditRatingDragTarget = false;
     this._auditLeftOrder = [];
     this._auditSuppressClick = false;
+    this.auditResultsView = 'results';
+    this._auditHotspotHistoryBatches = [];
+    this._auditHotspotHistoryVisibleBatches = 1;
 
     // Configure selection handlers
     this._auditSelectionHandlers = createSelectionHandlers(this, {
@@ -211,6 +226,11 @@ export class CurateAuditTab extends LitElement {
   }
 
   updated(changedProperties) {
+    if (changedProperties.has('tenant')) {
+      this.auditResultsView = 'results';
+      this._auditHotspotHistoryBatches = [];
+      this._auditHotspotHistoryVisibleBatches = 1;
+    }
     if (!changedProperties.has('targets')
       && !changedProperties.has('keywords')
       && !changedProperties.has('tagStatsBySource')
@@ -263,6 +283,22 @@ export class CurateAuditTab extends LitElement {
     // Don't open modal if we're in selection mode or if long-press was triggered
     if (this.dragSelecting || this._auditLongPressTriggered) {
       event.preventDefault();
+      return;
+    }
+    const order = (imageSet || this.images || [])
+      .map((entry) => entry?.id)
+      .filter((id) => id !== null && id !== undefined);
+    const clickedId = image?.id;
+    const index = order.findIndex((id) => String(id) === String(clickedId));
+    const selectionResult = this._auditSelectionHandlers.handleClickSelection(event, {
+      imageId: clickedId,
+      index: index >= 0 ? index : null,
+      order,
+    });
+    if (selectionResult.handled) {
+      if (selectionResult.changed) {
+        this._emitSelectionChanged(selectionResult.selection);
+      }
       return;
     }
     if (event.defaultPrevented) {
@@ -373,7 +409,7 @@ export class CurateAuditTab extends LitElement {
   // Drag & Drop Handlers
   // ========================================
 
-  _handleAuditDragStart(event, image) {
+  _handleAuditDragStart(event, image, imageSet = null) {
     if (this.dragSelecting) {
       event.preventDefault();
       return;
@@ -398,6 +434,7 @@ export class CurateAuditTab extends LitElement {
     event.dataTransfer.effectAllowed = 'move';
     event.dataTransfer.setData('text/plain', ids.join(','));
     event.dataTransfer.setData('application/x-zoltag-source', 'audit-available');
+    setDragImagePayload(event.dataTransfer, ids, [imageSet || this.images || []]);
   }
 
   // ========================================
@@ -416,6 +453,7 @@ export class CurateAuditTab extends LitElement {
   _handleHotspotDrop(event, targetId) {
     event.preventDefault();
     this._auditHotspotDragTarget = null;
+    this._recordAuditHotspotHistory(event, targetId);
 
     this.dispatchEvent(new CustomEvent('hotspot-changed', {
       detail: {
@@ -426,6 +464,104 @@ export class CurateAuditTab extends LitElement {
       bubbles: true,
       composed: true
     }));
+  }
+
+  _setAuditResultsView(nextView) {
+    this.auditResultsView = nextView === 'history' ? 'history' : 'results';
+    this.dragSelection = [];
+    if (this.auditResultsView === 'history' && this._auditHotspotHistoryVisibleBatches < 1) {
+      this._auditHotspotHistoryVisibleBatches = 1;
+    }
+  }
+
+  _recordAuditHotspotHistory(event, targetId) {
+    const target = (this.targets || []).find((entry) => entry.id === targetId);
+    const ids = parseDraggedImageIds(event?.dataTransfer);
+    if (!target || !ids.length) return;
+    if (target.type === 'rating') {
+      const rating = Number.parseInt(String(target.rating ?? ''), 10);
+      if (!Number.isFinite(rating)) return;
+    } else if (!target.keyword) {
+      return;
+    }
+    const batch = createHotspotHistoryBatch({
+      ids,
+      dragImages: readDragImagePayload(event?.dataTransfer),
+      imageSets: [this.images || []],
+      target,
+      sourceLabel: 'Curate Audit',
+    });
+    if (!batch) return;
+    this._auditHotspotHistoryBatches = prependHistoryBatch(this._auditHotspotHistoryBatches, batch);
+    if (this._auditHotspotHistoryVisibleBatches < 1) {
+      this._auditHotspotHistoryVisibleBatches = 1;
+    }
+  }
+
+  _loadPreviousAuditHistoryBatches() {
+    const total = this._auditHotspotHistoryBatches.length;
+    if (!total) return;
+    const next = loadPreviousHistoryBatchCount(this._auditHotspotHistoryVisibleBatches, 5);
+    this._auditHotspotHistoryVisibleBatches = Math.min(total, next);
+  }
+
+  _renderAuditHistoryPane() {
+    const visibleBatches = getVisibleHistoryBatches(
+      this._auditHotspotHistoryBatches,
+      this._auditHotspotHistoryVisibleBatches
+    );
+    if (!visibleBatches.length) {
+      return html`
+        <div class="p-6 text-center text-sm text-gray-500">
+          No hotspot history yet. Drag images to a hotspot, then open History.
+        </div>
+      `;
+    }
+    const canLoadPrevious = visibleBatches.length < this._auditHotspotHistoryBatches.length;
+    return html`
+      <div class="hotspot-history-pane">
+        ${visibleBatches.map((batch, index) => html`
+          <div class="hotspot-history-batch">
+            <div class="hotspot-history-batch-header">
+              <span class="hotspot-history-batch-title">${index === 0 ? 'Latest Batch' : `Batch ${index + 1}`}</span>
+              <span class="hotspot-history-batch-meta">${batch.images.length} items · ${batch.targetLabel}</span>
+            </div>
+            ${renderImageGrid({
+              images: batch.images,
+              selection: [],
+              flashSelectionIds: this._auditFlashSelectionIds,
+              selectionHandlers: this._auditSelectionHandlers,
+              renderFunctions: {
+                renderCurateRatingWidget: this.renderCurateRatingWidget,
+                renderCurateRatingStatic: this.renderCurateRatingStatic,
+                renderCurateAiMLScore: this.renderCurateAiMLScore,
+                renderCuratePermatagSummary: this.renderCuratePermatagSummary,
+                formatCurateDate: this.formatCurateDate,
+              },
+              eventHandlers: {
+                onImageClick: (dragEvent, image) => this._handleAuditImageClick(dragEvent, image, batch.images),
+                onDragStart: (dragEvent, image) => this._handleAuditDragStart(dragEvent, image, batch.images),
+              },
+              options: {
+                enableReordering: false,
+                showPermatags: true,
+                showAiScore: true,
+                emptyMessage: 'No images in this batch.',
+              },
+            })}
+          </div>
+        `)}
+        <div class="hotspot-history-footer">
+          <button
+            class="curate-pane-action secondary"
+            @click=${this._loadPreviousAuditHistoryBatches}
+            ?disabled=${!canLoadPrevious}
+          >
+            Previous
+          </button>
+        </div>
+      </div>
+    `;
   }
 
   _handleHotspotKeywordChange(event, targetId) {
@@ -751,9 +887,23 @@ export class CurateAuditTab extends LitElement {
             <div class="curate-pane">
               <div class="curate-pane-header">
                 <div class="curate-pane-header-row">
-                  <span>${leftLabel}</span>
+                  <span>${this.auditResultsView === 'history' ? 'History' : leftLabel}</span>
+                  <div class="curate-audit-toggle">
+                    <button
+                      class=${this.auditResultsView === 'results' ? 'active' : ''}
+                      @click=${() => this._setAuditResultsView('results')}
+                    >
+                      Results
+                    </button>
+                    <button
+                      class=${this.auditResultsView === 'history' ? 'active' : ''}
+                      @click=${() => this._setAuditResultsView('history')}
+                    >
+                      History
+                    </button>
+                  </div>
                   <div class="curate-pane-header-actions">
-                    ${this.keyword && !this.loadAll ? html`
+                    ${this.auditResultsView === 'results' && this.keyword && !this.loadAll ? html`
                       ${renderResultsPagination({
                         total: paginationTotal,
                         offset,
@@ -774,47 +924,51 @@ export class CurateAuditTab extends LitElement {
                 </div>
               ` : html``}
               <div class="curate-pane-body">
-                ${renderImageGrid({
-                  images: leftImages,
-                  selection: this.dragSelection,
-                  flashSelectionIds: this._auditFlashSelectionIds,
-                  selectionHandlers: this._auditSelectionHandlers,
-                  renderFunctions: {
-                    renderCurateRatingWidget: this.renderCurateRatingWidget,
-                    renderCurateRatingStatic: this.renderCurateRatingStatic,
-                    renderCurateAiMLScore: this.renderCurateAiMLScore,
-                    renderCuratePermatagSummary: this.renderCuratePermatagSummary,
-                    formatCurateDate: this.formatCurateDate,
-                  },
-                  eventHandlers: {
-                    onImageClick: (event, image) => this._handleAuditImageClick(event, image, leftImages),
-                    onDragStart: (event, image) => this._handleAuditDragStart(event, image),
-                    onPointerDown: (event, index, imageId) => this._handleAuditPointerDownWithOrder(event, index, imageId, this._auditLeftOrder),
-                    onPointerMove: (event) => this._handleAuditPointerMove(event),
-                    onPointerEnter: (index) => this._handleAuditSelectHoverWithOrder(index, this._auditLeftOrder),
-                  },
-                  options: {
-                    enableReordering: false,
-                    showPermatags: true,
-                    showAiScore: true,
-                    emptyMessage: this.keyword ? 'No images available.' : 'Choose a keyword to start.',
-                  },
-                })}
-                ${this.keyword && !this.loadAll ? html`
-                  <div class="mt-3">
-                    ${renderResultsPagination({
-                      total: paginationTotal,
-                      offset,
-                      limit,
-                      count: leftImages.length,
-                      onPrev: this._handlePagePrev,
-                      onNext: this._handlePageNext,
-                      onLimitChange: this._handleLimitChange,
-                      disabled: this.loading,
-                      showPageSize: false,
-                    })}
-                  </div>
-                ` : html``}
+                ${this.auditResultsView === 'history' ? html`
+                  ${this._renderAuditHistoryPane()}
+                ` : html`
+                  ${renderImageGrid({
+                    images: leftImages,
+                    selection: this.dragSelection,
+                    flashSelectionIds: this._auditFlashSelectionIds,
+                    selectionHandlers: this._auditSelectionHandlers,
+                    renderFunctions: {
+                      renderCurateRatingWidget: this.renderCurateRatingWidget,
+                      renderCurateRatingStatic: this.renderCurateRatingStatic,
+                      renderCurateAiMLScore: this.renderCurateAiMLScore,
+                      renderCuratePermatagSummary: this.renderCuratePermatagSummary,
+                      formatCurateDate: this.formatCurateDate,
+                    },
+                    eventHandlers: {
+                      onImageClick: (event, image) => this._handleAuditImageClick(event, image, leftImages),
+                      onDragStart: (event, image) => this._handleAuditDragStart(event, image, leftImages),
+                      onPointerDown: (event, index, imageId) => this._handleAuditPointerDownWithOrder(event, index, imageId, this._auditLeftOrder),
+                      onPointerMove: (event) => this._handleAuditPointerMove(event),
+                      onPointerEnter: (index) => this._handleAuditSelectHoverWithOrder(index, this._auditLeftOrder),
+                    },
+                    options: {
+                      enableReordering: false,
+                      showPermatags: true,
+                      showAiScore: true,
+                      emptyMessage: this.keyword ? 'No images available.' : 'Choose a keyword to start.',
+                    },
+                  })}
+                  ${this.keyword && !this.loadAll ? html`
+                    <div class="mt-3">
+                      ${renderResultsPagination({
+                        total: paginationTotal,
+                        offset,
+                        limit,
+                        count: leftImages.length,
+                        onPrev: this._handlePagePrev,
+                        onNext: this._handlePageNext,
+                        onLimitChange: this._handleLimitChange,
+                        disabled: this.loading,
+                        showPageSize: false,
+                      })}
+                    </div>
+                  ` : html``}
+                `}
               </div>
             </div>
 

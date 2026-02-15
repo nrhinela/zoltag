@@ -16,6 +16,15 @@ import {
 import { createSelectionHandlers } from './shared/selection-handlers.js';
 import { renderResultsPagination } from './shared/pagination-controls.js';
 import { renderImageGrid } from './shared/image-grid.js';
+import {
+  createHotspotHistoryBatch,
+  getVisibleHistoryBatches,
+  loadPreviousHistoryBatchCount,
+  parseDraggedImageIds,
+  prependHistoryBatch,
+  readDragImagePayload,
+  setDragImagePayload,
+} from './shared/hotspot-history.js';
 import './shared/widgets/filter-chips.js';
 import './shared/widgets/right-panel.js';
 import './shared/widgets/list-targets-panel.js';
@@ -126,6 +135,9 @@ export class SearchTab extends LitElement {
     _listTargetCounter: { type: Number, state: true },
     _listDragTargetId: { type: String, state: true },
     _listsLoading: { type: Boolean, state: true },
+    searchResultsView: { type: String, state: true },
+    _searchHotspotHistoryBatches: { type: Array, state: true },
+    _searchHotspotHistoryVisibleBatches: { type: Number, state: true },
   };
 
   constructor() {
@@ -201,6 +213,9 @@ export class SearchTab extends LitElement {
     this._listTargetCounter = 1;
     this._listDragTargetId = null;
     this._listsLoading = false;
+    this.searchResultsView = 'results';
+    this._searchHotspotHistoryBatches = [];
+    this._searchHotspotHistoryVisibleBatches = 1;
     this._searchHotspotHandlers = createHotspotHandlers(this, {
       targetsProperty: 'searchHotspotTargets',
       dragTargetProperty: '_searchHotspotDragTarget',
@@ -313,6 +328,7 @@ export class SearchTab extends LitElement {
     // Add global pointer handlers for selection
     this._handleSearchGlobalPointerDown = (event) => {
       if (!this.searchDragSelection.length) return;
+      if (event.metaKey || event.ctrlKey || event.shiftKey) return;
       const path = event.composedPath ? event.composedPath() : [];
       const clickedThumb = path.some(node =>
         node.classList && node.classList.contains('curate-thumb-wrapper')
@@ -398,6 +414,9 @@ export class SearchTab extends LitElement {
       this._listDragTargetId = null;
       this._lastListFetchTime = 0;
       this.searchLists = [];
+      this.searchResultsView = 'results';
+      this._searchHotspotHistoryBatches = [];
+      this._searchHotspotHistoryVisibleBatches = 1;
       this._fetchSearchLists({ force: true });
     }
     if (changedProps.has('searchFilterPanel')) {
@@ -854,6 +873,25 @@ export class SearchTab extends LitElement {
     if (!ids.length) {
       this._updateListTargetStatus(targetId, 'No images found to add.');
       return;
+    }
+    const list = (this.searchLists || []).find((entry) => String(entry.id) === String(target.listId));
+    const batch = createHotspotHistoryBatch({
+      ids,
+      dragImages: readDragImagePayload(event?.dataTransfer),
+      imageSets: [this.searchImages || []],
+      target: {
+        type: 'list',
+        keyword: list?.title || `List ${target.listId}`,
+        category: 'List',
+        action: 'add',
+      },
+      sourceLabel: this.searchSubTab === 'browse-by-folder' ? 'Search Browse' : 'Search Results',
+    });
+    if (batch) {
+      this._searchHotspotHistoryBatches = prependHistoryBatch(this._searchHotspotHistoryBatches, batch);
+      if (this._searchHotspotHistoryVisibleBatches < 1) {
+        this._searchHotspotHistoryVisibleBatches = 1;
+      }
     }
     this._addImagesToListTarget(targetId, target.listId, ids);
   }
@@ -1845,6 +1883,19 @@ export class SearchTab extends LitElement {
   }
 
   _handleSearchImageClick(event, image, imageSet) {
+    const order = (imageSet || this.searchImages || [])
+      .map((entry) => entry?.id)
+      .filter((id) => id !== null && id !== undefined);
+    const clickedId = image?.id;
+    const index = order.findIndex((id) => String(id) === String(clickedId));
+    const selectionResult = this._searchSelectionHandlers.handleClickSelection(event, {
+      imageId: clickedId,
+      index: index >= 0 ? index : null,
+      order,
+    });
+    if (selectionResult.handled) {
+      return;
+    }
     if (event.defaultPrevented) return;
     if (this._searchSuppressClick || this.searchDragSelection.length) {
       this._searchSuppressClick = false;
@@ -1857,7 +1908,7 @@ export class SearchTab extends LitElement {
     }));
   }
 
-  _handleSearchDragStart(event, image) {
+  _handleSearchDragStart(event, image, imageSet = null) {
     // Prevent dragging during selection mode
     if (this.searchDragSelecting) {
       event.preventDefault();
@@ -1873,6 +1924,114 @@ export class SearchTab extends LitElement {
     event.dataTransfer.setData('text/plain', ids.join(','));
     event.dataTransfer.setData('application/x-zoltag-source', 'search-available');
     event.dataTransfer.setData('image-ids', JSON.stringify(ids));
+    setDragImagePayload(event.dataTransfer, ids, [imageSet || this.searchImages || []]);
+  }
+
+  _setSearchResultsView(nextView) {
+    this.searchResultsView = nextView === 'history' ? 'history' : 'results';
+    this.searchDragSelection = [];
+    if (this.searchResultsView === 'history' && this._searchHotspotHistoryVisibleBatches < 1) {
+      this._searchHotspotHistoryVisibleBatches = 1;
+    }
+  }
+
+  _recordSearchHotspotHistory(event, targetId, { sourceLabel = 'Search Results' } = {}) {
+    const target = (this.searchHotspotTargets || []).find((entry) => entry.id === targetId);
+    const ids = parseDraggedImageIds(event?.dataTransfer);
+    if (!target || !ids.length) return;
+    if (target.type === 'rating') {
+      const rating = Number.parseInt(String(target.rating ?? ''), 10);
+      if (!Number.isFinite(rating)) return;
+    } else if (!target.keyword) {
+      return;
+    }
+    const dragImages = readDragImagePayload(event?.dataTransfer);
+    const browseImages = Object.values(this.browseByFolderData || {})
+      .flatMap((images) => (Array.isArray(images) ? images : []));
+    const batch = createHotspotHistoryBatch({
+      ids,
+      dragImages,
+      imageSets: [this.searchImages || [], browseImages],
+      target,
+      sourceLabel,
+    });
+    if (!batch) return;
+    this._searchHotspotHistoryBatches = prependHistoryBatch(this._searchHotspotHistoryBatches, batch);
+    if (this._searchHotspotHistoryVisibleBatches < 1) {
+      this._searchHotspotHistoryVisibleBatches = 1;
+    }
+  }
+
+  _handleSearchHotspotDrop(event, targetId) {
+    this._recordSearchHotspotHistory(event, targetId, {
+      sourceLabel: this.searchSubTab === 'browse-by-folder' ? 'Search Browse' : 'Search Results',
+    });
+    this._searchHotspotHandlers.handleDrop(event, targetId);
+  }
+
+  _loadPreviousSearchHistoryBatches() {
+    const total = this._searchHotspotHistoryBatches.length;
+    if (!total) return;
+    const next = loadPreviousHistoryBatchCount(this._searchHotspotHistoryVisibleBatches, 5);
+    this._searchHotspotHistoryVisibleBatches = Math.min(total, next);
+  }
+
+  _renderSearchHistoryPane() {
+    const visibleBatches = getVisibleHistoryBatches(
+      this._searchHotspotHistoryBatches,
+      this._searchHotspotHistoryVisibleBatches
+    );
+    if (!visibleBatches.length) {
+      return html`
+        <div class="p-6 text-center text-sm text-gray-500">
+          No hotspot history yet. Drag images to a hotspot, then open History.
+        </div>
+      `;
+    }
+    const canLoadPrevious = visibleBatches.length < this._searchHotspotHistoryBatches.length;
+    return html`
+      <div class="hotspot-history-pane">
+        ${visibleBatches.map((batch, index) => html`
+          <div class="hotspot-history-batch">
+            <div class="hotspot-history-batch-header">
+              <span class="hotspot-history-batch-title">${index === 0 ? 'Latest Batch' : `Batch ${index + 1}`}</span>
+              <span class="hotspot-history-batch-meta">${batch.images.length} items · ${batch.targetLabel}</span>
+            </div>
+            ${renderImageGrid({
+              images: batch.images,
+              selection: [],
+              flashSelectionIds: this._searchFlashSelectionIds,
+              selectionHandlers: this._searchSelectionHandlers,
+              renderFunctions: {
+                renderCurateRatingWidget: this.renderCurateRatingWidget,
+                renderCurateRatingStatic: this.renderCurateRatingStatic,
+                renderCuratePermatagSummary: this.renderCuratePermatagSummary || this._renderSearchPermatagSummary.bind(this),
+                formatCurateDate: this.formatCurateDate,
+              },
+              eventHandlers: {
+                onImageClick: (dragEvent, image) => this._handleSearchImageClick(dragEvent, image, batch.images),
+                onDragStart: (dragEvent, image) => this._handleSearchDragStart(dragEvent, image, batch.images),
+              },
+              options: {
+                enableReordering: false,
+                showPermatags: true,
+                showAiScore: false,
+                emptyMessage: 'No images in this batch.',
+              },
+            })}
+          </div>
+        `)}
+        <div class="hotspot-history-footer">
+          <button
+            class="curate-pane-action secondary"
+            @click=${this._loadPreviousSearchHistoryBatches}
+            ?disabled=${!canLoadPrevious}
+          >
+            Previous
+          </button>
+        </div>
+      </div>
+    `;
   }
 
   _getSearchPaginationState() {
@@ -2160,43 +2319,63 @@ export class SearchTab extends LitElement {
             <div class="curate-layout search-layout mt-3" style="--curate-thumb-size: ${this.curateThumbSize}px; ${browseByFolderBlurStyle}">
               <div class="curate-pane" @dragover=${this._handleSearchAvailableDragOver} @drop=${this._handleSearchAvailableDrop}>
                 <div class="curate-pane-body">
-                  <div class="p-2">
-                    ${searchPagination}
+                  <div class="p-2 pt-3">
+                    <div class="curate-audit-toggle">
+                      <button
+                        class=${this.searchResultsView === 'results' ? 'active' : ''}
+                        @click=${() => this._setSearchResultsView('results')}
+                      >
+                        Results
+                      </button>
+                      <button
+                        class=${this.searchResultsView === 'history' ? 'active' : ''}
+                        @click=${() => this._setSearchResultsView('history')}
+                      >
+                        History
+                      </button>
+                    </div>
                   </div>
-                  ${this.searchImages && this.searchImages.length > 0 ? html`
-                    ${renderImageGrid({
-                      images: this.searchImages,
-                      selection: this.searchDragSelection,
-                      flashSelectionIds: this._searchFlashSelectionIds,
-                      selectionHandlers: this._searchSelectionHandlers,
-                      renderFunctions: {
-                        renderCurateRatingWidget: this.renderCurateRatingWidget,
-                        renderCurateRatingStatic: this.renderCurateRatingStatic,
-                        renderCuratePermatagSummary: this.renderCuratePermatagSummary || this._renderSearchPermatagSummary.bind(this),
-                        formatCurateDate: this.formatCurateDate,
-                      },
-                      eventHandlers: {
-                        onImageClick: (event, image) => this._handleSearchImageClick(event, image, this.searchImages),
-                        onDragStart: (event, image) => this._handleSearchDragStart(event, image),
-                        onPointerDown: (event, index, imageId) => this._handleSearchPointerDown(event, index, imageId),
-                        onPointerMove: (event) => this._handleSearchPointerMove(event),
-                        onPointerEnter: (index) => this._handleSearchSelectHover(index),
-                      },
-                      options: {
-                        enableReordering: false,
-                        showPermatags: true,
-                        showAiScore: false,
-                        emptyMessage: 'No images found. Adjust filters to search.',
-                      },
-                    })}
+                  ${this.searchResultsView === 'history' ? html`
+                    ${this._renderSearchHistoryPane()}
                   ` : html`
-                    <div class="p-4 text-center text-gray-500 text-sm">
-                      No images found. Adjust filters to search.
+                    <div class="p-2">
+                      ${searchPagination}
+                    </div>
+                    ${this.searchImages && this.searchImages.length > 0 ? html`
+                      ${renderImageGrid({
+                        images: this.searchImages,
+                        selection: this.searchDragSelection,
+                        flashSelectionIds: this._searchFlashSelectionIds,
+                        selectionHandlers: this._searchSelectionHandlers,
+                        renderFunctions: {
+                          renderCurateRatingWidget: this.renderCurateRatingWidget,
+                          renderCurateRatingStatic: this.renderCurateRatingStatic,
+                          renderCuratePermatagSummary: this.renderCuratePermatagSummary || this._renderSearchPermatagSummary.bind(this),
+                          formatCurateDate: this.formatCurateDate,
+                        },
+                        eventHandlers: {
+                          onImageClick: (event, image) => this._handleSearchImageClick(event, image, this.searchImages),
+                          onDragStart: (event, image) => this._handleSearchDragStart(event, image, this.searchImages),
+                          onPointerDown: (event, index, imageId) => this._handleSearchPointerDown(event, index, imageId),
+                          onPointerMove: (event) => this._handleSearchPointerMove(event),
+                          onPointerEnter: (index) => this._handleSearchSelectHover(index),
+                        },
+                        options: {
+                          enableReordering: false,
+                          showPermatags: true,
+                          showAiScore: false,
+                          emptyMessage: 'No images found. Adjust filters to search.',
+                        },
+                      })}
+                    ` : html`
+                      <div class="p-4 text-center text-gray-500 text-sm">
+                        No images found. Adjust filters to search.
+                      </div>
+                    `}
+                    <div class="p-2">
+                      ${searchPagination}
                     </div>
                   `}
-                  <div class="p-2">
-                    ${searchPagination}
-                  </div>
                 </div>
               </div>
 
@@ -2213,9 +2392,28 @@ export class SearchTab extends LitElement {
                 <div class="curate-pane-header">
                   <div class="curate-pane-header-row">
                     <span class="text-sm font-semibold">Browse by Folder</span>
+                    <div class="curate-audit-toggle">
+                      <button
+                        class=${this.searchResultsView === 'results' ? 'active' : ''}
+                        @click=${() => this._setSearchResultsView('results')}
+                      >
+                        Results
+                      </button>
+                      <button
+                        class=${this.searchResultsView === 'history' ? 'active' : ''}
+                        @click=${() => this._setSearchResultsView('history')}
+                      >
+                        History
+                      </button>
+                    </div>
                   </div>
                 </div>
                 <div class="curate-pane-body">
+                  ${this.searchResultsView === 'history' ? html`
+                    <div class="p-3">
+                      ${this._renderSearchHistoryPane()}
+                    </div>
+                  ` : html`
                   <div class="p-3 border-b bg-white">
                     <button
                       class="w-full flex items-center justify-between text-sm font-semibold text-gray-900 px-3 py-2 rounded-lg border transition-colors ${this.browseByFolderAccordionOpen ? 'bg-blue-50 border-blue-200' : 'bg-gray-50 border-gray-200'}"
@@ -2351,7 +2549,7 @@ export class SearchTab extends LitElement {
                                 },
                                 eventHandlers: {
                                   onImageClick: (event, image) => this._handleSearchImageClick(event, image, sortedImages),
-                                  onDragStart: (event, image) => this._handleSearchDragStart(event, image),
+                                  onDragStart: (event, image) => this._handleSearchDragStart(event, image, sortedImages),
                                   onPointerDown: (event, index, imageId) => this._handleBrowseByFolderPointerDown(event, index, imageId, order, folder),
                                   onPointerMove: (event) => this._handleSearchPointerMove(event),
                                   onPointerEnter: (index) => this._handleBrowseByFolderSelectHover(index, folder),
@@ -2377,6 +2575,7 @@ export class SearchTab extends LitElement {
                       </div>
                     `}
                   </div>
+                  `}
                   `}
                 </div>
               </div>

@@ -35,6 +35,7 @@ from zoltag.learning import (
 )
 from zoltag.tagging import get_tagger
 from zoltag.dependencies import get_secret
+from zoltag.integrations import TenantIntegrationRepository
 from zoltag.dropbox import DropboxClient
 from zoltag.dropbox_oauth import load_dropbox_oauth_credentials
 from zoltag.tenant_scope import assign_tenant_scope, tenant_column_filter, tenant_reference_filter
@@ -137,17 +138,28 @@ def _load_tenant(session, tenant_id: str) -> Tenant:
         raise click.ClickException(f"Tenant {tenant_id} not found in database")
 
     canonical_tenant_id = str(tenant_row.id)
-    tenant_settings = tenant_row.settings or {}
-    dropbox_app_key = (
-        (tenant_row.dropbox_app_key or tenant_settings.get("dropbox_app_key") or "").strip()
-        or None
-    )
+    integration_repo = TenantIntegrationRepository(session)
+    runtime_context = integration_repo.build_runtime_context(tenant_row)
+    tenant_settings = tenant_row.settings if isinstance(tenant_row.settings, dict) else {}
+    dropbox_runtime = runtime_context.get("dropbox") or {}
+    gdrive_runtime = runtime_context.get("gdrive") or {}
+    key_prefix = getattr(tenant_row, "key_prefix", None) or canonical_tenant_id
+
     return Tenant(
         id=canonical_tenant_id,
         name=tenant_row.name,
         identifier=getattr(tenant_row, "identifier", None) or canonical_tenant_id,
-        key_prefix=getattr(tenant_row, "key_prefix", None) or canonical_tenant_id,
-        dropbox_app_key=dropbox_app_key,
+        key_prefix=key_prefix,
+        dropbox_token_secret=str(dropbox_runtime.get("token_secret_name") or f"dropbox-token-{key_prefix}").strip(),
+        dropbox_app_key=str(dropbox_runtime.get("app_key") or "").strip() or None,
+        dropbox_app_secret=str(dropbox_runtime.get("app_secret_name") or f"dropbox-app-secret-{key_prefix}").strip(),
+        dropbox_oauth_mode=str(dropbox_runtime.get("oauth_mode") or "").strip().lower() or None,
+        dropbox_sync_folders=list(dropbox_runtime.get("sync_folders") or []),
+        gdrive_sync_folders=list(gdrive_runtime.get("sync_folders") or []),
+        default_source_provider=str(runtime_context.get("default_source_provider") or "dropbox").strip().lower(),
+        gdrive_client_id=str(gdrive_runtime.get("client_id") or "").strip() or None,
+        gdrive_token_secret=str(gdrive_runtime.get("token_secret_name") or f"gdrive-token-{key_prefix}").strip(),
+        gdrive_client_secret=str(gdrive_runtime.get("client_secret_name") or f"gdrive-client-secret-{key_prefix}").strip(),
         storage_bucket=tenant_row.storage_bucket,
         thumbnail_bucket=tenant_row.thumbnail_bucket,
         settings=tenant_settings,
@@ -212,26 +224,29 @@ def refresh_metadata(
     tenant = _load_tenant(session, tenant_id)
     TenantContext.set(tenant)
     tenant_id = tenant.id
-    secret_scope = tenant.secret_scope
-    if not tenant.dropbox_app_key:
-        raise click.ClickException("Dropbox app key not configured for tenant")
 
     try:
-        refresh_token = get_secret(f"dropbox-token-{secret_scope}")
+        refresh_token = get_secret(str(tenant.dropbox_token_secret or f"dropbox-token-{tenant.secret_scope}"))
     except Exception as exc:
         raise click.ClickException(f"Dropbox token not found: {exc}")
 
     try:
-        app_secret = get_secret(f"dropbox-app-secret-{secret_scope}")
-    except Exception as exc:
-        raise click.ClickException(f"Dropbox app secret not found: {exc}")
+        credentials = load_dropbox_oauth_credentials(
+            tenant_id=tenant.secret_scope,
+            tenant_app_key=tenant.dropbox_app_key,
+            tenant_app_secret_name=tenant.dropbox_app_secret,
+            get_secret=get_secret,
+            selection_mode="managed_only",
+        )
+    except ValueError as exc:
+        raise click.ClickException(str(exc))
 
     from dropbox import Dropbox
 
     dbx = Dropbox(
         oauth2_refresh_token=refresh_token,
-        app_key=tenant.dropbox_app_key,
-        app_secret=app_secret
+        app_key=credentials["app_key"],
+        app_secret=credentials["app_secret"],
     )
 
     missing_filter = or_(
@@ -961,44 +976,25 @@ def sync_dropbox(tenant_id: str, count: int):
     db = Session()
 
     try:
-        # Load tenant
-        tenant = _resolve_tenant_row(db, tenant_id)
-        if not tenant:
-            click.echo(f"Error: Tenant {tenant_id} not found", err=True)
-            return
-        tenant_id = str(tenant.id)
-
-        tenant_ctx = Tenant(
-            id=tenant_id,
-            name=tenant.name,
-            identifier=getattr(tenant, "identifier", None) or tenant_id,
-            key_prefix=getattr(tenant, "key_prefix", None) or tenant_id,
-            storage_bucket=tenant.storage_bucket,
-            thumbnail_bucket=tenant.thumbnail_bucket
-        )
+        tenant_ctx = _load_tenant(db, tenant_id)
+        tenant_id = tenant_ctx.id
         TenantContext.set(tenant_ctx)
 
-        click.echo(f"Syncing from Dropbox for tenant: {tenant.name}")
+        click.echo(f"Syncing from Dropbox for tenant: {tenant_ctx.name}")
 
         # Get Dropbox credentials
         try:
-            dropbox_token = get_secret(f"dropbox-token-{tenant_ctx.secret_scope}")
+            dropbox_token = get_secret(str(tenant_ctx.dropbox_token_secret or f"dropbox-token-{tenant_ctx.secret_scope}"))
         except Exception as exc:
             click.echo(f"Error: No Dropbox refresh token configured ({exc})", err=True)
             return
-        oauth_mode = str((tenant.settings or {}).get("dropbox_oauth_mode") or "").strip().lower()
-        if oauth_mode == "managed":
-            selection_mode = "managed_only"
-        elif oauth_mode == "legacy_tenant":
-            selection_mode = "tenant_only"
-        else:
-            selection_mode = "tenant_first"
         try:
             credentials = load_dropbox_oauth_credentials(
                 tenant_id=tenant_ctx.secret_scope,
-                tenant_app_key=tenant.dropbox_app_key,
+                tenant_app_key=tenant_ctx.dropbox_app_key,
+                tenant_app_secret_name=tenant_ctx.dropbox_app_secret,
                 get_secret=get_secret,
-                selection_mode=selection_mode,
+                selection_mode="managed_only",
             )
         except ValueError as exc:
             click.echo(f"Error: {exc}", err=True)
@@ -1013,10 +1009,7 @@ def sync_dropbox(tenant_id: str, count: int):
 
         # Get sync folders from tenant config or use root
         config_mgr = ConfigManager(db, tenant_id)
-        sync_folders = []
-        tenant_config = tenant.settings or {}
-        if tenant_config and 'sync_folders' in tenant_config:
-            sync_folders = tenant_config['sync_folders']
+        sync_folders = list(tenant_ctx.dropbox_sync_folders or [])
 
         if not sync_folders:
             sync_folders = ['']  # Root if no folders configured

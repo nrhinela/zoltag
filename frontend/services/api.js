@@ -575,22 +575,6 @@ export async function getSystemSettings() {
 }
 
 /**
- * Update tenant settings
- * @param {string} tenantId - Tenant ID
- * @param {Object} settings - Settings to update
- * @returns {Promise<Object>} Updated settings
- */
-export async function updateTenantSettings(tenantId, settings) {
-    return fetchWithAuth(`/admin/tenants/${tenantId}/settings`, {
-        method: 'PATCH',
-        body: JSON.stringify(settings)
-    }).catch(error => {
-        const err = new Error(error.message);
-        throw err;
-    });
-}
-
-/**
  * Get integration status/config for current tenant (tenant admin scope)
  * @param {string} tenantId - Tenant ID
  * @returns {Promise<Object>} Integration status payload

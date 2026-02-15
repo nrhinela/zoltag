@@ -63,6 +63,9 @@ export class AppEventsStateController extends BaseStateController {
     if (!this.host.curateDragSelection.length) {
       return;
     }
+    if (event.metaKey || event.ctrlKey || event.shiftKey) {
+      return;
+    }
     const path = event.composedPath ? event.composedPath() : [];
     const clickedThumb = path.some((node) => {
       if (!node || !node.classList) {

@@ -562,10 +562,6 @@ def create_storage_provider(
     normalized = (provider_name or "dropbox").strip().lower()
     if normalized in {"dropbox", "dbx"}:
         token_secret = getattr(tenant, "dropbox_token_secret", None)
-        app_secret_name = getattr(tenant, "dropbox_app_secret", None)
-        tenant_app_key = (getattr(tenant, "dropbox_app_key", None) or "").strip()
-        tenant_settings = getattr(tenant, "settings", None) or {}
-        oauth_mode = str(tenant_settings.get("dropbox_oauth_mode") or "").strip().lower()
         if not token_secret:
             raise ValueError("Dropbox secrets not configured for tenant")
 
@@ -573,56 +569,21 @@ def create_storage_provider(
         if not refresh_token:
             raise ValueError("Dropbox refresh token is not configured for tenant")
 
-        prefer_managed = oauth_mode == "managed"
-        prefer_legacy = oauth_mode == "legacy_tenant"
+        try:
+            managed_app_key = str(get_secret(settings.dropbox_app_key_secret) or "").strip()
+            managed_app_secret = str(get_secret(settings.dropbox_app_secret_secret) or "").strip()
+        except Exception:
+            managed_app_key = ""
+            managed_app_secret = ""
 
-        if not prefer_managed and tenant_app_key and app_secret_name:
-            try:
-                app_secret = str(get_secret(app_secret_name) or "").strip()
-            except Exception:
-                app_secret = ""
-            if app_secret:
-                return DropboxStorageProvider(
-                    refresh_token=refresh_token,
-                    app_key=tenant_app_key,
-                    app_secret=app_secret,
-                )
-
-        def _load_managed_credentials() -> tuple[str, str]:
-            try:
-                return (
-                    str(get_secret(settings.dropbox_app_key_secret) or "").strip(),
-                    str(get_secret(settings.dropbox_app_secret_secret) or "").strip(),
-                )
-            except Exception:
-                return ("", "")
-
-        managed_app_key, managed_app_secret = _load_managed_credentials()
-        if managed_app_key and managed_app_secret:
-            return DropboxStorageProvider(
-                refresh_token=refresh_token,
-                app_key=managed_app_key,
-                app_secret=managed_app_secret,
-            )
-
-        if prefer_managed:
+        if not managed_app_key or not managed_app_secret:
             raise ValueError("Managed Dropbox OAuth credentials are not configured")
 
-        if not prefer_legacy and tenant_app_key and app_secret_name:
-            try:
-                app_secret = str(get_secret(app_secret_name) or "").strip()
-            except Exception:
-                app_secret = ""
-            if app_secret:
-                return DropboxStorageProvider(
-                    refresh_token=refresh_token,
-                    app_key=tenant_app_key,
-                    app_secret=app_secret,
-                )
-
-        if tenant_app_key:
-            raise ValueError("Dropbox app secret is not configured for tenant")
-        raise ValueError("Dropbox app key is not configured for tenant")
+        return DropboxStorageProvider(
+            refresh_token=refresh_token,
+            app_key=managed_app_key,
+            app_secret=managed_app_secret,
+        )
 
     if normalized in {"gdrive", "google-drive", "google_drive", "drive"}:
         client_id = getattr(tenant, "gdrive_client_id", None)

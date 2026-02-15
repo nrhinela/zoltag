@@ -236,18 +236,12 @@ async def propagate_dropbox_tags(
 
     try:
         refresh_token = str(get_secret(tenant.dropbox_token_secret) or "").strip()
-        oauth_mode = str((tenant.settings or {}).get("dropbox_oauth_mode") or "").strip().lower()
-        if oauth_mode == "managed":
-            selection_mode = "managed_only"
-        elif oauth_mode == "legacy_tenant":
-            selection_mode = "tenant_only"
-        else:
-            selection_mode = "tenant_first"
         credentials = load_dropbox_oauth_credentials(
             tenant_id=tenant.secret_scope,
             tenant_app_key=tenant.dropbox_app_key,
+            tenant_app_secret_name=tenant.dropbox_app_secret,
             get_secret=get_secret,
-            selection_mode=selection_mode,
+            selection_mode="managed_only",
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))

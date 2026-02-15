@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from zoltag import oauth_state
 from zoltag.dependencies import get_db, get_secret, store_secret
 from zoltag.dropbox_oauth import append_query_params, sanitize_redirect_origin, sanitize_return_path
+from zoltag.integrations import TenantIntegrationRepository
 from zoltag.metadata import Tenant as TenantModel
 from zoltag.settings import settings
 from zoltag.tenant_scope import tenant_reference_filter
@@ -21,10 +22,6 @@ router = APIRouter(
 
 def _resolve_tenant(db: Session, tenant_ref: str):
     return db.query(TenantModel).filter(tenant_reference_filter(TenantModel, tenant_ref)).first()
-
-
-def _tenant_secret_scope(tenant_obj: TenantModel) -> str:
-    return str(getattr(tenant_obj, "key_prefix", None) or tenant_obj.id).strip()
 
 
 def _resolve_redirect_origin(request: Request, explicit_origin: str | None = None) -> str:
@@ -57,6 +54,7 @@ async def gdrive_authorize(
     request: Request,
     tenant: str,
     flow: str = "popup",
+    provider_id: str | None = None,
     redirect_origin: str | None = None,
     return_to: str | None = None,
     db: Session = Depends(get_db),
@@ -68,19 +66,25 @@ async def gdrive_authorize(
     if not tenant_obj:
         raise HTTPException(status_code=400, detail="Tenant not found")
 
-    tenant_settings = tenant_obj.settings or {}
-    client_id = tenant_settings.get("gdrive_client_id")
+    repo = TenantIntegrationRepository(db)
+    try:
+        provider_record = repo.get_provider_record(tenant_obj, "gdrive", provider_id=provider_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    client_id = str(provider_record.config_json.get("client_id") or "").strip()
     if not client_id:
         raise HTTPException(status_code=400, detail="Google Drive client ID not configured")
 
     resolved_origin = _resolve_redirect_origin(request, redirect_origin)
     redirect_uri = f"{resolved_origin}/oauth/gdrive/callback"
     state = oauth_state.generate_with_context(
-        tenant_obj.id,
+        str(tenant_obj.id),
         {
             "flow": flow,
             "return_to": resolved_return_to,
             "redirect_origin": resolved_origin,
+            "provider_id": provider_record.id,
         },
     )
     params = {
@@ -119,11 +123,16 @@ async def gdrive_callback(
     if not tenant_obj:
         raise HTTPException(status_code=400, detail="Tenant not found")
 
-    tenant_settings = tenant_obj.settings or {}
-    secret_scope = _tenant_secret_scope(tenant_obj)
-    client_id = tenant_settings.get("gdrive_client_id")
-    client_secret_secret = tenant_settings.get("gdrive_client_secret") or f"gdrive-client-secret-{secret_scope}"
-    token_secret = tenant_settings.get("gdrive_token_secret") or f"gdrive-token-{secret_scope}"
+    provider_id = str(state_context.get("provider_id") or "").strip() or None
+    repo = TenantIntegrationRepository(db)
+    try:
+        provider_record = repo.get_provider_record(tenant_obj, "gdrive", provider_id=provider_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    client_id = str(provider_record.config_json.get("client_id") or "").strip()
+    client_secret_secret = provider_record.gdrive_client_secret_name
+    token_secret = provider_record.gdrive_token_secret_name
 
     if not client_id:
         raise HTTPException(status_code=400, detail="Google Drive client ID not configured")
@@ -160,6 +169,16 @@ async def gdrive_callback(
         )
 
     store_secret(token_secret, refresh_token)
+
+    repo.update_provider(
+        tenant_obj,
+        "gdrive",
+        provider_id=provider_record.id,
+        client_id=client_id,
+        client_secret_name=client_secret_secret,
+        token_secret_name=token_secret,
+    )
+    db.commit()
 
     flow = str(state_context.get("flow") or "").strip().lower()
     if flow == "redirect":

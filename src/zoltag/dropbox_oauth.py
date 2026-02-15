@@ -12,9 +12,9 @@ DEFAULT_RETURN_PATH = "/app?tab=library&subTab=providers"
 
 def _normalize_selection_mode(selection_mode: str | None) -> str:
     normalized = str(selection_mode or "").strip().lower()
-    if normalized in {"managed_only", "tenant_only", "managed_first", "tenant_first"}:
+    if normalized == "managed_only":
         return normalized
-    return "tenant_first"
+    return "managed_only"
 
 
 def _read_secret(secret_name: str | None, get_secret: Callable[[str], str]) -> str:
@@ -32,80 +32,34 @@ def inspect_dropbox_oauth_config(
     tenant_id: str,
     tenant_app_key: str | None,
     get_secret: Callable[[str], str],
+    tenant_app_secret_name: str | None = None,
     selection_mode: str | None = None,
 ) -> dict[str, Any]:
-    """Inspect available Dropbox OAuth credential modes for a tenant."""
+    """Inspect managed Dropbox OAuth credential availability for a tenant."""
     selection_mode = _normalize_selection_mode(selection_mode)
-    normalized_tenant_id = str(tenant_id or "").strip()
-    normalized_tenant_app_key = str(tenant_app_key or "").strip()
-    tenant_secret_name = f"dropbox-app-secret-{normalized_tenant_id}" if normalized_tenant_id else ""
-    tenant_secret_value = _read_secret(tenant_secret_name, get_secret)
-    tenant_ready = bool(normalized_tenant_app_key and tenant_secret_value)
+    _ = tenant_id
+    _ = tenant_app_key
+    _ = tenant_app_secret_name
 
     managed_app_key = _read_secret(settings.dropbox_app_key_secret, get_secret)
     managed_app_secret = _read_secret(settings.dropbox_app_secret_secret, get_secret)
     managed_ready = bool(managed_app_key and managed_app_secret)
-    can_connect = bool(tenant_ready or managed_ready)
+    can_connect = managed_ready
 
     selected_mode = "unconfigured"
     selected_app_key = ""
     selected_app_secret_name = ""
     issues: list[str] = []
 
-    if selection_mode == "managed_only":
-        if managed_ready:
-            selected_mode = "managed"
-            selected_app_key = managed_app_key
-            selected_app_secret_name = settings.dropbox_app_secret_secret
-        else:
-            issues.append("managed_dropbox_oauth_not_configured")
-    elif selection_mode == "tenant_only":
-        if tenant_ready:
-            selected_mode = "legacy_tenant"
-            selected_app_key = normalized_tenant_app_key
-            selected_app_secret_name = tenant_secret_name
-        elif normalized_tenant_app_key:
-            selected_mode = "legacy_tenant"
-            selected_app_key = normalized_tenant_app_key
-            selected_app_secret_name = tenant_secret_name
-            issues.append("tenant_app_secret_missing")
-        else:
-            issues.append("tenant_dropbox_oauth_not_configured")
-    elif selection_mode == "managed_first":
-        if managed_ready:
-            selected_mode = "managed"
-            selected_app_key = managed_app_key
-            selected_app_secret_name = settings.dropbox_app_secret_secret
-        elif tenant_ready:
-            selected_mode = "legacy_tenant"
-            selected_app_key = normalized_tenant_app_key
-            selected_app_secret_name = tenant_secret_name
-        elif normalized_tenant_app_key:
-            selected_mode = "legacy_tenant"
-            selected_app_key = normalized_tenant_app_key
-            selected_app_secret_name = tenant_secret_name
-            issues.append("tenant_app_secret_missing")
-        else:
-            issues.append("dropbox_oauth_not_configured")
+    if managed_ready:
+        selected_mode = "managed"
+        selected_app_key = managed_app_key
+        selected_app_secret_name = settings.dropbox_app_secret_secret
     else:
-        if tenant_ready:
-            selected_mode = "legacy_tenant"
-            selected_app_key = normalized_tenant_app_key
-            selected_app_secret_name = tenant_secret_name
-        elif managed_ready:
-            selected_mode = "managed"
-            selected_app_key = managed_app_key
-            selected_app_secret_name = settings.dropbox_app_secret_secret
-        elif normalized_tenant_app_key:
-            selected_mode = "legacy_tenant"
-            selected_app_key = normalized_tenant_app_key
-            selected_app_secret_name = tenant_secret_name
-            issues.append("tenant_app_secret_missing")
-        else:
-            issues.append("dropbox_oauth_not_configured")
+        issues.append("managed_dropbox_oauth_not_configured")
 
     return {
-        "tenant_ready": tenant_ready,
+        "tenant_ready": False,
         "managed_ready": managed_ready,
         "can_connect": can_connect,
         "selected_mode": selected_mode,
@@ -121,12 +75,14 @@ def load_dropbox_oauth_credentials(
     tenant_id: str,
     tenant_app_key: str | None,
     get_secret: Callable[[str], str],
+    tenant_app_secret_name: str | None = None,
     selection_mode: str | None = None,
 ) -> dict[str, str]:
     """Load the selected Dropbox OAuth app key + app secret value."""
     config = inspect_dropbox_oauth_config(
         tenant_id=tenant_id,
         tenant_app_key=tenant_app_key,
+        tenant_app_secret_name=tenant_app_secret_name,
         get_secret=get_secret,
         selection_mode=selection_mode,
     )

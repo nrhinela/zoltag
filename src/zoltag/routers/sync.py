@@ -8,7 +8,8 @@ from sqlalchemy.orm import Session
 
 from zoltag.dependencies import get_db, get_secret, get_tenant
 from zoltag.image import ImageProcessor
-from zoltag.metadata import Asset
+from zoltag.integrations import TenantIntegrationRepository, normalize_sync_folders
+from zoltag.metadata import Asset, Tenant as TenantModel
 from zoltag.settings import settings
 from zoltag.storage import ProviderEntry, create_storage_provider
 from zoltag.sync_pipeline import process_storage_entry
@@ -41,9 +42,24 @@ async def trigger_sync(
     """Trigger one-item sync for the requested storage provider."""
     try:
         _ = model  # Legacy query param retained for backward compatibility.
-        tenant_settings = tenant.settings or {}
-        configured_provider = str(tenant_settings.get("sync_source_provider") or "dropbox").strip().lower()
+        tenant_row = db.query(TenantModel).filter(TenantModel.id == tenant.id).first()
+        if not tenant_row:
+            raise HTTPException(status_code=404, detail="Tenant not found")
+
+        repo = TenantIntegrationRepository(db)
+        runtime_context = repo.build_runtime_context(tenant_row)
+        configured_provider = str(runtime_context.get("default_source_provider") or "dropbox").strip().lower()
         provider_name = _normalize_provider(provider or configured_provider)
+        if provider_name == "dropbox":
+            dropbox_runtime = runtime_context.get("dropbox") or {}
+            sync_folders = normalize_sync_folders(dropbox_runtime.get("sync_folders"))
+            tenant.dropbox_oauth_mode = str(dropbox_runtime.get("oauth_mode") or "").strip().lower() or None
+            tenant.dropbox_sync_folders = list(sync_folders)
+        else:
+            gdrive_runtime = runtime_context.get("gdrive") or {}
+            sync_folders = normalize_sync_folders(gdrive_runtime.get("sync_folders"))
+            tenant.gdrive_sync_folders = list(sync_folders)
+        tenant.default_source_provider = configured_provider
 
         try:
             storage_provider = create_storage_provider(provider_name, tenant=tenant, get_secret=get_secret)
@@ -51,9 +67,6 @@ async def trigger_sync(
             raise HTTPException(status_code=400, detail=str(exc))
         except Exception as exc:
             raise HTTPException(status_code=400, detail=f"Unable to initialize {provider_name} provider: {exc}")
-
-        sync_folder_key = "dropbox_sync_folders" if storage_provider.provider_name == "dropbox" else "gdrive_sync_folders"
-        sync_folders = tenant_settings.get(sync_folder_key, [])
 
         processed_paths = set()
         if not reprocess_existing:

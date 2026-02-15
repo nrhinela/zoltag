@@ -5,6 +5,7 @@ import { CurateExploreStateController } from './curate-explore-state.js';
 import { RatingModalStateController } from './rating-modal-state.js';
 import { SearchStateController } from './search-state.js';
 import { AppShellStateController } from './app-shell-state.js';
+import { AppNavigationStateController } from './app-navigation-state.js';
 import { AppDataStateController } from './app-data-state.js';
 import { AppEventsStateController } from './app-events-state.js';
 
@@ -24,6 +25,7 @@ export function initializeAppCoreSetup(host) {
   host._searchState = new SearchStateController(host);
   host._ratingModalState = new RatingModalStateController(host);
   host._appShellState = new AppShellStateController(host);
+  host._appNavigationState = new AppNavigationStateController(host);
   host._appDataState = new AppDataStateController(host);
   host._appEventsState = new AppEventsStateController(host);
 

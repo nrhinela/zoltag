@@ -1,7 +1,7 @@
 /**
  * Create selection handlers - eliminates duplication between explore and audit
  *
- * This factory creates handlers for long-press selection functionality.
+ * This factory creates handlers for long-press and modifier-click selection functionality.
  * Used to replace 10+ duplicate methods in zoltag-app.js.
  *
  * @param {Object} context - Component context (usually `this` from LitElement)
@@ -44,6 +44,53 @@ export function createSelectionHandlers(context, config) {
     dragSelectOnMove = false,
   } = config;
   const suppressClickProp = suppressClickProperty || '_curateSuppressClick';
+  let anchorImageId = null;
+
+  const toKey = (value) => String(value);
+  const hasImageId = (value) => value !== null && value !== undefined && value !== '';
+  const isSelectionEqual = (left, right) => {
+    if (left.length !== right.length) return false;
+    for (let i = 0; i < left.length; i += 1) {
+      if (toKey(left[i]) !== toKey(right[i])) {
+        return false;
+      }
+    }
+    return true;
+  };
+  const containsImageId = (selection, imageId) => {
+    if (!Array.isArray(selection) || !hasImageId(imageId)) return false;
+    const imageKey = toKey(imageId);
+    return selection.some((value) => toKey(value) === imageKey);
+  };
+  const uniqueImageIds = (ids) => {
+    const seen = new Set();
+    const result = [];
+    (ids || []).forEach((value) => {
+      if (!hasImageId(value)) return;
+      const key = toKey(value);
+      if (seen.has(key)) return;
+      seen.add(key);
+      result.push(value);
+    });
+    return result;
+  };
+  const resolveOrder = (orderOverride = null) => {
+    if (Array.isArray(orderOverride)) return orderOverride;
+    const fallback = getOrder();
+    return Array.isArray(fallback) ? fallback : [];
+  };
+  const resolveIndex = (order, imageId, fallbackIndex = null) => {
+    if (!Array.isArray(order) || !order.length) {
+      return Number.isInteger(fallbackIndex) ? fallbackIndex : null;
+    }
+    const imageKey = toKey(imageId);
+    const matchedIndex = order.findIndex((value) => toKey(value) === imageKey);
+    if (matchedIndex >= 0) return matchedIndex;
+    if (Number.isInteger(fallbackIndex) && fallbackIndex >= 0 && fallbackIndex < order.length) {
+      return fallbackIndex;
+    }
+    return null;
+  };
 
   return {
     /**
@@ -65,7 +112,8 @@ export function createSelectionHandlers(context, config) {
      * Start selection at index
      */
     startSelection(index, imageId) {
-      if (context[selectionProperty].includes(imageId)) {
+      if (containsImageId(context[selectionProperty], imageId)) {
+        anchorImageId = imageId;
         return;
       }
       this.cancelPressState();
@@ -74,6 +122,7 @@ export function createSelectionHandlers(context, config) {
       context[startIndexProperty] = index;
       context[endIndexProperty] = index;
       context[suppressClickProp] = true;
+      anchorImageId = imageId;
       flashSelection(imageId);
       this.updateSelection();
     },
@@ -88,10 +137,19 @@ export function createSelectionHandlers(context, config) {
       if (event.button !== 0) {
         return;
       }
-      const alreadySelected = context[selectionProperty].length
-        && context[selectionProperty].includes(imageId);
+      if (event.metaKey || event.ctrlKey || event.shiftKey) {
+        this.cancelPressState();
+        context[suppressClickProp] = false;
+        return;
+      }
+      const selection = Array.isArray(context[selectionProperty]) ? context[selectionProperty] : [];
+      if (!selection.length) {
+        anchorImageId = null;
+      }
+      const alreadySelected = selection.length && containsImageId(selection, imageId);
       if (alreadySelected) {
         context[suppressClickProp] = true;
+        anchorImageId = imageId;
         return;
       }
       if (dragSelectOnMove) {
@@ -135,7 +193,8 @@ export function createSelectionHandlers(context, config) {
      * Handle long press start
      */
     handleSelectStart(event, index, imageId) {
-      if (context[selectionProperty].includes(imageId)) {
+      if (containsImageId(context[selectionProperty], imageId)) {
+        anchorImageId = imageId;
         return;
       }
       event.preventDefault();
@@ -157,7 +216,7 @@ export function createSelectionHandlers(context, config) {
      * Update selection based on start/end indices
      */
     updateSelection() {
-      const order = getOrder();
+      const order = resolveOrder();
       if (!order || context[startIndexProperty] === null || context[endIndexProperty] === null) {
         return;
       }
@@ -165,6 +224,11 @@ export function createSelectionHandlers(context, config) {
       const end = Math.max(context[startIndexProperty], context[endIndexProperty]);
       const ids = order.slice(start, end + 1);
       context[selectionProperty] = ids;
+      if (ids.length) {
+        anchorImageId = order[context[startIndexProperty]] ?? ids[0];
+      } else {
+        anchorImageId = null;
+      }
     },
 
     /**
@@ -172,6 +236,75 @@ export function createSelectionHandlers(context, config) {
      */
     clearSelection() {
       context[selectionProperty] = [];
+      anchorImageId = null;
+    },
+
+    /**
+     * Handle desktop-style modifier click behavior.
+     */
+    handleClickSelection(event, { imageId, index = null, order = null } = {}) {
+      if (!event) {
+        return { handled: false, changed: false, selection: Array.isArray(context[selectionProperty]) ? [...context[selectionProperty]] : [] };
+      }
+      const useToggle = Boolean(event.metaKey || event.ctrlKey);
+      const useRange = Boolean(event.shiftKey);
+      if (!useToggle && !useRange) {
+        return { handled: false, changed: false, selection: Array.isArray(context[selectionProperty]) ? [...context[selectionProperty]] : [] };
+      }
+
+      const currentSelection = uniqueImageIds(context[selectionProperty]);
+      if (!currentSelection.length) {
+        anchorImageId = null;
+      }
+
+      const resolvedOrder = resolveOrder(order);
+      const clickIndex = resolveIndex(resolvedOrder, imageId, index);
+      let nextSelection = currentSelection;
+      const imageKey = toKey(imageId);
+
+      if (useRange) {
+        if (clickIndex === null || !resolvedOrder.length) {
+          if (useToggle) {
+            const isSelected = currentSelection.some((value) => toKey(value) === imageKey);
+            nextSelection = isSelected
+              ? currentSelection.filter((value) => toKey(value) !== imageKey)
+              : [...currentSelection, imageId];
+          } else {
+            nextSelection = hasImageId(imageId) ? [imageId] : [];
+          }
+        } else {
+          const anchorIndex = resolveIndex(resolvedOrder, anchorImageId, clickIndex);
+          const rangeStart = Math.min(anchorIndex ?? clickIndex, clickIndex);
+          const rangeEnd = Math.max(anchorIndex ?? clickIndex, clickIndex);
+          const rangeIds = resolvedOrder.slice(rangeStart, rangeEnd + 1);
+          nextSelection = useToggle
+            ? [...currentSelection, ...rangeIds]
+            : rangeIds;
+        }
+        anchorImageId = hasImageId(imageId) ? imageId : anchorImageId;
+      } else if (useToggle) {
+        const isSelected = currentSelection.some((value) => toKey(value) === imageKey);
+        if (isSelected) {
+          nextSelection = currentSelection.filter((value) => toKey(value) !== imageKey);
+          anchorImageId = nextSelection.length ? nextSelection[nextSelection.length - 1] : null;
+        } else {
+          nextSelection = [...currentSelection, imageId];
+          anchorImageId = imageId;
+        }
+      }
+
+      nextSelection = uniqueImageIds(nextSelection);
+      const changed = !isSelectionEqual(currentSelection, nextSelection);
+      if (changed) {
+        context[selectionProperty] = nextSelection;
+      }
+      context[suppressClickProp] = false;
+      event.preventDefault();
+      return {
+        handled: true,
+        changed,
+        selection: Array.isArray(context[selectionProperty]) ? [...context[selectionProperty]] : [],
+      };
     },
   };
 }

@@ -17,6 +17,7 @@ from zoltag.image import ImageProcessor
 from zoltag.metadata import Asset, ImageMetadata
 from zoltag.dependencies import get_secret
 from zoltag.dropbox import DropboxClient
+from zoltag.dropbox_oauth import load_dropbox_oauth_credentials
 from zoltag.cli.base import CliCommand
 
 
@@ -127,23 +128,29 @@ class RefreshMetadataCommand(CliCommand):
     def _refresh_metadata(self):
         """Refresh missing EXIF-derived metadata from Dropbox."""
         self.tenant = self.load_tenant(self.tenant_id)
-        if not self.tenant.dropbox_app_key:
-            raise click.ClickException("Dropbox app key not configured for tenant")
 
         try:
-            refresh_token = get_secret(f"dropbox-token-{self.tenant.secret_scope}")
+            refresh_token = get_secret(
+                str(self.tenant.dropbox_token_secret or f"dropbox-token-{self.tenant.secret_scope}")
+            )
         except Exception as exc:
             raise click.ClickException(f"Dropbox token not found: {exc}")
 
         try:
-            app_secret = get_secret(f"dropbox-app-secret-{self.tenant.secret_scope}")
-        except Exception as exc:
-            raise click.ClickException(f"Dropbox app secret not found: {exc}")
+            credentials = load_dropbox_oauth_credentials(
+                tenant_id=self.tenant.secret_scope,
+                tenant_app_key=self.tenant.dropbox_app_key,
+                tenant_app_secret_name=self.tenant.dropbox_app_secret,
+                get_secret=get_secret,
+                selection_mode="managed_only",
+            )
+        except ValueError as exc:
+            raise click.ClickException(str(exc))
 
         dbx = Dropbox(
             oauth2_refresh_token=refresh_token,
-            app_key=self.tenant.dropbox_app_key,
-            app_secret=app_secret
+            app_key=credentials["app_key"],
+            app_secret=credentials["app_secret"],
         )
 
         # Query for images with missing metadata
@@ -385,23 +392,29 @@ class BackfillCaptureTimestampCommand(CliCommand):
     def _backfill_capture_timestamp(self):
         """Backfill capture_timestamp using Dropbox media_info only."""
         self.tenant = self.load_tenant(self.tenant_id)
-        if not self.tenant.dropbox_app_key:
-            raise click.ClickException("Dropbox app key not configured for tenant")
 
         try:
-            refresh_token = get_secret(f"dropbox-token-{self.tenant.secret_scope}")
+            refresh_token = get_secret(
+                str(self.tenant.dropbox_token_secret or f"dropbox-token-{self.tenant.secret_scope}")
+            )
         except Exception as exc:
             raise click.ClickException(f"Dropbox token not found: {exc}")
 
         try:
-            app_secret = get_secret(f"dropbox-app-secret-{self.tenant.secret_scope}")
-        except Exception as exc:
-            raise click.ClickException(f"Dropbox app secret not found: {exc}")
+            credentials = load_dropbox_oauth_credentials(
+                tenant_id=self.tenant.secret_scope,
+                tenant_app_key=self.tenant.dropbox_app_key,
+                tenant_app_secret_name=self.tenant.dropbox_app_secret,
+                get_secret=get_secret,
+                selection_mode="managed_only",
+            )
+        except ValueError as exc:
+            raise click.ClickException(str(exc))
 
         dropbox_client = DropboxClient(
             refresh_token=refresh_token,
-            app_key=self.tenant.dropbox_app_key,
-            app_secret=app_secret,
+            app_key=credentials["app_key"],
+            app_secret=credentials["app_secret"],
         )
 
         base_query = self.db.query(ImageMetadata).filter(
