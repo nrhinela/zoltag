@@ -64,6 +64,23 @@ class Tenant(Base):
     people = relationship("Person", back_populates="tenant", cascade="all, delete-orphan")
 
 
+class TenantProviderIntegration(Base):
+    """Tenant-scoped provider integration config (v2 source of truth)."""
+
+    __tablename__ = "tenant_provider_integrations"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
+    provider_type = Column(String(32), nullable=False)  # dropbox, gdrive, future providers
+    label = Column(String(128), nullable=False)  # Human-facing name (e.g., "Main Dropbox")
+    is_active = Column(Boolean, nullable=False, default=True)
+    is_default_sync_source = Column(Boolean, nullable=False, default=False)
+    secret_scope = Column(String(255), nullable=False)
+    config_json = Column(JSONB, nullable=False, default=dict)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class Person(Base):
     """Known people for tagging and facial recognition."""
 

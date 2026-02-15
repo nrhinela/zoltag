@@ -1,6 +1,6 @@
 import { LitElement, html, css } from 'lit';
 import { onAuthStateChange, getSession } from '../services/supabase.js';
-import { isVerified, ensureRegistration } from '../services/auth.js';
+import { isVerified } from '../services/auth.js';
 
 /**
  * Authentication guard component
@@ -137,6 +137,22 @@ export class AuthGuard extends LitElement {
     this.authenticated = false;
     this.verified = false;
     this.loading = true;
+    this._verifyInFlight = null;
+  }
+
+  async _runVerification() {
+    if (this._verifyInFlight) {
+      return this._verifyInFlight;
+    }
+    this._verifyInFlight = isVerified()
+      .then((verified) => {
+        this.verified = verified;
+        return verified;
+      })
+      .finally(() => {
+        this._verifyInFlight = null;
+      });
+    return this._verifyInFlight;
   }
 
   async connectedCallback() {
@@ -147,9 +163,7 @@ export class AuthGuard extends LitElement {
     this.authenticated = !!session;
 
     if (this.authenticated) {
-      await ensureRegistration(session?.user?.user_metadata?.display_name || '');
-      // Check if user is approved
-      this.verified = await isVerified();
+      await this._runVerification();
     }
 
     this.loading = false;
@@ -162,12 +176,7 @@ export class AuthGuard extends LitElement {
         // Redirect to login on logout
         window.location.href = '/login';
       } else if (event === 'SIGNED_IN') {
-        // Verify approval status on signin
-        ensureRegistration(session?.user?.user_metadata?.display_name || '')
-          .then(() => isVerified())
-          .then((verified) => {
-            this.verified = verified;
-          });
+        this._runVerification();
       }
     });
 

@@ -3,7 +3,19 @@ import { enqueueCommand } from '../services/command-queue.js';
 import { getDropboxFolders, getLists, createList, getListItems } from '../services/api.js';
 import { createSelectionHandlers } from './shared/selection-handlers.js';
 import { renderResultsPagination } from './shared/pagination-controls.js';
-import { renderImageGrid } from './shared/image-grid.js';
+import { renderSelectableImageGrid } from './shared/selectable-image-grid.js';
+import {
+  buildHotspotHistorySessionKey,
+  createHotspotHistoryBatch,
+  getVisibleHistoryBatches,
+  loadHotspotHistorySessionState,
+  loadPreviousHistoryBatchCount,
+  parseDraggedImageIds,
+  prependHistoryBatch,
+  readDragImagePayload,
+  saveHotspotHistorySessionState,
+  setDragImagePayload,
+} from './shared/hotspot-history.js';
 import {
   getKeywordsByCategory,
   getCategoryCount,
@@ -129,6 +141,9 @@ export class CurateExploreTab extends LitElement {
     _curateReorderDraggedId: { type: Number, state: true },
     _curateLeftOrder: { type: Array, state: true },
     _curateSuppressClick: { type: Boolean, state: true },
+    curateResultsView: { type: String, state: true },
+    _curateHotspotHistoryBatches: { type: Array, state: true },
+    _curateHotspotHistoryVisibleBatches: { type: Number, state: true },
   };
 
   constructor() {
@@ -211,7 +226,11 @@ export class CurateExploreTab extends LitElement {
     this._curateExploreRatingDragTarget = null;
     this._curateReorderDraggedId = null;
     this._curateLeftOrder = [];
+    this._curateHistoryGroupKey = null;
     this._curateSuppressClick = false;
+    this.curateResultsView = 'results';
+    this._curateHotspotHistoryBatches = [];
+    this._curateHotspotHistoryVisibleBatches = 1;
 
     // Configure selection handlers
     this._curateSelectionHandlers = createSelectionHandlers(this, {
@@ -254,6 +273,7 @@ export class CurateExploreTab extends LitElement {
         this.dragEndIndex = null;
       }
       const hadLongPress = this._curateLongPressTriggered;
+      this._curateHistoryGroupKey = null;
       this._curateSelectionHandlers.cancelPressState();
       if (hadLongPress) {
         this._curateSuppressClick = true;
@@ -263,6 +283,7 @@ export class CurateExploreTab extends LitElement {
 
   connectedCallback() {
     super.connectedCallback();
+    this._restoreCurateHistorySessionState();
     // Listen for pointer/key release to end selection
     window.addEventListener('pointerup', this._handleCurateSelectionEnd);
     window.addEventListener('keyup', this._handleCurateSelectionEnd);
@@ -307,10 +328,38 @@ export class CurateExploreTab extends LitElement {
     this._curateSelectionHandlers.handleSelectHover(index);
   }
 
+  _handleCurateHistoryPointerDown(event, index, imageId, order, groupKey) {
+    this._curateHistoryGroupKey = groupKey;
+    this._handleCuratePointerDownWithOrder(event, index, imageId, order);
+  }
+
+  _handleCurateHistorySelectHover(index, order, groupKey) {
+    if (this._curateHistoryGroupKey !== groupKey) {
+      return;
+    }
+    this._handleCurateSelectHoverWithOrder(index, order);
+  }
+
   _handleCurateImageClick(event, image, imageSet) {
     // Don't open modal if we're in selection mode or if long-press was triggered
     if (this.dragSelecting || this._curateLongPressTriggered) {
       event.preventDefault();
+      return;
+    }
+    const order = (imageSet || this.images || [])
+      .map((entry) => entry?.id)
+      .filter((id) => id !== null && id !== undefined);
+    const clickedId = image?.id;
+    const index = order.findIndex((id) => String(id) === String(clickedId));
+    const selectionResult = this._curateSelectionHandlers.handleClickSelection(event, {
+      imageId: clickedId,
+      index: index >= 0 ? index : null,
+      order,
+    });
+    if (selectionResult.handled) {
+      if (selectionResult.changed) {
+        this._emitSelectionChanged(selectionResult.selection);
+      }
       return;
     }
     if (event.defaultPrevented) {
@@ -360,7 +409,7 @@ export class CurateExploreTab extends LitElement {
   // Reordering Handlers
   // ========================================
 
-  _handleCurateExploreReorderStart(event, image) {
+  _handleCurateExploreReorderStart(event, image, imageSet = null) {
     if (this.dragSelecting) {
       event.preventDefault();
       return;
@@ -386,6 +435,7 @@ export class CurateExploreTab extends LitElement {
     event.dataTransfer.effectAllowed = 'move';
     event.dataTransfer.setData('text/plain', ids.join(','));
     event.dataTransfer.setData('application/x-zoltag-source', 'available');
+    setDragImagePayload(event.dataTransfer, ids, [imageSet || this.images || []]);
   }
 
   _handleCurateExploreReorderOver(event, targetImageId) {
@@ -495,12 +545,21 @@ export class CurateExploreTab extends LitElement {
       this.curateExploreRatingTargets = [{ id: 'rating-1', rating: '', count: 0 }];
       this._curateExploreRatingNextId = 2;
       this._curateExploreRatingDragTarget = null;
+      this._restoreCurateHistorySessionState();
       if (this.rightPanelTool === 'lists') {
         this._ensureListsLoaded({ force: true });
       }
     }
     if (changedProperties.has('rightPanelTool') && this.rightPanelTool === 'lists') {
       this._ensureListsLoaded();
+    }
+    if (
+      changedProperties.has('tenant')
+      || changedProperties.has('curateResultsView')
+      || changedProperties.has('_curateHotspotHistoryBatches')
+      || changedProperties.has('_curateHotspotHistoryVisibleBatches')
+    ) {
+      this._persistCurateHistorySessionState();
     }
   }
 
@@ -1065,6 +1124,7 @@ export class CurateExploreTab extends LitElement {
   _handleCurateExploreHotspotDrop(event, targetId) {
     event.preventDefault();
     this._curateExploreHotspotDragTarget = null;
+    this._recordCurateHotspotHistory(event, targetId);
 
     this.dispatchEvent(new CustomEvent('hotspot-changed', {
       detail: { type: 'hotspot-drop', targetId, event },
@@ -1123,6 +1183,138 @@ export class CurateExploreTab extends LitElement {
       bubbles: true,
       composed: true
     }));
+  }
+
+  _getCurateHistorySessionKey() {
+    return buildHotspotHistorySessionKey('curate-explore', this.tenant);
+  }
+
+  _restoreCurateHistorySessionState() {
+    const state = loadHotspotHistorySessionState(this._getCurateHistorySessionKey(), {
+      fallbackView: 'results',
+    });
+    this.curateResultsView = state.view;
+    this._curateHotspotHistoryBatches = state.batches;
+    this._curateHotspotHistoryVisibleBatches = state.visibleCount;
+  }
+
+  _persistCurateHistorySessionState() {
+    saveHotspotHistorySessionState(this._getCurateHistorySessionKey(), {
+      view: this.curateResultsView,
+      batches: this._curateHotspotHistoryBatches,
+      visibleCount: this._curateHotspotHistoryVisibleBatches,
+    });
+  }
+
+  _setCurateResultsView(nextView) {
+    this.curateResultsView = nextView === 'history' ? 'history' : 'results';
+    this.dragSelection = [];
+    if (this.curateResultsView !== 'history') {
+      this._curateHistoryGroupKey = null;
+    }
+    if (this.curateResultsView === 'history' && this._curateHotspotHistoryVisibleBatches < 1) {
+      this._curateHotspotHistoryVisibleBatches = 1;
+    }
+  }
+
+  _recordCurateHotspotHistory(event, targetId) {
+    const target = (this.curateExploreTargets || []).find((entry) => entry.id === targetId);
+    const ids = parseDraggedImageIds(event?.dataTransfer);
+    if (!target || !ids.length) return;
+    if (target.type === 'rating') {
+      const rating = Number.parseInt(String(target.rating ?? ''), 10);
+      if (!Number.isFinite(rating)) return;
+    } else if (!target.keyword) {
+      return;
+    }
+    const batch = createHotspotHistoryBatch({
+      ids,
+      dragImages: readDragImagePayload(event?.dataTransfer),
+      imageSets: [this.images || []],
+      target,
+      sourceLabel: 'Curate Results',
+    });
+    if (!batch) return;
+    this._curateHotspotHistoryBatches = prependHistoryBatch(this._curateHotspotHistoryBatches, batch);
+    if (this._curateHotspotHistoryVisibleBatches < 1) {
+      this._curateHotspotHistoryVisibleBatches = 1;
+    }
+  }
+
+  _loadPreviousCurateHistoryBatches() {
+    const total = this._curateHotspotHistoryBatches.length;
+    if (!total) return;
+    const next = loadPreviousHistoryBatchCount(this._curateHotspotHistoryVisibleBatches, 5);
+    this._curateHotspotHistoryVisibleBatches = Math.min(total, next);
+  }
+
+  _renderCurateHistoryPane() {
+    const visibleBatches = getVisibleHistoryBatches(
+      this._curateHotspotHistoryBatches,
+      this._curateHotspotHistoryVisibleBatches
+    );
+    if (!visibleBatches.length) {
+      return html`
+        <div class="p-6 text-center text-sm text-gray-500">
+          No hotspot history yet. Drag images to a hotspot, then open Hotspot History.
+        </div>
+      `;
+    }
+    const canLoadPrevious = visibleBatches.length < this._curateHotspotHistoryBatches.length;
+    return html`
+      <div class="hotspot-history-pane">
+        ${visibleBatches.map((batch, index) => {
+          const order = (batch.images || []).map((image) => image.id);
+          return html`
+          <div class="hotspot-history-batch" data-history-batch-id=${batch.batchId}>
+            <div class="hotspot-history-batch-header">
+              <span class="hotspot-history-batch-title">${index === 0 ? 'Latest Batch' : `Batch ${index + 1}`}</span>
+              <span class="hotspot-history-batch-meta">${batch.images.length} items · ${batch.targetLabel}</span>
+            </div>
+            ${renderSelectableImageGrid({
+              images: batch.images,
+              selection: this.dragSelection,
+              flashSelectionIds: this._curateFlashSelectionIds,
+              selectionHandlers: this._curateSelectionHandlers,
+              renderFunctions: {
+                renderCurateRatingWidget: this.renderCurateRatingWidget,
+                renderCurateRatingStatic: this.renderCurateRatingStatic,
+                renderCuratePermatagSummary: this.renderCuratePermatagSummary,
+                renderCurateAiMLScore: this.renderCurateAiMLScore,
+                formatCurateDate: this.formatCurateDate,
+              },
+              onImageClick: (dragEvent, image) => this._handleCurateImageClick(dragEvent, image, batch.images),
+              onDragStart: (dragEvent, image) => this._handleCurateExploreReorderStart(dragEvent, image, batch.images),
+              selectionEvents: {
+                pointerDown: (dragEvent, itemIndex, imageId, imageOrder, groupKey) =>
+                  this._handleCurateHistoryPointerDown(dragEvent, itemIndex, imageId, imageOrder, groupKey),
+                pointerMove: (dragEvent) => this._handleCuratePointerMove(dragEvent),
+                pointerEnter: (itemIndex, imageOrder, groupKey) =>
+                  this._handleCurateHistorySelectHover(itemIndex, imageOrder, groupKey),
+                order,
+                groupKey: batch.batchId,
+              },
+              options: {
+                enableReordering: false,
+                showPermatags: true,
+                showAiScore: true,
+                emptyMessage: 'No images in this batch.',
+              },
+            })}
+          </div>
+        `;
+        })}
+        <div class="hotspot-history-footer">
+          <button
+            class="curate-pane-action secondary"
+            @click=${this._loadPreviousCurateHistoryBatches}
+            ?disabled=${!canLoadPrevious}
+          >
+            Previous
+          </button>
+        </div>
+      </div>
+    `;
   }
 
   // ========================================
@@ -1211,16 +1403,32 @@ export class CurateExploreTab extends LitElement {
         <div class="curate-layout mt-4" style="--curate-thumb-size: ${this.thumbSize}px;">
           <div class="curate-pane">
               <div class="curate-pane-header" style="padding: 4px;">
-                  ${renderResultsPagination({
-                    total,
-                    offset,
-                    limit,
-                    count: leftImages.length,
-                    onPrev: this._handleCuratePagePrev,
-                    onNext: this._handleCuratePageNext,
-                    onLimitChange: (e) => this._handleCurateLimitChange(Number(e.target.value)),
-                    disabled: this.loading,
-                  })}
+                  <div class="curate-pane-header-row">
+                    <div class="curate-audit-toggle">
+                      <button
+                        class=${this.curateResultsView === 'results' ? 'active' : ''}
+                        @click=${() => this._setCurateResultsView('results')}
+                      >
+                        Results
+                      </button>
+                      <button
+                        class=${this.curateResultsView === 'history' ? 'active' : ''}
+                        @click=${() => this._setCurateResultsView('history')}
+                      >
+                        Hotspot History
+                      </button>
+                    </div>
+                    ${this.curateResultsView === 'results' ? renderResultsPagination({
+                      total,
+                      offset,
+                      limit,
+                      count: leftImages.length,
+                      onPrev: this._handleCuratePagePrev,
+                      onNext: this._handleCuratePageNext,
+                      onLimitChange: (e) => this._handleCurateLimitChange(Number(e.target.value)),
+                      disabled: this.loading,
+                    }) : html``}
+                  </div>
               </div>
               ${this.loading ? html`
                 <div class="curate-loading-overlay" aria-label="Loading">
@@ -1228,44 +1436,52 @@ export class CurateExploreTab extends LitElement {
                 </div>
               ` : html``}
               <div class="curate-pane-body">
-                  ${renderImageGrid({
-                    images: leftImages,
-                    selection: this.dragSelection,
-                    flashSelectionIds: this._curateFlashSelectionIds,
-                    selectionHandlers: this._curateSelectionHandlers,
-                    renderFunctions: {
-                      renderCurateRatingWidget: this.renderCurateRatingWidget,
-                      renderCurateRatingStatic: this.renderCurateRatingStatic,
-                      renderCuratePermatagSummary: this.renderCuratePermatagSummary,
-                      renderCurateAiMLScore: this.renderCurateAiMLScore,
-                      formatCurateDate: this.formatCurateDate,
-                    },
-                    eventHandlers: {
+                  ${this.curateResultsView === 'history' ? html`
+                    ${this._renderCurateHistoryPane()}
+                  ` : html`
+                    ${renderSelectableImageGrid({
+                      images: leftImages,
+                      selection: this.dragSelection,
+                      flashSelectionIds: this._curateFlashSelectionIds,
+                      selectionHandlers: this._curateSelectionHandlers,
+                      renderFunctions: {
+                        renderCurateRatingWidget: this.renderCurateRatingWidget,
+                        renderCurateRatingStatic: this.renderCurateRatingStatic,
+                        renderCuratePermatagSummary: this.renderCuratePermatagSummary,
+                        renderCurateAiMLScore: this.renderCurateAiMLScore,
+                        formatCurateDate: this.formatCurateDate,
+                      },
                       onImageClick: (event, image) => this._handleCurateImageClick(event, image, leftImages),
-                      onDragStart: (event, image) => this._handleCurateExploreReorderStart(event, image),
-                      onDragOver: (event, targetImageId) => this._handleCurateExploreReorderOver(event, targetImageId),
-                      onDragEnd: (event) => this._handleCurateExploreReorderEnd(event),
-                      onPointerDown: (event, index, imageId) => this._handleCuratePointerDownWithOrder(event, index, imageId, this._curateLeftOrder),
-                      onPointerMove: (event) => this._handleCuratePointerMove(event),
-                      onPointerEnter: (index) => this._handleCurateSelectHoverWithOrder(index, this._curateLeftOrder),
-                    },
-                    options: {
-                      enableReordering: true,
-                      showPermatags: true,
-                      showAiScore: true,
-                      emptyMessage: 'No images available.',
-                    },
-                  })}
-                  ${renderResultsPagination({
-                    total,
-                    offset,
-                    limit,
-                    count: leftImages.length,
-                    onPrev: this._handleCuratePagePrev,
-                    onNext: this._handleCuratePageNext,
-                    onLimitChange: (e) => this._handleCurateLimitChange(Number(e.target.value)),
-                    disabled: this.loading,
-                  })}
+                      onDragStart: (event, image) => this._handleCurateExploreReorderStart(event, image, leftImages),
+                      dragHandlers: {
+                        onDragOver: (event, targetImageId) => this._handleCurateExploreReorderOver(event, targetImageId),
+                        onDragEnd: (event) => this._handleCurateExploreReorderEnd(event),
+                      },
+                      selectionEvents: {
+                        pointerDown: (event, index, imageId, imageOrder) =>
+                          this._handleCuratePointerDownWithOrder(event, index, imageId, imageOrder),
+                        pointerMove: (event) => this._handleCuratePointerMove(event),
+                        pointerEnter: (index, imageOrder) => this._handleCurateSelectHoverWithOrder(index, imageOrder),
+                        order: this._curateLeftOrder,
+                      },
+                      options: {
+                        enableReordering: true,
+                        showPermatags: true,
+                        showAiScore: true,
+                        emptyMessage: 'No images available.',
+                      },
+                    })}
+                    ${renderResultsPagination({
+                      total,
+                      offset,
+                      limit,
+                      count: leftImages.length,
+                      onPrev: this._handleCuratePagePrev,
+                      onNext: this._handleCuratePageNext,
+                      onLimitChange: (e) => this._handleCurateLimitChange(Number(e.target.value)),
+                      disabled: this.loading,
+                    })}
+                  `}
               </div>
           </div>
           <right-panel

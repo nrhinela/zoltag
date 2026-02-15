@@ -129,4 +129,5 @@ export function initializeAppDefaultState(host) {
   host._curateExploreReorderId = null;
   host._curateAuditHotspotDragTarget = null;
   host._curateExploreHotspotDragTarget = null;
+  host._appBootstrapReady = false;
 }

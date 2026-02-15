@@ -9,13 +9,16 @@ import {
   addMiscParams
 } from './api-params.js';
 import { createCrudOps } from './crud-helper.js';
-import { cachedRequest } from './request-cache.js';
+import { invalidateQueries, queryRequest } from './request-cache.js';
 
 // Use relative URL - works in both dev (via Vite proxy) and production
 const API_BASE_URL = '/api/v1';
 const STATS_CACHE_MS = 10000;
 const TENANTS_CACHE_MS = 5 * 60 * 1000;
 const LISTS_CACHE_MS = 10000;
+const KEYWORDS_CACHE_MS = 10000;
+const SYSTEM_SETTINGS_CACHE_MS = 5 * 60 * 1000;
+const INTEGRATION_STATUS_CACHE_MS = 10000;
 
 /**
  * Fetch with authentication headers
@@ -158,11 +161,10 @@ export async function getImageStats(tenantId, { force = false, includeRatings = 
     params.append('include_ratings', 'true');
   }
   const suffix = params.toString() ? `?${params.toString()}` : '';
-  const cacheKey = `imageStats:${tenantId}:${includeRatings ? 'full' : 'summary'}`;
-  return cachedRequest(
-    cacheKey,
+  return queryRequest(
+    ['imageStats', tenantId, includeRatings ? 'full' : 'summary'],
     () => fetchWithAuth(`/images/stats${suffix}`, { tenantId }),
-    { ttlMs: STATS_CACHE_MS, force }
+    { staleTimeMs: STATS_CACHE_MS, force }
   );
 }
 
@@ -175,10 +177,10 @@ export async function getFullImage(tenantId, imageId, { signal } = {}) {
 }
 
 export async function getTagStats(tenantId, { force = false } = {}) {
-  return cachedRequest(
-    `tagStats:${tenantId}`,
+  return queryRequest(
+    ['tagStats', tenantId],
     () => fetchWithAuth(`/tag-stats`, { tenantId }),
-    { ttlMs: STATS_CACHE_MS, force }
+    { staleTimeMs: STATS_CACHE_MS, force }
   );
 }
 
@@ -197,10 +199,10 @@ export async function getMlTrainingImages(tenantId, { limit = 50, offset = 0, re
 }
 
 export async function getMlTrainingStats(tenantId, { force = false } = {}) {
-  return cachedRequest(
-    `mlTrainingStats:${tenantId}`,
+  return queryRequest(
+    ['mlTrainingStats', tenantId],
     () => fetchWithAuth(`/ml-training/stats`, { tenantId }),
-    { ttlMs: STATS_CACHE_MS, force }
+    { staleTimeMs: STATS_CACHE_MS, force }
   );
 }
 
@@ -220,7 +222,11 @@ export async function getKeywords(tenantId, filters = {}) {
     }
 
     const url = params.toString() ? `/keywords?${params.toString()}` : `/keywords`;
-    const data = await fetchWithAuth(url, { tenantId });
+    const data = await queryRequest(
+      ['keywords', tenantId, params.toString()],
+      () => fetchWithAuth(url, { tenantId }),
+      { staleTimeMs: KEYWORDS_CACHE_MS, force: !!filters.force }
+    );
     return data.keywords_by_category || {};
 }
 
@@ -233,7 +239,7 @@ export async function getNlSearchFilters(tenantId, payload) {
 }
 
 export async function getTenants({ force = false } = {}) {
-    return cachedRequest('tenants:admin', async () => {
+    return queryRequest(['tenants', 'admin'], async () => {
         // Use admin endpoint for complete tenant data (includes settings, dropbox config, etc)
         try {
             return await fetchWithAuth(`/admin/tenants?details=true`);
@@ -245,13 +251,13 @@ export async function getTenants({ force = false } = {}) {
                 throw new Error('Failed to fetch tenants');
             }
         }
-    }, { ttlMs: TENANTS_CACHE_MS, force });
+    }, { staleTimeMs: TENANTS_CACHE_MS, force });
 }
 
 export async function getTenantsPublic({ force = false } = {}) {
-    return cachedRequest('tenants:public', async () => {
+    return queryRequest(['tenants', 'public'], async () => {
         return await fetchWithAuth(`/tenants`);
-    }, { ttlMs: TENANTS_CACHE_MS, force });
+    }, { staleTimeMs: TENANTS_CACHE_MS, force });
 }
 
 export async function setRating(tenantId, imageId, rating) {
@@ -270,19 +276,23 @@ export async function deleteImage(tenantId, imageId) {
 }
 
 export async function addToList(tenantId, listId, photoId) {
-    return fetchWithAuth(`/lists/${listId}/add-photo`, {
+    const result = await fetchWithAuth(`/lists/${listId}/add-photo`, {
         method: 'POST',
         tenantId,
         body: JSON.stringify({ photo_id: photoId }),
     });
+    invalidateQueries(['lists', tenantId]);
+    return result;
 }
 
 export async function addToRecentList(tenantId, photoId) {
-    return fetchWithAuth(`/lists/add-photo`, {
+    const result = await fetchWithAuth(`/lists/add-photo`, {
         method: 'POST',
         tenantId,
         body: JSON.stringify({ photo_id: photoId }),
     });
+    invalidateQueries(['lists', tenantId]);
+    return result;
 }
 
 export async function retagImage(tenantId, imageId) {
@@ -480,20 +490,24 @@ export async function deleteKeyword(tenantId, keywordId) {
 const listCrud = createCrudOps('/lists');
 
 export async function getLists(tenantId, { force = false } = {}) {
-  const data = await cachedRequest(
-    `lists:${tenantId}`,
+  const data = await queryRequest(
+    ['lists', tenantId],
     () => listCrud.list(tenantId),
-    { ttlMs: LISTS_CACHE_MS, force }
+    { staleTimeMs: LISTS_CACHE_MS, force }
   );
   return data || [];
 }
 
 export async function createList(tenantId, list) {
-  return listCrud.create(tenantId, list);
+  const result = await listCrud.create(tenantId, list);
+  invalidateQueries(['lists', tenantId]);
+  return result;
 }
 
 export async function deleteList(tenantId, listId) {
-  return listCrud.delete(tenantId, listId);
+  const result = await listCrud.delete(tenantId, listId);
+  invalidateQueries(['lists', tenantId]);
+  return result;
 }
 
 export async function getListItems(tenantId, listId, { idsOnly = false } = {}) {
@@ -507,14 +521,18 @@ export async function getListItems(tenantId, listId, { idsOnly = false } = {}) {
 }
 
 export async function deleteListItem(tenantId, itemId) {
-  return fetchWithAuth(`/lists/items/${itemId}`, {
+  const result = await fetchWithAuth(`/lists/items/${itemId}`, {
     method: 'DELETE',
     tenantId,
   });
+  invalidateQueries(['lists', tenantId]);
+  return result;
 }
 
 export async function updateList(tenantId, list) {
-  return listCrud.patch(tenantId, list.id, list);
+  const result = await listCrud.patch(tenantId, list.id, list);
+  invalidateQueries(['lists', tenantId]);
+  return result;
 }
 
 // ============================================================================
@@ -533,6 +551,8 @@ export async function createTenant(data) {
     }).catch(error => {
         const err = new Error(error.message);
         throw err;
+    }).finally(() => {
+        invalidateQueries(['tenants']);
     });
 }
 
@@ -549,6 +569,8 @@ export async function updateTenant(tenantId, data) {
     }).catch(error => {
         const err = new Error(error.message);
         throw err;
+    }).finally(() => {
+        invalidateQueries(['tenants']);
     });
 }
 
@@ -563,6 +585,8 @@ export async function deleteTenant(tenantId) {
     }).catch(error => {
         const err = new Error(error.message);
         throw err;
+    }).finally(() => {
+        invalidateQueries(['tenants']);
     });
 }
 
@@ -571,23 +595,11 @@ export async function deleteTenant(tenantId) {
  * @returns {Promise<Object>} System configuration
  */
 export async function getSystemSettings() {
-    return fetchWithAuth(`/config/system`);
-}
-
-/**
- * Update tenant settings
- * @param {string} tenantId - Tenant ID
- * @param {Object} settings - Settings to update
- * @returns {Promise<Object>} Updated settings
- */
-export async function updateTenantSettings(tenantId, settings) {
-    return fetchWithAuth(`/admin/tenants/${tenantId}/settings`, {
-        method: 'PATCH',
-        body: JSON.stringify(settings)
-    }).catch(error => {
-        const err = new Error(error.message);
-        throw err;
-    });
+    return queryRequest(
+        ['systemSettings'],
+        () => fetchWithAuth(`/config/system`),
+        { staleTimeMs: SYSTEM_SETTINGS_CACHE_MS }
+    );
 }
 
 /**
@@ -596,9 +608,11 @@ export async function updateTenantSettings(tenantId, settings) {
  * @returns {Promise<Object>} Integration status payload
  */
 export async function getIntegrationStatus(tenantId) {
-  return fetchWithAuth('/admin/integrations/status', {
-    tenantId,
-  });
+  return queryRequest(
+    ['integrationStatus', tenantId],
+    () => fetchWithAuth('/admin/integrations/status', { tenantId }),
+    { staleTimeMs: INTEGRATION_STATUS_CACHE_MS }
+  );
 }
 
 /**
@@ -619,7 +633,7 @@ export async function startIntegrationConnect(
   if (!normalizedProvider || !['dropbox', 'gdrive'].includes(normalizedProvider)) {
     throw new Error('Invalid provider');
   }
-  return fetchWithAuth(`/admin/integrations/${normalizedProvider}/connect`, {
+  const result = await fetchWithAuth(`/admin/integrations/${normalizedProvider}/connect`, {
     method: 'POST',
     tenantId,
     body: JSON.stringify({
@@ -627,6 +641,8 @@ export async function startIntegrationConnect(
       redirect_origin: redirectOrigin,
     }),
   });
+  invalidateQueries(['integrationStatus', tenantId]);
+  return result;
 }
 
 /**
@@ -640,10 +656,12 @@ export async function disconnectIntegration(tenantId, provider) {
   if (!normalizedProvider || !['dropbox', 'gdrive'].includes(normalizedProvider)) {
     throw new Error('Invalid provider');
   }
-  return fetchWithAuth(`/admin/integrations/${normalizedProvider}/connection`, {
+  const result = await fetchWithAuth(`/admin/integrations/${normalizedProvider}/connection`, {
     method: 'DELETE',
     tenantId,
   });
+  invalidateQueries(['integrationStatus', tenantId]);
+  return result;
 }
 
 /**
@@ -663,11 +681,13 @@ export async function updateIntegrationConfig(tenantId, payload = {}) {
   if (payload.defaultSourceProvider !== undefined) {
     body.default_source_provider = payload.defaultSourceProvider;
   }
-  return fetchWithAuth('/admin/integrations/dropbox/config', {
+  const result = await fetchWithAuth('/admin/integrations/dropbox/config', {
     method: 'PATCH',
     tenantId,
     body: JSON.stringify(body),
   });
+  invalidateQueries(['integrationStatus', tenantId]);
+  return result;
 }
 
 /**

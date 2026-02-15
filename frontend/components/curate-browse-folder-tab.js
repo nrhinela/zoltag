@@ -8,7 +8,19 @@ import {
   getKeywordsByCategoryFromList,
 } from './shared/keyword-utils.js';
 import { renderResultsPagination } from './shared/pagination-controls.js';
-import { renderImageGrid } from './shared/image-grid.js';
+import { renderSelectableImageGrid } from './shared/selectable-image-grid.js';
+import {
+  buildHotspotHistorySessionKey,
+  createHotspotHistoryBatch,
+  getVisibleHistoryBatches,
+  loadHotspotHistorySessionState,
+  loadPreviousHistoryBatchCount,
+  parseDraggedImageIds,
+  prependHistoryBatch,
+  readDragImagePayload,
+  saveHotspotHistorySessionState,
+  setDragImagePayload,
+} from './shared/hotspot-history.js';
 import FolderBrowserPanel from './folder-browser-panel.js';
 import './shared/widgets/filter-chips.js';
 import './shared/widgets/right-panel.js';
@@ -70,6 +82,9 @@ export class CurateBrowseFolderTab extends LitElement {
     _listDragTargetId: { type: String, state: true },
     _browseRatingModalActive: { type: Boolean, state: true },
     _browseRatingModalImageIds: { type: Array, state: true },
+    browseResultsView: { type: String, state: true },
+    _browseHotspotHistoryBatches: { type: Array, state: true },
+    _browseHotspotHistoryVisibleBatches: { type: Number, state: true },
   };
 
   constructor() {
@@ -146,6 +161,9 @@ export class CurateBrowseFolderTab extends LitElement {
     this._browsePressTimer = null;
     this._browseLongPressTriggered = false;
     this._browseSuppressClick = false;
+    this.browseResultsView = 'results';
+    this._browseHotspotHistoryBatches = [];
+    this._browseHotspotHistoryVisibleBatches = 1;
 
     this.folderBrowserPanel = new FolderBrowserPanel('curate-browse');
     this._folderBrowserPanelHandlers = null;
@@ -189,6 +207,7 @@ export class CurateBrowseFolderTab extends LitElement {
 
   connectedCallback() {
     super.connectedCallback();
+    this._restoreBrowseHistorySessionState();
     this._setupFolderBrowserPanel();
     if (this.tenant) {
       this.folderBrowserPanel.setTenant(this.tenant);
@@ -198,6 +217,7 @@ export class CurateBrowseFolderTab extends LitElement {
 
     this._handleBrowseGlobalPointerDown = (event) => {
       if (!this.browseDragSelection.length) return;
+      if (event.metaKey || event.ctrlKey || event.shiftKey) return;
       const path = event.composedPath ? event.composedPath() : [];
       const clickedThumb = path.some(node =>
         node.classList && node.classList.contains('curate-thumb-wrapper')
@@ -216,6 +236,7 @@ export class CurateBrowseFolderTab extends LitElement {
         this.browseDragStartIndex = null;
         this.browseDragEndIndex = null;
       }
+      this._browseGroupKey = null;
     };
 
     document.addEventListener('pointerdown', this._handleBrowseGlobalPointerDown);
@@ -245,6 +266,7 @@ export class CurateBrowseFolderTab extends LitElement {
       this.browseByFolderSelection = [];
       this.browseByFolderAppliedSelection = [];
       this.browseByFolderData = {};
+      this._restoreBrowseHistorySessionState();
       this.folderBrowserPanel?.setTenant(this.tenant);
       this.folderBrowserPanel?.loadFolders({ force: true });
       this._lists = [];
@@ -255,6 +277,14 @@ export class CurateBrowseFolderTab extends LitElement {
       if (this.browseByFolderOffset >= total && total > 0) {
         this.browseByFolderOffset = 0;
       }
+    }
+    if (
+      changedProps.has('tenant')
+      || changedProps.has('browseResultsView')
+      || changedProps.has('_browseHotspotHistoryBatches')
+      || changedProps.has('_browseHotspotHistoryVisibleBatches')
+    ) {
+      this._persistBrowseHistorySessionState();
     }
   }
 
@@ -473,7 +503,7 @@ export class CurateBrowseFolderTab extends LitElement {
     return this._browseSelectionHandlers.handlePointerDown(event, index, imageId);
   }
 
-  _handleBrowseSelectHover(index, groupKey) {
+  _handleBrowseSelectHover(index, _order, groupKey) {
     if (this._browseGroupKey !== groupKey) {
       return;
     }
@@ -491,6 +521,19 @@ export class CurateBrowseFolderTab extends LitElement {
   }
 
   _handleBrowseImageClick(event, image, imageSet) {
+    const order = (imageSet || this.images || [])
+      .map((entry) => entry?.id)
+      .filter((id) => id !== null && id !== undefined);
+    const clickedId = image?.id;
+    const index = order.findIndex((id) => String(id) === String(clickedId));
+    const selectionResult = this._browseSelectionHandlers.handleClickSelection(event, {
+      imageId: clickedId,
+      index: index >= 0 ? index : null,
+      order,
+    });
+    if (selectionResult.handled) {
+      return;
+    }
     if (event.defaultPrevented) return;
     if (this._browseSuppressClick || this.browseDragSelection.length) {
       this._browseSuppressClick = false;
@@ -503,7 +546,7 @@ export class CurateBrowseFolderTab extends LitElement {
     }));
   }
 
-  _handleBrowseDragStart(event, image) {
+  _handleBrowseDragStart(event, image, imageSet = null) {
     if (this.browseDragSelecting) {
       event.preventDefault();
       return;
@@ -517,22 +560,147 @@ export class CurateBrowseFolderTab extends LitElement {
     event.dataTransfer.setData('text/plain', ids.join(','));
     event.dataTransfer.setData('application/x-zoltag-source', 'curate-browse');
     event.dataTransfer.setData('image-ids', JSON.stringify(ids));
+    setDragImagePayload(event.dataTransfer, ids, [imageSet || []]);
+  }
+
+  _getBrowseHistorySessionKey() {
+    return buildHotspotHistorySessionKey('curate-browse', this.tenant);
+  }
+
+  _restoreBrowseHistorySessionState() {
+    const state = loadHotspotHistorySessionState(this._getBrowseHistorySessionKey(), {
+      fallbackView: 'results',
+    });
+    this.browseResultsView = state.view;
+    this._browseHotspotHistoryBatches = state.batches;
+    this._browseHotspotHistoryVisibleBatches = state.visibleCount;
+  }
+
+  _persistBrowseHistorySessionState() {
+    saveHotspotHistorySessionState(this._getBrowseHistorySessionKey(), {
+      view: this.browseResultsView,
+      batches: this._browseHotspotHistoryBatches,
+      visibleCount: this._browseHotspotHistoryVisibleBatches,
+    });
+  }
+
+  _setBrowseResultsView(nextView) {
+    this.browseResultsView = nextView === 'history' ? 'history' : 'results';
+    this.browseDragSelection = [];
+    if (this.browseResultsView !== 'history') {
+      this._browseGroupKey = null;
+    }
+    if (this.browseResultsView === 'history' && this._browseHotspotHistoryVisibleBatches < 1) {
+      this._browseHotspotHistoryVisibleBatches = 1;
+    }
+  }
+
+  _recordBrowseHotspotHistory(event, targetId) {
+    const target = (this.browseHotspotTargets || []).find((entry) => entry.id === targetId);
+    const ids = parseDraggedImageIds(event?.dataTransfer);
+    if (!target || !ids.length) return;
+    if (target.type === 'rating') {
+      const rating = Number.parseInt(String(target.rating ?? ''), 10);
+      if (!Number.isFinite(rating)) return;
+    } else if (!target.keyword) {
+      return;
+    }
+    const browseImages = Object.values(this.browseByFolderData || {})
+      .flatMap((images) => (Array.isArray(images) ? images : []));
+    const batch = createHotspotHistoryBatch({
+      ids,
+      dragImages: readDragImagePayload(event?.dataTransfer),
+      imageSets: [browseImages],
+      target,
+      sourceLabel: 'Curate Browse',
+    });
+    if (!batch) return;
+    this._browseHotspotHistoryBatches = prependHistoryBatch(this._browseHotspotHistoryBatches, batch);
+    if (this._browseHotspotHistoryVisibleBatches < 1) {
+      this._browseHotspotHistoryVisibleBatches = 1;
+    }
+  }
+
+  _handleBrowseHotspotDrop(event, targetId) {
+    this._recordBrowseHotspotHistory(event, targetId);
+    this._browseHotspotHandlers.handleDrop(event, targetId);
+  }
+
+  _loadPreviousBrowseHistoryBatches() {
+    const total = this._browseHotspotHistoryBatches.length;
+    if (!total) return;
+    const next = loadPreviousHistoryBatchCount(this._browseHotspotHistoryVisibleBatches, 5);
+    this._browseHotspotHistoryVisibleBatches = Math.min(total, next);
+  }
+
+  _renderBrowseHistoryPane() {
+    const visibleBatches = getVisibleHistoryBatches(
+      this._browseHotspotHistoryBatches,
+      this._browseHotspotHistoryVisibleBatches
+    );
+    if (!visibleBatches.length) {
+      return html`
+        <div class="p-6 text-center text-sm text-gray-500">
+          No hotspot history yet. Drag images to a hotspot, then open Hotspot History.
+        </div>
+      `;
+    }
+    const canLoadPrevious = visibleBatches.length < this._browseHotspotHistoryBatches.length;
+    return html`
+      <div class="hotspot-history-pane">
+        ${visibleBatches.map((batch, index) => {
+          const order = (batch.images || []).map((image) => image.id);
+          return html`
+          <div class="hotspot-history-batch" data-history-batch-id=${batch.batchId}>
+            <div class="hotspot-history-batch-header">
+              <span class="hotspot-history-batch-title">${index === 0 ? 'Latest Batch' : `Batch ${index + 1}`}</span>
+              <span class="hotspot-history-batch-meta">${batch.images.length} items · ${batch.targetLabel}</span>
+            </div>
+            ${renderSelectableImageGrid({
+              images: batch.images,
+              selection: this.browseDragSelection,
+              flashSelectionIds: this._browseFlashSelectionIds,
+              selectionHandlers: this._browseSelectionHandlers,
+              renderFunctions: {
+                renderCurateRatingWidget: this.renderCurateRatingWidget,
+                renderCurateRatingStatic: this.renderCurateRatingStatic,
+                renderCuratePermatagSummary: this.renderCuratePermatagSummary,
+                formatCurateDate: this.formatCurateDate,
+              },
+              onImageClick: (dragEvent, image) => this._handleBrowseImageClick(dragEvent, image, batch.images),
+              onDragStart: (dragEvent, image) => this._handleBrowseDragStart(dragEvent, image, batch.images),
+              selectionEvents: {
+                pointerDown: (dragEvent, itemIndex, imageId, imageOrder, groupKey) =>
+                  this._handleBrowsePointerDown(dragEvent, itemIndex, imageId, imageOrder, groupKey),
+                pointerMove: (dragEvent) => this._handleBrowsePointerMove(dragEvent),
+                pointerEnter: (itemIndex, imageOrder, groupKey) =>
+                  this._handleBrowseSelectHover(itemIndex, imageOrder, groupKey),
+                order,
+                groupKey: batch.batchId,
+              },
+              options: {
+                showPermatags: true,
+                emptyMessage: 'No images in this batch.',
+              },
+            })}
+          </div>
+        `;
+        })}
+        <div class="hotspot-history-footer">
+          <button
+            class="curate-pane-action secondary"
+            @click=${this._loadPreviousBrowseHistoryBatches}
+            ?disabled=${!canLoadPrevious}
+          >
+            Previous
+          </button>
+        </div>
+      </div>
+    `;
   }
 
   _handleBrowsePointerMove(event) {
     return this._browseSelectionHandlers.handlePointerMove(event);
-  }
-
-  _handleBrowsePointerDownStart(event, index, imageId) {
-    return this._browseSelectionHandlers.handlePointerDown(event, index, imageId);
-  }
-
-  _handleBrowseSelectStart(event, index, imageId) {
-    return this._browseSelectionHandlers.handleSelectStart(event, index, imageId);
-  }
-
-  _handleBrowseSelectHover(index) {
-    return this._browseSelectionHandlers.handleSelectHover(index);
   }
 
   _getBrowseByFolderPaginationState() {
@@ -1126,9 +1294,28 @@ export class CurateBrowseFolderTab extends LitElement {
           <div class="curate-pane-header">
             <div class="curate-pane-header-row">
               <span class="text-sm font-semibold">Browse by Folder</span>
+              <div class="curate-audit-toggle">
+                <button
+                  class=${this.browseResultsView === 'results' ? 'active' : ''}
+                  @click=${() => this._setBrowseResultsView('results')}
+                >
+                  Results
+                </button>
+                <button
+                  class=${this.browseResultsView === 'history' ? 'active' : ''}
+                  @click=${() => this._setBrowseResultsView('history')}
+                >
+                  Hotspot History
+                </button>
+              </div>
             </div>
           </div>
           <div class="curate-pane-body">
+            ${this.browseResultsView === 'history' ? html`
+              <div class="p-3">
+                ${this._renderBrowseHistoryPane()}
+              </div>
+            ` : html`
             <div class="p-3 border-b bg-white">
               <button
                 class="w-full flex items-center justify-between text-sm font-semibold text-gray-900 px-3 py-2 rounded-lg border transition-colors ${this.browseByFolderAccordionOpen ? 'bg-blue-50 border-blue-200' : 'bg-gray-50 border-gray-200'}"
@@ -1227,7 +1414,7 @@ export class CurateBrowseFolderTab extends LitElement {
                           ` : folder}
                           <span class="text-xs text-gray-500 font-normal">(${images.length} images)</span>
                         </div>
-                        ${sortedImages.length ? renderImageGrid({
+                        ${sortedImages.length ? renderSelectableImageGrid({
                           images: sortedImages,
                           selection: this.browseDragSelection,
                           flashSelectionIds: this._browseFlashSelectionIds,
@@ -1238,12 +1425,16 @@ export class CurateBrowseFolderTab extends LitElement {
                             renderCuratePermatagSummary: this.renderCuratePermatagSummary,
                             formatCurateDate: this.formatCurateDate,
                           },
-                          eventHandlers: {
-                            onImageClick: (event, image) => this._handleBrowseImageClick(event, image, images),
-                            onDragStart: (event, image) => this._handleBrowseDragStart(event, image),
-                            onPointerDown: (event, index, imageId) => this._handleBrowsePointerDown(event, index, imageId, order, folder),
-                            onPointerMove: (event) => this._handleBrowsePointerMove(event),
-                            onPointerEnter: (index) => this._handleBrowseSelectHover(index, folder),
+                          onImageClick: (event, image) => this._handleBrowseImageClick(event, image, images),
+                          onDragStart: (event, image) => this._handleBrowseDragStart(event, image, sortedImages),
+                          selectionEvents: {
+                            pointerDown: (event, index, imageId, imageOrder, groupKey) =>
+                              this._handleBrowsePointerDown(event, index, imageId, imageOrder, groupKey),
+                            pointerMove: (event) => this._handleBrowsePointerMove(event),
+                            pointerEnter: (index, imageOrder, groupKey) =>
+                              this._handleBrowseSelectHover(index, imageOrder, groupKey),
+                            order,
+                            groupKey: folder,
                           },
                           options: {
                             showPermatags: true,
@@ -1267,6 +1458,7 @@ export class CurateBrowseFolderTab extends LitElement {
             <div class="p-2">
               ${browsePagination}
             </div>
+            `}
           </div>
         </div>
 
@@ -1291,7 +1483,7 @@ export class CurateBrowseFolderTab extends LitElement {
             @hotspot-remove=${(event) => this._browseHotspotHandlers.handleRemoveTarget(event.detail.targetId)}
             @hotspot-dragover=${(event) => this._browseHotspotHandlers.handleDragOver(event.detail.event, event.detail.targetId)}
             @hotspot-dragleave=${() => this._browseHotspotHandlers.handleDragLeave()}
-            @hotspot-drop=${(event) => this._browseHotspotHandlers.handleDrop(event.detail.event, event.detail.targetId)}
+            @hotspot-drop=${(event) => this._handleBrowseHotspotDrop(event.detail.event, event.detail.targetId)}
           ></hotspot-targets-panel>
           <list-targets-panel
             slot="tool-lists"

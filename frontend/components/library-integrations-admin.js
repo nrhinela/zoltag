@@ -436,7 +436,6 @@ export class LibraryIntegrationsAdmin extends LitElement {
     if (!provider) return 'Unconfigured';
     if (provider.id === 'dropbox') {
       if (provider.mode === 'managed') return 'Managed App';
-      if (provider.mode === 'legacy_tenant') return 'Tenant App';
       return 'Unconfigured';
     }
     return provider.mode ? provider.mode.replace(/_/g, ' ') : 'OAuth';

@@ -6,6 +6,8 @@ export class AppEventsStateController extends BaseStateController {
   constructor(host) {
     super(host);
     this._boundKeyDown = null;
+    this._disposed = false;
+    this._bootstrapPromise = null;
   }
 
   handleQueueCommandComplete(event) {
@@ -63,6 +65,9 @@ export class AppEventsStateController extends BaseStateController {
     if (!this.host.curateDragSelection.length) {
       return;
     }
+    if (event.metaKey || event.ctrlKey || event.shiftKey) {
+      return;
+    }
     const path = event.composedPath ? event.composedPath() : [];
     const clickedThumb = path.some((node) => {
       if (!node || !node.classList) {
@@ -113,8 +118,16 @@ export class AppEventsStateController extends BaseStateController {
   }
 
   connect() {
-    this.host._loadCurrentUser();
-    this.host._initializeTab(this.host.activeTab);
+    this._disposed = false;
+    this.host._appBootstrapReady = false;
+    this._bootstrapPromise = (async () => {
+      // Load user first so tenant identifier -> UUID normalization happens
+      // before any tab bootstrap fetches.
+      await this.host._loadCurrentUser();
+      if (this._disposed) return;
+      this.host._initializeTab(this.host.activeTab);
+      this.host._appBootstrapReady = true;
+    })();
     this.host._unsubscribeQueue = subscribeQueue((state) => {
       this.host.queueState = state;
     });
@@ -130,6 +143,9 @@ export class AppEventsStateController extends BaseStateController {
   }
 
   disconnect() {
+    this._disposed = true;
+    this.host._appBootstrapReady = false;
+    this._bootstrapPromise = null;
     if (this.host._unsubscribeQueue) {
       this.host._unsubscribeQueue();
     }

@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from google.cloud import storage
 
 from zoltag.dependencies import get_db, get_tenant, get_secret
+from zoltag.integrations import TenantIntegrationRepository
 from zoltag.tenant import Tenant
 from zoltag.metadata import ImageMetadata, Tenant as TenantModel
 from zoltag.settings import settings
@@ -44,11 +45,11 @@ async def get_thumbnail(
     tenant_row = _resolve_tenant_for_image(db, image)
     if not tenant_row:
         raise HTTPException(status_code=404, detail="Tenant not found")
-    tenant_settings = getattr(tenant_row, "settings", None) or {}
-    dropbox_app_key = (
-        (tenant_row.dropbox_app_key or tenant_settings.get("dropbox_app_key") or "").strip()
-        or None
-    )
+    integration_repo = TenantIntegrationRepository(db)
+    runtime_context = integration_repo.build_runtime_context(tenant_row)
+    tenant_settings = getattr(tenant_row, "settings", None) if isinstance(getattr(tenant_row, "settings", None), dict) else {}
+    dropbox_runtime = runtime_context.get("dropbox") or {}
+    gdrive_runtime = runtime_context.get("gdrive") or {}
     key_prefix = (getattr(tenant_row, "key_prefix", None) or str(tenant_row.id)).strip()
 
     tenant = Tenant(
@@ -57,9 +58,16 @@ async def get_thumbnail(
         identifier=getattr(tenant_row, "identifier", None) or str(tenant_row.id),
         key_prefix=key_prefix,
         active=tenant_row.active,
-        dropbox_token_secret=f"dropbox-token-{key_prefix}",
-        dropbox_app_key=dropbox_app_key,
-        dropbox_app_secret=f"dropbox-app-secret-{key_prefix}",
+        dropbox_token_secret=str(dropbox_runtime.get("token_secret_name") or f"dropbox-token-{key_prefix}").strip(),
+        dropbox_app_key=str(dropbox_runtime.get("app_key") or "").strip() or None,
+        dropbox_app_secret=str(dropbox_runtime.get("app_secret_name") or f"dropbox-app-secret-{key_prefix}").strip(),
+        dropbox_oauth_mode=str(dropbox_runtime.get("oauth_mode") or "").strip().lower() or None,
+        dropbox_sync_folders=list(dropbox_runtime.get("sync_folders") or []),
+        gdrive_sync_folders=list(gdrive_runtime.get("sync_folders") or []),
+        default_source_provider=str(runtime_context.get("default_source_provider") or "dropbox").strip().lower(),
+        gdrive_client_id=str(gdrive_runtime.get("client_id") or "").strip() or None,
+        gdrive_token_secret=str(gdrive_runtime.get("token_secret_name") or f"gdrive-token-{key_prefix}").strip(),
+        gdrive_client_secret=str(gdrive_runtime.get("client_secret_name") or f"gdrive-client-secret-{key_prefix}").strip(),
         storage_bucket=tenant_row.storage_bucket,
         thumbnail_bucket=tenant_row.thumbnail_bucket,
         settings=tenant_settings,

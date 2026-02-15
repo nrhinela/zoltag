@@ -4,7 +4,6 @@ from urllib.parse import urlencode, urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
-from sqlalchemy.orm.attributes import flag_modified
 
 from zoltag.auth.dependencies import require_tenant_role_from_header
 from zoltag.auth.models import UserProfile
@@ -15,47 +14,26 @@ from zoltag.dropbox_oauth import (
     sanitize_redirect_origin,
     sanitize_return_path,
 )
+from zoltag.integrations import (
+    TenantIntegrationRepository,
+    normalize_provider_type,
+    normalize_sync_folders,
+)
 from zoltag.metadata import Tenant as TenantModel
 from zoltag.tenant import Tenant
 
 router = APIRouter(prefix="/api/v1/admin/integrations", tags=["admin-integrations"])
-_ALLOWED_SOURCE_PROVIDERS = {"dropbox", "gdrive"}
 _PROVIDER_LABELS = {
     "dropbox": "Dropbox",
     "gdrive": "Google Drive",
 }
 
 
-def _normalize_source_provider(value: str | None) -> str:
-    provider = str(value or "").strip().lower()
-    if provider in {"google-drive", "google_drive", "drive"}:
-        provider = "gdrive"
-    if provider not in _ALLOWED_SOURCE_PROVIDERS:
+def _normalize_provider_or_400(value: str | None) -> str:
+    try:
+        return normalize_provider_type(value)
+    except ValueError:
         raise HTTPException(status_code=400, detail="Invalid source provider")
-    return provider
-
-
-def _normalize_sync_folders(raw_value) -> list[str]:
-    if raw_value is None:
-        return []
-    if not isinstance(raw_value, list):
-        raise HTTPException(status_code=400, detail="sync_folders must be a list")
-
-    normalized: list[str] = []
-    seen: set[str] = set()
-    for item in raw_value:
-        folder = str(item or "").strip()
-        if not folder:
-            continue
-        if folder in seen:
-            continue
-        seen.add(folder)
-        normalized.append(folder)
-    return normalized
-
-
-def _sync_folder_key_for_provider(provider: str) -> str:
-    return "gdrive_sync_folders" if provider == "gdrive" else "dropbox_sync_folders"
 
 
 def _read_secret_value(secret_id: str) -> str:
@@ -63,43 +41,6 @@ def _read_secret_value(secret_id: str) -> str:
         return str(get_secret(secret_id) or "").strip()
     except Exception:
         return ""
-
-
-def _tenant_secret_scope(tenant_row: TenantModel) -> str:
-    return str(getattr(tenant_row, "key_prefix", None) or tenant_row.id).strip()
-
-
-def _secret_candidates(prefix: str, primary_scope: str, fallback_scope: str) -> list[str]:
-    candidates: list[str] = []
-    primary = f"{prefix}{primary_scope}".strip()
-    if primary:
-        candidates.append(primary)
-    fallback = f"{prefix}{fallback_scope}".strip()
-    if fallback and fallback not in candidates:
-        candidates.append(fallback)
-    return candidates
-
-
-def _read_first_secret(secret_names: list[str]) -> tuple[str, str]:
-    for secret_name in secret_names:
-        value = _read_secret_value(secret_name)
-        if value:
-            return secret_name, value
-    return "", ""
-
-
-def _resolve_default_source_provider(settings_payload: dict | None) -> str:
-    provider = str((settings_payload or {}).get("sync_source_provider") or "dropbox").strip().lower()
-    if provider not in _ALLOWED_SOURCE_PROVIDERS:
-        return "dropbox"
-    return provider
-
-
-def _list_setting(settings_payload: dict | None, key: str) -> list[str]:
-    raw = (settings_payload or {}).get(key) or []
-    if isinstance(raw, list):
-        return [str(item or "").strip() for item in raw if str(item or "").strip()]
-    return []
 
 
 def _resolve_redirect_origin_from_request(request: Request, payload: dict | None = None) -> str:
@@ -118,24 +59,20 @@ def _resolve_redirect_origin_from_request(request: Request, payload: dict | None
     return requested_redirect_origin
 
 
-def _build_dropbox_status(tenant_row: TenantModel) -> dict:
-    settings_payload = tenant_row.settings or {}
-    tenant_id = str(tenant_row.id).strip()
-    secret_scope = _tenant_secret_scope(tenant_row)
-    _token_secret_name, token_value = _read_first_secret(
-        _secret_candidates("dropbox-token-", secret_scope, tenant_id)
-    )
+def _build_dropbox_status(record) -> dict:
+    token_value = _read_secret_value(record.dropbox_token_secret_name)
     connected = bool(token_value)
-    stored_mode = str(settings_payload.get("dropbox_oauth_mode") or "").strip().lower()
+    config_json = record.config_json or {}
 
     if connected:
-        selected_mode = stored_mode if stored_mode in {"managed", "legacy_tenant"} else "managed"
+        selected_mode = "managed"
         can_connect = True
         issues: list[str] = []
     else:
         oauth_config = inspect_dropbox_oauth_config(
-            tenant_id=secret_scope,
-            tenant_app_key=tenant_row.dropbox_app_key,
+            tenant_id=record.secret_scope,
+            tenant_app_key=str(config_json.get("app_key") or "").strip(),
+            tenant_app_secret_name=record.dropbox_app_secret_name,
             get_secret=get_secret,
             selection_mode="managed_only",
         )
@@ -143,34 +80,28 @@ def _build_dropbox_status(tenant_row: TenantModel) -> dict:
         can_connect = bool(oauth_config["can_connect"])
         issues = oauth_config["issues"]
 
-    sync_folder_key = _sync_folder_key_for_provider("dropbox")
-
     return {
-        "id": "dropbox",
+        "id": "dropbox",  # Backward-compatible provider id used by existing UI/API callers.
+        "provider_id": record.id,
+        "provider_type": "dropbox",
         "label": _PROVIDER_LABELS["dropbox"],
+        "integration_label": record.label,
         "connected": connected,
         "can_connect": can_connect,
         "mode": selected_mode,
         "issues": issues,
-        "sync_folder_key": sync_folder_key,
-        "sync_folders": _list_setting(settings_payload, sync_folder_key),
+        "sync_folder_key": "dropbox_sync_folders",
+        "sync_folders": normalize_sync_folders(config_json.get("sync_folders")),
+        "source": record.source,
     }
 
 
-def _build_gdrive_status(tenant_row: TenantModel) -> dict:
-    settings_payload = tenant_row.settings or {}
-    tenant_id = str(tenant_row.id).strip()
-    secret_scope = _tenant_secret_scope(tenant_row)
-    client_id = str(settings_payload.get("gdrive_client_id") or "").strip()
-    client_secret_name = str(settings_payload.get("gdrive_client_secret") or f"gdrive-client-secret-{secret_scope}").strip()
-    token_secret_setting = str(settings_payload.get("gdrive_token_secret") or "").strip()
-    token_secret_candidates = (
-        [token_secret_setting]
-        if token_secret_setting
-        else _secret_candidates("gdrive-token-", secret_scope, tenant_id)
-    )
-    _token_secret_name, token_value = _read_first_secret(token_secret_candidates)
-    connected = bool(token_value)
+def _build_gdrive_status(record) -> dict:
+    config_json = record.config_json or {}
+    client_id = str(config_json.get("client_id") or "").strip()
+    token_secret_name = record.gdrive_token_secret_name
+    client_secret_name = record.gdrive_client_secret_name
+    connected = bool(_read_secret_value(token_secret_name))
 
     issues: list[str] = []
     if connected:
@@ -178,35 +109,41 @@ def _build_gdrive_status(tenant_row: TenantModel) -> dict:
     else:
         if not client_id:
             issues.append("gdrive_client_id_not_configured")
-        client_secret_value = _read_secret_value(client_secret_name) if client_secret_name else ""
-        if not client_secret_value:
+        if not _read_secret_value(client_secret_name):
             issues.append("gdrive_client_secret_not_configured")
-        can_connect = bool(client_id and client_secret_value)
+        can_connect = bool(client_id and not issues)
 
-    sync_folder_key = _sync_folder_key_for_provider("gdrive")
     return {
-        "id": "gdrive",
+        "id": "gdrive",  # Backward-compatible provider id used by existing UI/API callers.
+        "provider_id": record.id,
+        "provider_type": "gdrive",
         "label": _PROVIDER_LABELS["gdrive"],
+        "integration_label": record.label,
         "connected": connected,
         "can_connect": can_connect,
         "mode": "tenant_oauth",
         "issues": issues,
-        "sync_folder_key": sync_folder_key,
-        "sync_folders": _list_setting(settings_payload, sync_folder_key),
+        "sync_folder_key": "gdrive_sync_folders",
+        "sync_folders": normalize_sync_folders(config_json.get("sync_folders")),
+        "source": record.source,
     }
 
 
-def _build_integrations_status(tenant_row: TenantModel) -> dict:
-    settings_payload = tenant_row.settings or {}
-    default_source_provider = _resolve_default_source_provider(settings_payload)
-    dropbox_status = _build_dropbox_status(tenant_row)
-    gdrive_status = _build_gdrive_status(tenant_row)
+def _build_integrations_status(tenant_row: TenantModel, db: Session) -> dict:
+    repo = TenantIntegrationRepository(db)
+    primary_records = repo.get_primary_records_by_type(tenant_row)
+
+    dropbox_status = _build_dropbox_status(primary_records["dropbox"])
+    gdrive_status = _build_gdrive_status(primary_records["gdrive"])
     providers = [dropbox_status, gdrive_status]
+
+    default_provider = repo.resolve_default_sync_provider(tenant_row)
+    default_source_provider = default_provider.provider_type
     provider_configs = {provider["id"]: provider for provider in providers}
 
     active_provider = provider_configs.get(default_source_provider) or dropbox_status
     return {
-        "tenant_id": tenant_row.id,
+        "tenant_id": str(tenant_row.id),
         "default_source_provider": default_source_provider,
         "providers": providers,
         "provider_configs": provider_configs,
@@ -225,6 +162,20 @@ def _build_integrations_status(tenant_row: TenantModel) -> dict:
     }
 
 
+def _serialize_provider_record(record) -> dict:
+    return {
+        "id": record.id,
+        "tenant_id": record.tenant_id,
+        "provider_type": record.provider_type,
+        "label": record.label,
+        "is_active": record.is_active,
+        "is_default_sync_source": record.is_default_sync_source,
+        "secret_scope": record.secret_scope,
+        "config_json": record.config_json,
+        "source": record.source,
+    }
+
+
 @router.get("/status")
 async def get_integrations_status(
     tenant: Tenant = Depends(get_tenant),
@@ -235,7 +186,7 @@ async def get_integrations_status(
     tenant_row = db.query(TenantModel).filter(TenantModel.id == tenant.id).first()
     if not tenant_row:
         raise HTTPException(status_code=404, detail="Tenant not found")
-    return _build_integrations_status(tenant_row)
+    return _build_integrations_status(tenant_row, db)
 
 
 @router.get("/dropbox/status")
@@ -248,7 +199,217 @@ async def get_dropbox_status(
     tenant_row = db.query(TenantModel).filter(TenantModel.id == tenant.id).first()
     if not tenant_row:
         raise HTTPException(status_code=404, detail="Tenant not found")
-    return _build_integrations_status(tenant_row)
+    return _build_integrations_status(tenant_row, db)
+
+
+@router.get("/providers")
+async def list_integration_providers(
+    tenant: Tenant = Depends(get_tenant),
+    _admin: UserProfile = Depends(require_tenant_role_from_header("admin")),
+    db: Session = Depends(get_db),
+):
+    """List provider rows for the current tenant (v2 table + fallback projection)."""
+    tenant_row = db.query(TenantModel).filter(TenantModel.id == tenant.id).first()
+    if not tenant_row:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    repo = TenantIntegrationRepository(db)
+    records = repo.list_provider_records(tenant_row, include_inactive=True, include_placeholders=False)
+    return {
+        "tenant_id": str(tenant_row.id),
+        "providers": [_serialize_provider_record(record) for record in records],
+    }
+
+
+@router.post("/providers")
+async def create_integration_provider(
+    payload: dict,
+    tenant: Tenant = Depends(get_tenant),
+    _admin: UserProfile = Depends(require_tenant_role_from_header("admin")),
+    db: Session = Depends(get_db),
+):
+    """Create a provider row for the current tenant."""
+    tenant_row = db.query(TenantModel).filter(TenantModel.id == tenant.id).first()
+    if not tenant_row:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    provider_type = _normalize_provider_or_400(payload.get("provider_type"))
+    repo = TenantIntegrationRepository(db)
+    record = repo.create_provider(
+        tenant_row,
+        provider_type,
+        label=str(payload.get("label") or "").strip() or None,
+        is_active=bool(payload.get("is_active", True)),
+        is_default_sync_source=bool(payload.get("is_default_sync_source", False)),
+        secret_scope=str(payload.get("secret_scope") or "").strip() or None,
+        config_json=payload.get("config_json") if isinstance(payload.get("config_json"), dict) else None,
+    )
+    db.commit()
+    return {"status": "created", "provider": _serialize_provider_record(record)}
+
+
+@router.patch("/providers/{provider_id}")
+async def update_integration_provider(
+    provider_id: str,
+    payload: dict,
+    tenant: Tenant = Depends(get_tenant),
+    _admin: UserProfile = Depends(require_tenant_role_from_header("admin")),
+    db: Session = Depends(get_db),
+):
+    """Update one provider row for the current tenant."""
+    tenant_row = db.query(TenantModel).filter(TenantModel.id == tenant.id).first()
+    if not tenant_row:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    repo = TenantIntegrationRepository(db)
+    existing = repo.get_provider_record_by_id(tenant_row, provider_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Provider not found")
+
+    update_kwargs: dict = {}
+    if "label" in payload:
+        update_kwargs["label"] = str(payload.get("label") or "").strip()
+    if "is_active" in payload:
+        update_kwargs["is_active"] = bool(payload.get("is_active"))
+    if "is_default_sync_source" in payload:
+        update_kwargs["is_default_sync_source"] = bool(payload.get("is_default_sync_source"))
+    if "sync_folders" in payload:
+        update_kwargs["sync_folders"] = normalize_sync_folders(payload.get("sync_folders"))
+    if "oauth_mode" in payload:
+        requested_mode = str(payload.get("oauth_mode") or "").strip().lower()
+        if requested_mode not in {"", "managed"}:
+            raise HTTPException(status_code=400, detail="Only managed oauth_mode is supported")
+        update_kwargs["oauth_mode"] = "managed"
+    if "app_key" in payload:
+        update_kwargs["app_key"] = payload.get("app_key")
+    if "client_id" in payload:
+        update_kwargs["client_id"] = payload.get("client_id")
+    if "client_secret_name" in payload:
+        update_kwargs["client_secret_name"] = payload.get("client_secret_name")
+    if "token_secret_name" in payload:
+        update_kwargs["token_secret_name"] = payload.get("token_secret_name")
+    if isinstance(payload.get("config_json"), dict):
+        update_kwargs["config_json_patch"] = payload.get("config_json")
+
+    record = repo.update_provider(
+        tenant_row,
+        existing.provider_type,
+        provider_id=provider_id,
+        **update_kwargs,
+    )
+    db.commit()
+    return {"status": "updated", "provider": _serialize_provider_record(record)}
+
+
+@router.delete("/providers/{provider_id}")
+async def delete_integration_provider(
+    provider_id: str,
+    tenant: Tenant = Depends(get_tenant),
+    _admin: UserProfile = Depends(require_tenant_role_from_header("admin")),
+    db: Session = Depends(get_db),
+):
+    """Delete one provider row for the current tenant."""
+    tenant_row = db.query(TenantModel).filter(TenantModel.id == tenant.id).first()
+    if not tenant_row:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    repo = TenantIntegrationRepository(db)
+    deleted = repo.delete_provider(tenant_row, provider_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Provider not found")
+    db.commit()
+    return {"status": "deleted", "provider_id": provider_id}
+
+
+@router.post("/providers/{provider_id}/connect")
+async def start_provider_connect(
+    provider_id: str,
+    request: Request,
+    payload: dict | None = None,
+    tenant: Tenant = Depends(get_tenant),
+    _admin: UserProfile = Depends(require_tenant_role_from_header("admin")),
+    db: Session = Depends(get_db),
+):
+    """Generate provider OAuth authorize URL for one explicit provider row."""
+    tenant_row = db.query(TenantModel).filter(TenantModel.id == tenant.id).first()
+    if not tenant_row:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    repo = TenantIntegrationRepository(db)
+    record = repo.get_provider_record_by_id(tenant_row, provider_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Provider not found")
+
+    requested_return_to = (payload or {}).get("return_to")
+    requested_redirect_origin = _resolve_redirect_origin_from_request(request, payload)
+    return_to = sanitize_return_path(requested_return_to)
+    query_payload = {
+        "tenant": tenant.id,
+        "flow": "redirect",
+        "return_to": return_to,
+        "provider_id": provider_id,
+    }
+    if requested_redirect_origin:
+        query_payload["redirect_origin"] = requested_redirect_origin
+
+    if record.provider_type == "dropbox":
+        dropbox_status = _build_dropbox_status(record)
+        if not dropbox_status["can_connect"]:
+            raise HTTPException(status_code=400, detail="Dropbox OAuth is not configured for this provider")
+        query_payload["credential_mode"] = "managed"
+        return {
+            "tenant_id": tenant.id,
+            "provider": "dropbox",
+            "provider_id": provider_id,
+            "authorize_url": f"/oauth/dropbox/authorize?{urlencode(query_payload)}",
+            "mode": dropbox_status["mode"],
+        }
+
+    if record.provider_type == "gdrive":
+        gdrive_status = _build_gdrive_status(record)
+        if not gdrive_status["can_connect"]:
+            raise HTTPException(status_code=400, detail="Google Drive OAuth is not configured for this provider")
+        return {
+            "tenant_id": tenant.id,
+            "provider": "gdrive",
+            "provider_id": provider_id,
+            "authorize_url": f"/oauth/gdrive/authorize?{urlencode(query_payload)}",
+            "mode": gdrive_status["mode"],
+        }
+
+    raise HTTPException(status_code=400, detail="Unsupported provider type")
+
+
+@router.delete("/providers/{provider_id}/connection")
+async def disconnect_provider_connection(
+    provider_id: str,
+    tenant: Tenant = Depends(get_tenant),
+    _admin: UserProfile = Depends(require_tenant_role_from_header("admin")),
+    db: Session = Depends(get_db),
+):
+    """Disconnect one provider row by deleting its token secret."""
+    tenant_row = db.query(TenantModel).filter(TenantModel.id == tenant.id).first()
+    if not tenant_row:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    repo = TenantIntegrationRepository(db)
+    record = repo.get_provider_record_by_id(tenant_row, provider_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Provider not found")
+
+    if record.provider_type == "dropbox":
+        delete_secret(record.dropbox_token_secret_name)
+    elif record.provider_type == "gdrive":
+        delete_secret(record.gdrive_token_secret_name)
+    else:
+        raise HTTPException(status_code=400, detail="Unsupported provider type")
+
+    return {
+        "tenant_id": tenant.id,
+        "provider": record.provider_type,
+        "provider_id": provider_id,
+        "status": "disconnected",
+    }
 
 
 @router.patch("/dropbox/config")
@@ -263,36 +424,36 @@ async def update_dropbox_config(
     if not tenant_row:
         raise HTTPException(status_code=404, detail="Tenant not found")
 
-    settings_payload = tenant_row.settings or {}
-    if not isinstance(settings_payload, dict):
-        settings_payload = {}
+    repo = TenantIntegrationRepository(db)
 
+    target_provider: str | None = None
     if "default_source_provider" in payload:
-        settings_payload["sync_source_provider"] = _normalize_source_provider(payload.get("default_source_provider"))
+        provider = _normalize_provider_or_400(payload.get("default_source_provider"))
+        repo.set_default_sync_provider(tenant_row, provider)
 
-    target_provider = None
     if "provider" in payload:
-        target_provider = _normalize_source_provider(payload.get("provider"))
+        target_provider = _normalize_provider_or_400(payload.get("provider"))
 
     # Backward compatibility for older payload shape.
     if "source_provider" in payload:
-        source_provider = _normalize_source_provider(payload.get("source_provider"))
-        settings_payload["sync_source_provider"] = source_provider
+        source_provider = _normalize_provider_or_400(payload.get("source_provider"))
+        repo.set_default_sync_provider(tenant_row, source_provider)
         if target_provider is None:
             target_provider = source_provider
 
     if "sync_folders" in payload:
         if target_provider is None:
-            target_provider = _resolve_default_source_provider(settings_payload)
-        sync_folder_key = _sync_folder_key_for_provider(target_provider)
-        settings_payload[sync_folder_key] = _normalize_sync_folders(payload.get("sync_folders"))
+            target_provider = repo.resolve_default_sync_provider(tenant_row).provider_type
+        repo.update_provider(
+            tenant_row,
+            target_provider,
+            sync_folders=normalize_sync_folders(payload.get("sync_folders")),
+        )
 
-    tenant_row.settings = settings_payload
-    flag_modified(tenant_row, "settings")
     db.commit()
 
     refreshed = db.query(TenantModel).filter(TenantModel.id == tenant.id).first()
-    status = _build_integrations_status(refreshed)
+    status = _build_integrations_status(refreshed, db)
     status["status"] = "updated"
     return status
 
@@ -310,7 +471,9 @@ async def start_dropbox_connect(
     if not tenant_row:
         raise HTTPException(status_code=404, detail="Tenant not found")
 
-    dropbox_status = _build_dropbox_status(tenant_row)
+    repo = TenantIntegrationRepository(db)
+    dropbox_record = repo.get_provider_record(tenant_row, "dropbox")
+    dropbox_status = _build_dropbox_status(dropbox_record)
     if not dropbox_status["can_connect"]:
         raise HTTPException(status_code=400, detail="Dropbox OAuth is not configured for this tenant")
 
@@ -323,12 +486,16 @@ async def start_dropbox_connect(
         "credential_mode": "managed",
         "return_to": return_to,
     }
+    if dropbox_record.id:
+        query_payload["provider_id"] = dropbox_record.id
     if requested_redirect_origin:
         query_payload["redirect_origin"] = requested_redirect_origin
+
     query = urlencode(query_payload)
     return {
         "tenant_id": tenant.id,
         "provider": "dropbox",
+        "provider_id": dropbox_record.id,
         "authorize_url": f"/oauth/dropbox/authorize?{query}",
         "mode": dropbox_status["mode"],
     }
@@ -347,7 +514,9 @@ async def start_gdrive_connect(
     if not tenant_row:
         raise HTTPException(status_code=404, detail="Tenant not found")
 
-    gdrive_status = _build_gdrive_status(tenant_row)
+    repo = TenantIntegrationRepository(db)
+    gdrive_record = repo.get_provider_record(tenant_row, "gdrive")
+    gdrive_status = _build_gdrive_status(gdrive_record)
     if not gdrive_status["can_connect"]:
         raise HTTPException(status_code=400, detail="Google Drive OAuth is not configured for this tenant")
 
@@ -359,12 +528,16 @@ async def start_gdrive_connect(
         "flow": "redirect",
         "return_to": return_to,
     }
+    if gdrive_record.id:
+        query_payload["provider_id"] = gdrive_record.id
     if requested_redirect_origin:
         query_payload["redirect_origin"] = requested_redirect_origin
     query = urlencode(query_payload)
+
     return {
         "tenant_id": tenant.id,
         "provider": "gdrive",
+        "provider_id": gdrive_record.id,
         "authorize_url": f"/oauth/gdrive/authorize?{query}",
         "mode": gdrive_status["mode"],
     }
@@ -374,15 +547,30 @@ async def start_gdrive_connect(
 async def disconnect_dropbox(
     tenant: Tenant = Depends(get_tenant),
     _admin: UserProfile = Depends(require_tenant_role_from_header("admin")),
+    db: Session = Depends(get_db),
 ):
     """Disconnect Dropbox by deleting tenant refresh token secret."""
-    scope = str(tenant.secret_scope or "").strip()
-    tenant_id = str(tenant.id or "").strip()
-    for token_secret_name in _secret_candidates("dropbox-token-", scope, tenant_id):
-        delete_secret(token_secret_name)
+    tenant_row = db.query(TenantModel).filter(TenantModel.id == tenant.id).first()
+    if not tenant_row:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    repo = TenantIntegrationRepository(db)
+    record = repo.get_provider_record(tenant_row, "dropbox")
+
+    candidate_secret_names = {
+        str(record.dropbox_token_secret_name).strip(),
+        str(tenant.dropbox_token_secret or "").strip(),
+        f"dropbox-token-{tenant.secret_scope}",
+        f"dropbox-token-{tenant.id}",
+    }
+    for token_secret_name in candidate_secret_names:
+        if token_secret_name:
+            delete_secret(token_secret_name)
+
     return {
         "tenant_id": tenant.id,
         "provider": "dropbox",
+        "provider_id": record.id,
         "status": "disconnected",
     }
 
@@ -398,17 +586,22 @@ async def disconnect_gdrive(
     if not tenant_row:
         raise HTTPException(status_code=404, detail="Tenant not found")
 
-    settings_payload = tenant_row.settings or {}
-    token_secret_name = str(settings_payload.get("gdrive_token_secret") or "").strip()
-    if token_secret_name:
-        delete_secret(token_secret_name)
-    else:
-        scope = str(tenant.secret_scope or "").strip()
-        tenant_id = str(tenant.id or "").strip()
-        for candidate in _secret_candidates("gdrive-token-", scope, tenant_id):
-            delete_secret(candidate)
+    repo = TenantIntegrationRepository(db)
+    record = repo.get_provider_record(tenant_row, "gdrive")
+
+    candidate_secret_names = {
+        str(record.gdrive_token_secret_name).strip(),
+        str(tenant.gdrive_token_secret or "").strip(),
+        f"gdrive-token-{tenant.secret_scope}",
+        f"gdrive-token-{tenant.id}",
+    }
+    for token_secret_name in candidate_secret_names:
+        if token_secret_name:
+            delete_secret(token_secret_name)
+
     return {
         "tenant_id": tenant.id,
         "provider": "gdrive",
+        "provider_id": record.id,
         "status": "disconnected",
     }

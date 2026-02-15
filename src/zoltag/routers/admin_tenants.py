@@ -8,7 +8,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
-from zoltag.dependencies import get_db
+from zoltag.dependencies import get_db, get_secret
+from zoltag.integrations import TenantIntegrationRepository
 from zoltag.auth.dependencies import get_current_user
 from zoltag.auth.models import UserProfile, UserTenant
 from zoltag.metadata import Tenant as TenantModel
@@ -21,6 +22,16 @@ router = APIRouter(
 
 
 IDENTIFIER_PATTERN = re.compile(r"^[a-z0-9-]+$")
+LEGACY_PROVIDER_SETTINGS_KEYS = frozenset({
+    "dropbox_app_key",
+    "dropbox_oauth_mode",
+    "dropbox_sync_folders",
+    "gdrive_client_id",
+    "gdrive_client_secret",
+    "gdrive_token_secret",
+    "gdrive_sync_folders",
+    "default_source_provider",
+})
 
 
 def _normalize_identifier(value: str) -> str:
@@ -49,10 +60,23 @@ def _resolve_tenant(db: Session, tenant_ref: str):
     return db.query(TenantModel).filter(tenant_reference_filter(TenantModel, tenant_ref)).first()
 
 
-def _resolved_dropbox_app_key(tenant: TenantModel) -> str:
-    settings_payload = getattr(tenant, "settings", None) or {}
-    key_from_settings = settings_payload.get("dropbox_app_key") if isinstance(settings_payload, dict) else None
-    return (tenant.dropbox_app_key or key_from_settings or "").strip()
+def _resolved_dropbox_app_key(db: Session, tenant: TenantModel) -> str:
+    repo = TenantIntegrationRepository(db)
+    record = repo.get_provider_record(tenant, "dropbox")
+    return str(record.config_json.get("app_key") or "").strip()
+
+
+def _dropbox_connected(db: Session, tenant: TenantModel) -> bool:
+    repo = TenantIntegrationRepository(db)
+    record = repo.get_provider_record(tenant, "dropbox")
+    token_secret_name = str(record.dropbox_token_secret_name or "").strip()
+    if not token_secret_name:
+        return False
+    try:
+        token = str(get_secret(token_secret_name) or "").strip()
+    except Exception:
+        return False
+    return bool(token)
 
 
 def _require_super_admin(user: UserProfile) -> None:
@@ -105,13 +129,13 @@ async def list_tenants(
             tenant_query = tenant_query.filter(TenantModel.id.in_(tenant_filter_ids))
         tenants = tenant_query.all()
         return [{
-            "dropbox_app_key": _resolved_dropbox_app_key(t),
+            "dropbox_app_key": _resolved_dropbox_app_key(db, t),
             "id": str(t.id),
             "identifier": getattr(t, "identifier", None) or str(t.id),
             "key_prefix": getattr(t, "key_prefix", None) or str(t.id),
             "name": t.name,
             "active": t.active,
-            "dropbox_configured": bool(_resolved_dropbox_app_key(t)),  # Has app key configured
+            "dropbox_configured": _dropbox_connected(db, t),
             "storage_bucket": t.storage_bucket,
             "thumbnail_bucket": t.thumbnail_bucket,
             "settings": t.settings,
@@ -125,8 +149,6 @@ async def list_tenants(
         TenantModel.key_prefix,
         TenantModel.name,
         TenantModel.active,
-        TenantModel.dropbox_app_key,
-        TenantModel.settings,
         TenantModel.storage_bucket,
         TenantModel.thumbnail_bucket,
         TenantModel.created_at,
@@ -136,19 +158,26 @@ async def list_tenants(
         row_query = row_query.filter(TenantModel.id.in_(tenant_filter_ids))
     rows = row_query.all()
 
-    return [{
-        "dropbox_app_key": (row.dropbox_app_key or ((row.settings or {}).get("dropbox_app_key") if isinstance(row.settings, dict) else "") or "").strip(),
-        "id": str(row.id),
-        "identifier": getattr(row, "identifier", None) or str(row.id),
-        "key_prefix": getattr(row, "key_prefix", None) or str(row.id),
-        "name": row.name,
-        "active": row.active,
-        "dropbox_configured": bool((row.dropbox_app_key or ((row.settings or {}).get("dropbox_app_key") if isinstance(row.settings, dict) else "") or "").strip()),
-        "storage_bucket": row.storage_bucket,
-        "thumbnail_bucket": row.thumbnail_bucket,
-        "created_at": row.created_at.isoformat() if row.created_at else None,
-        "updated_at": row.updated_at.isoformat() if row.updated_at else None
-    } for row in rows]
+    tenants_by_id = {str(t.id): t for t in db.query(TenantModel).filter(TenantModel.id.in_([r.id for r in rows])).all()}
+    response = []
+    for row in rows:
+        tenant_row = tenants_by_id.get(str(row.id))
+        dropbox_app_key = _resolved_dropbox_app_key(db, tenant_row) if tenant_row else ""
+        dropbox_connected = _dropbox_connected(db, tenant_row) if tenant_row else False
+        response.append({
+            "dropbox_app_key": dropbox_app_key,
+            "id": str(row.id),
+            "identifier": getattr(row, "identifier", None) or str(row.id),
+            "key_prefix": getattr(row, "key_prefix", None) or str(row.id),
+            "name": row.name,
+            "active": row.active,
+            "dropbox_configured": dropbox_connected,
+            "storage_bucket": row.storage_bucket,
+            "thumbnail_bucket": row.thumbnail_bucket,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+            "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+        })
+    return response
 
 
 @router.get("/{tenant_id}", response_model=dict)
@@ -163,14 +192,15 @@ async def get_tenant(
         raise HTTPException(status_code=404, detail="Tenant not found")
     _require_tenant_admin_or_super_admin(db, user, tenant)
 
+    dropbox_app_key = _resolved_dropbox_app_key(db, tenant)
     return {
-        "dropbox_app_key": _resolved_dropbox_app_key(tenant),
+        "dropbox_app_key": dropbox_app_key,
         "id": str(tenant.id),
         "identifier": getattr(tenant, "identifier", None) or str(tenant.id),
         "key_prefix": getattr(tenant, "key_prefix", None) or str(tenant.id),
         "name": tenant.name,
         "active": tenant.active,
-        "dropbox_configured": bool(_resolved_dropbox_app_key(tenant)),
+        "dropbox_configured": _dropbox_connected(db, tenant),
         "storage_bucket": tenant.storage_bucket,
         "thumbnail_bucket": tenant.thumbnail_bucket,
         "settings": tenant.settings,
@@ -215,11 +245,21 @@ async def create_tenant(
         key_prefix=key_prefix,
         name=tenant_data["name"],
         active=tenant_data.get("active", True),
-        dropbox_app_key=tenant_data.get("dropbox_app_key"),
         settings=tenant_data.get("settings", {})
     )
 
     db.add(tenant)
+    db.flush()
+    repo = TenantIntegrationRepository(db)
+    repo.backfill_tenant(tenant)
+
+    if "dropbox_app_key" in tenant_data:
+        repo.update_provider(
+            tenant,
+            "dropbox",
+            app_key=str(tenant_data.get("dropbox_app_key") or "").strip() or None,
+        )
+
     db.commit()
     db.refresh(tenant)
 
@@ -282,13 +322,28 @@ async def update_tenant(
     if "active" in tenant_data:
         tenant.active = tenant_data["active"]
     if "dropbox_app_key" in tenant_data:
-        tenant.dropbox_app_key = tenant_data["dropbox_app_key"]
+        repo = TenantIntegrationRepository(db)
+        repo.update_provider(
+            tenant,
+            "dropbox",
+            app_key=str(tenant_data.get("dropbox_app_key") or "").strip() or None,
+        )
     if "storage_bucket" in tenant_data:
         tenant.storage_bucket = tenant_data["storage_bucket"]
     if "thumbnail_bucket" in tenant_data:
         tenant.thumbnail_bucket = tenant_data["thumbnail_bucket"]
     if "settings" in tenant_data:
-        tenant.settings = tenant_data["settings"]
+        incoming_settings = tenant_data["settings"] or {}
+        blocked_keys = sorted(set(incoming_settings.keys()) & LEGACY_PROVIDER_SETTINGS_KEYS)
+        if blocked_keys:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Provider configuration is managed by /api/v1/admin/integrations; "
+                    f"remove legacy settings keys: {', '.join(blocked_keys)}"
+                ),
+            )
+        tenant.settings = incoming_settings
 
     tenant.updated_at = datetime.utcnow()
     db.commit()
@@ -316,6 +371,15 @@ async def update_tenant_settings(
     if not tenant:
         raise HTTPException(status_code=404, detail="Tenant not found")
     _require_tenant_admin_or_super_admin(db, user, tenant)
+    blocked_keys = sorted(set((settings_update or {}).keys()) & LEGACY_PROVIDER_SETTINGS_KEYS)
+    if blocked_keys:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Provider configuration is managed by /api/v1/admin/integrations; "
+                f"remove legacy settings keys: {', '.join(blocked_keys)}"
+            ),
+        )
 
     # Get existing settings or initialize empty dict
     current_settings = tenant.settings or {}

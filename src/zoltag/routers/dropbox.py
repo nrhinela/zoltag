@@ -5,10 +5,10 @@ import requests
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse, HTMLResponse
 from sqlalchemy.orm import Session
-from sqlalchemy.orm.attributes import flag_modified
 
 from zoltag import oauth_state
 from zoltag.dependencies import get_db, get_secret, store_secret
+from zoltag.integrations import TenantIntegrationRepository
 from zoltag.metadata import Tenant as TenantModel
 from zoltag.settings import settings
 from zoltag.dropbox import DropboxWebhookValidator
@@ -27,10 +27,6 @@ router = APIRouter(
 
 def _resolve_tenant(db: Session, tenant_ref: str):
     return db.query(TenantModel).filter(tenant_reference_filter(TenantModel, tenant_ref)).first()
-
-
-def _tenant_secret_scope(tenant_obj: TenantModel) -> str:
-    return str(getattr(tenant_obj, "key_prefix", None) or tenant_obj.id).strip()
 
 
 def _resolve_redirect_origin(request: Request, explicit_origin: str | None = None) -> str:
@@ -64,6 +60,7 @@ async def dropbox_authorize(
     tenant: str,
     flow: str = "popup",
     credential_mode: str = "auto",
+    provider_id: str | None = None,
     redirect_origin: str | None = None,
     return_to: str | None = None,
     db: Session = Depends(get_db),
@@ -72,21 +69,25 @@ async def dropbox_authorize(
     flow = "redirect" if flow == "redirect" else "popup"
     credential_mode = str(credential_mode or "").strip().lower()
     resolved_return_to = sanitize_return_path(return_to)
-    if credential_mode == "managed":
-        selection_mode = "managed_only"
-    elif credential_mode == "tenant":
-        selection_mode = "tenant_only"
-    else:
-        selection_mode = "managed_first" if flow == "redirect" else "tenant_first"
+    if credential_mode not in {"", "auto", "managed"}:
+        raise HTTPException(status_code=400, detail="Only managed Dropbox OAuth mode is supported")
+    selection_mode = "managed_only"
 
-    # Get tenant OAuth app config
     tenant_obj = _resolve_tenant(db, tenant)
     if not tenant_obj:
         raise HTTPException(status_code=400, detail="Tenant not found")
+
+    repo = TenantIntegrationRepository(db)
+    try:
+        provider_record = repo.get_provider_record(tenant_obj, "dropbox", provider_id=provider_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
     try:
         credentials = load_dropbox_oauth_credentials(
-            tenant_id=_tenant_secret_scope(tenant_obj),
-            tenant_app_key=tenant_obj.dropbox_app_key,
+            tenant_id=provider_record.secret_scope,
+            tenant_app_key=str(provider_record.config_json.get("app_key") or "").strip(),
+            tenant_app_secret_name=provider_record.dropbox_app_secret_name,
             get_secret=get_secret,
             selection_mode=selection_mode,
         )
@@ -99,10 +100,11 @@ async def dropbox_authorize(
     state_context = {
         "flow": flow,
         "return_to": resolved_return_to,
-        "oauth_mode": credentials["mode"],
+        "oauth_mode": "managed",
         "redirect_origin": resolved_origin,
+        "provider_id": provider_record.id,
     }
-    state = oauth_state.generate_with_context(tenant_obj.id, state_context)
+    state = oauth_state.generate_with_context(str(tenant_obj.id), state_context)
     oauth_url = (
         f"https://www.dropbox.com/oauth2/authorize"
         f"?client_id={app_key}"
@@ -126,32 +128,34 @@ async def dropbox_callback(
     state_payload = oauth_state.consume_with_context(state)
     if not state_payload:
         raise HTTPException(status_code=400, detail="Invalid or expired OAuth state")
+
     tenant_id = state_payload["tenant_id"]
     state_context = state_payload.get("context", {}) or {}
     flow = str(state_context.get("flow") or "").strip().lower()
-    oauth_mode = str(state_context.get("oauth_mode") or "").strip().lower()
-    if oauth_mode == "managed":
-        selection_mode = "managed_only"
-    elif oauth_mode == "legacy_tenant":
-        selection_mode = "tenant_only"
-    else:
-        selection_mode = "managed_first" if flow == "redirect" else "tenant_first"
+    provider_id = str(state_context.get("provider_id") or "").strip() or None
+    selection_mode = "managed_only"
 
-    # Get tenant OAuth app config
     tenant_obj = _resolve_tenant(db, tenant_id)
     if not tenant_obj:
         raise HTTPException(status_code=400, detail="Tenant not found")
+
+    repo = TenantIntegrationRepository(db)
+    try:
+        provider_record = repo.get_provider_record(tenant_obj, "dropbox", provider_id=provider_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
     try:
         credentials = load_dropbox_oauth_credentials(
-            tenant_id=_tenant_secret_scope(tenant_obj),
-            tenant_app_key=tenant_obj.dropbox_app_key,
+            tenant_id=provider_record.secret_scope,
+            tenant_app_key=str(provider_record.config_json.get("app_key") or "").strip(),
+            tenant_app_secret_name=provider_record.dropbox_app_secret_name,
             get_secret=get_secret,
             selection_mode=selection_mode,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    # Exchange code for tokens
     app_key = credentials["app_key"]
     app_secret = credentials["app_secret"]
     resolved_origin = _resolve_redirect_origin(request, state_context.get("redirect_origin"))
@@ -176,12 +180,18 @@ async def dropbox_callback(
     if not refresh_token:
         raise HTTPException(status_code=400, detail="Dropbox OAuth did not return a refresh token")
 
-    # Store refresh token in Secret Manager
-    store_secret(f"dropbox-token-{_tenant_secret_scope(tenant_obj)}", refresh_token)
-    tenant_settings = tenant_obj.settings or {}
-    tenant_settings["dropbox_oauth_mode"] = credentials["mode"]
-    tenant_obj.settings = tenant_settings
-    flag_modified(tenant_obj, "settings")
+    store_secret(provider_record.dropbox_token_secret_name, refresh_token)
+
+    repo.update_provider(
+        tenant_obj,
+        "dropbox",
+        provider_id=provider_record.id,
+        oauth_mode="managed",
+        token_secret_name=provider_record.dropbox_token_secret_name,
+        config_json_patch={
+            "app_secret_name": credentials.get("app_secret_name"),
+        },
+    )
     db.commit()
 
     if flow == "redirect":

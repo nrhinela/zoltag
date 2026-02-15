@@ -2,7 +2,7 @@ import { LitElement, html, css } from 'lit';
 import { tailwind } from './tailwind-lit.js';
 import './admin-tabs.js';
 import './admin-tenant-settings.js';
-import './admin-storage-setup.js';
+import './library-integrations-admin.js';
 import { getTenants, getSystemSettings } from '../services/api.js';
 
 /**
@@ -149,7 +149,7 @@ export class AdminTenantEditor extends LitElement {
 
     const tabs = [
       { id: 'settings', label: 'Settings' },
-      { id: 'storage', label: 'Storage Setup' }
+      { id: 'storage', label: 'Providers' }
     ];
 
     return html`
@@ -179,11 +179,9 @@ export class AdminTenantEditor extends LitElement {
 
       <div class="tab-content ${this.activeTab === 'storage' ? 'active' : ''}">
         ${this.activeTab === 'storage'
-          ? html`<admin-storage-setup
-              .tenant="${this.tenant}"
-              .systemSettings="${this.systemSettings}"
-              @tenant-updated="${this.handleTenantUpdated}"
-            ></admin-storage-setup>`
+          ? html`<library-integrations-admin
+              .tenant="${this.tenant?.identifier || this.tenant?.id || ''}"
+            ></library-integrations-admin>`
           : ''}
       </div>
     `;

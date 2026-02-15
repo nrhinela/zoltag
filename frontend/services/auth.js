@@ -13,7 +13,167 @@
 
 import { supabase, getAccessToken } from './supabase.js';
 import { fetchWithAuth } from './api.js';
-import { cachedRequest } from './request-cache.js';
+import { invalidateQueries, queryRequest } from './request-cache.js';
+
+const REGISTER_SUCCESS_CACHE_MS = 60 * 1000;
+const REGISTER_CROSS_TAB_LOCK_MS = 15 * 1000;
+const REGISTER_LOCK_WAIT_MS = 4000;
+const REGISTER_LOCK_POLL_MS = 120;
+const REGISTER_SUCCESS_STORAGE_PREFIX = 'zoltag:auth-register:success';
+const REGISTER_LOCK_STORAGE_PREFIX = 'zoltag:auth-register:lock';
+const REGISTER_LOCK_OWNER = `tab-${Math.random().toString(36).slice(2, 10)}-${Date.now()}`;
+
+let registerInFlight = null;
+let registerInFlightToken = null;
+let lastRegisterSuccessToken = null;
+let lastRegisterSuccessAt = 0;
+
+function getStorageKey(prefix, subject) {
+  return `${prefix}:${subject || 'unknown'}`;
+}
+
+function decodeJwtSubject(token) {
+  if (!token) return '';
+  try {
+    const [, payloadBase64] = String(token).split('.');
+    if (!payloadBase64) return '';
+    const normalized = payloadBase64
+      .replace(/-/g, '+')
+      .replace(/_/g, '/')
+      .padEnd(Math.ceil(payloadBase64.length / 4) * 4, '=');
+    const payload = JSON.parse(atob(normalized));
+    return String(payload?.sub || '').trim();
+  } catch (_error) {
+    return '';
+  }
+}
+
+function readStorageNumber(key) {
+  if (typeof window === 'undefined') return 0;
+  try {
+    const value = Number(window.localStorage.getItem(key) || 0);
+    return Number.isFinite(value) ? value : 0;
+  } catch (_error) {
+    return 0;
+  }
+}
+
+function writeStorageNumber(key, value) {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(key, String(value));
+  } catch (_error) {
+    // ignore storage access failures
+  }
+}
+
+function readLockRecord(lockKey) {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(lockKey);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    const owner = String(parsed?.owner || '').trim();
+    const acquiredAt = Number(parsed?.acquiredAt || 0);
+    if (!owner || !Number.isFinite(acquiredAt) || acquiredAt <= 0) {
+      return null;
+    }
+    return { owner, acquiredAt };
+  } catch (_error) {
+    return null;
+  }
+}
+
+function tryAcquireRegisterLock(lockKey, owner) {
+  const now = Date.now();
+  const existing = readLockRecord(lockKey);
+  const isStale = existing && (now - existing.acquiredAt) > REGISTER_CROSS_TAB_LOCK_MS;
+  if (existing && existing.owner !== owner && !isStale) {
+    return false;
+  }
+  if (typeof window === 'undefined') {
+    return true;
+  }
+  try {
+    window.localStorage.setItem(lockKey, JSON.stringify({
+      owner,
+      acquiredAt: now,
+    }));
+    const confirmed = readLockRecord(lockKey);
+    return confirmed?.owner === owner;
+  } catch (_error) {
+    // If storage is unavailable, fall back to single-tab in-memory dedupe.
+    return true;
+  }
+}
+
+function releaseRegisterLock(lockKey, owner) {
+  if (typeof window === 'undefined') return;
+  try {
+    const current = readLockRecord(lockKey);
+    if (current?.owner === owner) {
+      window.localStorage.removeItem(lockKey);
+    }
+  } catch (_error) {
+    // ignore storage access failures
+  }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForRegisterCompletion(successKey, lockKey) {
+  const startedAt = Date.now();
+  while ((Date.now() - startedAt) < REGISTER_LOCK_WAIT_MS) {
+    const successAt = readStorageNumber(successKey);
+    if (successAt > 0 && (Date.now() - successAt) < REGISTER_SUCCESS_CACHE_MS) {
+      return true;
+    }
+
+    const lock = readLockRecord(lockKey);
+    if (!lock) {
+      return false;
+    }
+    const lockAge = Date.now() - lock.acquiredAt;
+    if (lockAge > REGISTER_CROSS_TAB_LOCK_MS) {
+      return false;
+    }
+    await sleep(REGISTER_LOCK_POLL_MS);
+  }
+  return false;
+}
+
+async function postRegister(token, displayName = '') {
+  const response = await fetch('/api/v1/auth/register', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ display_name: displayName || '' }),
+  });
+
+  if (response.status === 429) {
+    const isRecentSuccessForToken = (
+      lastRegisterSuccessToken === token
+      && (Date.now() - lastRegisterSuccessAt) < REGISTER_SUCCESS_CACHE_MS
+    );
+    if (isRecentSuccessForToken) {
+      return true;
+    }
+  }
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({ detail: 'Registration failed' }));
+    throw new Error(errorData.detail || 'Registration failed');
+  }
+
+  lastRegisterSuccessToken = token;
+  lastRegisterSuccessAt = Date.now();
+  invalidateQueries(['auth', 'me']);
+  return true;
+}
 
 /**
  * Sign up with email and password
@@ -60,31 +220,11 @@ export async function signUp(email, password, displayName = null) {
         return { ...data, needsEmailVerification: true };
       }
 
-      try {
-        console.log('Calling /api/v1/auth/register with token...');
-        const response = await fetch('/api/v1/auth/register', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ display_name: displayName }),
-        });
-
-        console.log('Register response:', { status: response.status, ok: response.ok });
-
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({ detail: 'Registration failed' }));
-          console.error('Registration error response:', errorData);
-          throw new Error(`Registration failed: ${errorData.detail || 'Unknown error'}`);
-        }
-
-        const result = await response.json();
-        console.log('✅ Registration complete:', result);
-      } catch (registrationError) {
-        console.error('❌ Registration error:', registrationError.message);
-        throw registrationError;
+      const didRegister = await ensureRegistration(displayName || '', { token, force: true });
+      if (!didRegister) {
+        throw new Error('Registration failed');
       }
+      console.log('✅ Registration complete');
     }
 
     return data;
@@ -119,21 +259,12 @@ export async function signIn(email, password) {
     }
 
     if (data?.session?.access_token) {
-      try {
-        const response = await fetch('/api/v1/auth/register', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${data.session.access_token}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ display_name: data.user?.user_metadata?.display_name || '' }),
-        });
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({ detail: 'Registration failed' }));
-          throw new Error(errorData.detail || 'Registration failed');
-        }
-      } catch (registerError) {
-        throw new Error(`Registration failed: ${registerError.message}`);
+      const didRegister = await ensureRegistration(
+        data.user?.user_metadata?.display_name || '',
+        { token: data.session.access_token }
+      );
+      if (!didRegister) {
+        console.warn('Sign in completed but registration ensure did not confirm success');
       }
     }
 
@@ -147,25 +278,73 @@ export async function signIn(email, password) {
  * Ensure a user_profile exists for the current Supabase session.
  * Safe to call multiple times.
  */
-export async function ensureRegistration(displayName = '') {
+export async function ensureRegistration(displayName = '', { token = null, force = false } = {}) {
   try {
-    const token = await getAccessToken();
-    if (!token) {
+    const accessToken = token || await getAccessToken();
+    if (!accessToken) {
       return false;
     }
-    const response = await fetch('/api/v1/auth/register', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ display_name: displayName || '' }),
-    });
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({ detail: 'Registration failed' }));
-      throw new Error(errorData.detail || 'Registration failed');
+    const subject = decodeJwtSubject(accessToken) || 'unknown';
+    const successKey = getStorageKey(REGISTER_SUCCESS_STORAGE_PREFIX, subject);
+    const lockKey = getStorageKey(REGISTER_LOCK_STORAGE_PREFIX, subject);
+
+    const isRecentSuccessForToken = (
+      !force
+      && lastRegisterSuccessToken === accessToken
+      && (Date.now() - lastRegisterSuccessAt) < REGISTER_SUCCESS_CACHE_MS
+    );
+    if (isRecentSuccessForToken) {
+      return true;
     }
-    return true;
+
+    const sharedSuccessAt = readStorageNumber(successKey);
+    const isRecentSharedSuccess = sharedSuccessAt > 0
+      && (Date.now() - sharedSuccessAt) < REGISTER_SUCCESS_CACHE_MS;
+    if (isRecentSharedSuccess) {
+      lastRegisterSuccessToken = accessToken;
+      lastRegisterSuccessAt = sharedSuccessAt;
+      return true;
+    }
+
+    if (registerInFlight && registerInFlightToken === accessToken) {
+      return await registerInFlight;
+    }
+
+    let ownsCrossTabLock = tryAcquireRegisterLock(lockKey, REGISTER_LOCK_OWNER);
+    if (!ownsCrossTabLock) {
+      const completedByOtherTab = await waitForRegisterCompletion(successKey, lockKey);
+      if (completedByOtherTab) {
+        lastRegisterSuccessToken = accessToken;
+        lastRegisterSuccessAt = Date.now();
+        return true;
+      }
+      ownsCrossTabLock = tryAcquireRegisterLock(lockKey, REGISTER_LOCK_OWNER);
+      if (!ownsCrossTabLock) {
+        return false;
+      }
+    }
+
+    registerInFlightToken = accessToken;
+    registerInFlight = postRegister(accessToken, displayName)
+      .then((result) => {
+        if (result) {
+          writeStorageNumber(successKey, Date.now());
+        }
+        return result;
+      })
+      .catch((error) => {
+        console.error('Registration ensure failed:', error.message);
+        return false;
+      })
+      .finally(() => {
+        releaseRegisterLock(lockKey, REGISTER_LOCK_OWNER);
+        if (registerInFlightToken === accessToken) {
+          registerInFlight = null;
+          registerInFlightToken = null;
+        }
+      });
+
+    return await registerInFlight;
   } catch (error) {
     console.error('Registration ensure failed:', error.message);
     return false;
@@ -217,10 +396,10 @@ export async function signInWithGoogle() {
  */
 export async function getCurrentUser({ force = false } = {}) {
   try {
-    const response = await cachedRequest(
-      'auth:me',
+    const response = await queryRequest(
+      ['auth', 'me'],
       () => fetchWithAuth('/auth/me'),
-      { ttlMs: 30000, force }
+      { staleTimeMs: 30000, force }
     );
     return response;
   } catch (error) {
@@ -249,6 +428,8 @@ export async function acceptInvitation(token) {
       method: 'POST',
       body: JSON.stringify({ invitation_token: token }),
     });
+    invalidateQueries(['auth', 'me']);
+    invalidateQueries(['tenants']);
     return response;
   } catch (error) {
     throw new Error(`Failed to accept invitation: ${error.message}`);
@@ -282,7 +463,26 @@ export async function isVerified() {
   try {
     const user = await getCurrentUser();
     return user && user.user && user.user.is_active;
-  } catch {
-    return false;
+  } catch (error) {
+    const message = String(error?.message || '');
+    const missingProfile = message.includes('User profile not found')
+      || message.toLowerCase().includes('complete registration');
+
+    // Only attempt auto-registration when backend explicitly says profile is missing.
+    if (!missingProfile) {
+      return false;
+    }
+
+    const didRegister = await ensureRegistration('', { force: true });
+    if (!didRegister) {
+      return false;
+    }
+
+    try {
+      const user = await getCurrentUser({ force: true });
+      return !!(user && user.user && user.user.is_active);
+    } catch {
+      return false;
+    }
   }
 }

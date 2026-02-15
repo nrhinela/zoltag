@@ -172,11 +172,13 @@ class ZoltagApp extends LitElement {
 
   connectedCallback() {
       super.connectedCallback();
-      this._appEventsState.connect();
       this._syncTenantFromStorage();
+      this._appNavigationState.connect();
+      this._appEventsState.connect();
   }
 
   disconnectedCallback() {
+      this._appNavigationState.disconnect();
       this._appEventsState.disconnect();
       super.disconnectedCallback();
   }
@@ -304,6 +306,7 @@ class ZoltagApp extends LitElement {
           this._syncAuditHotspotPrimary();
       }
       this._appShellState.handleUpdated(changedProperties);
+      this._appNavigationState.handleUpdated(changedProperties);
   }
 
   _syncTenantFromStorage() {

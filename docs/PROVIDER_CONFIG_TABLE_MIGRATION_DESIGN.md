@@ -62,9 +62,9 @@ create index ix_tpi_tenant_type on tenant_provider_integrations (tenant_id, prov
 Suggested `config_json` examples:
 
 - Dropbox
-  - `oauth_mode`: `"managed" | "legacy_tenant"`
+  - `oauth_mode`: `"managed"`
   - `sync_folders`: `["/Archive - Photo/Events"]`
-  - `app_key`: `"..."` (optional, for legacy tenant app mode)
+  - `app_key`: `"..."` (optional metadata for display/audit)
   - `token_secret_name`: `"dropbox-token-..."`
   - `app_secret_name`: `"dropbox-app-secret-..."`
 
