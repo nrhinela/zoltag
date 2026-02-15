@@ -110,6 +110,7 @@ export class CurateExploreTab extends LitElement {
     curateKeywordOperators: { type: Object },
     curateNoPositivePermatags: { type: Boolean },
     minRating: { type: Object },
+    mediaType: { type: String },
     dropboxPathPrefix: { type: String },
     filenameQuery: { type: String },
     listFilterId: { type: [String, Number] },
@@ -173,6 +174,7 @@ export class CurateExploreTab extends LitElement {
     this.curateKeywordOperators = {};
     this.curateNoPositivePermatags = false;
     this.minRating = null;
+    this.mediaType = 'all';
     this.dropboxPathPrefix = '';
     this.filenameQuery = '';
     this.listFilterId = '';
@@ -978,6 +980,16 @@ export class CurateExploreTab extends LitElement {
         value: this.minRating,
         displayLabel: 'Rating',
         displayValue,
+      });
+    }
+
+    const mediaType = String(this.mediaType || 'all').trim().toLowerCase();
+    if (mediaType === 'image' || mediaType === 'video') {
+      filters.push({
+        type: 'media',
+        value: mediaType,
+        displayLabel: 'Media',
+        displayValue: mediaType === 'video' ? 'Videos' : 'Photos',
       });
     }
 

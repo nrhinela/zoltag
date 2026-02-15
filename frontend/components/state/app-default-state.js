@@ -16,6 +16,7 @@ export function initializeAppDefaultState(host) {
   host.curateLimit = 100;
   host.curateOrderBy = 'photo_creation';
   host.curateOrderDirection = 'desc';
+  host.curateMediaType = 'all';
   host.curateHideDeleted = true;
   host.curateMinRating = null;
   host.curateKeywordFilters = {};
@@ -60,6 +61,7 @@ export function initializeAppDefaultState(host) {
   host.curateAuditAiModel = '';
   host.curateAuditOrderBy = 'photo_creation';
   host.curateAuditOrderDirection = 'desc';
+  host.curateAuditMediaType = 'all';
   host.curateAuditHideDeleted = true;
   host.curateAuditMinRating = null;
   host.curateAuditNoPositivePermatags = false;

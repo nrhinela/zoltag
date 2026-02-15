@@ -20,7 +20,7 @@ from zoltag.settings import settings
 from zoltag.storage import create_storage_provider
 from zoltag.dropbox_oauth import load_dropbox_oauth_credentials
 from zoltag.config.db_utils import load_keywords_map
-from zoltag.image import ImageProcessor
+from zoltag.image import ImageProcessor, VideoProcessor, is_supported_video_file
 from zoltag.exif import (
     get_exif_value,
     parse_exif_datetime,
@@ -113,22 +113,43 @@ async def refresh_image_metadata(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Error downloading {provider_name} image: {exc}")
 
-    try:
-        processor = ImageProcessor()
-        features = processor.extract_features(image_bytes)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Error parsing image metadata: {exc}")
-
-    exif = features.get("exif", {}) or {}
-    capture_timestamp = parse_exif_datetime(
-        get_exif_value(exif, "DateTimeOriginal", "DateTime")
+    source_mime = (
+        (entry.mime_type if entry else None)
+        or getattr(getattr(storage_info, "asset", None), "mime_type", None)
+        or mimetypes.guess_type(image.filename or "")[0]
     )
-    gps_latitude = parse_exif_float(get_exif_value(exif, "GPSLatitude"))
-    gps_longitude = parse_exif_float(get_exif_value(exif, "GPSLongitude"))
-    iso = parse_exif_int(get_exif_value(exif, "ISOSpeedRatings", "ISOSpeed", "ISO"))
-    aperture = parse_exif_float(get_exif_value(exif, "FNumber", "ApertureValue"))
-    shutter_speed = parse_exif_str(get_exif_value(exif, "ExposureTime", "ShutterSpeedValue"))
-    focal_length = parse_exif_float(get_exif_value(exif, "FocalLength"))
+    is_video = (
+        str(getattr(getattr(storage_info, "asset", None), "media_type", "") or "").strip().lower() == "video"
+        or is_supported_video_file(image.filename or "", mime_type=source_mime)
+    )
+
+    try:
+        if is_video:
+            processor = VideoProcessor(thumbnail_size=(settings.thumbnail_size, settings.thumbnail_size))
+            features = processor.extract_features(image_bytes, filename=image.filename or "video")
+            exif = {}
+            capture_timestamp = None
+            gps_latitude = None
+            gps_longitude = None
+            iso = None
+            aperture = None
+            shutter_speed = None
+            focal_length = None
+        else:
+            processor = ImageProcessor()
+            features = processor.extract_features(image_bytes)
+            exif = features.get("exif", {}) or {}
+            capture_timestamp = parse_exif_datetime(
+                get_exif_value(exif, "DateTimeOriginal", "DateTime")
+            )
+            gps_latitude = parse_exif_float(get_exif_value(exif, "GPSLatitude"))
+            gps_longitude = parse_exif_float(get_exif_value(exif, "GPSLongitude"))
+            iso = parse_exif_int(get_exif_value(exif, "ISOSpeedRatings", "ISOSpeed", "ISO"))
+            aperture = parse_exif_float(get_exif_value(exif, "FNumber", "ApertureValue"))
+            shutter_speed = parse_exif_str(get_exif_value(exif, "ExposureTime", "ShutterSpeedValue"))
+            focal_length = parse_exif_float(get_exif_value(exif, "FocalLength"))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error parsing media metadata: {exc}")
 
     asset = ensure_asset_for_image(
         db=db,
@@ -181,18 +202,25 @@ async def refresh_image_metadata(
         if provider_name == "dropbox" and hasattr(ImageMetadata, "dropbox_id") and entry.file_id:
             setattr(image, "dropbox_id", entry.file_id)
 
-    guessed_mime_type = mimetypes.guess_type(image.filename or "")[0]
+    guessed_mime_type = source_mime or mimetypes.guess_type(image.filename or "")[0]
     asset.thumbnail_key = thumbnail_path
     asset.filename = image.filename or asset.filename
     asset.source_provider = provider_name
+    asset.media_type = "video" if is_video else "image"
     if entry and entry.source_key:
         asset.source_key = entry.source_key
     if entry and entry.revision:
         asset.source_rev = entry.revision
     if asset.mime_type is None:
-        asset.mime_type = guessed_mime_type or (f"image/{str(image.format).lower()}" if image.format else None)
+        asset.mime_type = guessed_mime_type or (
+            f"{'video' if is_video else 'image'}/{str(image.format).lower()}" if image.format else None
+        )
     asset.width = image.width
     asset.height = image.height
+    if is_video:
+        duration_ms = features.get("duration_ms")
+        if duration_ms is not None:
+            asset.duration_ms = duration_ms
     image.asset_id = asset.id
 
     db.add(asset)

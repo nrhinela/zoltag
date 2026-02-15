@@ -124,6 +124,7 @@ class FilterChips extends LitElement {
     const all = [
       { type: 'keyword', label: 'Keywords', icon: '🏷️' },
       { type: 'rating', label: 'Rating', icon: '⭐' },
+      { type: 'media', label: 'Media Type', icon: '🎬' },
       { type: 'folder', label: 'Folder', icon: '📂' },
       { type: 'list', label: 'List', icon: '🧾' },
       { type: 'filename', label: 'Filename', icon: '📝' },
@@ -301,6 +302,24 @@ class FilterChips extends LitElement {
     this._addFilter(filter);
   }
 
+  _handleMediaSelect(mediaType) {
+    const normalized = String(mediaType || '').trim().toLowerCase();
+    if (normalized !== 'image' && normalized !== 'video') {
+      this._removeFilterByType('media');
+      this.valueSelectorOpen = null;
+      this.filterMenuOpen = false;
+      return;
+    }
+    this._addFilter({
+      type: 'media',
+      value: normalized,
+      displayLabel: 'Media',
+      displayValue: normalized === 'video' ? 'Videos' : 'Photos',
+    });
+    this.valueSelectorOpen = null;
+    this.filterMenuOpen = false;
+  }
+
   _handleListModeChange(mode) {
     this.listFilterMode = mode === 'exclude' ? 'exclude' : 'include';
   }
@@ -433,6 +452,8 @@ class FilterChips extends LitElement {
         return this._renderKeywordSelector();
       case 'rating':
         return this._renderRatingSelector();
+      case 'media':
+        return this._renderMediaSelector();
       case 'folder':
         return this._renderFolderSelector();
       case 'list':
@@ -589,6 +610,38 @@ class FilterChips extends LitElement {
                   ${rating === 0
                     ? html`<span class="ml-0">${label}</span>`
                     : html`<span class="text-yellow-500" aria-hidden="true">★</span><span class="ml-1">${label}</span>`}
+                </button>
+              `;
+            })}
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  _renderMediaSelector() {
+    const currentValue = ((this.activeFilters || []).find((filter) => filter.type === 'media')?.value || '').toLowerCase();
+    const options = [
+      { value: 'all', label: 'All media' },
+      { value: 'image', label: 'Photos only' },
+      { value: 'video', label: 'Videos only' },
+    ];
+    return html`
+      <div class="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-50 min-w-[260px] max-w-[340px]">
+        <div class="p-4">
+          <div class="text-sm font-semibold text-gray-700 mb-3">Media Type</div>
+          <div class="space-y-2">
+            ${options.map((option) => {
+              const isActive = option.value === 'all'
+                ? !currentValue
+                : currentValue === option.value;
+              return html`
+                <button
+                  class=${`w-full text-left px-3 py-2 border rounded-lg text-sm transition-colors ${isActive ? 'bg-blue-50 border-blue-300 text-blue-800' : 'hover:bg-gray-50 border-gray-200 text-gray-700'}`}
+                  @click=${() => this._handleMediaSelect(option.value)}
+                  type="button"
+                >
+                  ${option.label}
                 </button>
               `;
             })}

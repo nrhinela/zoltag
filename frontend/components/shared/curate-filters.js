@@ -4,6 +4,7 @@ export function buildCurateFilterObject(state, overrides = {}) {
     offset: overrides.resetOffset ? 0 : (state.curatePageOffset || 0),
     sortOrder: overrides.sortOrder !== undefined ? overrides.sortOrder : state.curateOrderDirection,
     orderBy: overrides.orderBy !== undefined ? overrides.orderBy : state.curateOrderBy,
+    mediaType: overrides.mediaType !== undefined ? overrides.mediaType : (state.curateMediaType || 'all'),
     hideZeroRating: state.curateHideDeleted,
     keywords: overrides.keywords !== undefined ? overrides.keywords : state.curateKeywordFilters,
     operators: overrides.operators !== undefined ? overrides.operators : state.curateKeywordOperators || {},
@@ -42,6 +43,7 @@ export function buildCurateAuditFilterObject(state, overrides = {}) {
   const filters = {
     sortOrder: overrides.sortOrder !== undefined ? overrides.sortOrder : state.curateAuditOrderDirection,
     orderBy: useAiSort ? 'ml_score' : (overrides.orderBy !== undefined ? overrides.orderBy : state.curateAuditOrderBy),
+    mediaType: overrides.mediaType !== undefined ? overrides.mediaType : (state.curateAuditMediaType || 'all'),
     permatagKeyword: state.curateAuditKeyword,
     permatagCategory: state.curateAuditCategory,
     permatagSignum: 1,

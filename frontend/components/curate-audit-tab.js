@@ -61,6 +61,7 @@ export class CurateAuditTab extends LitElement {
     keywordCategory: { type: String },
     keywords: { type: Array },
     minRating: { type: Object },
+    mediaType: { type: String },
     dropboxPathPrefix: { type: String },
     filenameQuery: { type: String },
     dropboxFolders: { type: Array },
@@ -113,6 +114,7 @@ export class CurateAuditTab extends LitElement {
     this.keywordCategory = '';
     this.keywords = [];
     this.minRating = null;
+    this.mediaType = 'all';
     this.dropboxPathPrefix = '';
     this.filenameQuery = '';
     this.dropboxFolders = [];
@@ -819,6 +821,16 @@ export class CurateAuditTab extends LitElement {
       });
     }
 
+    const mediaType = String(this.mediaType || 'all').trim().toLowerCase();
+    if (mediaType === 'image' || mediaType === 'video') {
+      filters.push({
+        type: 'media',
+        value: mediaType,
+        displayLabel: 'Media',
+        displayValue: mediaType === 'video' ? 'Videos' : 'Photos',
+      });
+    }
+
     return filters;
   }
 
@@ -877,7 +889,7 @@ export class CurateAuditTab extends LitElement {
               .keywords=${this.keywords}
               .activeFilters=${activeFilters}
               .dropboxFolders=${this.dropboxFolders || []}
-              .availableFilterTypes=${['keyword', 'rating', 'folder', 'filename']}
+              .availableFilterTypes=${['keyword', 'rating', 'media', 'folder', 'filename']}
               .keywordMultiSelect=${false}
               @filters-changed=${this._handleAuditChipFiltersChanged}
               @folder-search=${this._handleAuditDropboxInput}

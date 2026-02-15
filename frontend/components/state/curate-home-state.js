@@ -212,6 +212,7 @@ export class CurateHomeStateController extends BaseStateController {
     let nextNoPositivePermatags = false;
     let nextDropboxPathPrefix = '';
     let nextFilenameQuery = '';
+    let nextMediaType = 'all';
     let nextHideDeleted = true;
     let nextListId = '';
     let nextListExcludeId = '';
@@ -256,6 +257,9 @@ export class CurateHomeStateController extends BaseStateController {
         case 'filename':
           nextFilenameQuery = chip.value || '';
           break;
+        case 'media':
+          nextMediaType = chip.value === 'video' ? 'video' : (chip.value === 'image' ? 'image' : 'all');
+          break;
         case 'list':
           if (chip.mode === 'exclude') {
             nextListExcludeId = chip.value || '';
@@ -280,6 +284,7 @@ export class CurateHomeStateController extends BaseStateController {
       curateNoPositivePermatags: nextNoPositivePermatags,
       curateMinRating: nextMinRating,
       curateHideDeleted: nextHideDeleted,
+      curateMediaType: nextMediaType,
       curateDropboxPathPrefix: nextDropboxPathPrefix,
       curateFilenameQuery: nextFilenameQuery,
       curateListId: nextListId,
@@ -439,6 +444,7 @@ export class CurateHomeStateController extends BaseStateController {
       curateLimit: 100,
       curateOrderBy: 'photo_creation',
       curateOrderDirection: 'desc',
+      curateMediaType: 'all',
       curateHideDeleted: true,
       curateMinRating: null,
       curateKeywordFilters: {},
@@ -473,6 +479,7 @@ export class CurateHomeStateController extends BaseStateController {
       curateLimit: host.curateLimit,
       curateOrderBy: host.curateOrderBy,
       curateOrderDirection: host.curateOrderDirection,
+      curateMediaType: host.curateMediaType,
       curateHideDeleted: host.curateHideDeleted,
       curateMinRating: host.curateMinRating,
       curateKeywordFilters: { ...(host.curateKeywordFilters || {}) },
@@ -655,6 +662,7 @@ export class CurateHomeStateController extends BaseStateController {
    * Reset Curate Home state when tenant changes.
    */
   resetForTenantChange() {
+    this.host.curateMediaType = 'all';
     this.host.curateHideDeleted = true;
     this.host.curateMinRating = null;
     this.host.curateNoPositivePermatags = false;

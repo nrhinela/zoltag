@@ -86,3 +86,19 @@ export function formatCurateProcessedDate(image) {
   const seconds = pad(date.getSeconds());
   return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
 }
+
+export function formatDurationMs(value, { placeholder = '' } = {}) {
+  const ms = Number(value);
+  if (!Number.isFinite(ms) || ms <= 0) {
+    return placeholder;
+  }
+  const totalSeconds = Math.floor(ms / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const pad2 = (num) => String(num).padStart(2, '0');
+  if (hours > 0) {
+    return `${hours}:${pad2(minutes)}:${pad2(seconds)}`;
+  }
+  return `${minutes}:${pad2(seconds)}`;
+}

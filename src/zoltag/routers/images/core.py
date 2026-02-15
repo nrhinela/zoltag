@@ -78,6 +78,7 @@ async def list_images(
     rating_operator: str = "eq",
     hide_zero_rating: bool = False,
     reviewed: Optional[bool] = None,
+    media_type: Optional[str] = None,
     dropbox_path_prefix: Optional[str] = None,
     filename_query: Optional[str] = None,
     permatag_keyword: Optional[str] = None,
@@ -120,6 +121,9 @@ async def list_images(
     if order_by_value == "ml_score" and not ml_keyword_id:
         order_by_value = None
     constrain_to_ml_matches = order_by_value == "ml_score" and ml_keyword_id is not None
+    media_type_value = (media_type or "all").strip().lower()
+    if media_type_value not in {"all", "image", "video"}:
+        media_type_value = "all"
 
     base_query, subqueries_list, exclude_subqueries_list, has_empty_filter = build_image_query_with_subqueries(
         db,
@@ -130,6 +134,7 @@ async def list_images(
         rating_operator=rating_operator,
         hide_zero_rating=hide_zero_rating,
         reviewed=reviewed,
+        media_type=None if media_type_value == "all" else media_type_value,
         dropbox_path_prefix=dropbox_path_prefix,
         filename_query=filename_query,
         permatag_keyword=permatag_keyword,
@@ -639,6 +644,9 @@ async def list_images(
             "created_at": img.created_at.isoformat() if img.created_at else None,
             "thumbnail_path": storage_info.thumbnail_key,
             "thumbnail_url": storage_info.thumbnail_url,
+            "media_type": (storage_info.asset.media_type if storage_info.asset else None) or "image",
+            "mime_type": storage_info.asset.mime_type if storage_info.asset else None,
+            "duration_ms": storage_info.asset.duration_ms if storage_info.asset else None,
             "tags_applied": img.tags_applied,
             "faces_detected": img.faces_detected,
             "rating": img.rating,
@@ -829,6 +837,9 @@ async def list_duplicate_images(
             "created_at": img.created_at.isoformat() if img.created_at else None,
             "thumbnail_path": storage_info.thumbnail_key,
             "thumbnail_url": storage_info.thumbnail_url,
+            "media_type": (storage_info.asset.media_type if storage_info.asset else None) or "image",
+            "mime_type": storage_info.asset.mime_type if storage_info.asset else None,
+            "duration_ms": storage_info.asset.duration_ms if storage_info.asset else None,
             "rating": img.rating,
             "permatags": image_permatags,
             "duplicate_group": duplicate_key,
@@ -953,6 +964,9 @@ async def get_image(
         "perceptual_hash": image.perceptual_hash,
         "thumbnail_path": storage_info.thumbnail_key,
         "thumbnail_url": storage_info.thumbnail_url,
+        "media_type": (storage_info.asset.media_type if storage_info.asset else None) or "image",
+        "mime_type": storage_info.asset.mime_type if storage_info.asset else None,
+        "duration_ms": storage_info.asset.duration_ms if storage_info.asset else None,
         "rating": image.rating,
         "reviewed_at": reviewed_at.isoformat() if reviewed_at else None,
         "tags": machine_tags_list,
@@ -992,6 +1006,7 @@ async def get_image_asset(
         "source_rev": storage_info.source_rev,
         "source_url": _build_source_url(storage_info, tenant, image),
         "filename": asset.filename if asset else image.filename,
+        "media_type": (asset.media_type if asset else None) or "image",
         "mime_type": asset.mime_type if asset else None,
         "width": asset.width if asset and asset.width is not None else image.width,
         "height": asset.height if asset and asset.height is not None else image.height,
@@ -1035,6 +1050,7 @@ async def get_asset(
         "source_url": _build_source_url(asset, tenant, image=None),
         "thumbnail_key": asset.thumbnail_key,
         "thumbnail_url": tenant.get_thumbnail_url(settings, asset.thumbnail_key),
+        "media_type": asset.media_type,
         "mime_type": asset.mime_type,
         "width": asset.width,
         "height": asset.height,

@@ -6,7 +6,8 @@ import {
   addMlTagParams,
   addCategoryFilterParams,
   addOrderingParams,
-  addMiscParams
+  addMiscParams,
+  addMediaTypeParams
 } from './api-params.js';
 import { createCrudOps } from './crud-helper.js';
 import { invalidateQueries, queryRequest } from './request-cache.js';
@@ -112,6 +113,7 @@ export async function getImages(tenantId, filters = {}) {
   addOrderingParams(params, filters);
   addPermatagParams(params, filters);
   addMlTagParams(params, filters);
+  addMediaTypeParams(params, filters);
 
   const url = `/images?${params.toString()}`;
   return fetchWithAuth(url, {
@@ -170,6 +172,21 @@ export async function getImageStats(tenantId, { force = false, includeRatings = 
 
 export async function getFullImage(tenantId, imageId, { signal } = {}) {
   return fetchWithAuth(`/images/${imageId}/full`, {
+    tenantId,
+    responseType: 'blob',
+    signal,
+  });
+}
+
+export async function getImagePlayback(tenantId, imageId, { signal } = {}) {
+  return fetchWithAuth(`/images/${imageId}/playback`, {
+    tenantId,
+    signal,
+  });
+}
+
+export async function getImagePlaybackStream(tenantId, imageId, { signal } = {}) {
+  return fetchWithAuth(`/images/${imageId}/playback/stream`, {
     tenantId,
     responseType: 'blob',
     signal,

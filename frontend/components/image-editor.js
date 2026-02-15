@@ -4,6 +4,8 @@ import {
   getKeywords,
   addPermatag,
   getFullImage,
+  getImagePlayback,
+  getImagePlaybackStream,
   setRating,
   refreshImageMetadata,
   propagateDropboxTags,
@@ -16,6 +18,7 @@ import {
 } from '../services/api.js';
 import { tailwind } from './tailwind-lit.js';
 import { propertyGridStyles, renderPropertyRows, renderPropertySection } from './shared/widgets/property-grid.js';
+import { formatDurationMs } from './shared/formatting.js';
 import './shared/widgets/keyword-dropdown.js';
 
 class ImageEditor extends LitElement {
@@ -157,12 +160,94 @@ class ImageEditor extends LitElement {
       background: #f3f4f6;
       flex-shrink: 0;
     }
+    .image-wrap video {
+      width: 100%;
+      height: 100%;
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+      border-radius: 12px;
+      border: 1px solid #e5e7eb;
+      background: #111827;
+      flex-shrink: 0;
+    }
+    .image-media-pill {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      z-index: 10;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: rgba(15, 23, 42, 0.84);
+      color: #e2e8f0;
+      font-size: 11px;
+      line-height: 1;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      pointer-events: none;
+      box-shadow: 0 6px 16px rgba(15, 23, 42, 0.26);
+    }
+    .image-media-pill .duration {
+      color: #f8fafc;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: 0.01em;
+    }
     .image-wrap.image-full img {
       width: 100%;
       height: 100%;
       max-width: 100%;
       max-height: 100%;
       object-fit: contain;
+    }
+    .image-wrap.image-full video {
+      width: 100%;
+      height: 100%;
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+    }
+    .video-loading-surface {
+      width: 100%;
+      height: 100%;
+      max-width: 100%;
+      max-height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 12px;
+      border: 1px solid #1f2937;
+      background: #111827;
+      color: #cbd5e1;
+      font-size: 12px;
+      letter-spacing: 0.01em;
+    }
+    .video-playback-status {
+      position: absolute;
+      bottom: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      border-radius: 999px;
+      border: 1px solid #e5e7eb;
+      background: rgba(17, 24, 39, 0.78);
+      color: #f9fafb;
+      font-size: 11px;
+      box-shadow: 0 6px 16px rgba(15, 23, 42, 0.25);
+    }
+    .video-playback-retry {
+      border: 1px solid #93c5fd;
+      background: #eff6ff;
+      color: #1d4ed8;
+      border-radius: 999px;
+      padding: 3px 8px;
+      font-size: 10px;
+      font-weight: 600;
     }
     .high-res-button {
       position: absolute;
@@ -920,6 +1005,9 @@ class ImageEditor extends LitElement {
     fullImageUrl: { type: String },
     fullImageLoading: { type: Boolean },
     fullImageError: { type: String },
+    videoPlaybackUrl: { type: String },
+    videoPlaybackLoading: { type: Boolean },
+    videoPlaybackError: { type: String },
     ratingSaving: { type: Boolean },
     ratingError: { type: String },
     metadataRefreshing: { type: Boolean },
@@ -959,7 +1047,12 @@ class ImageEditor extends LitElement {
     this.fullImageUrl = '';
     this.fullImageLoading = false;
     this.fullImageError = '';
+    this.videoPlaybackUrl = '';
+    this.videoPlaybackLoading = false;
+    this.videoPlaybackError = '';
     this._fullImageAbortController = null;
+    this._videoPlaybackAbortController = null;
+    this._videoPlaybackObjectUrl = '';
     this._fullImageLoadTimer = null;
     this._fullImageLoadDelayMs = 0;
     this._fullImageRapidDelayMs = 120;
@@ -1013,6 +1106,10 @@ class ImageEditor extends LitElement {
         this.activeTab = 'edit';
       }
     }
+    if (changedProperties.has('open') && this.open) {
+      this._scheduleFullImageLoad();
+      this._scheduleVideoPlaybackLoad();
+    }
   }
 
   connectedCallback() {
@@ -1024,6 +1121,7 @@ class ImageEditor extends LitElement {
     window.removeEventListener('permatags-changed', this._handlePermatagEvent);
     this._revokeVariantPreviewUrls();
     this._resetFullImage();
+    this._resetVideoPlayback();
     this._restoreBodyScroll();
     super.disconnectedCallback();
   }
@@ -1052,6 +1150,7 @@ class ImageEditor extends LitElement {
     const shouldLoad = this.embedded || this.open;
     if (shouldLoad && (changedProperties.has('image') || changedProperties.has('tenant'))) {
       this._resetFullImage();
+      this._resetVideoPlayback();
       this._resetVariantEditor();
       this.fetchDetails();
       this.fetchKeywords();
@@ -1059,12 +1158,14 @@ class ImageEditor extends LitElement {
     if (changedProperties.has('details')) {
       this._syncTagSubTab();
       this._scheduleFullImageLoad();
+      this._scheduleVideoPlaybackLoad();
       if (this.activeTab === 'variants') {
         this._loadAssetVariants();
       }
     }
     if (changedProperties.has('open') && !this.open && !this.embedded) {
       this._resetFullImage();
+      this._resetVideoPlayback();
     }
   }
 
@@ -1118,6 +1219,7 @@ class ImageEditor extends LitElement {
   }
 
   _close() {
+    this._pauseInlineVideo();
     this.dispatchEvent(new CustomEvent('close', { bubbles: true, composed: true }));
   }
 
@@ -1403,6 +1505,15 @@ class ImageEditor extends LitElement {
     this.fullImageError = '';
   }
 
+  _resetVideoPlayback() {
+    this._cancelVideoPlaybackLoad();
+    this._revokeVideoPlaybackObjectUrl();
+    this.videoPlaybackUrl = '';
+    this.videoPlaybackLoading = false;
+    this.videoPlaybackError = '';
+    this._pauseInlineVideo();
+  }
+
   _cancelFullImageLoad() {
     if (this._fullImageLoadTimer) {
       clearTimeout(this._fullImageLoadTimer);
@@ -1414,9 +1525,109 @@ class ImageEditor extends LitElement {
     }
   }
 
+  _cancelVideoPlaybackLoad() {
+    if (this._videoPlaybackAbortController) {
+      this._videoPlaybackAbortController.abort();
+      this._videoPlaybackAbortController = null;
+    }
+  }
+
+  _scheduleVideoPlaybackLoad() {
+    if (!this.details || !this.tenant) return;
+    if (!this.open && !this.embedded) return;
+    if (!this._isVideoMedia(this.details)) {
+      this._resetVideoPlayback();
+      return;
+    }
+    this._loadVideoPlayback();
+  }
+
+  async _loadVideoPlayback({ force = false } = {}) {
+    if (!this.details || !this.tenant) return;
+    if (!this._isVideoMedia(this.details)) return;
+    if (!force && (this.videoPlaybackLoading || this.videoPlaybackUrl)) return;
+
+    this._cancelVideoPlaybackLoad();
+    this.videoPlaybackLoading = true;
+    this.videoPlaybackError = '';
+    if (force) {
+      this._revokeVideoPlaybackObjectUrl();
+      this.videoPlaybackUrl = '';
+      this._pauseInlineVideo();
+    }
+    const imageId = this.details.id;
+    const controller = new AbortController();
+    this._videoPlaybackAbortController = controller;
+    try {
+      const payload = await getImagePlayback(this.tenant, imageId, { signal: controller.signal });
+      if (controller.signal.aborted || this.details?.id !== imageId) {
+        return;
+      }
+      const playbackMode = String(payload?.mode || '').trim().toLowerCase();
+      if (playbackMode === 'proxy_stream') {
+        const streamBlob = await getImagePlaybackStream(this.tenant, imageId, { signal: controller.signal });
+        if (controller.signal.aborted || this.details?.id !== imageId) {
+          return;
+        }
+        const objectUrl = URL.createObjectURL(streamBlob);
+        this._revokeVideoPlaybackObjectUrl();
+        this._videoPlaybackObjectUrl = objectUrl;
+        this.videoPlaybackUrl = objectUrl;
+        return;
+      }
+      const nextUrl = String(payload?.playback_url || '').trim();
+      if (!nextUrl) {
+        throw new Error('Playback URL unavailable');
+      }
+      this._revokeVideoPlaybackObjectUrl();
+      this.videoPlaybackUrl = nextUrl;
+    } catch (error) {
+      if (error?.name === 'AbortError') {
+        return;
+      }
+      this.videoPlaybackError = error?.message || 'Failed to load video playback URL.';
+      console.error('ImageEditor: video playback load failed', error);
+    } finally {
+      if (this._videoPlaybackAbortController === controller) {
+        this._videoPlaybackAbortController = null;
+      }
+      this.videoPlaybackLoading = false;
+    }
+  }
+
+  _pauseInlineVideo() {
+    const videoEl = this.renderRoot?.querySelector('.image-video-player');
+    if (videoEl && typeof videoEl.pause === 'function') {
+      videoEl.pause();
+    }
+  }
+
+  _revokeVideoPlaybackObjectUrl() {
+    if (!this._videoPlaybackObjectUrl) return;
+    try {
+      URL.revokeObjectURL(this._videoPlaybackObjectUrl);
+    } catch (_error) {
+      // no-op
+    }
+    this._videoPlaybackObjectUrl = '';
+  }
+
+  _handleVideoPlaybackError() {
+    if (!this._isVideoMedia(this.details)) return;
+    if (!this.videoPlaybackUrl || this.videoPlaybackLoading) return;
+    this.videoPlaybackError = this.videoPlaybackError || 'Video playback failed.';
+  }
+
+  _handleVideoPlaybackLoaded() {
+    if (this.videoPlaybackError) {
+      this.videoPlaybackError = '';
+    }
+  }
+
   _scheduleFullImageLoad() {
     if (!this.details || !this.tenant) return;
     if (!this.open && !this.embedded) return;
+    if (this._isVideoMedia(this.details)) return;
     if (this.fullImageUrl || this.fullImageLoading) return;
     this._cancelFullImageLoad();
     const now = Date.now();
@@ -1437,6 +1648,7 @@ class ImageEditor extends LitElement {
 
   async _loadFullImage() {
     if (!this.details || !this.tenant) return;
+    if (this._isVideoMedia(this.details)) return;
     if (this.fullImageUrl || this.fullImageLoading) return;
     this._cancelFullImageLoad();
     this.fullImageLoading = true;
@@ -1662,6 +1874,33 @@ class ImageEditor extends LitElement {
     return `${size.toFixed(size >= 100 ? 0 : size >= 10 ? 1 : 2)} ${units[unitIndex]}`;
   }
 
+  _inferMediaType(details = this.details) {
+    const mediaType = String(details?.media_type || '').trim().toLowerCase();
+    if (mediaType === 'video' || mediaType === 'image') {
+      return mediaType;
+    }
+    const mimeType = String(details?.mime_type || '').trim().toLowerCase();
+    if (mimeType.startsWith('video/')) {
+      return 'video';
+    }
+    return 'image';
+  }
+
+  _isVideoMedia(details = this.details) {
+    return this._inferMediaType(details) === 'video';
+  }
+
+  _formatMediaType(details = this.details) {
+    return this._isVideoMedia(details) ? 'Video' : 'Photo';
+  }
+
+  _formatMediaDuration(details = this.details, { placeholder = '--' } = {}) {
+    if (!this._isVideoMedia(details)) {
+      return placeholder;
+    }
+    return formatDurationMs(details?.duration_ms, { placeholder });
+  }
+
   _normalizeSourceProvider(value) {
     if (!value) return '';
     return String(value).trim().toLowerCase();
@@ -1747,6 +1986,16 @@ class ImageEditor extends LitElement {
               label: 'Provider',
               value: sourceProvider,
             },
+            {
+              label: 'Media',
+              value: this._formatMediaType(this.details),
+            },
+            ...(this._isVideoMedia(this.details)
+              ? [{
+                  label: 'Duration',
+                  value: this._formatMediaDuration(this.details, { placeholder: 'Unknown' }),
+                }]
+              : []),
             {
               label: 'Source',
               value: sourceHref
@@ -1996,6 +2245,8 @@ class ImageEditor extends LitElement {
         ${renderPropertySection({
           title: 'File',
           rows: [
+            { label: 'Media type', value: this._formatMediaType(details) },
+            { label: 'Duration', value: this._formatMediaDuration(details) },
             { label: 'Dimensions', value: dimensions },
             { label: 'Format', value: details.format || 'Unknown' },
             { label: 'MIME type', value: details.mime_type || 'Unknown' },
@@ -2423,7 +2674,13 @@ class ImageEditor extends LitElement {
     const imageSrc = this.fullImageUrl
       ? this.fullImageUrl
       : (this.details.thumbnail_url || `/api/v1/images/${this.details.id}/thumbnail`);
-    const showHighResButton = !this.fullImageUrl && !this.fullImageLoading;
+    const isVideoMedia = this._isVideoMedia(this.details);
+    const videoDuration = isVideoMedia ? this._formatMediaDuration(this.details) : '';
+    const showVideoStatus = isVideoMedia && (
+      (this.videoPlaybackLoading && !this.videoPlaybackUrl)
+      || !!this.videoPlaybackError
+    );
+    const showHighResButton = !isVideoMedia && !this.fullImageUrl && !this.fullImageLoading;
     const imageContainerClasses = `image-container ${this.isActualSize ? 'zoomed' : ''}`;
     const rightPaneContent = this.activeTab === 'metadata'
       ? this._renderMetadataTab()
@@ -2446,7 +2703,44 @@ class ImageEditor extends LitElement {
       <div class="panel-body">
         <div class="image-wrap image-full">
           <div class="${imageContainerClasses}">
-            <img src="${imageSrc}" alt="${this.details.filename}">
+            ${isVideoMedia ? html`
+              ${this.videoPlaybackUrl ? html`
+                <video
+                  class="image-video-player"
+                  controls
+                  preload="metadata"
+                  ?autoplay=${false}
+                  src="${this.videoPlaybackUrl}"
+                  @error=${this._handleVideoPlaybackError}
+                  @loadedmetadata=${this._handleVideoPlaybackLoaded}
+                  @canplay=${this._handleVideoPlaybackLoaded}
+                ></video>
+              ` : html`
+                <div class="video-loading-surface" aria-live="polite">
+                  Loading video...
+                </div>
+              `}
+            ` : html`
+              <img src="${imageSrc}" alt="${this.details.filename}">
+            `}
+            ${isVideoMedia ? html`
+              <div class="image-media-pill">
+                <span>VIDEO</span>
+                ${videoDuration ? html`<span class="duration">${videoDuration}</span>` : html``}
+              </div>
+              ${showVideoStatus ? html`
+                <div class="video-playback-status" aria-live="polite">
+                  ${this.videoPlaybackLoading
+                    ? html`<span>Loading video…</span>`
+                    : html`
+                      <span>${this.videoPlaybackError || 'Playback unavailable.'}</span>
+                      <button class="video-playback-retry" @click=${() => this._loadVideoPlayback({ force: true })}>
+                        Retry
+                      </button>
+                    `}
+                </div>
+              ` : html``}
+            ` : html``}
             ${showHighResButton ? html`
               <button class="high-res-button" @click=${this._loadFullImage}>High Res</button>
             ` : this.fullImageLoading ? html`

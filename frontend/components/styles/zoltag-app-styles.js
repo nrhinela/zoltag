@@ -895,6 +895,36 @@ export const zoltagAppStyles = css`
         font-size: 12px;
         line-height: 1;
     }
+    .curate-thumb-media-pill {
+        position: absolute;
+        top: 6px;
+        right: 6px;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        background: rgba(15, 23, 42, 0.88);
+        color: #e2e8f0;
+        padding: 4px 7px;
+        border-radius: 999px;
+        font-size: 10px;
+        line-height: 1;
+        font-weight: 700;
+        letter-spacing: 0.03em;
+        pointer-events: none;
+        z-index: 11;
+        box-shadow: 0 4px 12px rgba(15, 23, 42, 0.28);
+    }
+    .curate-thumb-media-pill.has-rating {
+        top: 34px;
+    }
+    .curate-thumb-media-pill-label {
+        color: #bfdbfe;
+    }
+    .curate-thumb-media-pill-duration {
+        color: #f8fafc;
+        font-variant-numeric: tabular-nums;
+        letter-spacing: 0.01em;
+    }
     .curate-thumb-rating-widget .curate-thumb-burst {
         position: absolute;
         top: -6px;

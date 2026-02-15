@@ -381,6 +381,7 @@ class Asset(Base):
 
     thumbnail_key = Column(String(1024), nullable=False)
 
+    media_type = Column(String(16), nullable=False, default="image")
     mime_type = Column(String(255))
     width = Column(Integer)
     height = Column(Integer)
@@ -392,6 +393,7 @@ class Asset(Base):
 
     __table_args__ = (
         Index("idx_assets_source_key", "source_provider", "source_key"),
+        Index("idx_assets_tenant_media_type", "tenant_id", "media_type"),
     )
 
 

@@ -7,7 +7,7 @@ from google.cloud import storage
 from sqlalchemy.orm import Session
 
 from zoltag.dependencies import get_db, get_secret, get_tenant
-from zoltag.image import ImageProcessor
+from zoltag.image import is_supported_media_file
 from zoltag.integrations import TenantIntegrationRepository, normalize_sync_folders
 from zoltag.metadata import Asset, Tenant as TenantModel
 from zoltag.settings import settings
@@ -86,10 +86,9 @@ async def trigger_sync(
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Failed to list {storage_provider.provider_name} files: {exc}")
 
-        processor = ImageProcessor()
         candidate: ProviderEntry | None = None
         for entry in file_entries:
-            if not processor.is_supported(entry.name):
+            if not is_supported_media_file(entry.name, entry.mime_type):
                 continue
             if reprocess_existing or entry.source_key not in processed_paths:
                 candidate = entry
@@ -126,7 +125,7 @@ async def trigger_sync(
         message = f"{candidate.name}: metadata + thumbnail stored" if processed else f"{candidate.name}: already synced"
 
         has_more = any(
-            processor.is_supported(entry.name)
+            is_supported_media_file(entry.name, entry.mime_type)
             and (reprocess_existing or entry.source_key not in processed_paths)
             and entry.source_key != candidate.source_key
             for entry in file_entries

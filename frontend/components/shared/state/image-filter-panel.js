@@ -34,6 +34,7 @@ import {
   addCategoryFilterParams,
   addOrderingParams,
   addMiscParams,
+  addMediaTypeParams,
 } from '../../../services/api-params.js';
 
 export class ImageFilterPanel {
@@ -55,6 +56,7 @@ export class ImageFilterPanel {
       ratingOperator: undefined,
       dropboxPathPrefix: '',
       filenameQuery: '',
+      mediaType: 'all',
       permatagPositiveMissing: false,
       listId: undefined,
       listExcludeId: undefined,
@@ -122,6 +124,7 @@ export class ImageFilterPanel {
     addCategoryFilterParams(params, this.filters);
     addOrderingParams(params, this.filters);
     addMiscParams(params, this.filters);
+    addMediaTypeParams(params, this.filters);
 
     return params;
   }
@@ -220,6 +223,7 @@ export class ImageFilterPanel {
       ratingOperator: undefined,
       dropboxPathPrefix: '',
       filenameQuery: '',
+      mediaType: 'all',
       permatagPositiveMissing: false,
     };
     this._emit('filters-changed', { tabId: this.tabId, filters: this.filters });
@@ -266,6 +270,9 @@ export class ImageFilterPanel {
       }
       if (Array.isArray(filters.dropboxPathPrefix)) {
         filters.dropboxPathPrefix = filters.dropboxPathPrefix[0] || '';
+      }
+      if (!filters.mediaType) {
+        filters.mediaType = 'all';
       }
       this.updateFilters(filters);
     } catch (error) {

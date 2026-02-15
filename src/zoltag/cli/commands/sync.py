@@ -9,7 +9,7 @@ from zoltag.dependencies import get_secret
 from zoltag.metadata import Asset
 from zoltag.dropbox import DropboxClient
 from zoltag.dropbox_oauth import load_dropbox_oauth_credentials
-from zoltag.image import ImageProcessor
+from zoltag.image import is_supported_media_file
 from zoltag.sync_pipeline import process_dropbox_entry
 from zoltag.cli.base import CliCommand
 
@@ -121,7 +121,6 @@ class SyncDropboxCommand(CliCommand):
 
             click.echo(f"Found {len(entries)} entries")
 
-            processor = ImageProcessor()
             unprocessed = []
             remaining = max(self.count - processed, 0)
             total_entries = len(entries)
@@ -130,7 +129,7 @@ class SyncDropboxCommand(CliCommand):
             for index, entry in enumerate(entries, start=1):
                 if index % 500 == 0:
                     click.echo(f"  Scanned {index}/{total_entries} entries...")
-                if not processor.is_supported(entry.name):
+                if not is_supported_media_file(entry.name, None):
                     continue
                 dropbox_path = entry.path_display
                 if not dropbox_path:

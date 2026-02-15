@@ -1463,6 +1463,7 @@ export class SearchTab extends LitElement {
 
   _syncChipFiltersFromFilterState(filters) {
     const nextChips = [];
+    const mediaType = String(filters.mediaType || filters.media_type || 'all').trim().toLowerCase();
 
     if (filters.permatagPositiveMissing) {
       nextChips.push({
@@ -1533,6 +1534,15 @@ export class SearchTab extends LitElement {
         value: filenameQuery,
         displayLabel: 'Filename',
         displayValue: filenameQuery,
+      });
+    }
+
+    if (mediaType === 'image' || mediaType === 'video') {
+      nextChips.push({
+        type: 'media',
+        value: mediaType,
+        displayLabel: 'Media',
+        displayValue: mediaType === 'video' ? 'Videos' : 'Photos',
       });
     }
 
@@ -1767,6 +1777,7 @@ export class SearchTab extends LitElement {
       offset: 0,
       sortOrder: this.searchDateOrder || 'desc',
       orderBy: this.searchOrderBy || 'photo_creation',
+      mediaType: 'all',
       hideZeroRating: true,
       keywords: {},
       operators: {},
@@ -1825,6 +1836,9 @@ export class SearchTab extends LitElement {
           break;
         case 'filename':
           searchFilters.filenameQuery = chip.value || '';
+          break;
+        case 'media':
+          searchFilters.mediaType = chip.value === 'video' ? 'video' : (chip.value === 'image' ? 'image' : 'all');
           break;
       }
     });
