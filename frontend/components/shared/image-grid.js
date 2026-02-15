@@ -11,6 +11,19 @@
  */
 
 import { html } from 'lit';
+import { formatDurationMs } from './formatting.js';
+
+function inferMediaType(image) {
+  const mediaType = String(image?.media_type || '').trim().toLowerCase();
+  if (mediaType === 'video' || mediaType === 'image') {
+    return mediaType;
+  }
+  const mimeType = String(image?.mime_type || '').trim().toLowerCase();
+  if (mimeType.startsWith('video/')) {
+    return 'video';
+  }
+  return 'image';
+}
 
 /**
  * Renders an image grid with full selection, drag & drop, and interaction support
@@ -121,6 +134,10 @@ export function renderImageGrid(config) {
         const imageId = Number(image.id);
         const isSelected = selection.includes(imageId) || selection.includes(image.id);
         const isFlashing = flashSelectionIds?.has(image.id);
+        const mediaType = inferMediaType(image);
+        const isVideo = mediaType === 'video';
+        const videoDuration = isVideo ? formatDurationMs(image?.duration_ms) : '';
+        const hasRating = !(image?.rating === null || image?.rating === undefined || image?.rating === '');
         const thumb = html`
           <div
             class="curate-thumb-wrapper ${isSelected ? 'selected' : ''}"
@@ -142,12 +159,18 @@ export function renderImageGrid(config) {
             >
             ${renderCurateRatingWidget ? renderCurateRatingWidget(image) : ''}
             ${renderCurateRatingStatic ? renderCurateRatingStatic(image) : ''}
+            ${isVideo ? html`
+              <div class="curate-thumb-media-pill ${hasRating ? 'has-rating' : ''}">
+                <span class="curate-thumb-media-pill-label">VIDEO</span>
+                ${videoDuration ? html`<span class="curate-thumb-media-pill-duration">${videoDuration}</span>` : html``}
+              </div>
+            ` : html``}
             ${showAiScore && renderCurateAiMLScore ? renderCurateAiMLScore(image) : ''}
             ${showPermatags && renderCuratePermatagSummary ? renderCuratePermatagSummary(image) : ''}
             ${formatCurateDate && formatCurateDate(image) ? html`
               <div class="curate-thumb-date">
                 <span class="curate-thumb-id">#${image.id}</span>
-                <span class="curate-thumb-icon" aria-hidden="true">📷</span>${formatCurateDate(image)}
+                <span class="curate-thumb-icon" aria-hidden="true">${isVideo ? '🎬' : '📷'}</span>${formatCurateDate(image)}
               </div>
             ` : ''}
           </div>

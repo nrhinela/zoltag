@@ -2,22 +2,25 @@
 
 import io
 import mimetypes
-from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import StreamingResponse
-from sqlalchemy.orm import Session
-from google.cloud import storage
+from datetime import datetime, timedelta, timezone
 
-from zoltag.dependencies import get_db, get_tenant, get_secret
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import StreamingResponse
+from google.cloud import storage
+from sqlalchemy.orm import Session
+
+from zoltag.dependencies import get_db, get_secret, get_tenant
 from zoltag.integrations import TenantIntegrationRepository
-from zoltag.tenant import Tenant
+from zoltag.image import ImageProcessor
 from zoltag.metadata import ImageMetadata, Tenant as TenantModel
+from zoltag.routers.images._shared import _resolve_provider_ref, _resolve_storage_or_409
 from zoltag.settings import settings
 from zoltag.storage import create_storage_provider
-from zoltag.image import ImageProcessor
+from zoltag.tenant import Tenant
 from zoltag.tenant_scope import tenant_column_filter
-from zoltag.routers.images._shared import _resolve_storage_or_409, _resolve_provider_ref
 
 router = APIRouter()
+PLAYBACK_URL_TTL_SECONDS = 300
 
 
 def _resolve_tenant_for_image(db: Session, image: ImageMetadata):
@@ -26,6 +29,68 @@ def _resolve_tenant_for_image(db: Session, image: ImageMetadata):
     if image_tenant_id is None:
         return None
     return db.query(TenantModel).filter(TenantModel.id == image_tenant_id).first()
+
+
+def _guess_content_type(*, filename: str = "", source_ref: str = "", fallback: str = "application/octet-stream"):
+    content_type, _ = mimetypes.guess_type(filename or source_ref or "")
+    return content_type or fallback
+
+
+def _infer_media_type(image: ImageMetadata, storage_info) -> str:
+    asset = getattr(storage_info, "asset", None)
+    media_type = str(getattr(asset, "media_type", "") or "").strip().lower()
+    if media_type in {"image", "video"}:
+        return media_type
+    mime_type = str(getattr(asset, "mime_type", "") or "").strip().lower()
+    if mime_type.startswith("video/"):
+        return "video"
+    if mime_type.startswith("image/"):
+        return "image"
+    guessed = _guess_content_type(filename=image.filename or "", source_ref=storage_info.source_key or "")
+    if guessed.startswith("video/"):
+        return "video"
+    return "image"
+
+
+def _parse_single_range_header(range_header: str, total_size: int) -> tuple[int, int]:
+    header = (range_header or "").strip()
+    if not header or total_size < 1:
+        raise ValueError("Invalid range header")
+    if "=" not in header:
+        raise ValueError("Invalid range header")
+
+    unit, value = header.split("=", 1)
+    if unit.strip().lower() != "bytes":
+        raise ValueError("Unsupported range unit")
+    if "," in value:
+        raise ValueError("Multiple ranges are not supported")
+    if "-" not in value:
+        raise ValueError("Invalid range format")
+
+    start_raw, end_raw = [part.strip() for part in value.split("-", 1)]
+    if not start_raw:
+        # Suffix byte range: bytes=-500
+        suffix_len = int(end_raw)
+        if suffix_len <= 0:
+            raise ValueError("Invalid suffix length")
+        start = max(total_size - suffix_len, 0)
+        end = total_size - 1
+        return start, end
+
+    start = int(start_raw)
+    end = total_size - 1 if not end_raw else int(end_raw)
+    if start < 0 or end < 0 or start > end:
+        raise ValueError("Invalid range bounds")
+    if start >= total_size:
+        raise ValueError("Range start is out of bounds")
+
+    end = min(end, total_size - 1)
+    return start, end
+
+
+def _build_expiry_timestamp(ttl_seconds: int) -> str:
+    expires = datetime.now(timezone.utc) + timedelta(seconds=max(60, int(ttl_seconds or 300)))
+    return expires.isoformat().replace("+00:00", "Z")
 
 
 @router.get("/images/{image_id}/thumbnail", operation_id="get_thumbnail")
@@ -169,4 +234,150 @@ async def get_full_image(
             "Cache-Control": "no-store",
             "Content-Disposition": f'inline; filename="{filename}"'
         }
+    )
+
+
+@router.get("/images/{image_id}/playback", operation_id="get_image_playback")
+async def get_image_playback(
+    image_id: int,
+    tenant: Tenant = Depends(get_tenant),
+    db: Session = Depends(get_db),
+):
+    """Resolve a browser-playable source for video assets."""
+    image = db.query(ImageMetadata).filter(
+        ImageMetadata.id == image_id,
+        tenant_column_filter(ImageMetadata, tenant),
+    ).first()
+    if not image:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    storage_info = _resolve_storage_or_409(
+        image=image,
+        tenant=tenant,
+        db=db,
+        require_source=True,
+    )
+    if _infer_media_type(image, storage_info) != "video":
+        raise HTTPException(status_code=400, detail="Playback is only available for video assets")
+
+    provider_name, source_ref = _resolve_provider_ref(storage_info, image)
+    if not source_ref:
+        raise HTTPException(status_code=404, detail=f"Video source is not available in {provider_name}")
+
+    try:
+        provider = create_storage_provider(provider_name, tenant=tenant, get_secret=get_secret)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to initialize {provider_name} provider: {exc}")
+
+    playback_url = None
+    try:
+        playback_url = provider.get_playback_url(source_ref, expires_seconds=PLAYBACK_URL_TTL_SECONDS)
+    except Exception:
+        playback_url = None
+
+    if playback_url:
+        mode = "direct_url"
+        expires_at = _build_expiry_timestamp(PLAYBACK_URL_TTL_SECONDS)
+    else:
+        mode = "proxy_stream"
+        expires_at = None
+        playback_url = f"/api/v1/images/{image_id}/playback/stream"
+
+    asset = getattr(storage_info, "asset", None)
+    mime_type = str(getattr(asset, "mime_type", "") or "").strip()
+    if not mime_type:
+        mime_type = _guess_content_type(filename=image.filename or "", source_ref=source_ref)
+
+    return {
+        "image_id": image.id,
+        "asset_id": str(storage_info.asset_id) if storage_info.asset_id else None,
+        "media_type": "video",
+        "provider": provider_name,
+        "mode": mode,
+        "playback_url": playback_url,
+        "expires_at": expires_at,
+        "mime_type": mime_type,
+    }
+
+
+@router.get("/images/{image_id}/playback/stream", operation_id="stream_image_playback")
+async def stream_image_playback(
+    image_id: int,
+    request: Request,
+    tenant: Tenant = Depends(get_tenant),
+    db: Session = Depends(get_db),
+):
+    """Proxy stream for video playback when provider direct links are unavailable."""
+    image = db.query(ImageMetadata).filter(
+        ImageMetadata.id == image_id,
+        tenant_column_filter(ImageMetadata, tenant),
+    ).first()
+    if not image:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    storage_info = _resolve_storage_or_409(
+        image=image,
+        tenant=tenant,
+        db=db,
+        require_source=True,
+    )
+    if _infer_media_type(image, storage_info) != "video":
+        raise HTTPException(status_code=400, detail="Playback is only available for video assets")
+
+    provider_name, source_ref = _resolve_provider_ref(storage_info, image)
+    if not source_ref:
+        raise HTTPException(status_code=404, detail=f"Video source is not available in {provider_name}")
+
+    try:
+        provider = create_storage_provider(provider_name, tenant=tenant, get_secret=get_secret)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to initialize {provider_name} provider: {exc}")
+
+    try:
+        file_bytes = provider.download_file(source_ref)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error fetching {provider_name} video: {exc}")
+
+    total_size = len(file_bytes)
+    filename = image.filename or "video"
+    content_type = str(getattr(getattr(storage_info, "asset", None), "mime_type", "") or "").strip()
+    if not content_type:
+        content_type = _guess_content_type(
+            filename=filename,
+            source_ref=source_ref,
+            fallback="video/mp4",
+        )
+
+    status_code = 200
+    payload = file_bytes
+    headers = {
+        "Cache-Control": "no-store",
+        "Accept-Ranges": "bytes",
+        "Content-Disposition": f'inline; filename="{filename}"',
+        "Content-Length": str(total_size),
+    }
+    range_header = request.headers.get("range")
+    if range_header and total_size > 0:
+        try:
+            start, end = _parse_single_range_header(range_header, total_size)
+        except ValueError:
+            raise HTTPException(
+                status_code=416,
+                detail="Requested range is not satisfiable",
+                headers={"Content-Range": f"bytes */{total_size}"},
+            )
+        payload = file_bytes[start:end + 1]
+        status_code = 206
+        headers["Content-Range"] = f"bytes {start}-{end}/{total_size}"
+        headers["Content-Length"] = str(len(payload))
+
+    return StreamingResponse(
+        iter([payload]),
+        status_code=status_code,
+        media_type=content_type,
+        headers=headers,
     )

@@ -156,6 +156,7 @@ export class CurateExploreStateController extends BaseStateController {
     this.host.curateSubTab = 'main';
     this.host.curateOrderBy = 'photo_creation';
     this.host.curateOrderDirection = 'desc';
+    this.host.curateMediaType = 'all';
     this.host.curatePageOffset = 0;
     this.host.curateDragSelection = [];
     this.host.curateKeywordFilters = {};

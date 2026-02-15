@@ -3,7 +3,7 @@
 .PHONY: help install test lint format clean deploy migrate dev worker dev-backend dev-frontend dev-css dev-clean
 .PHONY: db-dev db-prod db-migrate-prod db-migrate-dev db-create-migration
 .PHONY: deploy-api deploy-worker deploy-all status logs-api logs-worker env-check
-.PHONY: train-and-recompute daily
+.PHONY: train-and-recompute daily verify-video-rollout
 
 # Default environment
 ENV ?= prod
@@ -45,6 +45,8 @@ help:
 	@echo "  env-check          Show current environment configuration"
 	@echo "  train-and-recompute Train keyword models and recompute tags"
 	@echo "  daily              Sync Dropbox then train + recompute tags"
+	@echo "  verify-video-rollout Verify video-thumbnail rollout (DB + optional API smoke checks)"
+	@echo "                      Use VERIFY_ARGS='--skip-api' etc to pass script flags"
 	@echo ""
 	@echo "Environment variables:"
 	@echo "  ENV=dev|prod       Target environment (default: dev)"
@@ -334,3 +336,15 @@ daily:
 	zoltag sync-dropbox --tenant-id $(TENANT_ID)
 	@echo "Running train-and-recompute..."
 	$(MAKE) train-and-recompute TENANT_ID=$(TENANT_ID)
+
+verify-video-rollout:
+	@echo "Running video-thumbnail rollout verification..."
+	@set -e; \
+	if [ -f .env ]; then \
+		set -a; . ./.env; set +a; \
+	fi; \
+	PY_CMD=".venv/bin/python"; \
+	if [ ! -x "$$PY_CMD" ]; then \
+		PY_CMD="python3"; \
+	fi; \
+	"$$PY_CMD" scripts/verify_video_thumbnail_rollout.py $(VERIFY_ARGS)
