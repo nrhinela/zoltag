@@ -4,7 +4,7 @@ from datetime import datetime
 import uuid
 from typing import Optional
 
-from sqlalchemy import Column, String, Integer, Float, DateTime, Boolean, Text, ForeignKey, Index, UniqueConstraint
+from sqlalchemy import Column, String, Integer, BigInteger, Float, DateTime, Boolean, Text, ForeignKey, Index, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, ARRAY, UUID
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
@@ -119,7 +119,7 @@ class ImageMetadata(Base):
     
     # File information
     filename = Column(String(512), nullable=False)
-    file_size = Column(Integer)
+    file_size = Column(BigInteger)
     content_hash = Column(String(64), index=True)  # For change detection
     modified_time = Column(DateTime)
     

@@ -157,6 +157,17 @@ export function renderImageGrid(config) {
               @pointermove=${(event) => onPointerMove?.(event)}
               @pointerenter=${() => onPointerEnter?.(index)}
             >
+            ${isVideo ? html`
+              <span class="curate-thumb-play-overlay" aria-hidden="true">
+                <svg
+                  class="curate-thumb-play-icon"
+                  viewBox="0 0 24 24"
+                  focusable="false"
+                >
+                  <path d="M8 6v12l10-6z"></path>
+                </svg>
+              </span>
+            ` : html``}
             ${renderCurateRatingWidget ? renderCurateRatingWidget(image) : ''}
             ${renderCurateRatingStatic ? renderCurateRatingStatic(image) : ''}
             ${isVideo ? html`

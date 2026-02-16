@@ -858,6 +858,24 @@ export const zoltagAppStyles = css`
         border-radius: 10px;
         transition: box-shadow 0.15s ease, transform 0.15s ease;
     }
+    .curate-thumb-play-overlay {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        pointer-events: none;
+        z-index: 9;
+    }
+    .curate-thumb-play-icon {
+        width: clamp(30px, 28%, 52px);
+        height: clamp(30px, 28%, 52px);
+        fill: rgba(255, 255, 255, 0.96);
+        background: rgba(15, 23, 42, 0.55);
+        border-radius: 999px;
+        padding: 8px;
+        box-shadow: 0 8px 18px rgba(15, 23, 42, 0.38);
+    }
     .curate-thumb-rating-widget {
         position: absolute;
         top: 6px;
