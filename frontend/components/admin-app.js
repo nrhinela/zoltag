@@ -5,6 +5,8 @@ import './admin-tenant-list.js';
 import './admin-tenant-editor.js';
 import './admin-users.js';
 import './cli-commands.js';
+import './admin-jobs.js';
+import './admin-keyword-thresholds.js';
 import { getTenants } from '../services/api.js';
 
 /**
@@ -13,7 +15,8 @@ import { getTenants } from '../services/api.js';
  */
 class AdminApp extends LitElement {
   static properties = {
-    activeTab: { type: String }, // 'tenants', 'users', or 'cli'
+    activeTab: { type: String }, // 'tenants', 'users', 'jobs', 'keywords', or 'cli'
+    _thresholdTenantId: { type: String },
     view: { type: String }, // 'list' or 'editor' (for tenants)
     currentTenantId: { type: String },
     tenants: { type: Array },
@@ -131,6 +134,7 @@ class AdminApp extends LitElement {
     this.currentTenantId = null;
     this.tenants = [];
     this.loading = false;
+    this._thresholdTenantId = null;
   }
 
   connectedCallback() {
@@ -206,6 +210,18 @@ class AdminApp extends LitElement {
             <i class="fas fa-users-cog mr-2"></i>Users
           </button>
           <button
+            class="tab-button ${this.activeTab === 'jobs' ? 'active' : ''}"
+            @click="${() => this.switchTab('jobs')}"
+          >
+            <i class="fas fa-gears mr-2"></i>Jobs
+          </button>
+          <button
+            class="tab-button ${this.activeTab === 'keywords' ? 'active' : ''}"
+            @click="${() => this.switchTab('keywords')}"
+          >
+            <i class="fas fa-sliders mr-2"></i>Thresholds
+          </button>
+          <button
             class="tab-button ${this.activeTab === 'cli' ? 'active' : ''}"
             @click="${() => this.switchTab('cli')}"
           >
@@ -228,6 +244,33 @@ class AdminApp extends LitElement {
                 ></admin-tenant-editor>`
           : this.activeTab === 'users'
             ? html`<admin-users></admin-users>`
+            : this.activeTab === 'jobs'
+              ? html`<admin-jobs .tenants=${this.tenants}></admin-jobs>`
+            : this.activeTab === 'keywords'
+              ? html`
+                <div class="panel">
+                  <div class="p-3 border-b border-gray-200 flex items-center gap-3">
+                    <label class="text-sm text-gray-600 font-medium">Tenant:</label>
+                    <select
+                      class="text-sm border border-gray-300 rounded px-2 py-1"
+                      .value=${this._thresholdTenantId || ''}
+                      @change=${(e) => { this._thresholdTenantId = e.target.value; }}
+                    >
+                      <option value="">— select a tenant —</option>
+                      ${(this.tenants || []).map(t => html`
+                        <option value=${t.id}>${t.name}</option>
+                      `)}
+                    </select>
+                  </div>
+                  ${this._thresholdTenantId ? html`
+                    <admin-keyword-thresholds
+                      .tenantId=${this._thresholdTenantId}
+                    ></admin-keyword-thresholds>
+                  ` : html`
+                    <div class="p-6 text-gray-400 text-sm">Select a tenant to view thresholds.</div>
+                  `}
+                </div>
+              `
             : html`
                 <div class="panel">
                   <cli-commands></cli-commands>

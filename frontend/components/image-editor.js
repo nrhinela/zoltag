@@ -1,6 +1,7 @@
 import { LitElement, html, css } from 'lit';
 import {
   getImageDetails,
+  getSimilarImages,
   getKeywords,
   addPermatag,
   getFullImage,
@@ -15,11 +16,20 @@ import {
   deleteAssetVariant,
   getAssetVariantContent,
   inspectAssetVariant,
+  getAssetNote,
+  upsertAssetNote,
 } from '../services/api.js';
 import { tailwind } from './tailwind-lit.js';
 import { propertyGridStyles, renderPropertyRows, renderPropertySection } from './shared/widgets/property-grid.js';
-import { formatDurationMs } from './shared/formatting.js';
+import { formatCurateDate, formatDurationMs } from './shared/formatting.js';
+import { renderImageGrid } from './shared/image-grid.js';
+import { renderCuratePermatagSummary } from './render/curate-image-fragments.js';
+import { renderCurateRatingStatic } from './render/curate-rating-widgets.js';
 import './shared/widgets/keyword-dropdown.js';
+
+const SIMILAR_WARMUP_DELAY_MS = 300;
+const similarWarmupInflight = new Map();
+const similarWarmupCompleted = new Set();
 
 class ImageEditor extends LitElement {
   static styles = [tailwind, propertyGridStyles, css`
@@ -731,6 +741,222 @@ class ImageEditor extends LitElement {
       min-height: 0;
       overflow: auto;
     }
+    .similar-fullscreen {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      padding: 16px 18px;
+      flex: 1;
+      min-height: 0;
+      overflow: hidden;
+    }
+    .similar-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      font-size: 12px;
+      color: #4b5563;
+    }
+    .similar-refresh {
+      border: 1px solid #d1d5db;
+      border-radius: 8px;
+      padding: 6px 8px;
+      background: #f9fafb;
+      color: #374151;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .similar-refresh:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+    .similar-grid-wrap {
+      min-height: 0;
+      overflow: auto;
+      --curate-thumb-size: 150px;
+    }
+    .similar-grid-wrap .curate-grid {
+      gap: 10px;
+    }
+    .similar-grid-wrap .curate-thumb-tile {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .similar-grid-wrap .curate-thumb-footer {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .similar-item-meta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      color: #4b5563;
+      font-size: 11px;
+      font-variant-numeric: tabular-nums;
+    }
+    .similar-open-button {
+      border: 1px solid #2563eb;
+      border-radius: 8px;
+      padding: 6px 8px;
+      background: #eff6ff;
+      color: #1d4ed8;
+      font-size: 11px;
+      cursor: pointer;
+      width: 100%;
+    }
+    .curate-grid {
+      display: grid;
+      gap: 2px;
+      grid-template-columns: repeat(auto-fill, minmax(var(--curate-thumb-size, 110px), 1fr));
+      user-select: none;
+    }
+    .curate-thumb-wrapper {
+      position: relative;
+      border-radius: 10px;
+      transition: box-shadow 0.15s ease, transform 0.15s ease;
+    }
+    .curate-thumb-wrapper:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 8px 18px rgba(17, 24, 39, 0.18);
+    }
+    .curate-thumb {
+      width: 100%;
+      aspect-ratio: 1 / 1;
+      object-fit: cover;
+      border-radius: 8px;
+      border: 1px solid #e5e7eb;
+      background: #f3f4f6;
+      cursor: pointer;
+    }
+    .curate-thumb-play-overlay {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      pointer-events: none;
+      z-index: 9;
+    }
+    .curate-thumb-play-icon {
+      width: clamp(30px, 28%, 52px);
+      height: clamp(30px, 28%, 52px);
+      fill: rgba(255, 255, 255, 0.96);
+      background: rgba(15, 23, 42, 0.55);
+      border-radius: 999px;
+      padding: 8px;
+      box-shadow: 0 8px 18px rgba(15, 23, 42, 0.38);
+    }
+    .curate-thumb-media-pill {
+      position: absolute;
+      top: 6px;
+      right: 6px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(15, 23, 42, 0.88);
+      color: #e2e8f0;
+      padding: 4px 7px;
+      border-radius: 999px;
+      font-size: 10px;
+      line-height: 1;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+      pointer-events: none;
+      z-index: 11;
+      box-shadow: 0 4px 12px rgba(15, 23, 42, 0.28);
+    }
+    .curate-thumb-media-pill-label {
+      color: #bfdbfe;
+    }
+    .curate-thumb-media-pill-duration {
+      color: #f8fafc;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: 0.01em;
+    }
+    .curate-thumb-rating-static {
+      position: absolute;
+      top: 6px;
+      right: 6px;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      background: rgba(255, 255, 255, 0.9);
+      color: #111827;
+      padding: 4px 6px;
+      border-radius: 999px;
+      box-shadow: 0 4px 12px rgba(17, 24, 39, 0.18);
+      z-index: 10;
+      pointer-events: none;
+    }
+    .curate-thumb-rating-static span {
+      font-size: 12px;
+      line-height: 1;
+    }
+    .curate-thumb-date {
+      position: absolute;
+      left: 6px;
+      right: 6px;
+      bottom: 1px;
+      font-size: 10px;
+      line-height: 1.2;
+      color: #f9fafb;
+      background: rgba(17, 24, 39, 0.65);
+      padding: 2px 6px;
+      border-radius: 6px;
+      text-align: center;
+      pointer-events: none;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .curate-thumb-id {
+      margin-right: 6px;
+      font-weight: 600;
+      color: #e5e7eb;
+    }
+    .curate-thumb-icon {
+      margin-right: 4px;
+      font-size: 11px;
+    }
+    .curate-thumb-rating {
+      position: absolute;
+      left: 6px;
+      right: 6px;
+      bottom: 19px;
+      font-size: 10px;
+      color: #f9fafb;
+      background: rgba(17, 24, 39, 0.65);
+      padding: 2px 6px;
+      border-radius: 6px;
+      text-align: center;
+      display: block;
+      pointer-events: none;
+    }
+    .curate-thumb-rating-label {
+      display: block;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      text-align: center;
+      padding: 0 6px;
+    }
+    .curate-drop {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 180px;
+      color: #9ca3af;
+      font-size: 12px;
+      border: 1px dashed #d1d5db;
+      border-radius: 8px;
+      padding: 16px;
+      text-align: center;
+    }
     .variant-preview-wrap {
       width: 100%;
       height: 72px;
@@ -1008,6 +1234,9 @@ class ImageEditor extends LitElement {
     videoPlaybackUrl: { type: String },
     videoPlaybackLoading: { type: Boolean },
     videoPlaybackError: { type: String },
+    similarImages: { type: Array },
+    similarLoading: { type: Boolean },
+    similarError: { type: String },
     ratingSaving: { type: Boolean },
     ratingError: { type: String },
     metadataRefreshing: { type: Boolean },
@@ -1028,6 +1257,9 @@ class ImageEditor extends LitElement {
     fullscreenZoom: { type: Number },
     fullscreenFitMode: { type: Boolean },
     canEditTags: { type: Boolean },
+    marketingNote: { type: String },
+    marketingNoteSaving: { type: Boolean },
+    marketingNoteError: { type: String },
   };
 
   constructor() {
@@ -1050,6 +1282,9 @@ class ImageEditor extends LitElement {
     this.videoPlaybackUrl = '';
     this.videoPlaybackLoading = false;
     this.videoPlaybackError = '';
+    this.similarImages = [];
+    this.similarLoading = false;
+    this.similarError = '';
     this._fullImageAbortController = null;
     this._videoPlaybackAbortController = null;
     this._videoPlaybackObjectUrl = '';
@@ -1058,6 +1293,7 @@ class ImageEditor extends LitElement {
     this._fullImageRapidDelayMs = 120;
     this._fullImageRapidThresholdMs = 200;
     this._fullImageLastNavTs = 0;
+    this._similarWarmupTimer = null;
     this.ratingSaving = false;
     this.ratingError = '';
     this.metadataRefreshing = false;
@@ -1081,6 +1317,9 @@ class ImageEditor extends LitElement {
     this.fullscreenZoom = 50;
     this.fullscreenFitMode = false;
     this.canEditTags = true;
+    this.marketingNote = '';
+    this.marketingNoteSaving = false;
+    this.marketingNoteError = '';
     this._ratingBurstActive = false;
     this._ratingBurstTimer = null;
     this._suppressPermatagRefresh = false;
@@ -1119,6 +1358,7 @@ class ImageEditor extends LitElement {
 
   disconnectedCallback() {
     window.removeEventListener('permatags-changed', this._handlePermatagEvent);
+    this._clearSimilarWarmupTimer();
     this._revokeVariantPreviewUrls();
     this._resetFullImage();
     this._resetVideoPlayback();
@@ -1149,8 +1389,10 @@ class ImageEditor extends LitElement {
   willUpdate(changedProperties) {
     const shouldLoad = this.embedded || this.open;
     if (shouldLoad && (changedProperties.has('image') || changedProperties.has('tenant'))) {
+      this._clearSimilarWarmupTimer();
       this._resetFullImage();
       this._resetVideoPlayback();
+      this._resetSimilarResults();
       this._resetVariantEditor();
       this.fetchDetails();
       this.fetchKeywords();
@@ -1159,11 +1401,15 @@ class ImageEditor extends LitElement {
       this._syncTagSubTab();
       this._scheduleFullImageLoad();
       this._scheduleVideoPlaybackLoad();
+      if (this.open || this.embedded) {
+        this._scheduleSimilarWarmup();
+      }
       if (this.activeTab === 'variants') {
         this._loadAssetVariants();
       }
     }
     if (changedProperties.has('open') && !this.open && !this.embedded) {
+      this._clearSimilarWarmupTimer();
       this._resetFullImage();
       this._resetVideoPlayback();
     }
@@ -1175,11 +1421,37 @@ class ImageEditor extends LitElement {
     this.error = '';
     try {
       this.details = await getImageDetails(this.tenant, this.image.id);
+      this._fetchMarketingNote();
     } catch (error) {
       this.error = 'Failed to load image details.';
       console.error('ImageEditor: fetchDetails failed', error);
     } finally {
       this.loading = false;
+    }
+  }
+
+  async _fetchMarketingNote() {
+    if (!this.image || !this.tenant) return;
+    try {
+      const result = await getAssetNote(this.tenant, this.image.id, 'marketing');
+      this.marketingNote = result.body ?? '';
+    } catch (error) {
+      console.error('ImageEditor: failed to load marketing note', error);
+    }
+  }
+
+  async _handleSaveMarketingNote() {
+    if (!this.image || !this.tenant || this.marketingNoteSaving) return;
+    this.marketingNoteSaving = true;
+    this.marketingNoteError = '';
+    try {
+      const result = await upsertAssetNote(this.tenant, this.image.id, 'marketing', this.marketingNote);
+      this.marketingNote = result.body ?? '';
+    } catch (error) {
+      this.marketingNoteError = 'Failed to save note.';
+      console.error('ImageEditor: failed to save marketing note', error);
+    } finally {
+      this.marketingNoteSaving = false;
     }
   }
 
@@ -1227,8 +1499,110 @@ class ImageEditor extends LitElement {
     this.activeTab = tab;
     if (tab === 'image') {
       this._loadFullImage();
+    } else if (tab === 'similar') {
+      this._loadSimilarImages();
     } else if (tab === 'variants') {
       this._loadAssetVariants();
+    }
+  }
+
+  _resetSimilarResults() {
+    this.similarImages = [];
+    this.similarLoading = false;
+    this.similarError = '';
+  }
+
+  _getSimilarWarmupKey() {
+    if (!this.tenant || !this.details?.id) return null;
+    const mediaType = String(this._inferMediaType(this.details) || 'image').toLowerCase();
+    return `${this.tenant}::${mediaType}`;
+  }
+
+  _clearSimilarWarmupTimer() {
+    if (!this._similarWarmupTimer) return;
+    clearTimeout(this._similarWarmupTimer);
+    this._similarWarmupTimer = null;
+  }
+
+  _scheduleSimilarWarmup() {
+    if (!this.details?.id || !this.tenant) return;
+    if (this.activeTab === 'similar') return;
+    const warmupKey = this._getSimilarWarmupKey();
+    if (!warmupKey || similarWarmupCompleted.has(warmupKey) || similarWarmupInflight.has(warmupKey)) {
+      return;
+    }
+    this._clearSimilarWarmupTimer();
+    this._similarWarmupTimer = window.setTimeout(() => {
+      this._similarWarmupTimer = null;
+      this._warmSimilarCache().catch(() => {});
+    }, SIMILAR_WARMUP_DELAY_MS);
+  }
+
+  async _warmSimilarCache() {
+    const sourceImageId = this.details?.id;
+    const warmupKey = this._getSimilarWarmupKey();
+    if (!sourceImageId || !warmupKey || !this.tenant) return;
+    if (similarWarmupCompleted.has(warmupKey)) return;
+
+    const existingWarmup = similarWarmupInflight.get(warmupKey);
+    if (existingWarmup) {
+      await existingWarmup;
+      return;
+    }
+
+    const warmupPromise = (async () => {
+      await getSimilarImages(this.tenant, sourceImageId, {
+        limit: 1,
+        sameMediaType: true,
+      });
+      similarWarmupCompleted.add(warmupKey);
+    })();
+
+    similarWarmupInflight.set(warmupKey, warmupPromise);
+    try {
+      await warmupPromise;
+    } catch (error) {
+      console.debug('ImageEditor: similar warmup skipped', error);
+    } finally {
+      similarWarmupInflight.delete(warmupKey);
+    }
+  }
+
+  async _loadSimilarImages(force = false) {
+    if (!this.details?.id || !this.tenant) return;
+    if (!force && (this.similarLoading || this.similarImages.length > 0)) return;
+    const sourceImageId = this.details.id;
+    const warmupKey = this._getSimilarWarmupKey();
+    const existingWarmup = warmupKey ? similarWarmupInflight.get(warmupKey) : null;
+    if (existingWarmup) {
+      try {
+        await existingWarmup;
+      } catch {
+        // Warmup is opportunistic only; continue with direct fetch.
+      }
+    }
+    this.similarLoading = true;
+    this.similarError = '';
+    try {
+      const payload = await getSimilarImages(this.tenant, sourceImageId, {
+        limit: 60,
+        sameMediaType: true,
+      });
+      if (this.details?.id !== sourceImageId) {
+        return;
+      }
+      this.similarImages = Array.isArray(payload?.images) ? payload.images : [];
+    } catch (error) {
+      if (this.details?.id !== sourceImageId) {
+        return;
+      }
+      this.similarImages = [];
+      this.similarError = error?.message || 'Failed to load similar images.';
+      console.error('ImageEditor: failed to load similar images', error);
+    } finally {
+      if (this.details?.id === sourceImageId) {
+        this.similarLoading = false;
+      }
     }
   }
 
@@ -2054,6 +2428,28 @@ class ImageEditor extends LitElement {
             : html`<div class="empty-text">No active tags.</div>`,
         })}
 
+        ${renderPropertySection({
+          title: 'Notes',
+          body: html`
+            <div class="flex flex-col gap-2">
+              <textarea
+                class="w-full rounded border border-gray-300 p-2 text-sm resize-y min-h-[80px]"
+                placeholder="Marketing description..."
+                .value=${this.marketingNote}
+                @input=${(e) => { this.marketingNote = e.target.value; }}
+              ></textarea>
+              <div class="flex items-center gap-2">
+                <button
+                  class="text-xs text-blue-600 hover:text-blue-700 disabled:opacity-50"
+                  ?disabled=${this.marketingNoteSaving}
+                  @click=${this._handleSaveMarketingNote}
+                >${this.marketingNoteSaving ? 'Saving…' : 'Save'}</button>
+                ${this.marketingNoteError ? html`<span class="text-xs text-red-500">${this.marketingNoteError}</span>` : html``}
+              </div>
+            </div>
+          `,
+        })}
+
         ${(this.canEditTags && this._normalizeSourceProvider(this.details?.source_provider) === 'dropbox') ? renderPropertySection({
           title: 'Tag Actions',
           body: html`
@@ -2384,6 +2780,9 @@ class ImageEditor extends LitElement {
         <button class="tab-button ${this.activeTab === 'tags' ? 'active' : ''}" @click=${() => this._setTab('tags')}>
           Tags
         </button>
+        <button class="tab-button ${this.activeTab === 'similar' ? 'active' : ''}" @click=${() => this._setTab('similar')}>
+          Similar
+        </button>
         <button class="tab-button ${this.activeTab === 'variants' ? 'active' : ''}" @click=${() => this._setTab('variants')}>
           Variants
         </button>
@@ -2413,6 +2812,86 @@ class ImageEditor extends LitElement {
         >
           Next →
         </button>
+      </div>
+    `;
+  }
+
+  _formatSimilarityScore(score) {
+    const numericScore = Number(score);
+    if (!Number.isFinite(numericScore)) return '--';
+    const percent = Math.max(-100, Math.min(100, Math.round(numericScore * 100)));
+    return `${percent}% match`;
+  }
+
+  _handleSimilarImageSelected(event, image) {
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
+    if (!image?.id) return;
+    const imageSet = Array.isArray(this.similarImages)
+      ? [...this.similarImages]
+      : [image];
+    this.dispatchEvent(new CustomEvent('image-selected', {
+      detail: { image, imageSet },
+      bubbles: true,
+      composed: true,
+    }));
+  }
+
+  _renderSimilarTab() {
+    const hasError = !!this.similarError;
+    const emptyMessage = this.similarLoading
+      ? 'Finding similar images...'
+      : hasError
+        ? this.similarError
+        : 'No similar images found.';
+    return html`
+      <div class="similar-fullscreen">
+        <div class="similar-header">
+          <span>Top visual matches for this image.</span>
+          <button
+            type="button"
+            class="similar-refresh"
+            @click=${() => this._loadSimilarImages(true)}
+            ?disabled=${this.similarLoading}
+          >
+            ${this.similarLoading ? 'Refreshing...' : 'Refresh'}
+          </button>
+        </div>
+        <div class="similar-grid-wrap">
+          ${renderImageGrid({
+            images: this.similarImages,
+            selection: [],
+            flashSelectionIds: new Set(),
+            renderFunctions: {
+              renderCurateRatingStatic,
+              renderCuratePermatagSummary,
+              formatCurateDate,
+            },
+            eventHandlers: {
+              onImageClick: (event, image) => this._handleSimilarImageSelected(event, image),
+              onDragStart: (event) => {
+                event.preventDefault();
+              },
+            },
+            options: {
+              showPermatags: true,
+              emptyMessage,
+              renderItemFooter: (image) => html`
+                <div class="similar-item-meta">
+                  <span>#${image.id}</span>
+                  <span>${this._formatSimilarityScore(image.similarity_score)}</span>
+                </div>
+                <button
+                  type="button"
+                  class="similar-open-button"
+                  @click=${(event) => this._handleSimilarImageSelected(event, image)}
+                >
+                  Open
+                </button>
+              `,
+            },
+          })}
+        </div>
       </div>
     `;
   }
@@ -2697,6 +3176,15 @@ class ImageEditor extends LitElement {
         </div>
       `;
     }
+    if (this.activeTab === 'similar') {
+      return html`
+        <div class="variants-layout">
+          ${this._renderTopTabs()}
+          ${this._renderSimilarTab()}
+          ${this._renderImageNavigation()}
+        </div>
+      `;
+    }
 
     return html`
       ${this._renderTopTabs()}
@@ -2754,7 +3242,7 @@ class ImageEditor extends LitElement {
           </div>
         </div>
         <div class="panel-right">
-          <div class="mt-3" style="flex: 1; min-height: 0; overflow: auto;">
+          <div style="flex: 1; min-height: 0; overflow: auto;">
             ${rightPaneContent}
           </div>
         </div>

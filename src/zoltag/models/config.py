@@ -90,6 +90,7 @@ class PhotoList(Base):
     tenant_id = Column(sa.UUID(as_uuid=True), nullable=False, index=True)
     title = Column(String(255), nullable=False)
     notebox = Column(Text, nullable=True)
+    visibility = Column(String(20), nullable=False, server_default='shared', index=True)
     created_by_uid = Column(sa.UUID, nullable=True, index=True)  # Foreign key to user_profiles.supabase_uid
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())

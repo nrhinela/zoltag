@@ -7,6 +7,7 @@
 
 # Default environment
 ENV ?= prod
+WORKERS ?= 1
 PROJECT_ID = photocat-483622
 REGION = us-central1
 DEV_PID_FILE = .dev-pids
@@ -51,6 +52,7 @@ help:
 	@echo "Environment variables:"
 	@echo "  ENV=dev|prod       Target environment (default: dev)"
 	@echo "  TENANT_ID          Tenant ID for train-and-recompute target"
+	@echo "  WORKERS=<n>        Number of worker processes for 'make worker' (default: 1)"
 
 # ============================================================================
 # Development
@@ -159,7 +161,39 @@ dev-css:
 
 worker:
 	@echo "Starting background worker..."
-	WORKER_MODE=true python3 -m zoltag.worker
+	@if [ ! -f .env ]; then \
+		echo "ERROR: .env file not found. Please create one with DATABASE_URL set."; \
+		exit 1; \
+	fi
+	@if ! printf '%s' "$(WORKERS)" | grep -Eq '^[0-9]+$$'; then \
+		echo "ERROR: WORKERS must be a positive integer"; \
+		exit 1; \
+	fi
+	@if [ "$(WORKERS)" -lt 1 ]; then \
+		echo "ERROR: WORKERS must be >= 1"; \
+		exit 1; \
+	fi
+	@PY_CMD=".venv/bin/python"; \
+	if [ ! -x "$$PY_CMD" ]; then \
+		PY_CMD="python3"; \
+	fi; \
+	set -a && . ./.env && set +a && \
+	if [ "$(WORKERS)" -eq 1 ]; then \
+		PYTHONPATH=src WORKER_MODE=true "$$PY_CMD" -m zoltag.worker; \
+	else \
+		echo "Launching $(WORKERS) worker processes..."; \
+		pids=""; \
+		trap 'echo "Stopping workers..."; for pid in $$pids; do kill $$pid 2>/dev/null || true; done; wait; exit 0' INT TERM; \
+		i=1; \
+		while [ $$i -le "$(WORKERS)" ]; do \
+			PYTHONPATH=src WORKER_MODE=true "$$PY_CMD" -m zoltag.worker & \
+			pid=$$!; \
+			pids="$$pids $$pid"; \
+			echo "  worker $$i pid=$$pid"; \
+			i=$$((i+1)); \
+		done; \
+		wait; \
+	fi
 
 # ============================================================================
 # Database Management
@@ -322,8 +356,8 @@ train-and-recompute:
 	zoltag train-keyword-models --tenant-id $(TENANT_ID)
 	@echo "Recomputing trained tags..."
 	zoltag recompute-trained-tags --tenant-id $(TENANT_ID) --replace
-	@echo "Recomputing SigLIP tags..."
-	zoltag recompute-siglip-tags --replace --tenant-id $(TENANT_ID)
+	@echo "Recomputing zero-shot tags..."
+	zoltag recompute-zeroshot-tags --replace --tenant-id $(TENANT_ID)
 	@echo "Done!"
 
 daily:

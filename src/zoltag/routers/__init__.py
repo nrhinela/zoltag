@@ -15,6 +15,8 @@ from . import sync
 from . import config
 from . import people
 from . import nl_search
+from . import jobs
+from . import keyword_thresholds
 
 __all__ = [
     "auth",
@@ -32,4 +34,6 @@ __all__ = [
     "sync",
     "config",
     "nl_search",
+    "jobs",
+    "keyword_thresholds",
 ]

@@ -696,6 +696,14 @@ export const zoltagAppStyles = css`
         text-transform: uppercase;
         letter-spacing: 0.04em;
     }
+    .curate-pane-header--audit {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+    .curate-pane-header-title {
+        display: block;
+    }
     .right-panel-header {
         position: sticky;
         top: 0;
@@ -712,6 +720,14 @@ export const zoltagAppStyles = css`
         display: flex;
         align-items: center;
         gap: 6px;
+        min-width: 0;
+    }
+    .curate-pane-header-row--audit {
+        flex-wrap: wrap;
+        row-gap: 8px;
+    }
+    .curate-pane-header-row--audit .curate-pane-header-actions {
+        margin-left: auto;
     }
     .curate-pane-action {
         border: 1px solid #2563eb;
@@ -1014,12 +1030,16 @@ export const zoltagAppStyles = css`
         right: 6px;
         bottom: 1px;
         font-size: 10px;
+        line-height: 1.2;
         color: #f9fafb;
         background: rgba(17, 24, 39, 0.65);
         padding: 2px 6px;
         border-radius: 6px;
         text-align: center;
         pointer-events: none;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
     }
     .curate-thumb-icon {
         margin-right: 4px;
@@ -1264,28 +1284,46 @@ export const zoltagAppStyles = css`
         background: #eff6ff;
     }
     .curate-utility-controls {
-        display: grid;
-        grid-template-columns: 1fr auto auto;
+        display: flex;
+        flex-wrap: nowrap;
         gap: 8px;
         align-items: center;
+        min-width: 0;
     }
     .curate-utility-controls.curate-utility-controls--tags {
-        grid-template-columns: 1fr auto;
+        display: flex;
     }
     .curate-utility-controls.rating-target-controls {
-        grid-template-columns: 1fr;
+        display: block;
     }
     .curate-utility-controls select {
         width: 100%;
+        min-width: 0;
+        max-width: 100%;
         padding: 6px 8px;
         border: 1px solid #d1d5db;
         border-radius: 8px;
         font-size: 0.75rem;
         background: #fff;
     }
+    .curate-utility-controls .curate-utility-type-select {
+        flex: 0 1 104px;
+        min-width: 84px;
+    }
+    .curate-utility-controls .curate-utility-select {
+        flex: 1 1 auto;
+        min-width: 0;
+    }
+    .curate-utility-controls .curate-utility-action {
+        flex: 0 1 96px;
+        min-width: 78px;
+    }
     .curate-utility-controls select.curate-utility-select.selected {
         background: #fef3c7;
         border-color: #fde68a;
+    }
+    .curate-pane.utility-targets .curate-pane-body {
+        overflow-x: hidden;
     }
     .curate-utility-count {
         flex: 1;

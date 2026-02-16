@@ -1,5 +1,6 @@
 """FastAPI application entry point."""
 
+import logging
 from pathlib import Path
 from fastapi import FastAPI, Depends, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
@@ -36,7 +37,9 @@ from zoltag.routers import (
     gdrive,
     sync,
     config,
-    nl_search
+    nl_search,
+    jobs,
+    keyword_thresholds,
 )
 
 app = FastAPI(
@@ -44,6 +47,7 @@ app = FastAPI(
     description="Multi-tenant image organization and search utility",
     version="0.1.0"
 )
+logger = logging.getLogger(__name__)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
@@ -56,6 +60,33 @@ async def warm_jwks_cache():
         await get_jwks()
     except Exception:
         pass  # Non-fatal: requests will fetch on demand if this fails
+
+
+@app.on_event("startup")
+async def start_worker_mode():
+    """Start background queue worker when service runs in worker mode."""
+    if not settings.worker_mode:
+        return
+    try:
+        from zoltag.worker import start_background_worker_thread
+
+        start_background_worker_thread()
+    except Exception:
+        # Keep API process alive even if worker startup fails.
+        logger.exception("Failed to start worker mode thread")
+
+
+@app.on_event("shutdown")
+async def stop_worker_mode():
+    """Stop background queue worker when service shuts down."""
+    if not settings.worker_mode:
+        return
+    try:
+        from zoltag.worker import stop_background_worker_thread
+
+        stop_background_worker_thread()
+    except Exception:
+        logger.exception("Failed to stop worker mode thread")
 
 # Add CORS middleware
 # In production the frontend is served from the same origin as the API, so no
@@ -97,6 +128,8 @@ app.include_router(gdrive.router)
 app.include_router(sync.router)
 app.include_router(config.router)
 app.include_router(nl_search.router)
+app.include_router(jobs.router)
+app.include_router(keyword_thresholds.router)
 
 # Static file paths
 static_dir = Path(__file__).parent / "static"

@@ -1,7 +1,7 @@
 import { BaseStateController } from './base-state-controller.js';
 
 const TOP_LEVEL_TABS = new Set(['home', 'search', 'curate', 'library', 'lists']);
-const LIBRARY_SUB_TABS = new Set(['assets', 'keywords', 'providers', 'users']);
+const LIBRARY_SUB_TABS = new Set(['assets', 'keywords', 'providers', 'users', 'jobs']);
 const SEARCH_SUB_TABS = new Set(['home', 'browse-by-folder', 'natural-search', 'chips']);
 const CURATE_SUB_TABS = new Set(['main', 'browse-folder', 'tag-audit', 'home', 'help']);
 const HOME_SUB_TABS = new Set(['overview', 'chips', 'lab']);

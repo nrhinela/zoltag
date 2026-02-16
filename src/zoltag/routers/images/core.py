@@ -1,16 +1,20 @@
 """Core image endpoints: list, get, asset."""
 
 import json
+import threading
+import time
 from typing import Optional
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, distinct, and_, case, cast, Text, literal
 from sqlalchemy.orm import Session, load_only
 from google.cloud import storage
+import numpy as np
 
 from zoltag.dependencies import get_db, get_tenant, get_tenant_setting
-from zoltag.auth.dependencies import require_tenant_role_from_header
+from zoltag.auth.dependencies import get_current_user, require_tenant_role_from_header
 from zoltag.auth.models import UserProfile
+from zoltag.list_visibility import is_tenant_admin_user
 from zoltag.asset_helpers import load_assets_for_images
 from zoltag.tenant import Tenant
 from zoltag.metadata import (
@@ -62,10 +66,111 @@ LIST_IMAGES_LOAD_ONLY_COLUMNS = (
     ImageMetadata.rating,
 )
 
+SIMILARITY_CACHE_TTL_SECONDS = 300
+SIMILARITY_CACHE_MAX_ENTRIES = 12
+_similarity_cache_lock = threading.Lock()
+_similarity_index_cache = {}
+
+
+def _build_similarity_index(
+    db: Session,
+    tenant: Tenant,
+    media_type: Optional[str],
+    embedding_dim: int,
+) -> dict:
+    query = db.query(
+        ImageMetadata.id.label("image_id"),
+        ImageEmbedding.embedding.label("embedding"),
+    ).join(
+        ImageEmbedding,
+        and_(
+            ImageEmbedding.asset_id == ImageMetadata.asset_id,
+            tenant_column_filter(ImageEmbedding, tenant),
+            ImageEmbedding.embedding.is_not(None),
+        ),
+    ).filter(
+        tenant_column_filter(ImageMetadata, tenant),
+        ImageMetadata.asset_id.is_not(None),
+    )
+
+    if media_type:
+        query = query.join(
+            Asset,
+            and_(
+                Asset.id == ImageMetadata.asset_id,
+                tenant_column_filter(Asset, tenant),
+            ),
+        ).filter(
+            func.lower(func.coalesce(Asset.media_type, "image")) == media_type
+        )
+
+    rows = query.all()
+    image_ids = []
+    vectors = []
+    for row in rows:
+        embedding = row.embedding
+        if not embedding:
+            continue
+        vec = np.asarray(embedding, dtype=np.float32)
+        if vec.ndim != 1 or vec.size != embedding_dim:
+            continue
+        norm = float(np.linalg.norm(vec))
+        if norm <= 1e-12:
+            continue
+        image_ids.append(int(row.image_id))
+        vectors.append(vec / norm)
+
+    if not vectors:
+        matrix = np.empty((0, embedding_dim), dtype=np.float32)
+        ids = np.empty((0,), dtype=np.int64)
+    else:
+        matrix = np.vstack(vectors)
+        ids = np.asarray(image_ids, dtype=np.int64)
+
+    return {
+        "built_at": time.time(),
+        "matrix": matrix,
+        "image_ids": ids,
+        "media_type": media_type or "",
+        "embedding_dim": embedding_dim,
+    }
+
+
+def _get_similarity_index(
+    db: Session,
+    tenant: Tenant,
+    media_type: Optional[str],
+    embedding_dim: int,
+) -> dict:
+    key = (str(tenant.id), media_type or "", int(embedding_dim))
+    now = time.time()
+    with _similarity_cache_lock:
+        cached = _similarity_index_cache.get(key)
+        if cached and (now - float(cached.get("built_at", 0))) <= SIMILARITY_CACHE_TTL_SECONDS:
+            return cached
+
+    built = _build_similarity_index(
+        db=db,
+        tenant=tenant,
+        media_type=media_type,
+        embedding_dim=embedding_dim,
+    )
+    with _similarity_cache_lock:
+        _similarity_index_cache[key] = built
+        if len(_similarity_index_cache) > SIMILARITY_CACHE_MAX_ENTRIES:
+            oldest_key = min(
+                _similarity_index_cache.keys(),
+                key=lambda cache_key: float(_similarity_index_cache[cache_key].get("built_at", 0.0)),
+            )
+            if oldest_key != key:
+                _similarity_index_cache.pop(oldest_key, None)
+    return built
+
 
 @router.get("/images", response_model=dict, operation_id="list_images")
 async def list_images(
     tenant: Tenant = Depends(get_tenant),
+    current_user: UserProfile = Depends(get_current_user),
     limit: int = 100,
     offset: int = 0,
     anchor_id: Optional[int] = None,
@@ -128,6 +233,8 @@ async def list_images(
     base_query, subqueries_list, exclude_subqueries_list, has_empty_filter = build_image_query_with_subqueries(
         db,
         tenant,
+        current_user=current_user,
+        is_tenant_admin=is_tenant_admin_user(db, tenant, current_user),
         list_id=list_id,
         list_exclude_id=list_exclude_id,
         rating=rating,
@@ -854,6 +961,205 @@ async def list_duplicate_images(
         "limit": requested_limit,
         "offset": offset,
         "has_more": has_more,
+    }
+
+
+@router.get("/images/{image_id}/similar", response_model=dict, operation_id="get_similar_images")
+def get_similar_images(
+    image_id: int,
+    tenant: Tenant = Depends(get_tenant),
+    limit: int = 40,
+    min_score: Optional[float] = None,
+    same_media_type: bool = True,
+    db: Session = Depends(get_db),
+):
+    """Return top embedding-similar images for a given image."""
+    requested_limit = max(1, min(int(limit or 40), 200))
+    if min_score is not None:
+        if min_score < -1.0 or min_score > 1.0:
+            raise HTTPException(status_code=400, detail="min_score must be between -1.0 and 1.0")
+
+    source_image = db.query(ImageMetadata).filter(
+        ImageMetadata.id == image_id,
+        tenant_column_filter(ImageMetadata, tenant),
+    ).options(
+        load_only(*LIST_IMAGES_LOAD_ONLY_COLUMNS)
+    ).first()
+    if not source_image:
+        raise HTTPException(status_code=404, detail="Image not found")
+    if source_image.asset_id is None:
+        raise HTTPException(status_code=400, detail="Image has no linked asset")
+
+    source_embedding = db.query(ImageEmbedding).filter(
+        tenant_column_filter(ImageEmbedding, tenant),
+        ImageEmbedding.asset_id == source_image.asset_id,
+        ImageEmbedding.embedding.is_not(None),
+    ).first()
+    if not source_embedding or not source_embedding.embedding:
+        raise HTTPException(status_code=400, detail="Embedding not found for source image")
+
+    source_vector = np.asarray(source_embedding.embedding, dtype=np.float32)
+    if source_vector.ndim != 1 or source_vector.size == 0:
+        raise HTTPException(status_code=400, detail="Invalid source embedding")
+    source_norm = float(np.linalg.norm(source_vector))
+    if source_norm <= 1e-12:
+        raise HTTPException(status_code=400, detail="Source embedding has zero magnitude")
+    source_unit_vector = source_vector / source_norm
+
+    source_storage_info = _resolve_storage_or_409(image=source_image, tenant=tenant, db=db)
+    source_media_type = ((source_storage_info.asset.media_type if source_storage_info.asset else None) or "image").lower()
+    similarity_media_type = source_media_type if same_media_type else None
+
+    index = _get_similarity_index(
+        db=db,
+        tenant=tenant,
+        media_type=similarity_media_type,
+        embedding_dim=int(source_vector.size),
+    )
+    matrix = index["matrix"]
+    candidate_ids = index["image_ids"]
+    if matrix.size == 0 or candidate_ids.size == 0:
+        return {
+            "tenant_id": tenant.id,
+            "source_image_id": source_image.id,
+            "source_asset_id": str(source_image.asset_id),
+            "source_media_type": source_media_type,
+            "same_media_type": bool(same_media_type),
+            "images": [],
+            "count": 0,
+            "limit": requested_limit,
+        }
+
+    scores = np.dot(matrix, source_unit_vector)
+    keep_mask = candidate_ids != int(source_image.id)
+    filtered_ids = candidate_ids[keep_mask]
+    filtered_scores = scores[keep_mask]
+    if filtered_ids.size == 0:
+        return {
+            "tenant_id": tenant.id,
+            "source_image_id": source_image.id,
+            "source_asset_id": str(source_image.asset_id),
+            "source_media_type": source_media_type,
+            "same_media_type": bool(same_media_type),
+            "images": [],
+            "count": 0,
+            "limit": requested_limit,
+        }
+
+    if min_score is not None:
+        score_mask = filtered_scores >= float(min_score)
+        filtered_scores = filtered_scores[score_mask]
+        filtered_ids = filtered_ids[score_mask]
+        if filtered_ids.size == 0:
+            return {
+                "tenant_id": tenant.id,
+                "source_image_id": source_image.id,
+                "source_asset_id": str(source_image.asset_id),
+                "source_media_type": source_media_type,
+                "same_media_type": bool(same_media_type),
+                "images": [],
+                "count": 0,
+                "limit": requested_limit,
+            }
+
+    if requested_limit < filtered_scores.size:
+        top_unsorted = np.argpartition(filtered_scores, -requested_limit)[-requested_limit:]
+        ordered_indices = top_unsorted[np.argsort(filtered_scores[top_unsorted])[::-1]]
+    else:
+        ordered_indices = np.argsort(filtered_scores)[::-1]
+
+    top_image_ids = [int(filtered_ids[int(idx)]) for idx in ordered_indices]
+    score_by_image_id = {
+        int(filtered_ids[int(idx)]): round(float(filtered_scores[int(idx)]), 4)
+        for idx in ordered_indices
+    }
+
+    if not top_image_ids:
+        return {
+            "tenant_id": tenant.id,
+            "source_image_id": source_image.id,
+            "source_asset_id": str(source_image.asset_id),
+            "source_media_type": source_media_type,
+            "same_media_type": bool(same_media_type),
+            "images": [],
+            "count": 0,
+            "limit": requested_limit,
+        }
+
+    top_images = db.query(ImageMetadata).filter(
+        tenant_column_filter(ImageMetadata, tenant),
+        ImageMetadata.id.in_(top_image_ids),
+    ).options(
+        load_only(*LIST_IMAGES_LOAD_ONLY_COLUMNS)
+    ).all()
+    images_by_id = {int(img.id): img for img in top_images}
+    ordered_images = [images_by_id[img_id] for img_id in top_image_ids if img_id in images_by_id]
+    assets_by_id = load_assets_for_images(db, ordered_images)
+    asset_id_to_image_id = {img.asset_id: int(img.id) for img in ordered_images if img.asset_id is not None}
+    asset_ids = list(asset_id_to_image_id.keys())
+    permatags = db.query(Permatag).filter(
+        Permatag.asset_id.in_(asset_ids),
+        tenant_column_filter(Permatag, tenant),
+    ).all() if asset_ids else []
+    keyword_ids = {tag.keyword_id for tag in permatags}
+    keywords_map = load_keywords_map(db, tenant.id, keyword_ids)
+    permatags_by_image = {}
+    for tag in permatags:
+        image_row_id = asset_id_to_image_id.get(tag.asset_id)
+        if image_row_id is None:
+            continue
+        kw_info = keywords_map.get(tag.keyword_id, {"keyword": "unknown", "category": "unknown"})
+        permatags_by_image.setdefault(image_row_id, []).append({
+            "id": tag.id,
+            "keyword": kw_info["keyword"],
+            "category": kw_info["category"],
+            "signum": tag.signum,
+        })
+
+    images_list = []
+    for image_row in ordered_images:
+        try:
+            storage_info = _resolve_storage_or_409(
+                image=image_row,
+                tenant=tenant,
+                db=db,
+                assets_by_id=assets_by_id,
+            )
+        except HTTPException:
+            continue
+        similarity_score = score_by_image_id.get(int(image_row.id), 0.0)
+        image_permatags = permatags_by_image.get(int(image_row.id), [])
+        images_list.append({
+            "id": image_row.id,
+            "asset_id": storage_info.asset_id,
+            "filename": image_row.filename,
+            "width": image_row.width,
+            "height": image_row.height,
+            "file_size": image_row.file_size,
+            "capture_timestamp": image_row.capture_timestamp.isoformat() if image_row.capture_timestamp else None,
+            "modified_time": image_row.modified_time.isoformat() if image_row.modified_time else None,
+            "created_at": image_row.created_at.isoformat() if image_row.created_at else None,
+            "source_provider": storage_info.source_provider,
+            "source_key": storage_info.source_key,
+            "source_url": _build_source_url(storage_info, tenant, image_row),
+            "thumbnail_url": storage_info.thumbnail_url,
+            "media_type": (storage_info.asset.media_type if storage_info.asset else None) or "image",
+            "mime_type": storage_info.asset.mime_type if storage_info.asset else None,
+            "duration_ms": storage_info.asset.duration_ms if storage_info.asset else None,
+            "rating": image_row.rating,
+            "permatags": image_permatags,
+            "similarity_score": similarity_score,
+        })
+
+    return {
+        "tenant_id": tenant.id,
+        "source_image_id": source_image.id,
+        "source_asset_id": str(source_image.asset_id),
+        "source_media_type": source_media_type,
+        "same_media_type": bool(same_media_type),
+        "images": images_list,
+        "count": len(images_list),
+        "limit": requested_limit,
     }
 
 

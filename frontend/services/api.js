@@ -337,6 +337,19 @@ export async function getImageDetails(tenantId, imageId) {
     return fetchWithAuth(`/images/${imageId}`, { tenantId });
 }
 
+export async function getSimilarImages(tenantId, imageId, { limit = 40, minScore, sameMediaType = true } = {}) {
+  const params = new URLSearchParams();
+  if (limit !== undefined && limit !== null) {
+    params.append('limit', String(limit));
+  }
+  if (minScore !== undefined && minScore !== null && minScore !== '') {
+    params.append('min_score', String(minScore));
+  }
+  params.append('same_media_type', sameMediaType ? 'true' : 'false');
+  const query = params.toString();
+  return fetchWithAuth(`/images/${imageId}/similar${query ? `?${query}` : ''}`, { tenantId });
+}
+
 export async function listAssetVariants(tenantId, imageId) {
   return fetchWithAuth(`/images/${imageId}/asset-variants`, { tenantId });
 }
@@ -506,10 +519,11 @@ export async function deleteKeyword(tenantId, keywordId) {
 // List CRUD
 const listCrud = createCrudOps('/lists');
 
-export async function getLists(tenantId, { force = false } = {}) {
+export async function getLists(tenantId, { force = false, visibilityScope = 'default' } = {}) {
+  const normalizedVisibilityScope = String(visibilityScope || 'default').trim().toLowerCase() || 'default';
   const data = await queryRequest(
-    ['lists', tenantId],
-    () => listCrud.list(tenantId),
+    ['lists', tenantId, normalizedVisibilityScope],
+    () => listCrud.list(tenantId, { visibility_scope: normalizedVisibilityScope }),
     { staleTimeMs: LISTS_CACHE_MS, force }
   );
   return data || [];
@@ -705,6 +719,391 @@ export async function updateIntegrationConfig(tenantId, payload = {}) {
   });
   invalidateQueries(['integrationStatus', tenantId]);
   return result;
+}
+
+/**
+ * List jobs for a tenant
+ * @param {string} tenantId
+ * @param {{status?: string, source?: string, limit?: number, offset?: number, createdAfter?: string, createdBefore?: string}} options
+ * @returns {Promise<Object>}
+ */
+export async function getJobs(tenantId, options = {}) {
+  const params = new URLSearchParams();
+  if (options.status) params.append('status', String(options.status));
+  if (options.source) params.append('source', String(options.source));
+  if (options.limit !== undefined && options.limit !== null) params.append('limit', String(options.limit));
+  if (options.offset !== undefined && options.offset !== null) params.append('offset', String(options.offset));
+  if (options.createdAfter) params.append('created_after', String(options.createdAfter));
+  if (options.createdBefore) params.append('created_before', String(options.createdBefore));
+  const query = params.toString();
+  return fetchWithAuth(`/jobs${query ? `?${query}` : ''}`, { tenantId });
+}
+
+/**
+ * Queue summary for a tenant
+ * @param {string} tenantId
+ * @returns {Promise<Object>}
+ */
+export async function getJobsSummary(tenantId) {
+  return fetchWithAuth('/jobs/summary', { tenantId });
+}
+
+/**
+ * Enqueue a job for a tenant
+ * @param {string} tenantId
+ * @param {Object} payload
+ * @returns {Promise<Object>}
+ */
+export async function enqueueJob(tenantId, payload) {
+  return fetchWithAuth('/jobs', {
+    method: 'POST',
+    tenantId,
+    body: JSON.stringify(payload || {}),
+  });
+}
+
+/**
+ * Cancel a job
+ * @param {string} tenantId
+ * @param {string} jobId
+ * @param {Object} payload
+ * @returns {Promise<Object>}
+ */
+export async function cancelJob(tenantId, jobId, payload = {}) {
+  return fetchWithAuth(`/jobs/${jobId}/cancel`, {
+    method: 'POST',
+    tenantId,
+    body: JSON.stringify(payload || {}),
+  });
+}
+
+/**
+ * Retry a job
+ * @param {string} tenantId
+ * @param {string} jobId
+ * @param {Object} payload
+ * @returns {Promise<Object>}
+ */
+export async function retryJob(tenantId, jobId, payload = {}) {
+  return fetchWithAuth(`/jobs/${jobId}/retry`, {
+    method: 'POST',
+    tenantId,
+    body: JSON.stringify(payload || {}),
+  });
+}
+
+/**
+ * Delete a job
+ * @param {string} tenantId
+ * @param {string} jobId
+ * @returns {Promise<Object>}
+ */
+export async function deleteJob(tenantId, jobId) {
+  return fetchWithAuth(`/jobs/${jobId}`, {
+    method: 'DELETE',
+    tenantId,
+  });
+}
+
+/**
+ * List attempts for a job
+ * @param {string} tenantId
+ * @param {string} jobId
+ * @param {{limit?: number, offset?: number}} options
+ * @returns {Promise<Object>}
+ */
+export async function getJobAttempts(tenantId, jobId, options = {}) {
+  const params = new URLSearchParams();
+  if (options.limit !== undefined && options.limit !== null) params.append('limit', String(options.limit));
+  if (options.offset !== undefined && options.offset !== null) params.append('offset', String(options.offset));
+  const query = params.toString();
+  return fetchWithAuth(`/jobs/${jobId}/attempts${query ? `?${query}` : ''}`, { tenantId });
+}
+
+/**
+ * List active job definitions (super-admin endpoint)
+ * @param {string} tenantId
+ * @param {{includeInactive?: boolean}} options
+ * @returns {Promise<Object>}
+ */
+export async function getJobDefinitions(tenantId, options = {}) {
+  const params = new URLSearchParams();
+  if (options.includeInactive) params.append('include_inactive', 'true');
+  const query = params.toString();
+  return fetchWithAuth(`/jobs/definitions${query ? `?${query}` : ''}`, { tenantId });
+}
+
+/**
+ * List active definitions available to a tenant admin for enqueue actions
+ * @param {string} tenantId
+ * @returns {Promise<Object>}
+ */
+export async function getTenantJobCatalog(tenantId) {
+  return fetchWithAuth('/jobs/catalog', { tenantId });
+}
+
+/**
+ * List global job definitions (super-admin)
+ * @param {{includeInactive?: boolean}} options
+ * @returns {Promise<Object>}
+ */
+export async function getGlobalJobDefinitions(options = {}) {
+  return getJobDefinitions(undefined, options);
+}
+
+/**
+ * Create job definition (super-admin)
+ * @param {string} tenantId
+ * @param {Object} payload
+ * @returns {Promise<Object>}
+ */
+export async function createJobDefinition(tenantId, payload) {
+  return fetchWithAuth('/jobs/definitions', {
+    method: 'POST',
+    tenantId,
+    body: JSON.stringify(payload || {}),
+  });
+}
+
+/**
+ * Create global job definition (super-admin)
+ * @param {Object} payload
+ * @returns {Promise<Object>}
+ */
+export async function createGlobalJobDefinition(payload) {
+  return createJobDefinition(undefined, payload);
+}
+
+/**
+ * Update job definition (super-admin)
+ * @param {string} tenantId
+ * @param {string} definitionId
+ * @param {Object} payload
+ * @returns {Promise<Object>}
+ */
+export async function updateJobDefinition(tenantId, definitionId, payload) {
+  return fetchWithAuth(`/jobs/definitions/${definitionId}`, {
+    method: 'PATCH',
+    tenantId,
+    body: JSON.stringify(payload || {}),
+  });
+}
+
+/**
+ * Update global job definition (super-admin)
+ * @param {string} definitionId
+ * @param {Object} payload
+ * @returns {Promise<Object>}
+ */
+export async function updateGlobalJobDefinition(definitionId, payload) {
+  return updateJobDefinition(undefined, definitionId, payload);
+}
+
+/**
+ * List job triggers
+ * @param {string} tenantId
+ * @param {{includeDisabled?: boolean}} options
+ * @returns {Promise<Object>}
+ */
+export async function getJobTriggers(tenantId, options = {}) {
+  const params = new URLSearchParams();
+  if (options.includeDisabled) params.append('include_disabled', 'true');
+  const query = params.toString();
+  return fetchWithAuth(`/jobs/triggers${query ? `?${query}` : ''}`, { tenantId });
+}
+
+/**
+ * List global job triggers (super-admin)
+ * @param {{includeDisabled?: boolean}} options
+ * @returns {Promise<Object>}
+ */
+export async function getGlobalJobTriggers(options = {}) {
+  return getJobTriggers(undefined, options);
+}
+
+/**
+ * Create job trigger
+ * @param {string} tenantId
+ * @param {Object} payload
+ * @returns {Promise<Object>}
+ */
+export async function createJobTrigger(tenantId, payload) {
+  return fetchWithAuth('/jobs/triggers', {
+    method: 'POST',
+    tenantId,
+    body: JSON.stringify(payload || {}),
+  });
+}
+
+/**
+ * Create global job trigger (super-admin)
+ * @param {Object} payload
+ * @returns {Promise<Object>}
+ */
+export async function createGlobalJobTrigger(payload) {
+  return createJobTrigger(undefined, payload);
+}
+
+/**
+ * Update job trigger
+ * @param {string} tenantId
+ * @param {string} triggerId
+ * @param {Object} payload
+ * @returns {Promise<Object>}
+ */
+export async function updateJobTrigger(tenantId, triggerId, payload) {
+  return fetchWithAuth(`/jobs/triggers/${triggerId}`, {
+    method: 'PATCH',
+    tenantId,
+    body: JSON.stringify(payload || {}),
+  });
+}
+
+/**
+ * Update global job trigger (super-admin)
+ * @param {string} triggerId
+ * @param {Object} payload
+ * @returns {Promise<Object>}
+ */
+export async function updateGlobalJobTrigger(triggerId, payload) {
+  return updateJobTrigger(undefined, triggerId, payload);
+}
+
+/**
+ * Delete job trigger
+ * @param {string} tenantId
+ * @param {string} triggerId
+ * @returns {Promise<Object>}
+ */
+export async function deleteJobTrigger(tenantId, triggerId) {
+  return fetchWithAuth(`/jobs/triggers/${triggerId}`, {
+    method: 'DELETE',
+    tenantId,
+  });
+}
+
+/**
+ * Delete global job trigger (super-admin)
+ * @param {string} triggerId
+ * @returns {Promise<Object>}
+ */
+export async function deleteGlobalJobTrigger(triggerId) {
+  return deleteJobTrigger(undefined, triggerId);
+}
+
+/**
+ * List workflow definitions (super-admin)
+ * @param {{includeInactive?: boolean}} options
+ * @returns {Promise<Object>}
+ */
+export async function getGlobalWorkflowDefinitions(options = {}) {
+  const params = new URLSearchParams();
+  if (options.includeInactive) params.append('include_inactive', 'true');
+  const query = params.toString();
+  return fetchWithAuth(`/jobs/workflows${query ? `?${query}` : ''}`);
+}
+
+/**
+ * Create workflow definition (super-admin)
+ * @param {Object} payload
+ * @returns {Promise<Object>}
+ */
+export async function createGlobalWorkflowDefinition(payload) {
+  return fetchWithAuth('/jobs/workflows', {
+    method: 'POST',
+    body: JSON.stringify(payload || {}),
+  });
+}
+
+/**
+ * Update workflow definition (super-admin)
+ * @param {string} workflowId
+ * @param {Object} payload
+ * @returns {Promise<Object>}
+ */
+export async function updateGlobalWorkflowDefinition(workflowId, payload) {
+  return fetchWithAuth(`/jobs/workflows/${workflowId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload || {}),
+  });
+}
+
+/**
+ * Delete workflow definition (super-admin)
+ * @param {string} workflowId
+ * @returns {Promise<Object>}
+ */
+export async function deleteGlobalWorkflowDefinition(workflowId) {
+  return fetchWithAuth(`/jobs/workflows/${workflowId}`, {
+    method: 'DELETE',
+  });
+}
+
+/**
+ * List active workflow catalog for tenant
+ * @param {string} tenantId
+ * @returns {Promise<Object>}
+ */
+export async function getTenantWorkflowCatalog(tenantId) {
+  return fetchWithAuth('/jobs/workflows/catalog', { tenantId });
+}
+
+/**
+ * Enqueue workflow run for tenant
+ * @param {string} tenantId
+ * @param {Object} payload
+ * @returns {Promise<Object>}
+ */
+export async function enqueueWorkflowRun(tenantId, payload) {
+  return fetchWithAuth('/jobs/workflows/runs', {
+    method: 'POST',
+    tenantId,
+    body: JSON.stringify(payload || {}),
+  });
+}
+
+/**
+ * List workflow runs for tenant
+ * @param {string} tenantId
+ * @param {{status?: string, limit?: number, offset?: number, includeSteps?: boolean}} options
+ * @returns {Promise<Object>}
+ */
+export async function getWorkflowRuns(tenantId, options = {}) {
+  const params = new URLSearchParams();
+  if (options.status) params.append('status', String(options.status));
+  if (options.limit !== undefined && options.limit !== null) params.append('limit', String(options.limit));
+  if (options.offset !== undefined && options.offset !== null) params.append('offset', String(options.offset));
+  if (options.includeSteps) params.append('include_steps', 'true');
+  const query = params.toString();
+  return fetchWithAuth(`/jobs/workflows/runs${query ? `?${query}` : ''}`, { tenantId });
+}
+
+/**
+ * Cancel workflow run for tenant
+ * @param {string} tenantId
+ * @param {string} workflowRunId
+ * @param {Object} payload
+ * @returns {Promise<Object>}
+ */
+export async function cancelWorkflowRun(tenantId, workflowRunId, payload = {}) {
+  return fetchWithAuth(`/jobs/workflows/runs/${workflowRunId}/cancel`, {
+    method: 'POST',
+    tenantId,
+    body: JSON.stringify(payload || {}),
+  });
+}
+
+/**
+ * Delete workflow run for tenant
+ * @param {string} tenantId
+ * @param {string} workflowRunId
+ * @returns {Promise<Object>}
+ */
+export async function deleteWorkflowRun(tenantId, workflowRunId) {
+  return fetchWithAuth(`/jobs/workflows/runs/${workflowRunId}`, {
+    method: 'DELETE',
+    tenantId,
+  });
 }
 
 /**
@@ -962,5 +1361,32 @@ export async function removeImagePersonTag(tenantId, imageId, personId) {
     return fetchWithAuth(`/images/${imageId}/people/${personId}`, {
         method: 'DELETE',
         tenantId
+    });
+}
+
+export async function getAssetNote(tenantId, imageId, noteType) {
+    return fetchWithAuth(`/images/${imageId}/notes/${noteType}`, { tenantId });
+}
+
+export async function upsertAssetNote(tenantId, imageId, noteType, body) {
+    return fetchWithAuth(`/images/${imageId}/notes/${noteType}`, {
+        method: 'PUT',
+        tenantId,
+        body: JSON.stringify({ body }),
+    });
+}
+
+export async function getKeywordThresholds(tenantId, { tagType } = {}) {
+    const params = new URLSearchParams();
+    if (tagType) params.append('tag_type', tagType);
+    const qs = params.toString();
+    return fetchWithAuth(`/admin/keyword-thresholds${qs ? `?${qs}` : ''}`, { tenantId });
+}
+
+export async function setKeywordThresholdManual(tenantId, keywordId, tagType, thresholdManual) {
+    return fetchWithAuth(`/admin/keyword-thresholds/${keywordId}/${tagType}`, {
+        method: 'PATCH',
+        tenantId,
+        body: JSON.stringify({ threshold_manual: thresholdManual }),
     });
 }

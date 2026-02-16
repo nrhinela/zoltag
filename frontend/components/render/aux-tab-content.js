@@ -61,12 +61,14 @@ export function renderAuxTabContent(host, { formatCurateDate }) {
   const canEditKeywords = isSuperAdmin || isTenantAdmin || isTenantEditor;
   const canManageTenantUsers = isSuperAdmin || isTenantAdmin;
   const canManageProviders = isSuperAdmin || isTenantAdmin;
+  const canManageJobs = isSuperAdmin || isTenantAdmin;
   const libraryTabActive = host.activeTab === 'library';
   const defaultLibrarySubTab = 'assets';
   const rawLibrarySubTab = host.activeLibrarySubTab || defaultLibrarySubTab;
   const librarySubTab = (rawLibrarySubTab === 'keywords' || rawLibrarySubTab === 'assets'
     || (rawLibrarySubTab === 'users' && canManageTenantUsers)
-    || (rawLibrarySubTab === 'providers' && canManageProviders))
+    || (rawLibrarySubTab === 'providers' && canManageProviders)
+    || (rawLibrarySubTab === 'jobs' && canManageJobs))
     ? rawLibrarySubTab
     : defaultLibrarySubTab;
 
@@ -92,6 +94,14 @@ export function renderAuxTabContent(host, { formatCurateDate }) {
               @click=${() => host.activeLibrarySubTab = 'providers'}
             >
               <i class="fas fa-database mr-2"></i>Providers
+            </button>
+          ` : html``}
+          ${canManageJobs ? html`
+            <button
+              class="admin-subtab ${librarySubTab === 'jobs' ? 'active' : ''}"
+              @click=${() => host.activeLibrarySubTab = 'jobs'}
+            >
+              <i class="fas fa-list-check mr-2"></i>Jobs
             </button>
           ` : html``}
         </div>
@@ -152,6 +162,14 @@ export function renderAuxTabContent(host, { formatCurateDate }) {
             ></library-integrations-admin>
           </div>
         ` : html``}
+        ${librarySubTab === 'jobs' ? html`
+          <div class="mt-2">
+            <library-jobs-admin
+              .tenant=${host.tenant}
+              .isSuperAdmin=${isSuperAdmin}
+            ></library-jobs-admin>
+          </div>
+        ` : html``}
       </div>
     ` : html``}
 
@@ -159,6 +177,7 @@ export function renderAuxTabContent(host, { formatCurateDate }) {
       <div slot="lists" class="container">
         <list-editor
           .tenant=${host.tenant}
+          .currentUser=${host.currentUser}
           .initialSelectedListId=${host.pendingListSelectionId}
           .initialSelectedListToken=${host.pendingListSelectionToken || 0}
           .thumbSize=${host.curateThumbSize}
@@ -248,6 +267,15 @@ export function renderGlobalOverlays(host, { canCurate }) {
         .canEditTags=${canCurate}
         @close=${host._handleCurateEditorClose}
         @image-rating-updated=${host._handleImageRatingUpdated}
+        @image-selected=${(e) => {
+          const selectedImage = e?.detail?.image;
+          const imageSet = Array.isArray(e?.detail?.imageSet) ? e.detail.imageSet : [];
+          if (!selectedImage?.id) return;
+          host.curateEditorImage = selectedImage;
+          host.curateEditorImageSet = imageSet.length ? [...imageSet] : [selectedImage];
+          host.curateEditorImageIndex = host.curateEditorImageSet.findIndex((img) => img.id === selectedImage.id);
+          host.curateEditorOpen = true;
+        }}
         @zoom-to-photo=${host._handleZoomToPhoto}
         @image-navigate=${host._handleImageNavigate}
       ></image-editor>

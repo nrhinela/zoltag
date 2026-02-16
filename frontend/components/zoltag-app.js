@@ -40,6 +40,7 @@ import { zoltagAppStyles } from './styles/zoltag-app-styles.js';
 import { propertyGridStyles } from './shared/widgets/property-grid.js';
 import { getTenants, getSystemSettings } from '../services/api.js';
 import './library-integrations-admin.js';
+import './library-jobs-admin.js';
 
 class ZoltagApp extends LitElement {
   static styles = [tailwind, zoltagAppStyles, propertyGridStyles];

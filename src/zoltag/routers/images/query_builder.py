@@ -17,7 +17,8 @@ from sqlalchemy.orm import Session, Query
 from sqlalchemy.sql import Selectable
 
 from zoltag.tenant import Tenant
-from zoltag.metadata import ImageMetadata, MachineTag, KeywordModel
+from sqlalchemy import case as sa_case
+from zoltag.metadata import ImageMetadata, MachineTag, KeywordModel, KeywordThreshold
 from zoltag.dependencies import get_tenant_setting
 from zoltag.tenant_scope import tenant_column_filter
 
@@ -183,17 +184,36 @@ class QueryBuilder:
             if model_row:
                 model_name = model_row[0]
 
-        # Build ML scores subquery (max confidence for this keyword) keyed by asset_id.
-        ml_scores = self.db.query(
-            MachineTag.asset_id.label('asset_id'),
-            func.max(MachineTag.confidence).label('ml_score')
+        # Look up effective threshold for this keyword+tag_type: COALESCE(manual, calc)
+        _threshold_row = self.db.query(
+            KeywordThreshold.threshold_manual,
+            KeywordThreshold.threshold_calc,
         ).filter(
+            KeywordThreshold.tenant_id == self.tenant.id,
+            KeywordThreshold.keyword_id == ml_keyword_id,
+            KeywordThreshold.tag_type == ml_tag_type,
+        ).first()
+        _effective_threshold = None
+        if _threshold_row:
+            _effective_threshold = (
+                _threshold_row.threshold_manual
+                if _threshold_row.threshold_manual is not None
+                else _threshold_row.threshold_calc
+            )
+
+        # Build ML scores subquery (max confidence for this keyword) keyed by asset_id.
+        _mt_filters = [
             MachineTag.keyword_id == ml_keyword_id,
             tenant_column_filter(MachineTag, self.tenant),
             MachineTag.tag_type == ml_tag_type,
             MachineTag.asset_id.is_not(None),
-            *([MachineTag.model_name == model_name] if model_name else [])
-        ).group_by(
+            *([MachineTag.model_name == model_name] if model_name else []),
+            *([MachineTag.confidence >= _effective_threshold] if _effective_threshold is not None else []),
+        ]
+        ml_scores = self.db.query(
+            MachineTag.asset_id.label('asset_id'),
+            func.max(MachineTag.confidence).label('ml_score')
+        ).filter(*_mt_filters).group_by(
             MachineTag.asset_id
         ).subquery()
 

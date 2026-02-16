@@ -4,7 +4,7 @@ from datetime import datetime
 import uuid
 from typing import Optional
 
-from sqlalchemy import Column, String, Integer, BigInteger, Float, DateTime, Boolean, Text, ForeignKey, Index, UniqueConstraint
+from sqlalchemy import Column, String, Integer, BigInteger, Float, DateTime, Boolean, Text, ForeignKey, Index, UniqueConstraint, CheckConstraint
 from sqlalchemy.dialects.postgresql import JSONB, ARRAY, UUID
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
@@ -414,4 +414,286 @@ class AssetDerivative(Base):
 
     __table_args__ = (
         Index("idx_asset_derivatives_variant", "variant"),
+    )
+
+
+class JobDefinition(Base):
+    """Allowlisted CLI command definitions for queue execution."""
+
+    __tablename__ = "job_definitions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    key = Column(Text, nullable=False, unique=True)
+    description = Column(Text, nullable=False, default="")
+    arg_schema = Column(JSONB, nullable=False, default=dict)
+    timeout_seconds = Column(Integer, nullable=False, default=3600)
+    max_attempts = Column(Integer, nullable=False, default=3)
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("idx_job_definitions_active", "is_active"),
+    )
+
+
+class JobTrigger(Base):
+    """Tenant-level trigger that maps an event/schedule to a job definition."""
+
+    __tablename__ = "job_triggers"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True, index=True)
+    label = Column(Text, nullable=False)
+    is_enabled = Column(Boolean, nullable=False, default=True)
+    trigger_type = Column(Text, nullable=False)
+    event_name = Column(Text)
+    cron_expr = Column(Text)
+    timezone = Column(Text)
+    definition_id = Column(UUID(as_uuid=True), ForeignKey("job_definitions.id", ondelete="RESTRICT"), nullable=False, index=True)
+    payload_template = Column(JSONB, nullable=False, default=dict)
+    dedupe_window_seconds = Column(Integer, nullable=False, default=300)
+    created_by = Column(UUID(as_uuid=True), ForeignKey("user_profiles.supabase_uid", ondelete="SET NULL"))
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    definition = relationship("JobDefinition")
+
+    __table_args__ = (
+        Index("idx_job_triggers_tenant_enabled", "tenant_id", "is_enabled"),
+        CheckConstraint("trigger_type in ('event','schedule')", name="ck_job_triggers_trigger_type"),
+        CheckConstraint(
+            "("
+            "(trigger_type = 'event' and event_name is not null and cron_expr is null)"
+            " or "
+            "(trigger_type = 'schedule' and cron_expr is not null and timezone is not null and event_name is null)"
+            ")",
+            name="ck_job_triggers_event_or_schedule",
+        ),
+    )
+
+
+class Job(Base):
+    """A queued/running/completed command execution instance."""
+
+    __tablename__ = "jobs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
+    definition_id = Column(UUID(as_uuid=True), ForeignKey("job_definitions.id", ondelete="RESTRICT"), nullable=False, index=True)
+    source = Column(Text, nullable=False, default="manual")
+    source_ref = Column(Text)
+    status = Column(Text, nullable=False, default="queued")
+    priority = Column(Integer, nullable=False, default=100)
+    payload = Column(JSONB, nullable=False, default=dict)
+    dedupe_key = Column(Text, index=True)
+    correlation_id = Column(Text)
+    scheduled_for = Column(DateTime, default=datetime.utcnow, nullable=False)
+    queued_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    started_at = Column(DateTime)
+    finished_at = Column(DateTime)
+    attempt_count = Column(Integer, nullable=False, default=0)
+    max_attempts = Column(Integer, nullable=False, default=3)
+    lease_expires_at = Column(DateTime)
+    claimed_by_worker = Column(Text)
+    last_error = Column(Text)
+    created_by = Column(UUID(as_uuid=True), ForeignKey("user_profiles.supabase_uid", ondelete="SET NULL"))
+
+    definition = relationship("JobDefinition")
+    attempts = relationship("JobAttempt", back_populates="job", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index("idx_jobs_tenant_status_time", "tenant_id", "status", "queued_at"),
+        CheckConstraint("source in ('manual','event','schedule','system')", name="ck_jobs_source"),
+        CheckConstraint(
+            "status in ('queued','running','succeeded','failed','canceled','dead_letter')",
+            name="ck_jobs_status",
+        ),
+    )
+
+
+class KeywordThreshold(Base):
+    """Per-keyword, per-model score thresholds for filtering MachineTag results.
+
+    Effective threshold = COALESCE(threshold_manual, threshold_calc).
+    If both are null, no filtering is applied (safe default).
+    """
+
+    __tablename__ = "keyword_thresholds"
+
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
+    # keyword_id FK references keywords table (different declarative base — DB enforces constraint)
+    keyword_id = Column(Integer, nullable=False, index=True)
+    tag_type = Column(String(50), nullable=False)           # e.g. 'siglip', 'trained'
+    threshold_calc = Column(Float, nullable=True)           # auto-calculated
+    threshold_manual = Column(Float, nullable=True)         # user override
+    calc_method = Column(String(50), nullable=True)         # e.g. 'percentile_20'
+    calc_sample_n = Column(Integer, nullable=True)          # verified assets used in calc
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("keyword_id", "tag_type", name="uq_keyword_thresholds_keyword_tag_type"),
+        Index("idx_keyword_thresholds_tenant", "tenant_id"),
+    )
+
+
+class AssetNote(Base):
+    """User-authored notes attached to an asset (photo or video)."""
+
+    __tablename__ = "asset_notes"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    asset_id = Column(UUID(as_uuid=True), ForeignKey("assets.id", ondelete="CASCADE"), nullable=False)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
+    note_type = Column(String(64), nullable=False, default="general")
+    body = Column(Text, nullable=False)
+    created_by = Column(UUID(as_uuid=True), ForeignKey("user_profiles.supabase_uid", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("idx_asset_notes_asset_id", "asset_id"),
+        UniqueConstraint("asset_id", "note_type", name="uq_asset_notes_asset_note_type"),
+    )
+
+
+class JobAttempt(Base):
+    """Single attempt record for a job execution."""
+
+    __tablename__ = "job_attempts"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    job_id = Column(UUID(as_uuid=True), ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False, index=True)
+    attempt_no = Column(Integer, nullable=False)
+    worker_id = Column(Text, nullable=False)
+    pid = Column(Integer)
+    started_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    finished_at = Column(DateTime)
+    exit_code = Column(Integer)
+    status = Column(Text, nullable=False)
+    stdout_tail = Column(Text)
+    stderr_tail = Column(Text)
+    error_text = Column(Text)
+
+    job = relationship("Job", back_populates="attempts")
+
+    __table_args__ = (
+        UniqueConstraint("job_id", "attempt_no", name="uq_job_attempts_job_attempt"),
+        Index("idx_job_attempts_job_started", "job_id", "started_at"),
+        CheckConstraint(
+            "status in ('running','succeeded','failed','timeout','canceled')",
+            name="ck_job_attempts_status",
+        ),
+    )
+
+
+class JobWorker(Base):
+    """Worker heartbeat and runtime metadata."""
+
+    __tablename__ = "job_workers"
+
+    worker_id = Column(Text, primary_key=True)
+    hostname = Column(Text, nullable=False)
+    version = Column(Text, nullable=False, default="")
+    queues = Column(ARRAY(Text), nullable=False, default=list)
+    last_seen_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    running_count = Column(Integer, nullable=False, default=0)
+    metadata_json = Column("metadata", JSONB, nullable=False, default=dict)
+
+
+class WorkflowDefinition(Base):
+    """Global workflow definitions (DAGs) built from job definitions."""
+
+    __tablename__ = "workflow_definitions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    key = Column(Text, nullable=False, unique=True)
+    description = Column(Text, nullable=False, default="")
+    steps = Column(JSONB, nullable=False, default=list)
+    max_parallel_steps = Column(Integer, nullable=False, default=2)
+    failure_policy = Column(Text, nullable=False, default="fail_fast")
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("idx_workflow_definitions_active", "is_active"),
+        CheckConstraint("failure_policy in ('fail_fast','continue')", name="ck_workflow_definitions_failure_policy"),
+    )
+
+
+class WorkflowRun(Base):
+    """Runtime workflow execution for a specific tenant."""
+
+    __tablename__ = "workflow_runs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
+    workflow_definition_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("workflow_definitions.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    status = Column(Text, nullable=False, default="running")
+    payload = Column(JSONB, nullable=False, default=dict)
+    priority = Column(Integer, nullable=False, default=100)
+    max_parallel_steps = Column(Integer, nullable=False, default=2)
+    failure_policy = Column(Text, nullable=False, default="fail_fast")
+    queued_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    started_at = Column(DateTime)
+    finished_at = Column(DateTime)
+    created_by = Column(UUID(as_uuid=True), ForeignKey("user_profiles.supabase_uid", ondelete="SET NULL"))
+    last_error = Column(Text)
+
+    definition = relationship("WorkflowDefinition")
+    step_runs = relationship("WorkflowStepRun", back_populates="workflow_run", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index("idx_workflow_runs_tenant_status", "tenant_id", "status", "queued_at"),
+        CheckConstraint("status in ('running','succeeded','failed','canceled')", name="ck_workflow_runs_status"),
+        CheckConstraint("failure_policy in ('fail_fast','continue')", name="ck_workflow_runs_failure_policy"),
+    )
+
+
+class WorkflowStepRun(Base):
+    """Per-step execution state for a workflow run."""
+
+    __tablename__ = "workflow_step_runs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    workflow_run_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("workflow_runs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    step_key = Column(Text, nullable=False)
+    definition_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("job_definitions.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    status = Column(Text, nullable=False, default="pending")
+    payload = Column(JSONB, nullable=False, default=dict)
+    depends_on = Column(ARRAY(Text), nullable=False, default=list)
+    child_job_id = Column(UUID(as_uuid=True), ForeignKey("jobs.id", ondelete="SET NULL"), unique=True)
+    queued_at = Column(DateTime)
+    started_at = Column(DateTime)
+    finished_at = Column(DateTime)
+    last_error = Column(Text)
+
+    workflow_run = relationship("WorkflowRun", back_populates="step_runs")
+    definition = relationship("JobDefinition")
+    child_job = relationship("Job")
+
+    __table_args__ = (
+        UniqueConstraint("workflow_run_id", "step_key", name="uq_workflow_step_runs_run_step"),
+        Index("idx_workflow_step_runs_run_status", "workflow_run_id", "status"),
+        CheckConstraint(
+            "status in ('pending','queued','running','succeeded','failed','canceled','skipped')",
+            name="ck_workflow_step_runs_status",
+        ),
     )

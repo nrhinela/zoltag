@@ -10,7 +10,7 @@ from zoltag.asset_helpers import AssetReadinessError, load_assets_for_images, re
 from zoltag.database import SessionLocal
 from zoltag.dependencies import get_db, get_tenant, get_tenant_setting
 from zoltag.tenant import Tenant
-from zoltag.metadata import ImageMetadata, MachineTag, Permatag, KeywordModel, ImageEmbedding
+from zoltag.metadata import ImageMetadata, MachineTag, Permatag, KeywordModel, ImageEmbedding, KeywordThreshold
 from zoltag.models.config import Keyword, KeywordCategory
 from zoltag.settings import settings
 from zoltag.config.db_config import ConfigManager
@@ -76,6 +76,24 @@ async def list_ml_training_images(
         MachineTag.asset_id.in_(asset_ids),
         MachineTag.tag_type == active_tag_type
     ).all() if asset_ids else []
+
+    # Load effective thresholds for this tag type: COALESCE(manual, calc)
+    _threshold_rows = db.query(
+        KeywordThreshold.keyword_id,
+        KeywordThreshold.threshold_manual,
+        KeywordThreshold.threshold_calc,
+    ).filter(
+        KeywordThreshold.tenant_id == tenant.id,
+        KeywordThreshold.tag_type == active_tag_type,
+    ).all() if tags else []
+    _thresholds = {
+        row.keyword_id: (row.threshold_manual if row.threshold_manual is not None else row.threshold_calc)
+        for row in _threshold_rows
+    }
+    tags = [
+        t for t in tags
+        if _thresholds.get(t.keyword_id) is None or t.confidence >= _thresholds[t.keyword_id]
+    ]
 
     permatags = db.query(Permatag).filter(
         Permatag.asset_id.in_(asset_ids),

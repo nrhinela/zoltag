@@ -958,9 +958,11 @@ export class CurateAuditTab extends LitElement {
 
           <div class="curate-layout" style="--curate-thumb-size: ${this.thumbSize}px;">
             <div class="curate-pane">
-              <div class="curate-pane-header">
-                <div class="curate-pane-header-row">
-                  <span>${this.auditResultsView === 'history' ? 'Hotspot History' : leftLabel}</span>
+              <div class="curate-pane-header curate-pane-header--audit">
+                <span class="curate-pane-header-title">
+                  ${this.auditResultsView === 'history' ? 'Hotspot History' : leftLabel}
+                </span>
+                <div class="curate-pane-header-row curate-pane-header-row--audit">
                   <div class="curate-audit-toggle">
                     <button
                       class=${this.auditResultsView === 'results' ? 'active' : ''}

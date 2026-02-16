@@ -6,6 +6,9 @@ from sqlalchemy.orm import Session
 from typing import Optional
 
 from zoltag.dependencies import get_db, get_tenant, get_tenant_setting
+from zoltag.auth.dependencies import get_current_user
+from zoltag.auth.models import UserProfile
+from zoltag.list_visibility import can_view_list, is_tenant_admin_user
 from zoltag.config.db_config import ConfigManager
 from zoltag.tenant import Tenant
 from zoltag.metadata import ImageMetadata, Permatag, KeywordModel, MachineTag
@@ -21,6 +24,7 @@ router = APIRouter(
 @router.get("/keywords")
 async def get_available_keywords(
     tenant: Tenant = Depends(get_tenant),
+    current_user: UserProfile = Depends(get_current_user),
     db: Session = Depends(get_db),
     list_id: Optional[int] = None,
     rating: Optional[int] = None,
@@ -43,11 +47,12 @@ async def get_available_keywords(
     )
 
     if list_id is not None:
+        is_tenant_admin = is_tenant_admin_user(db, tenant, current_user)
         lst = db.query(PhotoList).filter(
             PhotoList.id == list_id,
             tenant_column_filter(PhotoList, tenant),
         ).first()
-        if not lst:
+        if not lst or not can_view_list(lst, user=current_user, is_tenant_admin=is_tenant_admin):
             return {"tenant_id": tenant.id, "keywords_by_category": {}, "all_keywords": []}
         list_assets_subq = db.query(PhotoListItem.asset_id).filter(
             PhotoListItem.list_id == list_id,

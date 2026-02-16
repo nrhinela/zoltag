@@ -1,7 +1,8 @@
 """Router for system configuration endpoints."""
 
 from fastapi import APIRouter
-import click
+
+from zoltag.cli.introspection import list_cli_commands_metadata
 
 router = APIRouter(
     prefix="/api/v1/config",
@@ -34,33 +35,4 @@ async def get_system_config():
 @router.get("/cli-commands")
 async def get_cli_commands():
     """Return CLI command metadata for the UI."""
-    from zoltag.cli import cli as cli_group
-
-    commands = []
-    for name, command in sorted(cli_group.commands.items()):
-        ctx = click.Context(command, info_name=f"zoltag {name}")
-        params = []
-        for param in command.params:
-            default = getattr(param, "default", None)
-            if default is object:
-                default = None
-            elif not isinstance(default, (str, int, float, bool, type(None), list, dict)):
-                default = str(default)
-            entry = {
-                "name": param.name,
-                "param_type": "option" if isinstance(param, click.Option) else "argument",
-                "opts": list(getattr(param, "opts", [])),
-                "help": getattr(param, "help", "") or "",
-                "default": default,
-                "required": bool(getattr(param, "required", False)),
-                "nargs": getattr(param, "nargs", None),
-            }
-            params.append(entry)
-        commands.append({
-            "name": name,
-            "help": command.help or "",
-            "usage": command.get_usage(ctx).replace("Usage:", "").strip(),
-            "params": params,
-        })
-
-    return {"commands": commands}
+    return {"commands": list_cli_commands_metadata()}

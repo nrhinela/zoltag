@@ -909,14 +909,14 @@ def show_config(tenant_id: str):
         session.close()
 
 
-@cli.command(name='recompute-siglip-tags')
-@click.option('--tenant-id', required=True, help='Tenant ID for which to recompute SigLIP tags')
+@cli.command(name='recompute-zeroshot-tags')
+@click.option('--tenant-id', required=True, help='Tenant ID for which to recompute zero-shot tags')
 @click.option('--batch-size', default=50, type=int, help='Process images in batches')
 @click.option('--limit', default=None, type=int, help='Limit number of images to process')
 @click.option('--offset', default=0, type=int, help='Offset into image list')
-@click.option('--replace', is_flag=True, default=False, help='Replace existing SigLIP tags')
-@click.option('--older-than-days', default=None, type=float, help='Only process images with SigLIP tags older than this many days')
-def recompute_siglip_tags(
+@click.option('--replace', is_flag=True, default=False, help='Replace existing zero-shot tags')
+@click.option('--older-than-days', default=None, type=float, help='Only process images with zero-shot tags older than this many days')
+def recompute_zeroshot_tags(
     tenant_id: str,
     batch_size: int,
     limit: Optional[int],
@@ -924,10 +924,10 @@ def recompute_siglip_tags(
     replace: bool,
     older_than_days: Optional[float]
 ):
-    """Recompute SigLIP-based keyword tags for all images in a tenant."""
-    from zoltag.cli.commands.tagging import RecomputeSiglipTagsCommand
+    """Recompute zero-shot keyword tags for all images in a tenant."""
+    from zoltag.cli.commands.tagging import RecomputeZeroShotTagsCommand
 
-    cmd = RecomputeSiglipTagsCommand(
+    cmd = RecomputeZeroShotTagsCommand(
         tenant_id,
         batch_size,
         limit,

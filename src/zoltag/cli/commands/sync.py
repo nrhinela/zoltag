@@ -1,6 +1,7 @@
 """Dropbox synchronization command."""
 
 import click
+from dropbox.exceptions import ApiError
 
 from google.cloud import storage
 
@@ -12,6 +13,27 @@ from zoltag.dropbox_oauth import load_dropbox_oauth_credentials
 from zoltag.image import is_supported_media_file
 from zoltag.sync_pipeline import process_dropbox_entry
 from zoltag.cli.base import CliCommand
+
+
+def _format_folder_listing_error(folder: str, exc: Exception) -> str:
+    folder_label = folder or "/"
+    if isinstance(exc, ApiError):
+        error_obj = getattr(exc, "error", None)
+        try:
+            if error_obj and error_obj.is_path():
+                lookup_error = error_obj.get_path()
+                if lookup_error.is_not_found():
+                    return f"Configured Dropbox folder not found: {folder_label}"
+                if lookup_error.is_not_folder():
+                    return f"Configured Dropbox path is not a folder: {folder_label}"
+        except Exception:
+            # Fall through to generic message when SDK error parsing changes.
+            pass
+
+    text = str(exc).strip()
+    if "not_found" in text.lower():
+        return f"Configured Dropbox folder not found: {folder_label}"
+    return f"Failed to list Dropbox folder {folder_label}: {text or exc.__class__.__name__}"
 
 
 @click.command(name='sync-dropbox')
@@ -63,8 +85,7 @@ class SyncDropboxCommand(CliCommand):
                 str(tenant_context.dropbox_token_secret or f"dropbox-token-{tenant_context.secret_scope}")
             )
         except Exception as exc:
-            click.echo(f"Error: No Dropbox refresh token configured ({exc})", err=True)
-            return
+            raise click.ClickException(f"No Dropbox refresh token configured ({exc})")
         try:
             credentials = load_dropbox_oauth_credentials(
                 tenant_id=tenant_context.secret_scope,
@@ -74,8 +95,7 @@ class SyncDropboxCommand(CliCommand):
                 selection_mode="managed_only",
             )
         except ValueError as exc:
-            click.echo(f"Error: {exc}", err=True)
-            return
+            raise click.ClickException(str(exc))
 
         # Initialize Dropbox client
         dropbox_client = DropboxClient(
@@ -117,7 +137,10 @@ class SyncDropboxCommand(CliCommand):
             click.echo(f"\nListing folder: {folder or '(root)'}")
 
             # Get list of files in folder
-            entries = list(dropbox_client.list_folder(folder, recursive=True))
+            try:
+                entries = list(dropbox_client.list_folder(folder, recursive=True))
+            except Exception as exc:
+                raise click.ClickException(_format_folder_listing_error(folder, exc)) from exc
 
             click.echo(f"Found {len(entries)} entries")
 
