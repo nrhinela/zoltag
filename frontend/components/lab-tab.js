@@ -16,6 +16,7 @@ export class LabTab extends LitElement {
 
   static properties = {
     tenant: { type: String },
+    canCurate: { type: Boolean },
     nlQuery: { type: String },
     nlLoading: { type: Boolean },
     nlError: { type: String },
@@ -42,6 +43,7 @@ export class LabTab extends LitElement {
   constructor() {
     super();
     this.tenant = '';
+    this.canCurate = true;
     this.nlQuery = '';
     this.nlLoading = false;
     this.nlError = '';
@@ -334,6 +336,7 @@ export class LabTab extends LitElement {
         ${this.nlShowResults ? html`
           <search-tab
             .tenant=${this.tenant}
+            .canCurate=${this.canCurate}
             .searchFilterPanel=${this.searchFilterPanel}
             .searchImages=${this.searchImages}
             .searchTotal=${this.searchTotal}

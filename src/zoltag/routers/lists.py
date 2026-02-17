@@ -1,5 +1,7 @@
 """Router for photo list operations."""
 
+import logging
+
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Body, Query
@@ -26,12 +28,28 @@ from zoltag.settings import settings
 from zoltag.auth.dependencies import get_current_user
 from zoltag.auth.models import UserProfile
 from zoltag.routers.images._shared import _build_source_url
+from zoltag.text_index import rebuild_asset_text_index
 from zoltag.tenant_scope import assign_tenant_scope, tenant_column_filter, tenant_column_filter_for_values
 
 router = APIRouter(
     prefix="/api/v1/lists",
     tags=["lists"]
 )
+logger = logging.getLogger(__name__)
+
+
+def _refresh_asset_text_index_for_asset(db: Session, tenant: Tenant, asset_id) -> None:
+    if not asset_id:
+        return
+    try:
+        rebuild_asset_text_index(
+            db,
+            tenant_id=tenant.id,
+            asset_id=str(asset_id),
+            include_embeddings=False,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to refresh asset_text_index for asset %s: %s", asset_id, exc)
 
 
 def _resolve_storage_or_409(*, image: ImageMetadata, tenant: Tenant, db: Session, assets_by_id=None):
@@ -234,8 +252,10 @@ async def delete_list_item(
     is_tenant_admin = is_tenant_admin_user(db, tenant, current_user)
     if not can_view_list(list_row, user=current_user, is_tenant_admin=is_tenant_admin):
         raise HTTPException(status_code=404, detail="List item not found")
+    removed_asset_id = item.asset_id
     db.delete(item)
     db.commit()
+    _refresh_asset_text_index_for_asset(db, tenant, removed_asset_id)
     return {"deleted": True, "item_id": item_id}
 
 
@@ -344,6 +364,13 @@ async def edit_list(
         lst.visibility = normalize_list_visibility(visibility, default=normalize_list_visibility(lst.visibility))
     db.commit()
     db.refresh(lst)
+    list_asset_ids = [
+        row[0]
+        for row in db.query(PhotoListItem.asset_id).filter(PhotoListItem.list_id == lst.id).all()
+        if row[0] is not None
+    ]
+    for item_asset_id in list_asset_ids:
+        _refresh_asset_text_index_for_asset(db, tenant, item_asset_id)
 
     # Get creator display name
     created_by_name = None
@@ -380,8 +407,15 @@ async def delete_list(
     )
     if not can_edit_list(lst, user=current_user, is_tenant_admin=is_tenant_admin):
         raise HTTPException(status_code=403, detail="Only list owner or admin can delete this list")
+    list_asset_ids = [
+        row[0]
+        for row in db.query(PhotoListItem.asset_id).filter(PhotoListItem.list_id == lst.id).all()
+        if row[0] is not None
+    ]
     db.delete(lst)
     db.commit()
+    for item_asset_id in list_asset_ids:
+        _refresh_asset_text_index_for_asset(db, tenant, item_asset_id)
     return {"deleted": True}
 
 
@@ -619,6 +653,7 @@ async def add_photo_to_specific_list(
     db.add(item)
     db.commit()
     db.refresh(item)
+    _refresh_asset_text_index_for_asset(db, tenant, asset_id)
     return {
         "list_id": list_id,
         "item_id": item.id,
@@ -682,6 +717,7 @@ async def add_photo_to_list(
     db.add(item)
     db.commit()
     db.refresh(item)
+    _refresh_asset_text_index_for_asset(db, tenant, asset_id)
     return {
         "list_id": recent.id,
         "item_id": item.id,

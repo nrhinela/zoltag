@@ -10,6 +10,7 @@ from . import (
     inspect,
     thumbnails,
     thresholds,
+    text_index,
 )
 
 __all__ = [
@@ -22,4 +23,5 @@ __all__ = [
     'inspect',
     'thumbnails',
     'thresholds',
+    'text_index',
 ]

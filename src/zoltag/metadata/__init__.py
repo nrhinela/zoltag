@@ -558,6 +558,24 @@ class AssetNote(Base):
     )
 
 
+class AssetTextIndex(Base):
+    """Denormalized text-search document per asset."""
+
+    __tablename__ = "asset_text_index"
+
+    asset_id = Column(UUID(as_uuid=True), ForeignKey("assets.id", ondelete="CASCADE"), primary_key=True)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
+    search_text = Column(Text, nullable=False, default="")
+    components = Column(JSONB, nullable=False, default=dict)
+    search_embedding = Column(ARRAY(Float), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("idx_asset_text_index_tenant_asset", "tenant_id", "asset_id"),
+    )
+
+
 class JobAttempt(Base):
     """Single attempt record for a job execution."""
 

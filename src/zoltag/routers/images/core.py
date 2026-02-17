@@ -8,7 +8,7 @@ import time
 from typing import Dict, List, Optional, Tuple
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import func, distinct, and_, case, cast, Text, literal, text
+from sqlalchemy import func, distinct, and_, case, cast, Text, literal, or_, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, load_only
 from google.cloud import storage
@@ -23,6 +23,7 @@ from zoltag.tenant import Tenant
 from zoltag.metadata import (
     Asset,
     AssetDerivative,
+    AssetTextIndex,
     ImageEmbedding,
     ImageMetadata,
     MachineTag,
@@ -70,17 +71,22 @@ LIST_IMAGES_LOAD_ONLY_COLUMNS = (
     ImageMetadata.rating,
 )
 
-SIMILARITY_CACHE_TTL_SECONDS = 300
+SIMILARITY_CACHE_TTL_SECONDS = 1800
 SIMILARITY_CACHE_MAX_ENTRIES = 12
 _similarity_cache_lock = threading.Lock()
 _similarity_index_cache = {}
 _pgvector_capability_cache: Dict[str, bool] = {}
+_asset_text_index_pgvector_capability_cache: Dict[str, bool] = {}
+_pg_trgm_capability_cache: Dict[str, bool] = {}
 TEXT_QUERY_EMBEDDING_CACHE_TTL_SECONDS = 1800
 TEXT_QUERY_EMBEDDING_CACHE_MAX_ENTRIES = 256
 _text_query_embedding_cache_lock = threading.Lock()
 _text_query_embedding_cache: Dict[Tuple[str, str], dict] = {}
-HYBRID_TEXT_PREFILTER_BASE = 2000
-HYBRID_TEXT_PREFILTER_MAX = 12000
+HYBRID_TEXT_PREFILTER_BASE = 800
+HYBRID_TEXT_PREFILTER_MAX = 4000
+HYBRID_TRIGRAM_THRESHOLD = 0.12
+TEXT_INDEX_SEMANTIC_BLEND = 0.35
+TEXT_INDEX_LEXICAL_BLEND = 0.6
 
 
 def _build_similarity_index(
@@ -222,6 +228,37 @@ def _is_pgvector_ready(db: Session) -> bool:
         return False
 
 
+def _is_pg_trgm_ready(db: Session) -> bool:
+    bind = db.get_bind()
+    if bind.dialect.name != "postgresql":
+        return False
+
+    cache_key = _pgvector_cache_key(db)
+    cached = _pg_trgm_capability_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    try:
+        row = db.execute(
+            text(
+                """
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM pg_extension
+                    WHERE extname = 'pg_trgm'
+                ) AS has_pg_trgm
+                """
+            )
+        ).mappings().first()
+        can_use = bool(row and row["has_pg_trgm"])
+        _pg_trgm_capability_cache[cache_key] = can_use
+        return can_use
+    except SQLAlchemyError:
+        db.rollback()
+        _pg_trgm_capability_cache[cache_key] = False
+        return False
+
+
 def _to_pgvector_literal(values: np.ndarray) -> str:
     return "[" + ",".join(f"{float(value):.10g}" for value in values.tolist()) + "]"
 
@@ -231,19 +268,19 @@ def _normalize_hybrid_weights(
     lexical_weight: Optional[float],
 ) -> Tuple[float, float]:
     try:
-        vector = float(vector_weight if vector_weight is not None else 0.7)
+        vector = float(vector_weight if vector_weight is not None else 0.0)
     except (TypeError, ValueError):
-        vector = 0.7
+        vector = 0.0
     try:
-        lexical = float(lexical_weight if lexical_weight is not None else 0.3)
+        lexical = float(lexical_weight if lexical_weight is not None else 1.0)
     except (TypeError, ValueError):
-        lexical = 0.3
+        lexical = 1.0
 
     vector = max(0.0, vector)
     lexical = max(0.0, lexical)
     total = vector + lexical
     if total <= 1e-9:
-        return 0.7, 0.3
+        return 0.0, 1.0
     return vector / total, lexical / total
 
 
@@ -256,10 +293,239 @@ def _compute_hybrid_text_prefilter_limit(
     requested_upper_bound = safe_offset + safe_limit
     window = max(
         HYBRID_TEXT_PREFILTER_BASE,
-        safe_limit * 20,
-        requested_upper_bound * 3,
+        safe_limit * 8,
+        requested_upper_bound * 2,
     )
     return min(HYBRID_TEXT_PREFILTER_MAX, int(window))
+
+
+def _compute_hybrid_seed_limits(
+    limit: int,
+    offset: int,
+    prefilter_limit: int,
+) -> Tuple[int, int, int]:
+    safe_limit = max(1, int(limit or 100))
+    safe_offset = max(0, int(offset or 0))
+    requested_upper_bound = safe_limit + safe_offset
+    lexical_seed_limit = min(prefilter_limit, max(300, requested_upper_bound * 3))
+    vector_seed_limit = min(prefilter_limit, max(250, requested_upper_bound * 3))
+    fallback_seed_limit = min(prefilter_limit, max(120, requested_upper_bound * 2))
+    return int(lexical_seed_limit), int(vector_seed_limit), int(fallback_seed_limit)
+
+
+def _merge_seed_image_ids(
+    seed_groups: List[List[int]],
+    max_rows: int,
+) -> List[int]:
+    safe_limit = max(1, int(max_rows or 1))
+    merged: List[int] = []
+    seen = set()
+    for group in seed_groups:
+        for image_id in group:
+            image_id_int = int(image_id)
+            if image_id_int in seen:
+                continue
+            seen.add(image_id_int)
+            merged.append(image_id_int)
+            if len(merged) >= safe_limit:
+                return merged
+    return merged
+
+
+def _fetch_text_index_seed_image_ids(
+    db: Session,
+    tenant: Tenant,
+    normalized_query: str,
+    query_tokens: List[str],
+    max_rows: int,
+) -> List[int]:
+    if not normalized_query and not query_tokens:
+        return []
+
+    safe_limit = max(1, int(max_rows or HYBRID_TEXT_PREFILTER_BASE))
+    text_value = func.lower(func.coalesce(AssetTextIndex.search_text, ""))
+
+    query = db.query(
+        ImageMetadata.id.label("image_id"),
+    ).join(
+        AssetTextIndex,
+        and_(
+            AssetTextIndex.asset_id == ImageMetadata.asset_id,
+            tenant_column_filter(AssetTextIndex, tenant),
+        ),
+    ).filter(
+        tenant_column_filter(ImageMetadata, tenant),
+        ImageMetadata.asset_id.is_not(None),
+    )
+
+    dialect_name = getattr(getattr(db, "bind", None), "dialect", None)
+    dialect_name = getattr(dialect_name, "name", "")
+    rows = []
+    if dialect_name == "postgresql" and normalized_query:
+        try:
+            tsvector = func.to_tsvector("english", func.coalesce(AssetTextIndex.search_text, ""))
+            tsquery = func.websearch_to_tsquery("english", normalized_query)
+            full_match_expr = tsvector.op("@@")(tsquery)
+            full_rank_expr = func.ts_rank_cd(tsvector, tsquery)
+            token_terms = [token for token in query_tokens[:8] if token]
+            token_match_exprs = []
+            token_match_count_expr = literal(0)
+            token_rank_sum_expr = literal(0.0)
+            for token in token_terms:
+                token_tsquery = func.plainto_tsquery("english", token)
+                token_match_expr = tsvector.op("@@")(token_tsquery)
+                token_match_exprs.append(token_match_expr)
+                token_match_count_expr = token_match_count_expr + case((token_match_expr, 1), else_=0)
+                token_rank_sum_expr = token_rank_sum_expr + func.ts_rank_cd(tsvector, token_tsquery)
+            any_token_match_expr = or_(*token_match_exprs) if token_match_exprs else full_match_expr
+            if _is_pg_trgm_ready(db):
+                trigram_expr = func.similarity(text_value, normalized_query)
+                query = query.filter(
+                    or_(
+                        full_match_expr,
+                        any_token_match_expr,
+                        trigram_expr >= HYBRID_TRIGRAM_THRESHOLD,
+                    )
+                ).order_by(
+                    case((full_match_expr, 1), else_=0).desc(),
+                    token_match_count_expr.desc(),
+                    full_rank_expr.desc(),
+                    token_rank_sum_expr.desc(),
+                    trigram_expr.desc(),
+                    ImageMetadata.id.desc(),
+                )
+            else:
+                query = query.filter(
+                    or_(
+                        full_match_expr,
+                        any_token_match_expr,
+                    )
+                ).order_by(
+                    case((full_match_expr, 1), else_=0).desc(),
+                    token_match_count_expr.desc(),
+                    full_rank_expr.desc(),
+                    token_rank_sum_expr.desc(),
+                    ImageMetadata.id.desc(),
+                )
+            rows = query.limit(safe_limit).all()
+        except SQLAlchemyError as exc:
+            db.rollback()
+            logger.debug("FTS seed query fallback to basic lexical matching: %s", exc)
+
+    if not rows:
+        clauses = []
+        if normalized_query:
+            clauses.append(text_value.contains(normalized_query))
+        for token in query_tokens:
+            if token:
+                clauses.append(text_value.contains(token))
+        if not clauses:
+            return []
+        query = query.filter(or_(*clauses))
+        if normalized_query:
+            query = query.order_by(
+                case((text_value.contains(normalized_query), 1), else_=0).desc(),
+                ImageMetadata.id.desc(),
+            )
+        else:
+            query = query.order_by(ImageMetadata.id.desc())
+        rows = query.limit(safe_limit).all()
+    ordered_ids: List[int] = []
+    seen = set()
+    for row in rows:
+        image_id = int(row.image_id)
+        if image_id in seen:
+            continue
+        seen.add(image_id)
+        ordered_ids.append(image_id)
+    return ordered_ids
+
+
+def _is_asset_text_index_pgvector_ready(db: Session) -> bool:
+    bind = db.get_bind()
+    if bind.dialect.name != "postgresql":
+        return False
+
+    cache_key = _pgvector_cache_key(db)
+    cached = _asset_text_index_pgvector_capability_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    try:
+        row = db.execute(
+            text(
+                """
+                SELECT
+                    EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector') AS has_extension,
+                    EXISTS (
+                        SELECT 1
+                        FROM information_schema.columns
+                        WHERE table_schema = 'public'
+                          AND table_name = 'asset_text_index'
+                          AND column_name = 'search_embedding_vec'
+                    ) AS has_embedding_vec
+                """
+            )
+        ).mappings().first()
+        can_use = bool(row and row["has_extension"] and row["has_embedding_vec"])
+        _asset_text_index_pgvector_capability_cache[cache_key] = can_use
+        return can_use
+    except SQLAlchemyError:
+        db.rollback()
+        _asset_text_index_pgvector_capability_cache[cache_key] = False
+        return False
+
+
+def _fetch_text_index_vector_seed_image_ids(
+    db: Session,
+    tenant: Tenant,
+    query_vector: Optional[np.ndarray],
+    max_rows: int,
+) -> List[int]:
+    if query_vector is None or int(getattr(query_vector, "size", 0) or 0) <= 0:
+        return []
+    if not _is_asset_text_index_pgvector_ready(db):
+        return []
+
+    query_vec_literal = _to_pgvector_literal(query_vector)
+    candidate_limit = max(1, int(max_rows or 1))
+    try:
+        rows = db.execute(
+            text(
+                """
+                SELECT
+                    im.id AS image_id
+                FROM asset_text_index ati
+                JOIN image_metadata im
+                  ON im.asset_id = ati.asset_id
+                 AND im.tenant_id = :tenant_id
+                WHERE ati.tenant_id = :tenant_id
+                  AND ati.search_embedding_vec IS NOT NULL
+                ORDER BY ati.search_embedding_vec <=> CAST(:query_vec AS vector)
+                LIMIT :candidate_limit
+                """
+            ),
+            {
+                "tenant_id": tenant.id,
+                "query_vec": query_vec_literal,
+                "candidate_limit": int(candidate_limit),
+            },
+        ).mappings().all()
+    except SQLAlchemyError as exc:
+        db.rollback()
+        _asset_text_index_pgvector_capability_cache[_pgvector_cache_key(db)] = False
+        logger.debug("Asset text index vector seed unavailable; disabling pgvector seed path: %s", exc)
+        return []
+
+    ordered_ids: List[int] = []
+    seen = set()
+    for row in rows:
+        image_id = int(row["image_id"])
+        if image_id in seen:
+            continue
+        seen.add(image_id)
+        ordered_ids.append(image_id)
+    return ordered_ids
 
 
 def _tokenize_text_query(text_query: str) -> Tuple[str, List[str]]:
@@ -458,6 +724,130 @@ def _compute_lexical_scores_for_candidates(
     }
 
 
+def _compute_text_index_scores_for_candidates(
+    db: Session,
+    tenant: Tenant,
+    candidate_rows: List,
+    normalized_query: str,
+    query_tokens: List[str],
+    query_vector: Optional[np.ndarray],
+) -> Tuple[Dict[int, float], Dict[int, float]]:
+    if not candidate_rows:
+        return {}, {}
+
+    asset_to_image_id = {}
+    for row in candidate_rows:
+        if row.asset_id is None:
+            continue
+        asset_to_image_id[row.asset_id] = int(row.image_id)
+    if not asset_to_image_id:
+        return {}, {}
+
+    text_value = func.lower(func.coalesce(AssetTextIndex.search_text, ""))
+    query_columns = [
+        AssetTextIndex.asset_id,
+        AssetTextIndex.search_text,
+    ]
+    if normalized_query and db.get_bind().dialect.name == "postgresql":
+        tsvector = func.to_tsvector("english", func.coalesce(AssetTextIndex.search_text, ""))
+        tsquery = func.websearch_to_tsquery("english", normalized_query)
+        query_columns.append(func.ts_rank_cd(tsvector, tsquery).label("fts_rank"))
+        token_terms = [token for token in query_tokens[:8] if token]
+        if token_terms:
+            token_match_count_expr = literal(0)
+            token_rank_sum_expr = literal(0.0)
+            for token in token_terms:
+                token_tsquery = func.plainto_tsquery("english", token)
+                token_match_expr = tsvector.op("@@")(token_tsquery)
+                token_match_count_expr = token_match_count_expr + case((token_match_expr, 1), else_=0)
+                token_rank_sum_expr = token_rank_sum_expr + func.ts_rank_cd(tsvector, token_tsquery)
+            query_columns.append(token_match_count_expr.label("fts_token_match_count"))
+            query_columns.append(token_rank_sum_expr.label("fts_token_rank_sum"))
+        if _is_pg_trgm_ready(db):
+            query_columns.append(func.similarity(text_value, normalized_query).label("trigram_score"))
+    if query_vector is not None and int(getattr(query_vector, "size", 0) or 0) > 0:
+        query_columns.append(AssetTextIndex.search_embedding)
+
+    try:
+        rows = (
+            db.query(*query_columns)
+            .filter(
+                tenant_column_filter(AssetTextIndex, tenant),
+                AssetTextIndex.asset_id.in_(list(asset_to_image_id.keys())),
+            )
+            .all()
+        )
+    except SQLAlchemyError as exc:
+        logger.debug("Asset text index unavailable for hybrid search scoring: %s", exc)
+        return {}, {}
+
+    lexical_raw: Dict[int, float] = {}
+    semantic_scores: Dict[int, float] = {}
+    has_query_terms = bool(normalized_query or query_tokens)
+    can_score_semantic = query_vector is not None and int(getattr(query_vector, "size", 0) or 0) > 0
+
+    for row in rows:
+        image_id = asset_to_image_id.get(row.asset_id)
+        if image_id is None:
+            continue
+
+        if has_query_terms:
+            fts_rank = float(getattr(row, "fts_rank", 0.0) or 0.0)
+            token_match_count = float(getattr(row, "fts_token_match_count", 0.0) or 0.0)
+            token_rank_sum = float(getattr(row, "fts_token_rank_sum", 0.0) or 0.0)
+            trigram_score = float(getattr(row, "trigram_score", 0.0) or 0.0)
+            trigram_effective = trigram_score if trigram_score >= HYBRID_TRIGRAM_THRESHOLD else 0.0
+            token_coverage = 0.0
+            if query_tokens:
+                token_coverage = min(1.0, token_match_count / float(max(1, len(query_tokens[:8]))))
+            if fts_rank > 0 or token_rank_sum > 0 or trigram_effective > 0:
+                score = (
+                    max(0.0, fts_rank)
+                    + (0.65 * max(0.0, token_rank_sum))
+                    + (0.2 * token_coverage)
+                    + (0.35 * trigram_effective)
+                )
+            else:
+                score = _string_match_score(
+                    str(row.search_text or ""),
+                    normalized_query=normalized_query,
+                    query_tokens=query_tokens,
+                    phrase_weight=1.0,
+                    token_weight=0.2,
+                    token_cap=0.8,
+                )
+            if score > 0:
+                lexical_raw[image_id] = max(float(lexical_raw.get(image_id, 0.0)), float(score))
+
+        row_search_embedding = getattr(row, "search_embedding", None)
+        if can_score_semantic and row_search_embedding:
+            vec = np.asarray(row_search_embedding, dtype=np.float32).reshape(-1)
+            if vec.ndim != 1 or vec.size != int(query_vector.size):
+                continue
+            norm = float(np.linalg.norm(vec))
+            if norm <= 1e-12:
+                continue
+            similarity = float(np.dot(vec / norm, query_vector))
+            semantic_scores[image_id] = max(
+                float(semantic_scores.get(image_id, 0.0)),
+                float(np.clip((similarity + 1.0) / 2.0, 0.0, 1.0)),
+            )
+
+    if not lexical_raw:
+        return {}, semantic_scores
+
+    max_lexical = max(lexical_raw.values())
+    if max_lexical <= 1e-9:
+        return {}, semantic_scores
+
+    lexical_scores = {
+        image_id: min(1.0, max(0.0, value / max_lexical))
+        for image_id, value in lexical_raw.items()
+        if value > 0
+    }
+    return lexical_scores, semantic_scores
+
+
 def _rank_candidates_with_hybrid_scores(
     db: Session,
     tenant: Tenant,
@@ -467,6 +857,7 @@ def _rank_candidates_with_hybrid_scores(
     date_order: str,
     vector_weight: float,
     lexical_weight: float,
+    query_vector: Optional[np.ndarray] = None,
 ) -> Tuple[List[int], Dict[int, float], Dict[int, float], Dict[int, float]]:
     if not candidate_rows:
         return [], {}, {}, {}
@@ -480,27 +871,43 @@ def _rank_candidates_with_hybrid_scores(
         normalized_query=normalized_query,
         query_tokens=query_tokens,
     )
+    text_index_semantic_scores: Dict[int, float] = {}
+    if vector_weight > 1e-6:
+        try:
+            if query_vector is None:
+                query_vector = _get_text_query_embedding(normalized_query)
+            index = _get_similarity_index(
+                db=db,
+                tenant=tenant,
+                media_type=None,
+                embedding_dim=int(query_vector.size),
+            )
+            matrix = index.get("matrix")
+            indexed_ids = index.get("image_ids")
+            if matrix is not None and indexed_ids is not None and matrix.size and indexed_ids.size:
+                similarities = np.dot(matrix, query_vector)
+                similarities = np.clip((similarities + 1.0) / 2.0, 0.0, 1.0)
+                candidate_id_set = {int(row.image_id) for row in candidate_rows}
+                for image_id, similarity in zip(indexed_ids.tolist(), similarities.tolist()):
+                    image_id_int = int(image_id)
+                    if image_id_int in candidate_id_set:
+                        semantic_scores[image_id_int] = float(similarity)
+        except Exception as exc:  # noqa: BLE001 - keep search functional even if embedding model fails.
+            logger.warning("Hybrid search semantic scoring unavailable; falling back to lexical/date ranking: %s", exc)
 
-    try:
-        query_vector = _get_text_query_embedding(normalized_query)
-        index = _get_similarity_index(
-            db=db,
-            tenant=tenant,
-            media_type=None,
-            embedding_dim=int(query_vector.size),
+    text_index_lexical_scores, text_index_semantic_scores = _compute_text_index_scores_for_candidates(
+        db=db,
+        tenant=tenant,
+        candidate_rows=candidate_rows,
+        normalized_query=normalized_query,
+        query_tokens=query_tokens,
+        query_vector=query_vector if vector_weight > 1e-6 else None,
+    )
+    for image_id, extra_lexical in text_index_lexical_scores.items():
+        base_lexical = float(lexical_scores.get(image_id, 0.0))
+        lexical_scores[image_id] = float(
+            min(1.0, base_lexical + (TEXT_INDEX_LEXICAL_BLEND * float(extra_lexical)))
         )
-        matrix = index.get("matrix")
-        indexed_ids = index.get("image_ids")
-        if matrix is not None and indexed_ids is not None and matrix.size and indexed_ids.size:
-            similarities = np.dot(matrix, query_vector)
-            similarities = np.clip((similarities + 1.0) / 2.0, 0.0, 1.0)
-            candidate_id_set = {int(row.image_id) for row in candidate_rows}
-            for image_id, similarity in zip(indexed_ids.tolist(), similarities.tolist()):
-                image_id_int = int(image_id)
-                if image_id_int in candidate_id_set:
-                    semantic_scores[image_id_int] = float(similarity)
-    except Exception as exc:  # noqa: BLE001 - keep search functional even if embedding model fails.
-        logger.warning("Hybrid search semantic scoring unavailable; falling back to lexical/date ranking: %s", exc)
 
     hybrid_scores: Dict[int, float] = {}
 
@@ -528,7 +935,17 @@ def _rank_candidates_with_hybrid_scores(
     ranked_rows = []
     for row in candidate_rows:
         image_id = int(row.image_id)
-        semantic = float(semantic_scores.get(image_id, 0.0))
+        image_semantic = float(semantic_scores.get(image_id, 0.0))
+        text_semantic = float(text_index_semantic_scores.get(image_id, 0.0))
+        if text_semantic > 0 and image_semantic > 0:
+            semantic = (
+                ((1.0 - TEXT_INDEX_SEMANTIC_BLEND) * image_semantic)
+                + (TEXT_INDEX_SEMANTIC_BLEND * text_semantic)
+            )
+        elif text_semantic > 0:
+            semantic = text_semantic
+        else:
+            semantic = image_semantic
         lexical = float(lexical_scores.get(image_id, 0.0))
         hybrid = (vector_weight * semantic) + (lexical_weight * lexical)
         hybrid_scores[image_id] = hybrid
@@ -550,8 +967,8 @@ def _rank_candidates_with_hybrid_scores(
                 -payload[2],
                 -payload[3],
                 _rating_sort_key(payload[0]),
-                _date_sort_key(payload[0]),
                 _id_sort_key(int(payload[0].image_id)),
+                _date_sort_key(payload[0]),
             )
         )
     else:
@@ -560,8 +977,8 @@ def _rank_candidates_with_hybrid_scores(
                 -payload[1],
                 -payload[2],
                 -payload[3],
-                _date_sort_key(payload[0]),
                 _id_sort_key(int(payload[0].image_id)),
+                _date_sort_key(payload[0]),
             )
         )
 
@@ -706,8 +1123,8 @@ async def list_images(
     dropbox_path_prefix: Optional[str] = None,
     filename_query: Optional[str] = None,
     text_query: Optional[str] = None,
-    hybrid_vector_weight: float = 0.7,
-    hybrid_lexical_weight: float = 0.3,
+    hybrid_vector_weight: float = 0.0,
+    hybrid_lexical_weight: float = 1.0,
     permatag_keyword: Optional[str] = None,
     permatag_category: Optional[str] = None,
     permatag_signum: Optional[int] = None,
@@ -752,10 +1169,18 @@ async def list_images(
     if media_type_value not in {"all", "image", "video"}:
         media_type_value = "all"
     text_query_value = str(text_query or "").strip()
+    normalized_text_query, text_query_tokens = _tokenize_text_query(text_query_value)
     vector_weight_value, lexical_weight_value = _normalize_hybrid_weights(
         hybrid_vector_weight,
         hybrid_lexical_weight,
     )
+    text_query_vector: Optional[np.ndarray] = None
+    if text_query_value and vector_weight_value > 1e-6:
+        try:
+            text_query_vector = _get_text_query_embedding(normalized_text_query)
+        except Exception as exc:  # noqa: BLE001 - keep query flow resilient.
+            logger.warning("Text query embedding unavailable during candidate seeding; continuing lexical-only: %s", exc)
+            text_query_vector = None
 
     base_query, subqueries_list, exclude_subqueries_list, has_empty_filter = build_image_query_with_subqueries(
         db,
@@ -957,11 +1382,49 @@ async def list_images(
                         return (0, score)
                     if text_query_value:
                         prefilter_limit = _compute_hybrid_text_prefilter_limit(limit, offset)
-                        candidate_rows = build_candidate_rows_from_ids(
+                        lexical_seed_limit, vector_seed_limit, fallback_seed_limit = _compute_hybrid_seed_limits(
+                            limit=limit,
+                            offset=offset,
+                            prefilter_limit=prefilter_limit,
+                        )
+                        unique_ids_lookup = set(unique_image_ids)
+                        lexical_seed_ids = _fetch_text_index_seed_image_ids(
+                            db=db,
+                            tenant=tenant,
+                            normalized_query=normalized_text_query,
+                            query_tokens=text_query_tokens,
+                            max_rows=lexical_seed_limit,
+                        )
+                        lexical_seed_ids = [image_id for image_id in lexical_seed_ids if image_id in unique_ids_lookup]
+                        vector_seed_ids: List[int] = []
+                        if vector_weight_value > 1e-6 and text_query_vector is not None:
+                            raw_vector_seed_ids = _fetch_text_index_vector_seed_image_ids(
+                                db=db,
+                                tenant=tenant,
+                                query_vector=text_query_vector,
+                                max_rows=vector_seed_limit,
+                            )
+                            vector_seed_ids = [image_id for image_id in raw_vector_seed_ids if image_id in unique_ids_lookup]
+                        fallback_rows = build_candidate_rows_from_ids(
                             unique_image_ids,
+                            max_rows=fallback_seed_limit,
+                        )
+                        fallback_seed_ids = [int(row.image_id) for row in fallback_rows]
+                        seed_candidate_ids = _merge_seed_image_ids(
+                            [lexical_seed_ids, vector_seed_ids, fallback_seed_ids],
                             max_rows=prefilter_limit,
                         )
-                        sorted_ids, _, _, _ = _rank_candidates_with_hybrid_scores(
+                        if seed_candidate_ids:
+                            candidate_rows = build_candidate_rows_from_ids(
+                                seed_candidate_ids,
+                                max_rows=prefilter_limit,
+                            )
+                        else:
+                            candidate_rows = build_candidate_rows_from_ids(
+                                unique_image_ids,
+                                max_rows=prefilter_limit,
+                            )
+                        sorted_ids, _, _, lexical_scores = _rank_candidates_with_hybrid_scores(
                             db=db,
                             tenant=tenant,
                             candidate_rows=candidate_rows,
@@ -970,7 +1433,14 @@ async def list_images(
                             date_order=date_order,
                             vector_weight=vector_weight_value,
                             lexical_weight=lexical_weight_value,
+                            query_vector=text_query_vector,
                         )
+                        if lexical_weight_value >= 0.999 and vector_weight_value <= 0.001:
+                            sorted_ids = [
+                                image_id
+                                for image_id in sorted_ids
+                                if float(lexical_scores.get(image_id, 0.0)) > 0.0
+                            ]
                     elif order_by_value == "image_id":
                         sorted_ids = sorted(
                             unique_image_ids,
@@ -996,17 +1466,17 @@ async def list_images(
                     else:
                         # Calculate relevance scores using helper
                         score_map = calculate_relevance_scores(db, tenant, unique_image_ids, all_keywords, active_tag_type)
-                        # Sort unique_image_ids by relevance score (descending), then by date (order), then by ID (order)
+                        # Sort by relevance first; keep date only as a late tie-breaker.
                         sorted_ids = sorted(
                             unique_image_ids,
                             key=lambda img_id: (
                                 -(score_map.get(img_id) or 0),
+                                -img_id if date_order == "desc" else img_id,
                                 (
                                     -(date_map.get(img_id).timestamp())
                                     if date_map.get(img_id) and date_order == "desc"
                                     else (date_map.get(img_id).timestamp() if date_map.get(img_id) else float('inf'))
                                 ),
-                                -img_id if date_order == "desc" else img_id
                             )
                         )
 
@@ -1092,8 +1562,8 @@ async def list_images(
                     ImageMetadata.id
                 ).order_by(
                     func.sum(MachineTag.confidence).desc(),
-                    order_by_date,
-                    id_order
+                    id_order,
+                    order_by_date
                 )
 
                 # Apply base_query subquery filters (list, rating, etc.) to the keyword query
@@ -1163,8 +1633,8 @@ async def list_images(
                     ImageMetadata.id
                 ).order_by(
                     func.sum(MachineTag.confidence).desc(),
-                    order_by_date,
-                    id_order
+                    id_order,
+                    order_by_date
                 )
 
                 total = builder.get_total_count(query)
@@ -1190,12 +1660,45 @@ async def list_images(
         if text_query_value:
             prefilter_limit = _compute_hybrid_text_prefilter_limit(limit, offset)
             ordered_candidate_query = query.order_by(*order_by_clauses)
-            candidate_rows = build_candidate_rows_from_query(
+            lexical_seed_limit, vector_seed_limit, fallback_seed_limit = _compute_hybrid_seed_limits(
+                limit=limit,
+                offset=offset,
+                prefilter_limit=prefilter_limit,
+            )
+            lexical_seed_ids = _fetch_text_index_seed_image_ids(
+                db=db,
+                tenant=tenant,
+                normalized_query=normalized_text_query,
+                query_tokens=text_query_tokens,
+                max_rows=lexical_seed_limit,
+            )
+            vector_seed_ids: List[int] = []
+            if vector_weight_value > 1e-6 and text_query_vector is not None:
+                vector_seed_ids = _fetch_text_index_vector_seed_image_ids(
+                    db=db,
+                    tenant=tenant,
+                    query_vector=text_query_vector,
+                    max_rows=vector_seed_limit,
+                )
+            fallback_rows = build_candidate_rows_from_query(
                 ordered_candidate_query,
+                max_rows=fallback_seed_limit,
+            )
+            fallback_seed_ids = [int(row.image_id) for row in fallback_rows]
+            seed_candidate_ids = _merge_seed_image_ids(
+                [lexical_seed_ids, vector_seed_ids, fallback_seed_ids],
                 max_rows=prefilter_limit,
             )
+            if seed_candidate_ids:
+                seeded_candidate_query = ordered_candidate_query.filter(ImageMetadata.id.in_(seed_candidate_ids))
+                candidate_rows = build_candidate_rows_from_query(
+                    seeded_candidate_query,
+                    max_rows=prefilter_limit,
+                )
+            else:
+                candidate_rows = fallback_rows
             if candidate_rows:
-                sorted_ids, _, _, _ = _rank_candidates_with_hybrid_scores(
+                sorted_ids, _, _, lexical_scores = _rank_candidates_with_hybrid_scores(
                     db=db,
                     tenant=tenant,
                     candidate_rows=candidate_rows,
@@ -1204,7 +1707,14 @@ async def list_images(
                     date_order=date_order,
                     vector_weight=vector_weight_value,
                     lexical_weight=lexical_weight_value,
+                    query_vector=text_query_vector,
                 )
+                if lexical_weight_value >= 0.999 and vector_weight_value <= 0.001:
+                    sorted_ids = [
+                        image_id
+                        for image_id in sorted_ids
+                        if float(lexical_scores.get(image_id, 0.0)) > 0.0
+                    ]
             else:
                 sorted_ids = []
             total = len(sorted_ids)

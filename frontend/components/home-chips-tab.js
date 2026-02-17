@@ -17,6 +17,7 @@ export class HomeChipsTab extends LitElement {
 
   static properties = {
     tenant: { type: String },
+    canCurate: { type: Boolean },
     selectedTag: { type: Object },
     searchFilterPanel: { type: Object },
     searchImages: { type: Array },
@@ -41,6 +42,7 @@ export class HomeChipsTab extends LitElement {
   constructor() {
     super();
     this.tenant = '';
+    this.canCurate = true;
     this.tagStatsBySource = {};
     this.selectedTag = null;
     this.searchFilterPanel = new ImageFilterPanel('home-chips');
@@ -530,6 +532,7 @@ export class HomeChipsTab extends LitElement {
             `}
             <search-tab
               .tenant=${this.tenant}
+              .canCurate=${this.canCurate}
               .searchFilterPanel=${this.searchFilterPanel}
               .searchChipFilters=${this.searchChipFilters}
               .searchImages=${this.searchImages}

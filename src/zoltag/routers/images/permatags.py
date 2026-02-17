@@ -5,6 +5,7 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException, Body, Request
 from sqlalchemy import func
 from sqlalchemy.orm import Session
+import logging
 
 from zoltag.dependencies import get_db, get_tenant, get_tenant_setting
 from zoltag.tenant import Tenant
@@ -15,10 +16,31 @@ from zoltag.config.db_config import ConfigManager
 from zoltag.config.db_utils import load_keywords_map
 from zoltag.auth.dependencies import require_tenant_role_from_header
 from zoltag.auth.models import UserProfile
+from zoltag.text_index import rebuild_asset_text_index
 from zoltag.tenant_scope import assign_tenant_scope, tenant_column_filter
 
 # Sub-router with no prefix/tags (inherits from parent)
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
+
+def _refresh_asset_text_index_for_asset(db: Session, tenant: Tenant, asset_id) -> None:
+    if not asset_id:
+        return
+    try:
+        rebuild_asset_text_index(
+            db,
+            tenant_id=tenant.id,
+            asset_id=str(asset_id),
+            include_embeddings=False,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to refresh asset_text_index for asset %s: %s", asset_id, exc)
+
+
+def _refresh_asset_text_index_for_assets(db: Session, tenant: Tenant, asset_ids) -> None:
+    for asset_id in set(asset_ids or []):
+        _refresh_asset_text_index_for_asset(db, tenant, asset_id)
 
 
 def get_keyword_info(db: Session, keyword_id: int) -> dict:
@@ -139,6 +161,7 @@ async def add_permatag(
 
     db.commit()
     db.refresh(permatag)
+    _refresh_asset_text_index_for_asset(db, tenant, image.asset_id)
 
     # Get keyword info for response
     kw_info = get_keyword_info(db, permatag.keyword_id)
@@ -260,6 +283,11 @@ async def bulk_permatags(
             created += 1
 
     db.commit()
+    _refresh_asset_text_index_for_assets(
+        db,
+        tenant,
+        [image_id_to_asset_id.get(op["image_id"]) for op in normalized_ops],
+    )
 
     return {
         "created": created,
@@ -298,6 +326,7 @@ async def delete_permatag(
 
     db.delete(permatag)
     db.commit()
+    _refresh_asset_text_index_for_asset(db, tenant, image.asset_id)
 
     return {"success": True}
 
@@ -367,6 +396,7 @@ async def accept_all_tags(
             db.add(permatag)
 
     db.commit()
+    _refresh_asset_text_index_for_asset(db, tenant, image.asset_id)
 
     # Return counts
     positive_count = len(current_keyword_ids)
@@ -434,6 +464,7 @@ async def freeze_permatags(
             negative_count += 1
 
     db.commit()
+    _refresh_asset_text_index_for_asset(db, tenant, image.asset_id)
 
     return {
         "success": True,

@@ -1,5 +1,7 @@
 """Asset notes endpoints (keyed to assets, accessed via image_id)."""
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Body
 from sqlalchemy.orm import Session
 
@@ -9,8 +11,10 @@ from zoltag.metadata import AssetNote, ImageMetadata
 from zoltag.tenant_scope import tenant_column_filter
 from zoltag.auth.dependencies import require_tenant_role_from_header
 from zoltag.auth.models import UserProfile
+from zoltag.text_index import rebuild_asset_text_index
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 def _resolve_asset_id(image_id: int, tenant: Tenant, db: Session):
@@ -70,4 +74,13 @@ async def upsert_asset_note(
         db.add(note)
     db.commit()
     db.refresh(note)
+    try:
+        rebuild_asset_text_index(
+            db,
+            tenant_id=tenant.id,
+            asset_id=asset_id,
+            include_embeddings=False,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to refresh asset_text_index for asset %s: %s", asset_id, exc)
     return {"id": str(note.id), "asset_id": str(asset_id), "note_type": note.note_type, "body": note.body}

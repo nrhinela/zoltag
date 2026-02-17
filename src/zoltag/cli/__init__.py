@@ -11,6 +11,7 @@ from .commands import (
     inspect,
     thumbnails,
     thresholds,
+    text_index,
 )
 
 
@@ -33,6 +34,7 @@ cli.add_command(inspect.list_images_command, name='list-images')
 cli.add_command(inspect.show_config_command, name='show-config')
 cli.add_command(thumbnails.backfill_thumbnails_command, name='backfill-thumbnails')
 cli.add_command(thresholds.compute_keyword_thresholds_command, name='compute-keyword-thresholds')
+cli.add_command(text_index.rebuild_asset_text_index_command, name='rebuild-asset-text-index')
 
 
 if __name__ == '__main__':

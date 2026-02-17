@@ -388,10 +388,12 @@ export function renderHomeTabContent(host, { navCards, formatCurateDate }) {
 
 export function renderSearchTabContent(host, { formatCurateDate }) {
   const canRate = typeof host._canCurate === 'function' ? host._canCurate() : true;
+  const canCurate = typeof host._canCurate === 'function' ? host._canCurate() : true;
   return html`
     <search-tab
       slot="search"
       .tenant=${host.tenant}
+      .canCurate=${canCurate}
       .searchSubTab=${host.activeSearchSubTab || 'home'}
       .initialExploreSelection=${host.pendingSearchExploreSelection}
       .initialVectorstoreQuery=${host.pendingVectorstoreQuery || ''}

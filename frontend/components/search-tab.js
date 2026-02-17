@@ -37,6 +37,8 @@ import './shared/widgets/rating-target-panel.js';
 import ImageFilterPanel from './shared/state/image-filter-panel.js';
 import FolderBrowserPanel from './folder-browser-panel.js';
 
+const VECTORSTORE_DEFAULT_LEXICAL_WEIGHT = 1.0;
+
 /**
  * Search Tab Component
  *
@@ -132,6 +134,7 @@ export class SearchTab extends LitElement {
     searchDragEndIndex: { type: Number },
     searchSavedDragTarget: { type: Boolean },
     rightPanelTool: { type: String },
+    canCurate: { type: Boolean },
     searchHotspotTargets: { type: Array },
     searchHotspotRatingEnabled: { type: Boolean },
     searchHotspotRatingCount: { type: Number },
@@ -148,6 +151,7 @@ export class SearchTab extends LitElement {
     _searchHotspotHistoryBatches: { type: Array, state: true },
     _searchHotspotHistoryVisibleBatches: { type: Number, state: true },
     vectorstoreQuery: { type: String, state: true },
+    vectorstoreLexicalWeight: { type: Number, state: true },
     vectorstoreLoading: { type: Boolean, state: true },
     vectorstoreHasSearched: { type: Boolean, state: true },
   };
@@ -202,6 +206,7 @@ export class SearchTab extends LitElement {
     this.searchDragEndIndex = null;
     this.searchSavedDragTarget = false;
     this.rightPanelTool = 'lists';
+    this.canCurate = true;
     this.searchHotspotTargets = [{ id: 1, type: 'keyword', count: 0 }];
     this.searchHotspotRatingEnabled = false;
     this.searchHotspotRatingCount = 0;
@@ -233,6 +238,7 @@ export class SearchTab extends LitElement {
     this._searchHotspotHistoryBatches = [];
     this._searchHotspotHistoryVisibleBatches = 1;
     this.vectorstoreQuery = '';
+    this.vectorstoreLexicalWeight = VECTORSTORE_DEFAULT_LEXICAL_WEIGHT;
     this.vectorstoreLoading = false;
     this.vectorstoreHasSearched = false;
     this._searchHotspotHandlers = createHotspotHandlers(this, {
@@ -246,13 +252,9 @@ export class SearchTab extends LitElement {
     });
     try {
       const storedTool = localStorage.getItem('rightPanelTool:search');
-      if (storedTool && storedTool === 'lists') {
-        this.rightPanelTool = storedTool;
-      } else {
-        this.rightPanelTool = 'lists';
-      }
+      this.rightPanelTool = this._resolveRightPanelTool(storedTool);
     } catch {
-      // ignore storage errors
+      this.rightPanelTool = this._resolveRightPanelTool(this.rightPanelTool);
     }
     this._searchSuppressClick = false;
     this._searchFlashSelectionIds = new Set();
@@ -459,6 +461,13 @@ export class SearchTab extends LitElement {
       }
     }
 
+    if (changedProps.has('canCurate')) {
+      const normalizedTool = this._resolveRightPanelTool(this.rightPanelTool);
+      if (normalizedTool !== this.rightPanelTool) {
+        this.rightPanelTool = normalizedTool;
+      }
+    }
+
     if (changedProps.has('searchSubTab')) {
       if (this.hideSubtabs && this.searchSubTab !== 'home') {
         this.searchSubTab = 'home';
@@ -471,6 +480,8 @@ export class SearchTab extends LitElement {
         }
         const currentFilters = this.searchFilterPanel?.getState?.() || this.searchFilterPanel?.filters || {};
         this.vectorstoreQuery = String(currentFilters.textQuery || this.vectorstoreQuery || '');
+        const vectorstoreWeights = this._readVectorstoreWeights(currentFilters);
+        this.vectorstoreLexicalWeight = vectorstoreWeights.lexicalWeight;
       }
       if (previousSubTab === 'vectorstore' && this.searchSubTab !== 'vectorstore' && this.searchFilterPanel) {
         const currentFilters = this.searchFilterPanel.getState?.() || this.searchFilterPanel.filters || {};
@@ -622,10 +633,31 @@ export class SearchTab extends LitElement {
   }
 
   _handleRightPanelToolChange(tool) {
-    this.rightPanelTool = tool;
-    if (tool === 'lists' && !(this.searchLists || []).length) {
+    this.rightPanelTool = this._resolveRightPanelTool(tool);
+    if (this.rightPanelTool === 'lists' && !(this.searchLists || []).length) {
       this._fetchSearchLists();
     }
+  }
+
+  _getRightPanelTools() {
+    if (this.canCurate) {
+      return [
+        { id: 'tags', label: 'Keywords' },
+        { id: 'lists', label: 'Lists' },
+        { id: 'ratings', label: 'Ratings' },
+      ];
+    }
+    return [{ id: 'lists', label: 'Lists' }];
+  }
+
+  _resolveRightPanelTool(candidateTool) {
+    const tools = this._getRightPanelTools();
+    const allowed = new Set(tools.map((tool) => tool.id));
+    const nextTool = String(candidateTool || '').trim();
+    if (nextTool && allowed.has(nextTool)) {
+      return nextTool;
+    }
+    return tools[0]?.id || 'lists';
   }
 
   _handleSearchRatingChange(targetId, value) {
@@ -1431,6 +1463,62 @@ export class SearchTab extends LitElement {
     this.vectorstoreQuery = event?.target?.value || '';
   }
 
+  _normalizeVectorstoreLexicalWeight(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return VECTORSTORE_DEFAULT_LEXICAL_WEIGHT;
+    return Math.max(0, Math.min(1, numeric));
+  }
+
+  _readVectorstoreWeights(filters = {}) {
+    const lexicalRaw = filters?.hybridLexicalWeight;
+    const vectorRaw = filters?.hybridVectorWeight;
+    const lexical = lexicalRaw === undefined || lexicalRaw === null || lexicalRaw === ''
+      ? null
+      : Number(lexicalRaw);
+    const vector = vectorRaw === undefined || vectorRaw === null || vectorRaw === ''
+      ? null
+      : Number(vectorRaw);
+    if (!Number.isFinite(lexical) && !Number.isFinite(vector)) {
+      return {
+        lexicalWeight: VECTORSTORE_DEFAULT_LEXICAL_WEIGHT,
+        vectorWeight: 1 - VECTORSTORE_DEFAULT_LEXICAL_WEIGHT,
+      };
+    }
+    if (!Number.isFinite(lexical)) {
+      const normalizedVector = this._normalizeVectorstoreLexicalWeight(vector);
+      return {
+        lexicalWeight: 1 - normalizedVector,
+        vectorWeight: normalizedVector,
+      };
+    }
+    if (!Number.isFinite(vector)) {
+      const normalizedLexical = this._normalizeVectorstoreLexicalWeight(lexical);
+      return {
+        lexicalWeight: normalizedLexical,
+        vectorWeight: 1 - normalizedLexical,
+      };
+    }
+    const boundedLexical = Math.max(0, lexical);
+    const boundedVector = Math.max(0, vector);
+    const total = boundedLexical + boundedVector;
+    if (total <= 0) {
+      return {
+        lexicalWeight: VECTORSTORE_DEFAULT_LEXICAL_WEIGHT,
+        vectorWeight: 1 - VECTORSTORE_DEFAULT_LEXICAL_WEIGHT,
+      };
+    }
+    return {
+      lexicalWeight: boundedLexical / total,
+      vectorWeight: boundedVector / total,
+    };
+  }
+
+  _handleVectorstoreWeightInput(event) {
+    const nextPercent = Number(event?.target?.value);
+    if (!Number.isFinite(nextPercent)) return;
+    this.vectorstoreLexicalWeight = this._normalizeVectorstoreLexicalWeight(nextPercent / 100);
+  }
+
   _handleVectorstoreQueryKeydown(event) {
     if (event?.key !== 'Enter') return;
     event.preventDefault();
@@ -1481,11 +1569,15 @@ export class SearchTab extends LitElement {
     if (this.vectorstoreLoading) return;
     const query = (this.vectorstoreQuery || '').trim();
     const currentFilters = this.searchFilterPanel.getState?.() || this.searchFilterPanel.filters || {};
+    const lexicalWeight = this._normalizeVectorstoreLexicalWeight(this.vectorstoreLexicalWeight);
+    const vectorWeight = this._normalizeVectorstoreLexicalWeight(1 - lexicalWeight);
     this.vectorstoreLoading = true;
     try {
       this.searchFilterPanel.updateFilters({
         ...currentFilters,
         textQuery: query,
+        hybridVectorWeight: vectorWeight,
+        hybridLexicalWeight: lexicalWeight,
         offset: 0,
       });
       await this.searchFilterPanel.fetchImages();
@@ -1500,6 +1592,7 @@ export class SearchTab extends LitElement {
   _clearVectorstoreSearch() {
     if (!this.searchFilterPanel) return;
     this.vectorstoreQuery = '';
+    this.vectorstoreLexicalWeight = VECTORSTORE_DEFAULT_LEXICAL_WEIGHT;
     this.vectorstoreHasSearched = false;
     const currentFilters = this.searchFilterPanel.getState?.() || this.searchFilterPanel.filters || {};
     this.searchFilterPanel.updateFilters({
@@ -1612,6 +1705,8 @@ export class SearchTab extends LitElement {
     const nextChips = [];
     if (this.searchSubTab === 'vectorstore') {
       this.vectorstoreQuery = String(filters.textQuery || '');
+      const vectorstoreWeights = this._readVectorstoreWeights(filters || {});
+      this.vectorstoreLexicalWeight = vectorstoreWeights.lexicalWeight;
     }
     const mediaType = String(filters.mediaType || filters.media_type || 'all').trim().toLowerCase();
 
@@ -2461,14 +2556,29 @@ export class SearchTab extends LitElement {
       </div>
     ` : html``;
 
+    const rightPanelTools = this._getRightPanelTools();
     const savedPane = html`
       <right-panel
-        .tools=${[
-          { id: 'lists', label: 'Lists' },
-        ]}
+        .tools=${rightPanelTools}
         .activeTool=${this.rightPanelTool}
         @tool-changed=${(event) => this._handleRightPanelToolChange(event.detail.tool)}
       >
+        ${this.canCurate ? html`
+          <hotspot-targets-panel
+            slot="tool-tags"
+            mode="tags"
+            .targets=${this.searchHotspotTargets}
+            .keywordsByCategory=${this._getSearchKeywordsByCategory()}
+            .dragTargetId=${this._searchHotspotDragTarget}
+            @hotspot-keyword-change=${(event) => this._searchHotspotHandlers.handleKeywordChange({ target: { value: event.detail.value } }, event.detail.targetId)}
+            @hotspot-action-change=${(event) => this._searchHotspotHandlers.handleActionChange({ target: { value: event.detail.value } }, event.detail.targetId)}
+            @hotspot-add=${() => this._searchHotspotHandlers.handleAddTarget()}
+            @hotspot-remove=${(event) => this._searchHotspotHandlers.handleRemoveTarget(event.detail.targetId)}
+            @hotspot-dragover=${(event) => this._searchHotspotHandlers.handleDragOver(event.detail.event, event.detail.targetId)}
+            @hotspot-dragleave=${() => this._searchHotspotHandlers.handleDragLeave()}
+            @hotspot-drop=${(event) => this._handleSearchHotspotDrop(event.detail.event, event.detail.targetId)}
+          ></hotspot-targets-panel>
+        ` : html``}
         <list-targets-panel
           slot="tool-lists"
           .listsLoading=${this._listsLoading}
@@ -2490,6 +2600,22 @@ export class SearchTab extends LitElement {
           @list-target-item-click=${(event) => this._handleListTargetItemClick(event.detail.event, event.detail.targetId, event.detail.index)}
           @list-target-add=${this._handleAddListTarget}
         ></list-targets-panel>
+        ${this.canCurate ? html`
+          <rating-target-panel
+            slot="tool-ratings"
+            .targets=${this.searchRatingTargets}
+            .dragTargetId=${this._searchRatingDragTarget}
+            @rating-change=${(event) => this._handleSearchRatingChange(event.detail.targetId, event.detail.value)}
+            @rating-add=${() => this._handleSearchRatingAddTarget()}
+            @rating-remove=${(event) => this._handleSearchRatingRemoveTarget(event.detail.targetId)}
+            @rating-dragover=${(event) => this._handleSearchRatingDragOver(event.detail.event, event.detail.targetId)}
+            @rating-dragleave=${(event) => this._handleSearchRatingDragLeave(event.detail.event)}
+            @rating-drop=${(event) => {
+              event.stopPropagation();
+              this._handleSearchRatingDrop(event.detail.event, event.detail.targetId);
+            }}
+          ></rating-target-panel>
+        ` : html``}
       </right-panel>
     `;
 
@@ -2591,10 +2717,35 @@ export class SearchTab extends LitElement {
                     class="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 text-sm font-semibold hover:bg-gray-50"
                     ?disabled=${this.vectorstoreLoading}
                     @click=${this._clearVectorstoreSearch}
-                  >
-                    Clear
-                  </button>
+	                  >
+	                    Clear
+	                  </button>
 	                </div>
+                  <div class="mt-4 border-t border-gray-100 pt-3">
+                    <div class="flex flex-wrap items-center justify-between gap-3">
+                      <div class="text-xs font-semibold text-gray-700">Ranking Balance</div>
+                      <div class="text-xs text-gray-500">
+                        Text index ${Math.round(this.vectorstoreLexicalWeight * 100)}% · Vector ${Math.round((1 - this.vectorstoreLexicalWeight) * 100)}%
+                      </div>
+                    </div>
+                    <div class="mt-2 flex items-center gap-3">
+                      <span class="text-xs text-gray-500 min-w-[72px]">Vector</span>
+                      <input
+                        type="range"
+                        min="0"
+                        max="100"
+                        step="5"
+                        .value=${String(Math.round(this.vectorstoreLexicalWeight * 100))}
+                        @input=${this._handleVectorstoreWeightInput}
+                        class="flex-1"
+                        aria-label="Vectorstore ranking balance"
+                      >
+                      <span class="text-xs text-gray-500 min-w-[72px] text-right">Text index</span>
+                    </div>
+                    <div class="mt-1 text-[11px] text-gray-500">
+                      Move right to favor text index matches; move left to favor embedding similarity.
+                    </div>
+                  </div>
 	              </div>
 	            ` : html``}
 	            ${(this.searchSubTab !== 'vectorstore' || this.vectorstoreHasSearched) ? html`
@@ -2606,6 +2757,7 @@ export class SearchTab extends LitElement {
               .keywords=${this.keywords}
               .imageStats=${this.imageStats}
               .activeFilters=${this.searchChipFilters}
+              .availableFilterTypes=${['keyword', 'rating', 'media', 'folder', 'list', 'filename', 'text_search']}
               .hideFiltersSection=${Boolean(this.searchSimilarityAssetUuid)}
               .dropboxFolders=${this.searchDropboxOptions || []}
               .lists=${this.searchLists}
@@ -2927,6 +3079,7 @@ export class SearchTab extends LitElement {
         ${this.searchSubTab === 'natural-search' ? html`
           <lab-tab
             .tenant=${this.tenant}
+            .canCurate=${this.canCurate}
             .tagStatsBySource=${this.tagStatsBySource}
             .activeCurateTagSource=${this.activeCurateTagSource}
             .keywords=${this.keywords}
@@ -2944,6 +3097,7 @@ export class SearchTab extends LitElement {
         ${this.searchSubTab === 'chips' ? html`
           <home-chips-tab
             .tenant=${this.tenant}
+            .canCurate=${this.canCurate}
             .initialSelection=${this.initialExploreSelection}
             .tagStatsBySource=${this.tagStatsBySource}
             .activeCurateTagSource=${this.activeCurateTagSource}

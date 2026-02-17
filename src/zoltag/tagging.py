@@ -255,10 +255,17 @@ class SigLIPTagger:
             keywords.append(keyword)
 
         with torch.no_grad():
+            max_text_length = 64
+            tokenizer = getattr(self.processor, "tokenizer", None)
+            tokenizer_limit = int(getattr(tokenizer, "model_max_length", max_text_length) or max_text_length)
+            if tokenizer_limit > 0:
+                max_text_length = min(max_text_length, tokenizer_limit)
             inputs = self.processor(
                 text=text_prompts,
                 return_tensors="pt",
-                padding=True
+                padding=True,
+                truncation=True,
+                max_length=max_text_length,
             )
             inputs = {k: v.to(self.device) for k, v in inputs.items()}
             text_outputs = self.model.get_text_features(**inputs)

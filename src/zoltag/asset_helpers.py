@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import mimetypes
 from dataclasses import dataclass
 from typing import Dict, Iterable, Optional
@@ -16,6 +17,23 @@ from zoltag.tenant_scope import assign_tenant_scope, tenant_column_filter
 
 class AssetReadinessError(RuntimeError):
     """Raised when strict asset read requirements are not met."""
+
+
+def _cache_bust_token(value: Optional[datetime]) -> Optional[str]:
+    """Build a stable unix-milliseconds token for cache-busting query params."""
+    if value is None:
+        return None
+    dt = value
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return str(int(dt.timestamp() * 1000))
+
+
+def _append_cache_bust(url: Optional[str], token: Optional[str]) -> Optional[str]:
+    if not url or not token:
+        return url
+    separator = "&" if "?" in url else "?"
+    return f"{url}{separator}v={token}"
 
 
 @dataclass
@@ -89,6 +107,12 @@ def resolve_image_storage(
             raise AssetReadinessError(f"Image {image.id} asset has no source provider/key.")
 
     thumbnail_url = tenant.get_thumbnail_url(settings, thumbnail_key)
+    cache_token = (
+        _cache_bust_token(getattr(image, "last_processed", None))
+        or _cache_bust_token(getattr(asset, "updated_at", None) if asset is not None else None)
+        or _cache_bust_token(getattr(image, "modified_time", None))
+    )
+    thumbnail_url = _append_cache_bust(thumbnail_url, cache_token)
 
     return ResolvedImageStorage(
         asset=asset,
