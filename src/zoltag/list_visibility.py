@@ -6,6 +6,7 @@ from fastapi import HTTPException
 from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
+from zoltag.auth.dependencies import get_effective_membership_permissions
 from zoltag.auth.models import UserProfile, UserTenant
 from zoltag.models.config import PhotoList
 from zoltag.tenant import Tenant
@@ -55,7 +56,23 @@ def get_tenant_role_for_user(db: Session, tenant: Tenant, user: UserProfile) -> 
 
 
 def is_tenant_admin_user(db: Session, tenant: Tenant, user: UserProfile) -> bool:
-    return get_tenant_role_for_user(db, tenant, user) == "admin"
+    if not user:
+        return False
+    if bool(getattr(user, "is_super_admin", False)):
+        return True
+    membership = (
+        db.query(UserTenant)
+        .filter(
+            UserTenant.supabase_uid == user.supabase_uid,
+            tenant_column_filter_for_values(UserTenant, tenant.id, tenant.id),
+            UserTenant.accepted_at.isnot(None),
+        )
+        .first()
+    )
+    if not membership:
+        return False
+    permissions = get_effective_membership_permissions(db, membership)
+    return "tenant.settings.manage" in permissions
 
 
 def is_list_owner(list_row: PhotoList, user: UserProfile) -> bool:
@@ -102,4 +119,3 @@ def get_list_scope_clause(*, user: UserProfile, scope: str, is_tenant_admin: boo
         PhotoList.visibility.is_(None),
     )
     return or_(shared_clause, owner_clause)
-

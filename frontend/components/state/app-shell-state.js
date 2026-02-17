@@ -2,10 +2,17 @@ import { BaseStateController } from './base-state-controller.js';
 import { getCurrentUser } from '../../services/auth.js';
 import { getImageStats } from '../../services/api.js';
 import { shouldAutoRefreshCurateStats } from '../shared/curate-stats.js';
+import {
+  canCurateTenant,
+  getTenantPermissions as getMembershipPermissions,
+  getTenantRole as getMembershipRole,
+  hasTenantPermission as hasMembershipPermission,
+  normalizeTenantRef,
+  resolveTenantMembership,
+} from '../shared/tenant-permissions.js';
 
 function normalizeTenantValue(value) {
-  if (typeof value !== 'string') return '';
-  return value.trim();
+  return normalizeTenantRef(value);
 }
 
 /**
@@ -53,35 +60,28 @@ export class AppShellStateController extends BaseStateController {
   resolveTenantRef(rawTenantRef) {
     const tenantRef = normalizeTenantValue(rawTenantRef);
     if (!tenantRef) return '';
-    const memberships = Array.isArray(this.host.currentUser?.tenants)
-      ? this.host.currentUser.tenants
-      : [];
-    for (const membership of memberships) {
-      const membershipTenantId = normalizeTenantValue(String(membership?.tenant_id ?? ''));
-      const membershipIdentifier = normalizeTenantValue(membership?.tenant_identifier || '');
-      if (tenantRef === membershipTenantId || (membershipIdentifier && tenantRef === membershipIdentifier)) {
-        return membershipTenantId || tenantRef;
-      }
-    }
-    return tenantRef;
+    const membership = resolveTenantMembership(this.host.currentUser, tenantRef);
+    return normalizeTenantValue(String(membership?.tenant_id || '')) || tenantRef;
   }
 
   getTenantRole() {
-    const tenantId = this.resolveTenantRef(this.host.tenant);
-    if (!tenantId) return null;
-    const memberships = this.host.currentUser?.tenants || [];
-    const match = memberships.find(
-      (membership) => normalizeTenantValue(String(membership?.tenant_id ?? '')) === tenantId
-    );
-    return match?.role || null;
+    return getMembershipRole(this.host.currentUser, this.host.tenant);
+  }
+
+  getTenantMembership() {
+    return resolveTenantMembership(this.host.currentUser, this.host.tenant);
+  }
+
+  getTenantPermissions() {
+    return getMembershipPermissions(this.host.currentUser, this.host.tenant);
+  }
+
+  hasTenantPermission(permissionKey) {
+    return hasMembershipPermission(this.host.currentUser, this.host.tenant, permissionKey);
   }
 
   canCurate() {
-    const role = this.getTenantRole();
-    if (!role) {
-      return true;
-    }
-    return role !== 'user';
+    return canCurateTenant(this.host.currentUser, this.host.tenant);
   }
 
   setActiveTab(tabName) {
@@ -93,7 +93,7 @@ export class AppShellStateController extends BaseStateController {
       this.host.activeLibrarySubTab = 'assets';
     }
     if (tabName === 'search' && !this.host.activeSearchSubTab) {
-      this.host.activeSearchSubTab = 'home';
+      this.host.activeSearchSubTab = 'landing';
     }
     if (tabName === 'curate' && !this.canCurate()) {
       this.host.activeTab = 'home';
@@ -115,7 +115,7 @@ export class AppShellStateController extends BaseStateController {
         this.host.activeLibrarySubTab = subTab;
       }
       if (tab === 'search') {
-        this.host.activeSearchSubTab = subTab || 'home';
+        this.host.activeSearchSubTab = subTab || 'landing';
         this.host.pendingSearchExploreSelection = null;
         this.host.pendingVectorstoreQuery = null;
       }
@@ -126,7 +126,7 @@ export class AppShellStateController extends BaseStateController {
       return;
     }
     if (detail === 'search') {
-      this.host.activeSearchSubTab = 'home';
+      this.host.activeSearchSubTab = 'landing';
       this.host.pendingSearchExploreSelection = null;
       this.host.pendingVectorstoreQuery = null;
     }
@@ -149,7 +149,7 @@ export class AppShellStateController extends BaseStateController {
       this.host.activeLibrarySubTab = subTab;
     }
     if (tab === 'search') {
-      this.host.activeSearchSubTab = subTab || 'home';
+      this.host.activeSearchSubTab = subTab || 'landing';
     }
     if (tab === 'library' && subTab === 'keywords' && adminSubTab) {
       this.host.activeAdminSubTab = adminSubTab;
@@ -294,7 +294,7 @@ export class AppShellStateController extends BaseStateController {
     // Tenant switch always returns to Home and forces a fresh data pull.
     this.host.activeTab = 'home';
     this.host.homeSubTab = 'overview';
-    this.host.activeSearchSubTab = 'home';
+    this.host.activeSearchSubTab = 'landing';
     this.host.pendingSearchExploreSelection = null;
     this.host.pendingVectorstoreQuery = null;
     this.host.pendingVectorstoreQueryToken = 0;

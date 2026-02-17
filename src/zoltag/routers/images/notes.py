@@ -9,7 +9,7 @@ from zoltag.dependencies import get_db, get_tenant
 from zoltag.tenant import Tenant
 from zoltag.metadata import AssetNote, ImageMetadata
 from zoltag.tenant_scope import tenant_column_filter
-from zoltag.auth.dependencies import require_tenant_role_from_header
+from zoltag.auth.dependencies import require_tenant_permission_from_header
 from zoltag.auth.models import UserProfile
 from zoltag.text_index import rebuild_asset_text_index
 
@@ -53,7 +53,7 @@ async def upsert_asset_note(
     body: str = Body(..., embed=True),
     tenant: Tenant = Depends(get_tenant),
     db: Session = Depends(get_db),
-    current_user: UserProfile = Depends(require_tenant_role_from_header("editor")),
+    current_user: UserProfile = Depends(require_tenant_permission_from_header("image.note.edit")),
 ):
     """Create or replace a note of the given type for an asset."""
     asset_id = _resolve_asset_id(image_id, tenant, db)

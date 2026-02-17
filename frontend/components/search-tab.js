@@ -13,6 +13,7 @@ import {
   getKeywordsByCategory,
   getKeywordsByCategoryFromList,
 } from './shared/keyword-utils.js';
+import { formatStatNumber } from './shared/formatting.js';
 import { createSelectionHandlers } from './shared/selection-handlers.js';
 import { renderResultsPagination } from './shared/pagination-controls.js';
 import { renderSelectableImageGrid } from './shared/selectable-image-grid.js';
@@ -54,7 +55,7 @@ const VECTORSTORE_DEFAULT_LEXICAL_WEIGHT = 1.0;
  * - Explore: Tag chip based navigation
  *
  * @property {String} tenant - Current tenant ID
- * @property {String} searchSubTab - Active subtab ('home', 'vectorstore', 'browse-by-folder', 'natural-search', 'chips')
+ * @property {String} searchSubTab - Active subtab ('advanced', 'results', 'browse-by-folder', 'natural-search', 'chips')
  * @property {Array} searchChipFilters - Current filter chip selections
  * @property {Array} searchDropboxOptions - Dropbox folder options
  * @property {Array} searchImages - Images from filter panel
@@ -153,13 +154,14 @@ export class SearchTab extends LitElement {
     vectorstoreQuery: { type: String, state: true },
     vectorstoreLexicalWeight: { type: Number, state: true },
     vectorstoreLoading: { type: Boolean, state: true },
+    _showRankingBalance: { type: Boolean, state: true },
     vectorstoreHasSearched: { type: Boolean, state: true },
   };
 
   constructor() {
     super();
     this.tenant = '';
-    this.searchSubTab = 'home';
+    this.searchSubTab = 'advanced';
     this.searchChipFilters = [];
     this.searchFilterPanel = null;
     this.searchDropboxOptions = [];
@@ -241,6 +243,7 @@ export class SearchTab extends LitElement {
     this.vectorstoreLexicalWeight = VECTORSTORE_DEFAULT_LEXICAL_WEIGHT;
     this.vectorstoreLoading = false;
     this.vectorstoreHasSearched = false;
+    this._showRankingBalance = false;
     this._searchHotspotHandlers = createHotspotHandlers(this, {
       targetsProperty: 'searchHotspotTargets',
       dragTargetProperty: '_searchHotspotDragTarget',
@@ -320,7 +323,7 @@ export class SearchTab extends LitElement {
     this.searchRefreshing = true;
     try {
       const tasks = [];
-      if (this.searchSubTab === 'home' || (this.searchSubTab === 'vectorstore' && this.vectorstoreHasSearched)) {
+      if (this.searchSubTab === 'advanced' || (this.searchSubTab === 'results' && this.vectorstoreHasSearched)) {
         tasks.push(this.searchFilterPanel?.fetchImages());
       }
       if (this.searchSubTab === 'browse-by-folder') {
@@ -469,13 +472,13 @@ export class SearchTab extends LitElement {
     }
 
     if (changedProps.has('searchSubTab')) {
-      if (this.hideSubtabs && this.searchSubTab !== 'home') {
-        this.searchSubTab = 'home';
+      if (this.hideSubtabs && this.searchSubTab !== 'advanced') {
+        this.searchSubTab = 'advanced';
         return;
       }
       const previousSubTab = changedProps.get('searchSubTab');
-      if (this.searchSubTab === 'vectorstore') {
-        if (previousSubTab !== 'vectorstore') {
+      if (this.searchSubTab === 'results') {
+        if (previousSubTab !== 'results') {
           this.vectorstoreHasSearched = false;
         }
         const currentFilters = this.searchFilterPanel?.getState?.() || this.searchFilterPanel?.filters || {};
@@ -483,7 +486,7 @@ export class SearchTab extends LitElement {
         const vectorstoreWeights = this._readVectorstoreWeights(currentFilters);
         this.vectorstoreLexicalWeight = vectorstoreWeights.lexicalWeight;
       }
-      if (previousSubTab === 'vectorstore' && this.searchSubTab !== 'vectorstore' && this.searchFilterPanel) {
+      if (previousSubTab === 'results' && this.searchSubTab !== 'results' && this.searchFilterPanel) {
         const currentFilters = this.searchFilterPanel.getState?.() || this.searchFilterPanel.filters || {};
         if (currentFilters.textQuery || currentFilters.hybridVectorWeight !== undefined || currentFilters.hybridLexicalWeight !== undefined) {
           this.searchFilterPanel.updateFilters({
@@ -493,7 +496,7 @@ export class SearchTab extends LitElement {
             hybridLexicalWeight: undefined,
             offset: 0,
           });
-          if (this.searchSubTab === 'home') {
+          if (this.searchSubTab === 'advanced') {
             this.searchFilterPanel.fetchImages();
           }
         }
@@ -505,6 +508,9 @@ export class SearchTab extends LitElement {
         if (this.browseByFolderAppliedSelection?.length) {
           this._refreshBrowseByFolderData();
         }
+      }
+      if (this.searchSubTab === 'landing' && !this.browseByFolderOptions?.length) {
+        this.folderBrowserPanel?.loadFolders();
       }
     }
 
@@ -1545,11 +1551,12 @@ export class SearchTab extends LitElement {
 
     this._appliedInitialVectorstoreQueryToken = token;
     this.vectorstoreQuery = query;
+    this._ux1Query = query;
 
-    if (this.searchSubTab !== 'vectorstore') {
-      this.searchSubTab = 'vectorstore';
+    if (this.searchSubTab !== 'results') {
+      this.searchSubTab = 'results';
       this.dispatchEvent(new CustomEvent('search-subtab-changed', {
-        detail: { subtab: 'vectorstore' },
+        detail: { subtab: 'results' },
         bubbles: true,
         composed: true,
       }));
@@ -1695,7 +1702,7 @@ export class SearchTab extends LitElement {
   _syncChipFiltersFromFilterPanel() {
     const filters = this.searchFilterPanel?.getState?.() || this.searchFilterPanel?.filters;
     if (!filters || typeof filters !== 'object') return;
-    if (this.searchSubTab === 'vectorstore') {
+    if (this.searchSubTab === 'results') {
       this.vectorstoreQuery = String(filters.textQuery || '');
     }
     this._syncChipFiltersFromFilterState(filters);
@@ -1703,7 +1710,7 @@ export class SearchTab extends LitElement {
 
   _syncChipFiltersFromFilterState(filters) {
     const nextChips = [];
-    if (this.searchSubTab === 'vectorstore') {
+    if (this.searchSubTab === 'results') {
       this.vectorstoreQuery = String(filters.textQuery || '');
       const vectorstoreWeights = this._readVectorstoreWeights(filters || {});
       this.vectorstoreLexicalWeight = vectorstoreWeights.lexicalWeight;
@@ -1842,7 +1849,7 @@ export class SearchTab extends LitElement {
 
   _maybeStartInitialRefresh() {
     if (this._searchInitialLoadComplete || this._searchInitialLoadPending) return;
-    if (this.searchSubTab !== 'home') return;
+    if (this.searchSubTab !== 'advanced') return;
     if (!this.searchFilterPanel) return;
     if ((this.searchImages || []).length > 0) {
       this._searchInitialLoadComplete = true;
@@ -2033,7 +2040,7 @@ export class SearchTab extends LitElement {
   _handleChipFiltersChanged(event) {
     const chips = event.detail.filters || [];
     const currentFilters = this.searchFilterPanel?.getState?.() || this.searchFilterPanel?.filters || {};
-    const preserveVectorstoreQuery = this.searchSubTab === 'vectorstore';
+    const preserveVectorstoreQuery = this.searchSubTab === 'results';
 
     // Store the chip filters for UI state
     this.searchChipFilters = chips;
@@ -2469,6 +2476,140 @@ export class SearchTab extends LitElement {
   }
 
   // ========================================
+  // UX1 Landing
+  // ========================================
+
+  _renderUx1Landing() {
+    const searchFocused = this._ux1SearchFocused || false;
+    const imageStats = this.imageStats || {};
+    const keywordCount = formatStatNumber(imageStats.keyword_count);
+    const ratedCount = formatStatNumber(imageStats.rated_image_count);
+    const tagCount = formatStatNumber(imageStats.positive_permatag_count);
+    const folderCount = formatStatNumber((this.browseByFolderOptions || []).length);
+
+    const navRows = [
+      {
+        key: 'advanced',
+        label: 'Advanced Filter',
+        subtitle: 'Filter by keyword, rating, list, media type, date, and more. The fastest way to find exactly what you need.',
+        accentClass: 'home-cta-search',
+        glyphChar: 'F',
+        iconSvg: html`<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="2"></circle><line x1="16" y1="16" x2="21" y2="21" stroke="currentColor" stroke-width="2" stroke-linecap="round"></line></svg>`,
+        metrics: [
+          { label: 'Tags', value: tagCount },
+          { label: 'Rated', value: ratedCount },
+        ],
+      },
+      {
+        key: 'browse-by-folder',
+        label: 'Browse Folders',
+        subtitle: 'Zoltag tracks the source of each file. This view allows you to view files by their location.',
+        accentClass: 'home-cta-upload',
+        glyphChar: 'B',
+        iconSvg: html`<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8.2a2.2 2.2 0 0 1 2.2-2.2h4.1l1.9 2h5.8A2.2 2.2 0 0 1 20.2 10v7.8A2.2 2.2 0 0 1 18 20H6.2A2.2 2.2 0 0 1 4 17.8z" fill="none" stroke="currentColor" stroke-width="1.8"></path><path d="M12 10.4v5.2M9.4 13h5.2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path></svg>`,
+        metrics: [
+          { label: 'Folders', value: folderCount },
+        ],
+      },
+      {
+        key: 'chips',
+        label: 'Browse Keywords',
+        subtitle: 'See your entire tag vocabulary at a glance. Click any keyword to explore all images with that tag.',
+        accentClass: 'home-cta-keywords',
+        glyphChar: 'K',
+        iconSvg: html`<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.2 7.2h15.6M6.5 12h11M8.6 16.8h6.8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path><circle cx="5.2" cy="7.2" r="1" fill="currentColor"></circle><circle cx="7.6" cy="12" r="1" fill="currentColor"></circle><circle cx="9.7" cy="16.8" r="1" fill="currentColor"></circle></svg>`,
+        metrics: [
+          { label: 'Keywords', value: keywordCount },
+        ],
+      },
+    ];
+
+    return html`
+      <div class="container">
+
+        <!-- Search bar — same classes as home -->
+        <form class="home-vectorstore-launch" @submit=${(e) => { e.preventDefault(); this._ux1SubmitSearch(); }}>
+          <div class="home-vectorstore-launch-row">
+            <input
+              type="text"
+              class="home-vectorstore-launch-input"
+              placeholder="Search..."
+              .value=${this._ux1Query || ''}
+              @input=${(e) => { this._ux1Query = e.target.value; this.requestUpdate(); }}
+              @keydown=${(e) => { if (e.key === 'Enter') { e.preventDefault(); this._ux1SubmitSearch(); } }}
+              @focus=${() => { this._ux1SearchFocused = true; this.requestUpdate(); }}
+              @blur=${() => {
+                setTimeout(() => { this._ux1SearchFocused = false; this.requestUpdate(); }, 150);
+              }}
+            >
+            <button
+              type="submit"
+              class="home-vectorstore-launch-button"
+              ?disabled=${!(this._ux1Query || '').trim()}
+            >
+              Search
+            </button>
+          </div>
+        </form>
+
+        <!-- Nav cards — hidden while search input is focused -->
+        ${!searchFocused ? html`
+          <div class="home-cta-grid">
+            ${navRows.map((row) => html`
+              <button
+                type="button"
+                class="home-cta-card ${row.accentClass}"
+                @click=${() => this._handleSearchSubTabChange(row.key)}
+              >
+                <div class="home-cta-backdrop" aria-hidden="true"></div>
+                <div class="home-cta-glyph" aria-hidden="true">
+                  <span class="home-cta-glyph-char">${row.glyphChar}</span>
+                </div>
+                <div class="home-cta-icon-wrap" aria-hidden="true">
+                  ${row.iconSvg}
+                </div>
+                <div class="home-cta-content">
+                  <div class="home-cta-title">${row.label}</div>
+                  <div class="home-cta-subtitle">${row.subtitle}</div>
+                  <div class="home-cta-metrics">
+                    ${row.metrics.map((m) => html`
+                      <div class="home-cta-metric">
+                        <span class="home-cta-metric-label">${m.label}</span>
+                        <span class="home-cta-metric-value">${m.value}</span>
+                      </div>
+                    `)}
+                  </div>
+                </div>
+                <div class="home-cta-arrow" aria-hidden="true">
+                  <span class="home-cta-arrow-char">&#8594;</span>
+                </div>
+              </button>
+            `)}
+          </div>
+        ` : html``}
+
+      </div>
+    `;
+  }
+
+  _ux1SubmitSearch() {
+    const query = (this._ux1Query || '').trim();
+    if (!query) return;
+    this.vectorstoreQuery = query;
+    this._handleSearchSubTabChange('results');
+    this._runVectorstoreSearch();
+  }
+
+  _ux1ApplyKeyword(keyword) {
+    this._handleSearchSubTabChange('chips');
+    this.dispatchEvent(new CustomEvent('ux1-keyword-selected', {
+      detail: { keyword },
+      bubbles: true,
+      composed: true,
+    }));
+  }
+
+  // ========================================
   // Render Method
   // ========================================
 
@@ -2486,11 +2627,11 @@ export class SearchTab extends LitElement {
     const showBrowseByFolderOverlay = this.browseByFolderAccordionOpen || this._hasPendingBrowseByFolderSelection();
     const activeFilterState = this.searchFilterPanel?.getState?.() || this.searchFilterPanel?.filters || {};
     const activeVectorstoreQuery = String(activeFilterState.textQuery || this.vectorstoreQuery || '').trim();
-    const shouldShowVectorstoreResults = this.searchSubTab !== 'vectorstore' || this.vectorstoreHasSearched;
+    const shouldShowVectorstoreResults = this.searchSubTab !== 'results' || this.vectorstoreHasSearched;
     const visibleSearchImages = shouldShowVectorstoreResults ? (this.searchImages || []) : [];
-    const searchPagination = (this.searchSubTab === 'home' || this.searchSubTab === 'vectorstore')
+    const searchPagination = (this.searchSubTab === 'advanced' || this.searchSubTab === 'results')
       ? (() => {
-        if (this.searchSubTab === 'vectorstore' && !this.vectorstoreHasSearched) {
+        if (this.searchSubTab === 'results' && !this.vectorstoreHasSearched) {
           return html``;
         }
         const { offset, limit, total, count } = this._getSearchPaginationState();
@@ -2627,34 +2768,34 @@ export class SearchTab extends LitElement {
           <div class="flex items-center justify-between mb-4">
             <div class="curate-subtabs">
               <button
-                class="curate-subtab ${this.searchSubTab === 'home' ? 'active' : ''}"
-                @click=${() => this._handleSearchSubTabChange('home')}
+                class="curate-subtab ${this.searchSubTab === 'landing' ? 'active' : ''}"
+                @click=${() => this._handleSearchSubTabChange('landing')}
               >
                 Search Home
+              </button>
+              <button
+                class="curate-subtab ${this.searchSubTab === 'results' ? 'active' : ''}"
+                @click=${() => this._handleSearchSubTabChange('results')}
+              >
+                Search Results
+              </button>
+              <button
+                class="curate-subtab ${this.searchSubTab === 'advanced' ? 'active' : ''}"
+                @click=${() => this._handleSearchSubTabChange('advanced')}
+              >
+                Advanced Filter
               </button>
               <button
                 class="curate-subtab ${this.searchSubTab === 'browse-by-folder' ? 'active' : ''}"
                 @click=${() => this._handleSearchSubTabChange('browse-by-folder')}
               >
-                Browse by Folder
+                Browse Folders
               </button>
               <button
                 class="curate-subtab ${this.searchSubTab === 'chips' ? 'active' : ''}"
                 @click=${() => this._handleSearchSubTabChange('chips')}
               >
-                Explore
-              </button>
-              <button
-                class="curate-subtab ${this.searchSubTab === 'vectorstore' ? 'active' : ''}"
-                @click=${() => this._handleSearchSubTabChange('vectorstore')}
-              >
-                Search - Vectorstore
-              </button>
-              <button
-                class="curate-subtab ${this.searchSubTab === 'natural-search' ? 'active' : ''}"
-                @click=${() => this._handleSearchSubTabChange('natural-search')}
-              >
-                Search - LLM
+                Browse Keywords
               </button>
             </div>
 
@@ -2691,64 +2832,107 @@ export class SearchTab extends LitElement {
         ` : html``}
 
         <!-- Search Home / Vectorstore Subtab -->
-        ${(this.searchSubTab === 'home' || this.searchSubTab === 'vectorstore') ? html`
+        ${(this.searchSubTab === 'advanced' || this.searchSubTab === 'results') ? html`
           <div>
-	            ${this.searchSubTab === 'vectorstore' ? html`
-	              <div class="bg-white rounded-lg shadow p-4 mb-3 border border-blue-100">
+            ${this.searchSubTab === 'results' ? html`
+              <div class="bg-white rounded-lg p-4">
                 <div class="flex flex-wrap items-center gap-2">
-                  <div class="text-sm font-semibold text-gray-900">Search</div>
+                  ${this._showRankingBalance ? html`
+                  <div class="curate-audit-toggle">
+                    <button
+                      class=${(this._searchResultsMode || 'vector') === 'vector' ? 'active' : ''}
+                      @click=${() => { this._searchResultsMode = 'vector'; this.requestUpdate(); }}
+                    >Vector</button>
+                    <button
+                      class=${this._searchResultsMode === 'llm' ? 'active' : ''}
+                      @click=${() => { this._searchResultsMode = 'llm'; this.requestUpdate(); }}
+                    >LLM</button>
+                  </div>
+                  ` : html``}
                 </div>
-                <div class="mt-3 flex flex-wrap gap-2 items-center">
-                  <input
-                    class="flex-1 min-w-[260px] border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                    placeholder="Describe what you want to find (e.g. aerial silks performer in blue light)"
-                    .value=${this.vectorstoreQuery}
-                    @input=${this._handleVectorstoreQueryInput}
-                    @keydown=${this._handleVectorstoreQueryKeydown}
-                  >
-                  <button
-                    class="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
-                    ?disabled=${!this.vectorstoreQuery.trim() || this.vectorstoreLoading}
-                    @click=${this._runVectorstoreSearch}
-                  >
-                    ${this.vectorstoreLoading ? 'Thinking...' : 'Search'}
-                  </button>
-                  <button
-                    class="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 text-sm font-semibold hover:bg-gray-50"
-                    ?disabled=${this.vectorstoreLoading}
-                    @click=${this._clearVectorstoreSearch}
-	                  >
-	                    Clear
-	                  </button>
-	                </div>
-                  <div class="mt-4 border-t border-gray-100 pt-3">
-                    <div class="flex flex-wrap items-center justify-between gap-3">
-                      <div class="text-xs font-semibold text-gray-700">Ranking Balance</div>
-                      <div class="text-xs text-gray-500">
-                        Text index ${Math.round(this.vectorstoreLexicalWeight * 100)}% · Vector ${Math.round((1 - this.vectorstoreLexicalWeight) * 100)}%
-                      </div>
-                    </div>
-                    <div class="mt-2 flex items-center gap-3">
-                      <span class="text-xs text-gray-500 min-w-[72px]">Vector</span>
-                      <input
-                        type="range"
-                        min="0"
-                        max="100"
-                        step="5"
-                        .value=${String(Math.round(this.vectorstoreLexicalWeight * 100))}
-                        @input=${this._handleVectorstoreWeightInput}
-                        class="flex-1"
-                        aria-label="Vectorstore ranking balance"
+                ${this._searchResultsMode === 'llm' ? html`
+                  <div class="mt-3">
+                    <lab-tab
+                      .tenant=${this.tenant}
+                      .canCurate=${this.canCurate}
+                      .tagStatsBySource=${this.tagStatsBySource}
+                      .activeCurateTagSource=${this.activeCurateTagSource}
+                      .keywords=${this.keywords}
+                      .imageStats=${this.imageStats}
+                      .curateOrderBy=${this.searchOrderBy}
+                      .curateDateOrder=${this.searchDateOrder}
+                      .renderCurateRatingWidget=${this.renderCurateRatingWidget}
+                      .renderCurateRatingStatic=${this.renderCurateRatingStatic}
+                      .formatCurateDate=${this.formatCurateDate}
+                      @image-clicked=${(event) => this._handleSearchImageClick(event.detail.event, event.detail.image, event.detail.imageSet)}
+                      @image-selected=${(event) => this._handleSearchImageClick(null, event.detail.image, event.detail.imageSet)}
+                    ></lab-tab>
+                  </div>
+                ` : html`
+                <form class="home-vectorstore-launch" style="margin-bottom:0;" @submit=${(e) => { e.preventDefault(); this._runVectorstoreSearch(); }}>
+                  <div class="home-vectorstore-launch-row" style="align-items: flex-start;">
+                    <input
+                      class="home-vectorstore-launch-input"
+                      placeholder="Describe what you want to find (e.g. aerial silks performer in blue light)"
+                      .value=${this.vectorstoreQuery}
+                      @input=${this._handleVectorstoreQueryInput}
+                      @keydown=${this._handleVectorstoreQueryKeydown}
+                    >
+                    <div class="flex flex-col items-end gap-1 self-start">
+                      <button
+                        type="submit"
+                        class="home-vectorstore-launch-button"
+                        ?disabled=${!this.vectorstoreQuery.trim() || this.vectorstoreLoading}
                       >
-                      <span class="text-xs text-gray-500 min-w-[72px] text-right">Text index</span>
-                    </div>
-                    <div class="mt-1 text-[11px] text-gray-500">
-                      Move right to favor text index matches; move left to favor embedding similarity.
+                        ${this.vectorstoreLoading ? 'Thinking...' : 'Search'}
+                      </button>
+                      <button
+                        class="text-xs text-gray-400 hover:text-gray-600 underline underline-offset-2"
+                        type="button"
+                        @click=${() => {
+                          this._showRankingBalance = !this._showRankingBalance;
+                          if (!this._showRankingBalance && this._searchResultsMode === 'llm') {
+                            this._searchResultsMode = 'vector';
+                          }
+                          this.requestUpdate();
+                        }}
+                      >
+                        ${this._showRankingBalance ? 'Hide options' : 'Advanced'}
+                      </button>
                     </div>
                   </div>
-	              </div>
-	            ` : html``}
-	            ${(this.searchSubTab !== 'vectorstore' || this.vectorstoreHasSearched) ? html`
+                </form>
+                ${this._showRankingBalance ? html`
+                <div class="mt-4 border-t border-gray-100 pt-3">
+                  <div class="flex flex-wrap items-center justify-between gap-3">
+                    <div class="text-xs font-semibold text-gray-700">Ranking Balance</div>
+                    <div class="text-xs text-gray-500">
+                      Text index ${Math.round(this.vectorstoreLexicalWeight * 100)}% · Vector ${Math.round((1 - this.vectorstoreLexicalWeight) * 100)}%
+                    </div>
+                  </div>
+                  <div class="mt-2 flex items-center gap-3">
+                    <span class="text-xs text-gray-500 min-w-[72px]">Vector</span>
+                    <input
+                      type="range"
+                      min="0"
+                      max="100"
+                      step="5"
+                      .value=${String(Math.round(this.vectorstoreLexicalWeight * 100))}
+                      @input=${this._handleVectorstoreWeightInput}
+                      class="flex-1"
+                      aria-label="Vectorstore ranking balance"
+                    >
+                    <span class="text-xs text-gray-500 min-w-[72px] text-right">Text index</span>
+                  </div>
+                  <div class="mt-1 text-[11px] text-gray-500">
+                    Move right to favor text index matches; move left to favor embedding similarity.
+                  </div>
+                </div>
+                ` : html``}
+                `}
+              </div>
+            ` : html``}
+            ${(this.searchSubTab !== 'results' || this.vectorstoreHasSearched) ? html`
 	            <!-- Filter Chips Component -->
 	            <filter-chips
 	              .tenant=${this.tenant}
@@ -2853,7 +3037,7 @@ export class SearchTab extends LitElement {
                       })}
                     ` : html`
                       <div class="p-4 text-center text-gray-500 text-sm">
-                        ${this.searchSubTab === 'vectorstore' && !activeVectorstoreQuery
+                        ${this.searchSubTab === 'results' && !activeVectorstoreQuery
                           ? 'Enter a query above to run vectorstore search.'
                           : 'No images found. Adjust filters to search.'}
                       </div>
@@ -3076,24 +3260,6 @@ export class SearchTab extends LitElement {
           </div>
         ` : ''}
 
-        ${this.searchSubTab === 'natural-search' ? html`
-          <lab-tab
-            .tenant=${this.tenant}
-            .canCurate=${this.canCurate}
-            .tagStatsBySource=${this.tagStatsBySource}
-            .activeCurateTagSource=${this.activeCurateTagSource}
-            .keywords=${this.keywords}
-            .imageStats=${this.imageStats}
-            .curateOrderBy=${this.searchOrderBy}
-            .curateDateOrder=${this.searchDateOrder}
-            .renderCurateRatingWidget=${this.renderCurateRatingWidget}
-            .renderCurateRatingStatic=${this.renderCurateRatingStatic}
-            .formatCurateDate=${this.formatCurateDate}
-            @image-clicked=${(event) => this._handleSearchImageClick(event.detail.event, event.detail.image, event.detail.imageSet)}
-            @image-selected=${(event) => this._handleSearchImageClick(null, event.detail.image, event.detail.imageSet)}
-          ></lab-tab>
-        ` : html``}
-
         ${this.searchSubTab === 'chips' ? html`
           <home-chips-tab
             .tenant=${this.tenant}
@@ -3111,6 +3277,10 @@ export class SearchTab extends LitElement {
             @image-clicked=${(event) => this._handleSearchImageClick(event.detail.event, event.detail.image, event.detail.imageSet)}
             @image-selected=${(event) => this._handleSearchImageClick(null, event.detail.image, event.detail.imageSet)}
           ></home-chips-tab>
+        ` : html``}
+
+        ${this.searchSubTab === 'landing' ? html`
+          ${this._renderUx1Landing()}
         ` : html``}
       </div>
     `;

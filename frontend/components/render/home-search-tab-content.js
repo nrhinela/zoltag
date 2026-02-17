@@ -138,9 +138,6 @@ export function renderHomeTabContent(host, { navCards, formatCurateDate }) {
   const homeLists = [...(host.homeLists || [])]
     .sort((a, b) => (a.title || '').localeCompare(b.title || ''));
   const homeRecommendationsTab = host.homeRecommendationsTab === 'keywords' ? 'keywords' : 'lists';
-  const vectorstoreLaunchQuery = String(host.homeVectorstoreQuery || '');
-  const trimmedVectorstoreLaunchQuery = vectorstoreLaunchQuery.trim();
-
   const ctaCards = [
     {
       key: 'search',
@@ -234,43 +231,9 @@ export function renderHomeTabContent(host, { navCards, formatCurateDate }) {
       },
     });
   };
-  const handleVectorstoreLaunchInput = (event) => {
-    host.homeVectorstoreQuery = event?.target?.value || '';
-  };
-  const handleVectorstoreLaunchSubmit = (event) => {
-    event.preventDefault();
-    const query = String(host.homeVectorstoreQuery || '').trim();
-    if (!query) return;
-    host._handleHomeNavigate({
-      detail: {
-        tab: 'search',
-        subTab: 'vectorstore',
-        vectorstoreQuery: query,
-      },
-    });
-  };
-
   return html`
     <div slot="home" class="home-tab-shell">
       <div class="container">
-        <form class="home-vectorstore-launch" @submit=${handleVectorstoreLaunchSubmit}>
-          <div class="home-vectorstore-launch-row">
-            <input
-              id="home-vectorstore-launch-input"
-              class="home-vectorstore-launch-input"
-              type="text"
-              .value=${vectorstoreLaunchQuery}
-              @input=${handleVectorstoreLaunchInput}
-            >
-            <button
-              type="submit"
-              class="home-vectorstore-launch-button"
-              ?disabled=${!trimmedVectorstoreLaunchQuery}
-            >
-              Search
-            </button>
-          </div>
-        </form>
         <div class="home-overview-layout">
           <div class="home-overview-left">
             <div class="home-cta-grid home-cta-grid-quad">
@@ -394,7 +357,7 @@ export function renderSearchTabContent(host, { formatCurateDate }) {
       slot="search"
       .tenant=${host.tenant}
       .canCurate=${canCurate}
-      .searchSubTab=${host.activeSearchSubTab || 'home'}
+      .searchSubTab=${host.activeSearchSubTab || 'landing'}
       .initialExploreSelection=${host.pendingSearchExploreSelection}
       .initialVectorstoreQuery=${host.pendingVectorstoreQuery || ''}
       .initialVectorstoreQueryToken=${host.pendingVectorstoreQueryToken || 0}
@@ -416,7 +379,7 @@ export function renderSearchTabContent(host, { formatCurateDate }) {
       .formatCurateDate=${formatCurateDate}
       @sort-changed=${host._handleSearchSortChanged}
       @search-subtab-changed=${(event) => {
-        host.activeSearchSubTab = event?.detail?.subtab || 'home';
+        host.activeSearchSubTab = event?.detail?.subtab || 'landing';
       }}
       @explore-selection-applied=${() => {
         host.pendingSearchExploreSelection = null;

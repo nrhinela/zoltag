@@ -11,7 +11,7 @@ from google.cloud import storage
 from dropbox import Dropbox
 
 from zoltag.dependencies import get_db, get_tenant, get_secret
-from zoltag.auth.dependencies import require_tenant_role_from_header
+from zoltag.auth.dependencies import require_tenant_permission_from_header
 from zoltag.auth.models import UserProfile
 from zoltag.asset_helpers import ensure_asset_for_image
 from zoltag.tenant import Tenant
@@ -238,7 +238,7 @@ async def propagate_dropbox_tags(
     image_id: int,
     tenant: Tenant = Depends(get_tenant),
     db: Session = Depends(get_db),
-    current_user: UserProfile = Depends(require_tenant_role_from_header("editor"))
+    current_user: UserProfile = Depends(require_tenant_permission_from_header("image.tag"))
 ):
     """Apply calculated tags to Dropbox for a single image."""
     image = db.query(ImageMetadata).filter_by(

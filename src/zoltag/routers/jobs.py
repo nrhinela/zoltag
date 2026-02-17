@@ -11,7 +11,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
-from zoltag.auth.dependencies import require_super_admin, require_tenant_role_from_header
+from zoltag.auth.dependencies import require_super_admin, require_tenant_permission_from_header
 from zoltag.auth.models import UserProfile
 from zoltag.cli.introspection import (
     build_payload_schema_for_command,
@@ -331,7 +331,7 @@ async def list_job_definitions(
 @router.get("/catalog")
 async def list_job_catalog(
     tenant: Tenant = Depends(get_tenant),
-    _admin: UserProfile = Depends(require_tenant_role_from_header("admin")),
+    _admin: UserProfile = Depends(require_tenant_permission_from_header("tenant.jobs.enqueue")),
     db: Session = Depends(get_db),
 ):
     """List active job definitions for tenant enqueue UI."""
@@ -425,7 +425,7 @@ async def update_job_definition(
 async def enqueue_job(
     body: dict = Body(default_factory=dict),
     tenant: Tenant = Depends(get_tenant),
-    admin: UserProfile = Depends(require_tenant_role_from_header("admin")),
+    admin: UserProfile = Depends(require_tenant_permission_from_header("tenant.jobs.enqueue")),
     db: Session = Depends(get_db),
 ):
     """Enqueue a manual job for the current tenant."""
@@ -819,7 +819,7 @@ async def delete_workflow_definition(
 @router.get("/workflows/catalog")
 async def list_workflow_catalog(
     tenant: Tenant = Depends(get_tenant),
-    _admin: UserProfile = Depends(require_tenant_role_from_header("admin")),
+    _admin: UserProfile = Depends(require_tenant_permission_from_header("tenant.jobs.enqueue")),
     db: Session = Depends(get_db),
 ):
     """List active workflow definitions available to this tenant."""
@@ -837,7 +837,7 @@ async def list_workflow_catalog(
 async def enqueue_workflow_run(
     body: dict = Body(default_factory=dict),
     tenant: Tenant = Depends(get_tenant),
-    admin: UserProfile = Depends(require_tenant_role_from_header("admin")),
+    admin: UserProfile = Depends(require_tenant_permission_from_header("tenant.jobs.enqueue")),
     db: Session = Depends(get_db),
 ):
     """Start a workflow run for the current tenant."""
@@ -890,7 +890,7 @@ async def list_workflow_runs(
     offset: int = Query(default=0, ge=0),
     include_steps: bool = Query(default=False),
     tenant: Tenant = Depends(get_tenant),
-    _admin: UserProfile = Depends(require_tenant_role_from_header("admin")),
+    _admin: UserProfile = Depends(require_tenant_permission_from_header("tenant.jobs.view")),
     db: Session = Depends(get_db),
 ):
     """List workflow runs for tenant."""
@@ -930,7 +930,7 @@ async def list_workflow_runs(
 async def get_workflow_run(
     run_id: str,
     tenant: Tenant = Depends(get_tenant),
-    _admin: UserProfile = Depends(require_tenant_role_from_header("admin")),
+    _admin: UserProfile = Depends(require_tenant_permission_from_header("tenant.jobs.view")),
     db: Session = Depends(get_db),
 ):
     """Fetch one workflow run with step state."""
@@ -949,7 +949,7 @@ async def cancel_workflow_run_endpoint(
     run_id: str,
     body: dict = Body(default_factory=dict),
     tenant: Tenant = Depends(get_tenant),
-    _admin: UserProfile = Depends(require_tenant_role_from_header("admin")),
+    _admin: UserProfile = Depends(require_tenant_permission_from_header("tenant.jobs.manage")),
     db: Session = Depends(get_db),
 ):
     """Cancel an in-flight workflow run."""
@@ -974,7 +974,7 @@ async def cancel_workflow_run_endpoint(
 async def delete_workflow_run(
     run_id: str,
     tenant: Tenant = Depends(get_tenant),
-    _admin: UserProfile = Depends(require_tenant_role_from_header("admin")),
+    _admin: UserProfile = Depends(require_tenant_permission_from_header("tenant.jobs.manage")),
     db: Session = Depends(get_db),
 ):
     """Delete a workflow run after it reaches a terminal state."""
@@ -997,7 +997,7 @@ async def cancel_job(
     job_id: str,
     body: dict = Body(default_factory=dict),
     tenant: Tenant = Depends(get_tenant),
-    _admin: UserProfile = Depends(require_tenant_role_from_header("admin")),
+    _admin: UserProfile = Depends(require_tenant_permission_from_header("tenant.jobs.manage")),
     db: Session = Depends(get_db),
 ):
     """Cancel a queued/running job."""
@@ -1037,7 +1037,7 @@ async def cancel_job(
 async def delete_job(
     job_id: str,
     tenant: Tenant = Depends(get_tenant),
-    _admin: UserProfile = Depends(require_tenant_role_from_header("admin")),
+    _admin: UserProfile = Depends(require_tenant_permission_from_header("tenant.jobs.manage")),
     db: Session = Depends(get_db),
 ):
     """Delete a tenant job that is not currently running."""
@@ -1064,7 +1064,7 @@ async def retry_job(
     job_id: str,
     body: dict = Body(default_factory=dict),
     tenant: Tenant = Depends(get_tenant),
-    admin: UserProfile = Depends(require_tenant_role_from_header("admin")),
+    admin: UserProfile = Depends(require_tenant_permission_from_header("tenant.jobs.manage")),
     db: Session = Depends(get_db),
 ):
     """Create a new queued job copied from a previous terminal job."""
@@ -1380,7 +1380,7 @@ async def list_jobs(
     created_after: datetime | None = Query(default=None),
     created_before: datetime | None = Query(default=None),
     tenant: Tenant = Depends(get_tenant),
-    _admin: UserProfile = Depends(require_tenant_role_from_header("admin")),
+    _admin: UserProfile = Depends(require_tenant_permission_from_header("tenant.jobs.view")),
     db: Session = Depends(get_db),
 ):
     """List tenant jobs with status/source/time filters."""
@@ -1418,7 +1418,7 @@ async def list_jobs(
 @router.get("/summary")
 async def get_jobs_summary(
     tenant: Tenant = Depends(get_tenant),
-    _admin: UserProfile = Depends(require_tenant_role_from_header("admin")),
+    _admin: UserProfile = Depends(require_tenant_permission_from_header("tenant.jobs.view")),
     db: Session = Depends(get_db),
 ):
     """Get queue summary metrics for the current tenant."""
@@ -1459,7 +1459,7 @@ async def get_jobs_summary(
 async def get_job(
     job_id: str,
     tenant: Tenant = Depends(get_tenant),
-    _admin: UserProfile = Depends(require_tenant_role_from_header("admin")),
+    _admin: UserProfile = Depends(require_tenant_permission_from_header("tenant.jobs.view")),
     db: Session = Depends(get_db),
 ):
     """Fetch a single tenant job by id."""
@@ -1473,7 +1473,7 @@ async def get_job_attempts(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     tenant: Tenant = Depends(get_tenant),
-    _admin: UserProfile = Depends(require_tenant_role_from_header("admin")),
+    _admin: UserProfile = Depends(require_tenant_permission_from_header("tenant.jobs.view")),
     db: Session = Depends(get_db),
 ):
     """List attempt history for a single tenant job."""

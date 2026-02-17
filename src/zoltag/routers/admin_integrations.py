@@ -5,7 +5,7 @@ from urllib.parse import urlencode, urlsplit
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
-from zoltag.auth.dependencies import require_tenant_role_from_header
+from zoltag.auth.dependencies import require_tenant_permission_from_header
 from zoltag.auth.models import UserProfile
 from zoltag.database import get_db
 from zoltag.dependencies import delete_secret, get_secret, get_tenant
@@ -179,7 +179,7 @@ def _serialize_provider_record(record) -> dict:
 @router.get("/status")
 async def get_integrations_status(
     tenant: Tenant = Depends(get_tenant),
-    _admin: UserProfile = Depends(require_tenant_role_from_header("admin")),
+    _admin: UserProfile = Depends(require_tenant_permission_from_header("provider.view")),
     db: Session = Depends(get_db),
 ):
     """Get integration connection/config status for current tenant."""
@@ -192,7 +192,7 @@ async def get_integrations_status(
 @router.get("/dropbox/status")
 async def get_dropbox_status(
     tenant: Tenant = Depends(get_tenant),
-    _admin: UserProfile = Depends(require_tenant_role_from_header("admin")),
+    _admin: UserProfile = Depends(require_tenant_permission_from_header("provider.view")),
     db: Session = Depends(get_db),
 ):
     """Backward-compatible Dropbox status endpoint for current tenant."""
@@ -205,7 +205,7 @@ async def get_dropbox_status(
 @router.get("/providers")
 async def list_integration_providers(
     tenant: Tenant = Depends(get_tenant),
-    _admin: UserProfile = Depends(require_tenant_role_from_header("admin")),
+    _admin: UserProfile = Depends(require_tenant_permission_from_header("provider.view")),
     db: Session = Depends(get_db),
 ):
     """List provider rows for the current tenant (v2 table + fallback projection)."""
@@ -225,7 +225,7 @@ async def list_integration_providers(
 async def create_integration_provider(
     payload: dict,
     tenant: Tenant = Depends(get_tenant),
-    _admin: UserProfile = Depends(require_tenant_role_from_header("admin")),
+    _admin: UserProfile = Depends(require_tenant_permission_from_header("provider.manage")),
     db: Session = Depends(get_db),
 ):
     """Create a provider row for the current tenant."""
@@ -253,7 +253,7 @@ async def update_integration_provider(
     provider_id: str,
     payload: dict,
     tenant: Tenant = Depends(get_tenant),
-    _admin: UserProfile = Depends(require_tenant_role_from_header("admin")),
+    _admin: UserProfile = Depends(require_tenant_permission_from_header("provider.manage")),
     db: Session = Depends(get_db),
 ):
     """Update one provider row for the current tenant."""
@@ -305,7 +305,7 @@ async def update_integration_provider(
 async def delete_integration_provider(
     provider_id: str,
     tenant: Tenant = Depends(get_tenant),
-    _admin: UserProfile = Depends(require_tenant_role_from_header("admin")),
+    _admin: UserProfile = Depends(require_tenant_permission_from_header("provider.manage")),
     db: Session = Depends(get_db),
 ):
     """Delete one provider row for the current tenant."""
@@ -327,7 +327,7 @@ async def start_provider_connect(
     request: Request,
     payload: dict | None = None,
     tenant: Tenant = Depends(get_tenant),
-    _admin: UserProfile = Depends(require_tenant_role_from_header("admin")),
+    _admin: UserProfile = Depends(require_tenant_permission_from_header("provider.manage")),
     db: Session = Depends(get_db),
 ):
     """Generate provider OAuth authorize URL for one explicit provider row."""
@@ -384,7 +384,7 @@ async def start_provider_connect(
 async def disconnect_provider_connection(
     provider_id: str,
     tenant: Tenant = Depends(get_tenant),
-    _admin: UserProfile = Depends(require_tenant_role_from_header("admin")),
+    _admin: UserProfile = Depends(require_tenant_permission_from_header("provider.manage")),
     db: Session = Depends(get_db),
 ):
     """Disconnect one provider row by deleting its token secret."""
@@ -416,7 +416,7 @@ async def disconnect_provider_connection(
 async def update_dropbox_config(
     payload: dict,
     tenant: Tenant = Depends(get_tenant),
-    _admin: UserProfile = Depends(require_tenant_role_from_header("admin")),
+    _admin: UserProfile = Depends(require_tenant_permission_from_header("provider.manage")),
     db: Session = Depends(get_db),
 ):
     """Update tenant integration sync source and provider sync folders."""
@@ -463,7 +463,7 @@ async def start_dropbox_connect(
     request: Request,
     payload: dict | None = None,
     tenant: Tenant = Depends(get_tenant),
-    _admin: UserProfile = Depends(require_tenant_role_from_header("admin")),
+    _admin: UserProfile = Depends(require_tenant_permission_from_header("provider.manage")),
     db: Session = Depends(get_db),
 ):
     """Generate Dropbox OAuth authorize URL for redirect-based flow."""
@@ -506,7 +506,7 @@ async def start_gdrive_connect(
     request: Request,
     payload: dict | None = None,
     tenant: Tenant = Depends(get_tenant),
-    _admin: UserProfile = Depends(require_tenant_role_from_header("admin")),
+    _admin: UserProfile = Depends(require_tenant_permission_from_header("provider.manage")),
     db: Session = Depends(get_db),
 ):
     """Generate Google Drive OAuth authorize URL for redirect-based flow."""
@@ -546,7 +546,7 @@ async def start_gdrive_connect(
 @router.delete("/dropbox/connection")
 async def disconnect_dropbox(
     tenant: Tenant = Depends(get_tenant),
-    _admin: UserProfile = Depends(require_tenant_role_from_header("admin")),
+    _admin: UserProfile = Depends(require_tenant_permission_from_header("provider.manage")),
     db: Session = Depends(get_db),
 ):
     """Disconnect Dropbox by deleting tenant refresh token secret."""
@@ -578,7 +578,7 @@ async def disconnect_dropbox(
 @router.delete("/gdrive/connection")
 async def disconnect_gdrive(
     tenant: Tenant = Depends(get_tenant),
-    _admin: UserProfile = Depends(require_tenant_role_from_header("admin")),
+    _admin: UserProfile = Depends(require_tenant_permission_from_header("provider.manage")),
     db: Session = Depends(get_db),
 ):
     """Disconnect Google Drive by deleting tenant refresh token secret."""

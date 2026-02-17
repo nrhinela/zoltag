@@ -612,6 +612,15 @@ export const zoltagAppStyles = css`
         color: #ffffff;
         box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
     }
+    .admin-subtab:disabled {
+        opacity: 0.48;
+        cursor: not-allowed;
+    }
+    .admin-subtabs-hint {
+        margin: -8px 0 14px;
+        font-size: 12px;
+        color: #6b7280;
+    }
     .system-subtabs {
         display: inline-flex;
         gap: 6px;

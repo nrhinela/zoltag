@@ -1,9 +1,10 @@
 """Admin endpoints for user and invitation management."""
 
 from datetime import datetime, timedelta
+from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Request, status, Query, Header
 from sqlalchemy import func
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from typing import List, Optional
 import secrets
 
@@ -11,11 +12,14 @@ from zoltag.ratelimit import limiter
 
 from zoltag.database import get_db
 from zoltag.auth.dependencies import (
+    get_effective_membership_permissions,
+    get_tenant_role_id_by_key,
     get_current_user,
+    invalidate_tenant_permission_cache,
+    require_tenant_permission_from_header,
     require_super_admin,
-    require_tenant_role_from_header,
 )
-from zoltag.auth.models import UserProfile, UserTenant, Invitation
+from zoltag.auth.models import UserProfile, UserTenant, Invitation, TenantRole
 from zoltag.auth.schemas import (
     UserProfileResponse,
     CreateInvitationRequest,
@@ -29,6 +33,7 @@ from zoltag.tenant_scope import tenant_column_filter_for_values, tenant_referenc
 
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
+_LEGACY_ROLE_KEYS = {"user", "editor", "admin"}
 
 
 def _resolve_tenant(db: Session, tenant_ref: str) -> Optional[TenantModel]:
@@ -39,6 +44,117 @@ def _tenant_filter(db: Session, model, tenant_ref: str):
     tenant = _resolve_tenant(db, tenant_ref)
     tenant_id = tenant.id if tenant else tenant_ref
     return tenant_column_filter_for_values(model, tenant_id)
+
+
+def _legacy_role_for_key(role_key: Optional[str]) -> str:
+    normalized = str(role_key or "").strip().lower()
+    return normalized if normalized in _LEGACY_ROLE_KEYS else "user"
+
+
+def _resolve_membership_role_fields(
+    membership: UserTenant,
+) -> tuple[str, str, Optional[str], str]:
+    role_ref = getattr(membership, "tenant_role", None)
+    role_key = str(getattr(role_ref, "role_key", "") or "").strip().lower()
+    if not role_key:
+        role_key = "user"
+    role_label = str(getattr(role_ref, "label", "") or "").strip() or role_key.title()
+    tenant_role_id = str(getattr(role_ref, "id", "") or "").strip() or (
+        str(membership.tenant_role_id) if membership.tenant_role_id else None
+    )
+    legacy_role = _legacy_role_for_key(role_key)
+    return role_key, role_label, tenant_role_id, legacy_role
+
+
+def _require_tenant_role_id_by_key(
+    db: Session,
+    *,
+    tenant_id: UUID,
+    role_key: str,
+) -> UUID:
+    resolved_role_id = get_tenant_role_id_by_key(
+        db,
+        tenant_id=tenant_id,
+        role_key=role_key,
+    )
+    if not resolved_role_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Role '{role_key}' is not active for this tenant",
+        )
+    return resolved_role_id
+
+
+def _membership_or_403(
+    db: Session,
+    *,
+    user_id,
+    tenant_ref: str,
+) -> UserTenant:
+    membership = db.query(UserTenant).options(joinedload(UserTenant.tenant_role)).filter(
+        UserTenant.supabase_uid == user_id,
+        _tenant_filter(db, UserTenant, tenant_ref),
+        UserTenant.accepted_at.isnot(None),
+    ).first()
+    if not membership:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+    return membership
+
+
+def _require_membership_permission(
+    db: Session,
+    *,
+    user: UserProfile,
+    tenant_ref: str,
+    permission_key: str,
+) -> Optional[UserTenant]:
+    if user.is_super_admin:
+        return None
+
+    membership = _membership_or_403(
+        db,
+        user_id=user.supabase_uid,
+        tenant_ref=tenant_ref,
+    )
+    effective_permissions = get_effective_membership_permissions(db, membership)
+    if permission_key not in effective_permissions:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+    return membership
+
+
+def _resolve_tenant_role(
+    db: Session,
+    *,
+    tenant_ref: str,
+    role_key: Optional[str] = None,
+    role_id: Optional[str] = None,
+) -> TenantRole:
+    tenant = _resolve_tenant(db, tenant_ref)
+    if not tenant:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+
+    selected_role_id = str(role_id or "").strip()
+    selected_role_key = str(role_key or "").strip().lower()
+
+    query = db.query(TenantRole).filter(
+        TenantRole.tenant_id == tenant.id,
+    )
+    if selected_role_id:
+        try:
+            parsed_role_id = UUID(selected_role_id)
+        except ValueError:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid role_id format")
+        target = query.filter(TenantRole.id == parsed_role_id).first()
+    elif selected_role_key:
+        target = query.filter(TenantRole.role_key == selected_role_key).first()
+    else:
+        target = None
+
+    if not target:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant role not found")
+    if not target.is_active:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Role is not active")
+    return target
 
 
 # ============================================================================
@@ -101,7 +217,7 @@ async def list_approved_users(
         user_data = UserProfileResponse.from_orm(user).dict()
 
         # Fetch tenant memberships
-        memberships = db.query(UserTenant).filter(
+        memberships = db.query(UserTenant).options(joinedload(UserTenant.tenant_role)).filter(
             UserTenant.supabase_uid == user.supabase_uid,
             UserTenant.accepted_at.isnot(None)
         ).all()
@@ -112,11 +228,15 @@ async def list_approved_users(
                 TenantModel.id == membership.tenant_id
             ).first()
             if tenant:
+                role_key, role_label, tenant_role_id, legacy_role = _resolve_membership_role_fields(membership)
                 tenants.append({
                     "tenant_id": tenant.id,
                     "tenant_name": tenant.name,
-                    "role": membership.role,
-                    "accepted_at": membership.accepted_at.isoformat() if membership.accepted_at else None
+                    "role": legacy_role,
+                    "role_key": role_key,
+                    "role_label": role_label,
+                    "tenant_role_id": tenant_role_id,
+                    "accepted_at": membership.accepted_at.isoformat() if membership.accepted_at else None,
                 })
 
         user_data["tenants"] = tenants
@@ -128,12 +248,12 @@ async def list_approved_users(
 @router.get("/tenant-users", response_model=List[dict])
 async def list_tenant_users(
     x_tenant_id: str = Header(..., alias="X-Tenant-ID"),
-    _admin: UserProfile = Depends(require_tenant_role_from_header("admin")),
+    _admin: UserProfile = Depends(require_tenant_permission_from_header("tenant.users.view")),
     db: Session = Depends(get_db),
 ):
     """List users assigned to the tenant in X-Tenant-ID (tenant admin or super admin)."""
 
-    memberships = db.query(UserTenant).filter(
+    memberships = db.query(UserTenant).options(joinedload(UserTenant.tenant_role)).filter(
         _tenant_filter(db, UserTenant, x_tenant_id),
         UserTenant.accepted_at.isnot(None),
     ).all()
@@ -150,7 +270,11 @@ async def list_tenant_users(
         if not user:
             continue
         profile = UserProfileResponse.from_orm(user).dict()
-        profile["role"] = membership.role
+        role_key, role_label, tenant_role_id, legacy_role = _resolve_membership_role_fields(membership)
+        profile["role"] = legacy_role
+        profile["role_key"] = role_key
+        profile["role_label"] = role_label
+        profile["tenant_role_id"] = tenant_role_id
         profile["tenant_id"] = membership.tenant_id
         profile["accepted_at"] = membership.accepted_at.isoformat() if membership.accepted_at else None
         result.append(profile)
@@ -214,7 +338,12 @@ async def approve_user(
         membership = UserTenant(
             supabase_uid=user.supabase_uid,
             tenant_id=tenant.id,
-            role=body.role,
+            tenant_role_id=_require_tenant_role_id_by_key(
+                db,
+                tenant_id=tenant.id,
+                role_key=body.role,
+            ),
+            role=_legacy_role_for_key(body.role),
             invited_by=admin.supabase_uid,
             invited_at=datetime.utcnow(),
             accepted_at=datetime.utcnow()
@@ -222,6 +351,11 @@ async def approve_user(
         db.add(membership)
 
     db.commit()
+    if body.tenant_id and tenant:
+        invalidate_tenant_permission_cache(
+            supabase_uid=str(user.supabase_uid),
+            tenant_id=str(tenant.id),
+        )
 
     return {"message": "User approved", "user_id": str(user.supabase_uid)}
 
@@ -282,13 +416,22 @@ async def assign_user_to_tenant(
     membership = UserTenant(
         supabase_uid=user.supabase_uid,
         tenant_id=tenant.id,
-        role=request.role,
+        tenant_role_id=_require_tenant_role_id_by_key(
+            db,
+            tenant_id=tenant.id,
+            role_key=request.role,
+        ),
+        role=_legacy_role_for_key(request.role),
         invited_by=admin.supabase_uid,
         invited_at=datetime.utcnow(),
         accepted_at=datetime.utcnow()
     )
     db.add(membership)
     db.commit()
+    invalidate_tenant_permission_cache(
+        supabase_uid=str(user.supabase_uid),
+        tenant_id=str(tenant.id),
+    )
 
     return {"message": "User assigned to tenant", "user_id": str(user.supabase_uid)}
 
@@ -302,6 +445,13 @@ async def update_user_tenant_membership(
     db: Session = Depends(get_db),
 ):
     """Update role for an existing user-tenant membership (super admin only)."""
+    role_id = str(request.role_id or "").strip()
+    role_key = str(request.role_key or request.role or "").strip().lower()
+    if not role_id and not role_key:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="One of role_key, role_id, or role is required for this endpoint",
+        )
 
     membership = db.query(UserTenant).filter(
         UserTenant.supabase_uid == supabase_uid,
@@ -315,14 +465,29 @@ async def update_user_tenant_membership(
             detail="Tenant membership not found",
         )
 
-    membership.role = request.role
+    target_role = _resolve_tenant_role(
+        db,
+        tenant_ref=tenant_id,
+        role_key=role_key,
+        role_id=role_id,
+    )
+    next_role_key = str(target_role.role_key or "").strip().lower()
+    membership.role = _legacy_role_for_key(next_role_key)
+    membership.tenant_role_id = target_role.id
     db.commit()
+    invalidate_tenant_permission_cache(
+        supabase_uid=str(supabase_uid),
+        tenant_id=str(membership.tenant_id),
+    )
 
     return {
         "message": "Tenant role updated",
         "user_id": supabase_uid,
         "tenant_id": membership.tenant_id,
         "role": membership.role,
+        "role_key": next_role_key,
+        "role_label": str(target_role.label or "").strip() or next_role_key.title(),
+        "tenant_role_id": str(target_role.id),
     }
 
 
@@ -349,6 +514,10 @@ async def remove_user_tenant_membership(
 
     db.delete(membership)
     db.commit()
+    invalidate_tenant_permission_cache(
+        supabase_uid=str(supabase_uid),
+        tenant_id=str(membership.tenant_id),
+    )
 
     return {
         "message": "Tenant membership removed",
@@ -362,12 +531,12 @@ async def update_tenant_user_role(
     supabase_uid: str,
     request: UpdateTenantMembershipRequest,
     x_tenant_id: str = Header(..., alias="X-Tenant-ID"),
-    admin: UserProfile = Depends(require_tenant_role_from_header("admin")),
+    admin: UserProfile = Depends(require_tenant_permission_from_header("tenant.users.manage")),
     db: Session = Depends(get_db),
 ):
     """Update role for a user in the current tenant (tenant admin or super admin)."""
 
-    membership = db.query(UserTenant).filter(
+    membership = db.query(UserTenant).options(joinedload(UserTenant.tenant_role)).filter(
         UserTenant.supabase_uid == supabase_uid,
         _tenant_filter(db, UserTenant, x_tenant_id),
         UserTenant.accepted_at.isnot(None),
@@ -389,26 +558,46 @@ async def update_tenant_user_role(
             detail="Admin users cannot be edited from tenant admin",
         )
 
-    if request.role not in {"user", "editor", "admin"}:
+    role_id = str(request.role_id or "").strip()
+    role_key = str(request.role_key or "").strip().lower()
+    if not role_id and not role_key:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Role must be 'user', 'editor', or 'admin'",
+            detail="One of role_key or role_id is required",
         )
 
-    if supabase_uid == admin.supabase_uid and request.role != membership.role:
+    target_role = _resolve_tenant_role(
+        db,
+        tenant_ref=x_tenant_id,
+        role_key=role_key,
+        role_id=role_id,
+    )
+    next_role_key = str(target_role.role_key or "").strip().lower()
+    next_legacy_role = _legacy_role_for_key(next_role_key)
+    current_role_key, _, _, _ = _resolve_membership_role_fields(membership)
+
+    if supabase_uid == admin.supabase_uid and next_role_key != current_role_key:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="You cannot change your own role",
         )
 
-    membership.role = request.role
+    membership.tenant_role_id = target_role.id
+    membership.role = next_legacy_role
     db.commit()
+    invalidate_tenant_permission_cache(
+        supabase_uid=str(supabase_uid),
+        tenant_id=str(membership.tenant_id),
+    )
 
     return {
         "message": "Tenant role updated",
         "user_id": supabase_uid,
         "tenant_id": membership.tenant_id,
         "role": membership.role,
+        "role_key": next_role_key,
+        "role_label": str(target_role.label or "").strip() or next_role_key.title(),
+        "tenant_role_id": str(target_role.id),
     }
 
 
@@ -416,7 +605,7 @@ async def update_tenant_user_role(
 async def remove_tenant_user(
     supabase_uid: str,
     x_tenant_id: str = Header(..., alias="X-Tenant-ID"),
-    admin: UserProfile = Depends(require_tenant_role_from_header("admin")),
+    admin: UserProfile = Depends(require_tenant_permission_from_header("tenant.users.manage")),
     db: Session = Depends(get_db),
 ):
     """Remove a user from the current tenant (tenant admin or super admin)."""
@@ -451,6 +640,10 @@ async def remove_tenant_user(
 
     db.delete(membership)
     db.commit()
+    invalidate_tenant_permission_cache(
+        supabase_uid=str(supabase_uid),
+        tenant_id=str(membership.tenant_id),
+    )
 
     return {
         "message": "Tenant membership removed",
@@ -683,19 +876,12 @@ async def create_invitation(
             detail="Tenant not found",
         )
 
-    # Verify admin has access to tenant
-    if not user.is_super_admin:
-        membership = db.query(UserTenant).filter(
-            UserTenant.supabase_uid == user.supabase_uid,
-            _tenant_filter(db, UserTenant, body.tenant_id),
-            UserTenant.role == "admin"
-        ).first()
-
-        if not membership:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Admin role required for this tenant"
-            )
+    _require_membership_permission(
+        db,
+        user=user,
+        tenant_ref=body.tenant_id,
+        permission_key="tenant.users.manage",
+    )
 
     # If user already exists, assign them immediately and skip invitation flow.
     existing_user = db.query(UserProfile).filter(
@@ -713,14 +899,23 @@ async def create_invitation(
                 existing_membership.accepted_at = now
                 existing_membership.invited_at = existing_membership.invited_at or now
                 existing_membership.invited_by = existing_membership.invited_by or user.supabase_uid
-            if existing_membership.role != body.role:
-                existing_membership.role = body.role
+            existing_membership.role = _legacy_role_for_key(body.role)
+            existing_membership.tenant_role_id = _require_tenant_role_id_by_key(
+                db,
+                tenant_id=tenant.id,
+                role_key=body.role,
+            )
         else:
             db.add(
                 UserTenant(
                     supabase_uid=existing_user.supabase_uid,
                     tenant_id=tenant.id,
-                    role=body.role,
+                    tenant_role_id=_require_tenant_role_id_by_key(
+                        db,
+                        tenant_id=tenant.id,
+                        role_key=body.role,
+                    ),
+                    role=_legacy_role_for_key(body.role),
                     invited_by=user.supabase_uid,
                     invited_at=now,
                     accepted_at=now,
@@ -737,6 +932,10 @@ async def create_invitation(
             db.delete(stale)
 
         db.commit()
+        invalidate_tenant_permission_cache(
+            supabase_uid=str(existing_user.supabase_uid),
+            tenant_id=str(tenant.id),
+        )
 
         return {
             "message": "Existing user added to tenant",
@@ -818,16 +1017,12 @@ async def list_invitations(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="tenant_id required for non-super-admins"
             )
-
-        # Verify admin access
-        membership = db.query(UserTenant).filter(
-            UserTenant.supabase_uid == user.supabase_uid,
-            _tenant_filter(db, UserTenant, tenant_id),
-            UserTenant.role == "admin"
-        ).first()
-
-        if not membership:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+        _require_membership_permission(
+            db,
+            user=user,
+            tenant_ref=tenant_id,
+            permission_key="tenant.users.view",
+        )
 
         query = query.filter(_tenant_filter(db, Invitation, tenant_id))
     elif tenant_id:
@@ -867,16 +1062,13 @@ async def cancel_invitation(
     if not invitation:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invitation not found")
 
-    # Verify admin access
     if not user.is_super_admin:
-        membership = db.query(UserTenant).filter(
-            UserTenant.supabase_uid == user.supabase_uid,
-            _tenant_filter(db, UserTenant, invitation.tenant_id),
-            UserTenant.role == "admin"
-        ).first()
-
-        if not membership:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+        _require_membership_permission(
+            db,
+            user=user,
+            tenant_ref=str(invitation.tenant_id),
+            permission_key="tenant.users.manage",
+        )
 
     db.delete(invitation)
     db.commit()

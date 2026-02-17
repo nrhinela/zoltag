@@ -28,7 +28,11 @@ from jose import JWTError
 logger = logging.getLogger(__name__)
 
 from zoltag.database import get_db
-from zoltag.auth.dependencies import get_current_user
+from zoltag.auth.dependencies import (
+    get_current_user,
+    get_effective_membership_permissions,
+    get_tenant_role_id_by_key,
+)
 from zoltag.auth.jwt import get_supabase_uid_from_token
 from zoltag.auth.models import UserProfile, UserTenant, Invitation
 from zoltag.auth.schemas import (
@@ -43,6 +47,12 @@ from zoltag.ratelimit import limiter
 
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
+_LEGACY_ROLE_KEYS = {"user", "editor", "admin"}
+
+
+def _legacy_role_from_key(role_key: Optional[str]) -> str:
+    normalized = str(role_key or "").strip().lower()
+    return normalized if normalized in _LEGACY_ROLE_KEYS else "user"
 
 
 @router.post("/register", response_model=dict, status_code=201)
@@ -220,11 +230,22 @@ async def get_current_user_info(
             TenantModel.id == membership.tenant_id
         ).first()
         if tenant:
+            role_key = None
+            role_label = None
+            role_ref = getattr(membership, "tenant_role", None)
+            if role_ref is not None:
+                role_key = str(role_ref.role_key or "").strip() or None
+                role_label = str(role_ref.label or "").strip() or None
+            legacy_role = _legacy_role_from_key(role_key)
+            permissions = sorted(get_effective_membership_permissions(db, membership))
             tenants.append(TenantMembershipResponse(
                 tenant_id=tenant.id,
                 tenant_identifier=getattr(tenant, "identifier", None),
                 tenant_name=tenant.name,
-                role=membership.role,
+                role=legacy_role,
+                role_key=role_key,
+                role_label=role_label,
+                permissions=permissions,
                 accepted_at=membership.accepted_at
             ))
 
@@ -286,6 +307,11 @@ async def accept_invitation(
     membership = UserTenant(
         supabase_uid=user.supabase_uid,
         tenant_id=invitation.tenant_id,
+        tenant_role_id=get_tenant_role_id_by_key(
+            db,
+            tenant_id=invitation.tenant_id,
+            role_key=invitation.role,
+        ),
         role=invitation.role,
         invited_by=invitation.invited_by,
         invited_at=invitation.created_at,

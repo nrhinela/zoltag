@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from zoltag.auth.dependencies import require_tenant_role_from_header
+from zoltag.auth.dependencies import require_tenant_permission_from_header
 from zoltag.dependencies import get_db, get_tenant
 from zoltag.metadata import Person
 from zoltag.models.config import KeywordCategory, Keyword
@@ -16,7 +16,7 @@ from zoltag.tenant_scope import assign_tenant_scope, tenant_column_filter
 router = APIRouter(
     prefix="/api/v1/admin/keywords",
     tags=["admin-keywords"],
-    dependencies=[Depends(require_tenant_role_from_header("admin"))],
+    dependencies=[Depends(require_tenant_permission_from_header("image.tag"))],
 )
 
 

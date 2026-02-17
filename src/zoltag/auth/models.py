@@ -1,7 +1,7 @@
 """SQLAlchemy models for Supabase authentication."""
 
 from datetime import datetime
-from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, CheckConstraint, Index
+from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, CheckConstraint, Index, UniqueConstraint, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 import uuid
@@ -92,6 +92,12 @@ class UserTenant(Base):
         nullable=False
     )
 
+    tenant_role_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("tenant_roles.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
     role = Column(String(50), nullable=False, default="user")
 
     invited_by = Column(
@@ -111,11 +117,17 @@ class UserTenant(Base):
         foreign_keys=[supabase_uid],
         primaryjoin="UserTenant.supabase_uid == UserProfile.supabase_uid"
     )
+    tenant_role = relationship(
+        "TenantRole",
+        back_populates="memberships",
+        foreign_keys=[tenant_role_id],
+    )
 
     __table_args__ = (
         CheckConstraint("role IN ('admin', 'editor', 'user')", name="ck_user_tenants_role"),
         Index("idx_user_tenants_supabase_uid", "supabase_uid"),
         Index("idx_user_tenants_tenant_id", "tenant_id"),
+        Index("ix_user_tenants_tenant_role_id", "tenant_role_id"),
     )
 
     @property
@@ -201,3 +213,85 @@ class Invitation(Base):
             f"<Invitation(email={self.email}, tenant={self.tenant_id}, "
             f"pending={self.is_pending}, expired={self.is_expired})>"
         )
+
+
+class PermissionCatalog(Base):
+    """Global permission key catalog used by tenant RBAC mappings."""
+
+    __tablename__ = "permission_catalog"
+
+    key = Column(String(100), primary_key=True)
+    description = Column(Text, nullable=False)
+    category = Column(String(50), nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    role_permissions = relationship(
+        "TenantRolePermission",
+        back_populates="permission",
+        cascade="all, delete-orphan",
+    )
+
+
+class TenantRole(Base):
+    """Tenant-scoped role definition for RBAC."""
+
+    __tablename__ = "tenant_roles"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    role_key = Column(String(50), nullable=False)
+    label = Column(String(100), nullable=False)
+    description = Column(Text, nullable=True)
+    is_system = Column(Boolean, default=False, nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    role_permissions = relationship(
+        "TenantRolePermission",
+        back_populates="role",
+        cascade="all, delete-orphan",
+    )
+    memberships = relationship(
+        "UserTenant",
+        back_populates="tenant_role",
+        foreign_keys="[UserTenant.tenant_role_id]",
+    )
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "role_key", name="uq_tenant_roles_tenant_role_key"),
+        Index("ix_tenant_roles_tenant_active", "tenant_id", "is_active"),
+    )
+
+
+class TenantRolePermission(Base):
+    """Role -> permission mapping rows."""
+
+    __tablename__ = "tenant_role_permissions"
+
+    role_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("tenant_roles.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    permission_key = Column(
+        String(100),
+        ForeignKey("permission_catalog.key", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    effect = Column(String(10), nullable=False, default="allow")
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    role = relationship("TenantRole", back_populates="role_permissions")
+    permission = relationship("PermissionCatalog", back_populates="role_permissions")
+
+    __table_args__ = (
+        CheckConstraint("effect IN ('allow', 'deny')", name="ck_tenant_role_permissions_effect"),
+        Index("ix_tenant_role_permissions_permission", "permission_key"),
+    )

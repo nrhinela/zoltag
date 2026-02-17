@@ -1,5 +1,6 @@
 """FastAPI dependencies for authentication and authorization."""
 
+import time
 from typing import Optional, Callable
 from fastapi import Header, HTTPException, Depends, status
 from sqlalchemy.orm import Session
@@ -8,16 +9,134 @@ from datetime import datetime, timedelta, timezone
 
 from zoltag.database import get_db
 from zoltag.auth.jwt import verify_supabase_jwt, get_supabase_uid_from_token
-from zoltag.auth.models import UserProfile, UserTenant
+from zoltag.auth.models import UserProfile, UserTenant, TenantRole, TenantRolePermission
 from zoltag.metadata import Tenant as TenantModel
 from zoltag.tenant_scope import tenant_column_filter_for_values, tenant_reference_filter
 
 
-ROLE_PRIORITY = {
-    "user": 1,
-    "editor": 2,
-    "admin": 3,
+RBAC_PERMISSION_CACHE_TTL_SECONDS = 30
+_tenant_permission_cache = {}
+
+# Compatibility permission aliases.
+# These let tenant roles use friendlier domain language while existing
+# endpoint guards continue to check canonical keys.
+PERMISSION_IMPLICATIONS: dict[str, set[str]] = {
+    # Alias -> canonical
+    "assets.read": {"image.view"},
+    "assets.write": {"image.rate", "image.tag", "image.note.edit", "image.variant.manage"},
+    "keywords.read": {"image.view"},
+    "keywords.write": {"image.tag"},
+    # Canonical -> alias (for /auth/me payload ergonomics and UI checks)
+    "image.view": {"assets.read", "keywords.read"},
+    "image.rate": {"assets.write"},
+    "image.tag": {"assets.write", "keywords.write"},
+    "image.note.edit": {"assets.write"},
+    "image.variant.manage": {"assets.write"},
 }
+
+
+def _permission_cache_key(tenant_id: str, supabase_uid: str) -> tuple[str, str]:
+    return (str(tenant_id), str(supabase_uid))
+
+
+def invalidate_tenant_permission_cache(
+    supabase_uid: Optional[str] = None,
+    tenant_id: Optional[str] = None,
+) -> None:
+    """Invalidate cached effective permissions for one user/tenant or broader scope."""
+    if supabase_uid is None and tenant_id is None:
+        _tenant_permission_cache.clear()
+        return
+
+    target_user = str(supabase_uid) if supabase_uid is not None else None
+    target_tenant = str(tenant_id) if tenant_id is not None else None
+    keys_to_remove = []
+    for key_tenant, key_user in _tenant_permission_cache.keys():
+        if target_user is not None and key_user != target_user:
+            continue
+        if target_tenant is not None and key_tenant != target_tenant:
+            continue
+        keys_to_remove.append((key_tenant, key_user))
+
+    for key in keys_to_remove:
+        _tenant_permission_cache.pop(key, None)
+
+
+def _load_permissions_from_role_mapping(
+    db: Session,
+    membership: UserTenant,
+) -> set[str]:
+    role_id = membership.tenant_role_id
+    if not role_id:
+        return set()
+    rows = db.query(
+        TenantRolePermission.permission_key,
+        TenantRolePermission.effect,
+    ).join(
+        TenantRole,
+        TenantRole.id == TenantRolePermission.role_id,
+    ).filter(
+        TenantRole.id == role_id,
+        TenantRole.tenant_id == membership.tenant_id,
+        TenantRole.is_active.is_(True),
+    ).all()
+    if not rows:
+        return set()
+
+    allowed = {str(permission_key) for permission_key, effect in rows if str(effect) == "allow"}
+    denied = {str(permission_key) for permission_key, effect in rows if str(effect) == "deny"}
+    return _expand_permissions(allowed, denied)
+
+
+def _expand_permissions(allowed: set[str], denied: set[str]) -> set[str]:
+    expanded = set(allowed)
+    changed = True
+    while changed:
+        changed = False
+        for permission_key in list(expanded):
+            implied = PERMISSION_IMPLICATIONS.get(permission_key) or set()
+            for implied_key in implied:
+                if implied_key in denied or implied_key in expanded:
+                    continue
+                expanded.add(implied_key)
+                changed = True
+    return expanded - denied
+
+
+def get_effective_membership_permissions(
+    db: Session,
+    membership: UserTenant,
+) -> set[str]:
+    """Get effective permission keys for a tenant membership with short-lived cache."""
+    cache_key = _permission_cache_key(membership.tenant_id, membership.supabase_uid)
+    cached = _tenant_permission_cache.get(cache_key)
+    now = time.time()
+    if cached and cached[0] > now:
+        return set(cached[1])
+
+    permissions = _load_permissions_from_role_mapping(db, membership)
+
+    _tenant_permission_cache[cache_key] = (now + RBAC_PERMISSION_CACHE_TTL_SECONDS, set(permissions))
+    return permissions
+
+
+def get_tenant_role_id_by_key(
+    db: Session,
+    *,
+    tenant_id,
+    role_key: Optional[str],
+) -> Optional[object]:
+    """Resolve tenant role id for a role_key in a tenant, if present."""
+    normalized_key = str(role_key or "").strip().lower()
+    if not normalized_key:
+        return None
+    row = db.query(TenantRole.id).filter(
+        TenantRole.tenant_id == tenant_id,
+        TenantRole.role_key == normalized_key,
+    ).first()
+    if not row:
+        return None
+    return row[0]
 
 
 def _resolve_tenant_scope(db: Session, tenant_ref: str) -> Optional[str]:
@@ -28,22 +147,6 @@ def _resolve_tenant_scope(db: Session, tenant_ref: str) -> Optional[str]:
     if not row:
         return None
     return str(row[0])
-
-
-def _validate_role_name(required_role: str) -> None:
-    if required_role not in ROLE_PRIORITY:
-        raise ValueError(
-            f"Unsupported required_role '{required_role}'. "
-            f"Expected one of: {', '.join(ROLE_PRIORITY.keys())}"
-        )
-
-
-def _role_satisfies(actual_role: str, required_role: str) -> bool:
-    actual_priority = ROLE_PRIORITY.get(actual_role)
-    required_priority = ROLE_PRIORITY.get(required_role)
-    if actual_priority is None or required_priority is None:
-        return False
-    return actual_priority >= required_priority
 
 
 async def get_current_user(
@@ -221,72 +324,16 @@ def require_tenant_access(tenant_id: str) -> Callable:
     return check_access
 
 
-def require_tenant_role(tenant_id: str, required_role: str = "user") -> Callable:
-    """Dependency factory to check user has specific role in tenant.
+def require_tenant_permission_from_header(permission_key: str) -> Callable:
+    """Dependency factory to check tenant permission using X-Tenant-ID header."""
+    required_permission = str(permission_key or "").strip()
+    if not required_permission:
+        raise ValueError("permission_key is required")
 
-    Creates a dependency that checks if the authenticated user has at least
-    the specified role in the tenant. Supports role hierarchy:
-    - admin > editor > user
-    - Super admins automatically pass the check
-
-    Args:
-        tenant_id: The tenant ID to check
-        required_role: Minimum required role ('user', 'editor', or 'admin')
-
-    Returns:
-        Callable: Dependency function
-
-    Usage:
-        @app.post("/api/v1/admin/invitations")
-        async def create_invitation(
-            tenant_id: str,
-            user: UserProfile = Depends(require_tenant_role(tenant_id, "admin"))
-        ):
-            # User is guaranteed to be an admin in tenant_id
-    """
-    _validate_role_name(required_role)
-
-    async def check_role(
-        user: UserProfile = Depends(get_current_user),
-        db: Session = Depends(get_db)
-    ) -> UserProfile:
-        # Super admins bypass role checks
-        if user.is_super_admin:
-            return user
-
-        # Check membership and role
-        scope_tenant_id = _resolve_tenant_scope(db, tenant_id) or tenant_id
-        membership = db.query(UserTenant).filter(
-            UserTenant.supabase_uid == user.supabase_uid,
-            tenant_column_filter_for_values(UserTenant, scope_tenant_id),
-            UserTenant.accepted_at.isnot(None)
-        ).first()
-
-        if not membership:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"No access to tenant {tenant_id}"
-            )
-
-        if not _role_satisfies(membership.role, required_role):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"{required_role.capitalize()} role required in this tenant"
-            )
-
-        return user
-
-    return check_role
-
-
-def require_tenant_role_from_header(required_role: str = "admin") -> Callable:
-    """Dependency factory to check tenant role using X-Tenant-ID header."""
-    _validate_role_name(required_role)
-
-    async def check_role(
+    async def check_permission(
         x_tenant_id: str = Header(..., alias="X-Tenant-ID"),
         user: UserProfile = Depends(get_current_user),
-        db: Session = Depends(get_db)
+        db: Session = Depends(get_db),
     ) -> UserProfile:
         if user.is_super_admin:
             return user
@@ -295,21 +342,21 @@ def require_tenant_role_from_header(required_role: str = "admin") -> Callable:
         membership = db.query(UserTenant).filter(
             UserTenant.supabase_uid == user.supabase_uid,
             tenant_column_filter_for_values(UserTenant, scope_tenant_id),
-            UserTenant.accepted_at.isnot(None)
+            UserTenant.accepted_at.isnot(None),
         ).first()
 
         if not membership:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"No access to tenant {x_tenant_id}"
+                detail=f"No access to tenant {x_tenant_id}",
             )
 
-        if not _role_satisfies(membership.role, required_role):
+        effective_permissions = get_effective_membership_permissions(db, membership)
+        if required_permission not in effective_permissions:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"{required_role.capitalize()} role required in this tenant"
+                detail=f"Permission required: {required_permission}",
             )
-
         return user
 
-    return check_role
+    return check_permission

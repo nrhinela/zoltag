@@ -1,6 +1,13 @@
 import { html } from 'lit';
 import { renderCuratePermatagSummary } from './curate-image-fragments.js';
 import { renderCurateRatingWidget, renderCurateRatingStatic } from './curate-rating-widgets.js';
+import {
+  allowByPermissionOrRole,
+  canViewTenantUsers,
+  normalizeTenantRef,
+  resolveTenantMembership,
+  userIsSuperAdmin,
+} from '../shared/tenant-permissions.js';
 
 export function renderRatingModal(host) {
   if (!host._curateRatingModalActive) {
@@ -38,38 +45,59 @@ export function renderRatingModal(host) {
 }
 
 export function renderAuxTabContent(host, { formatCurateDate }) {
-  const selectedTenant = String(host.tenant || '').trim();
-  const tenantMembership = (host.currentUser?.tenants || []).find(
-    (membership) => {
-      const membershipTenantId = String(membership?.tenant_id || '').trim();
-      const membershipIdentifier = String(membership?.tenant_identifier || '').trim();
-      return (
-        selectedTenant !== ''
-        && (
-          selectedTenant === membershipTenantId
-          || (membershipIdentifier && selectedTenant === membershipIdentifier)
-        )
-      );
-    }
-  );
+  const selectedTenant = normalizeTenantRef(host.tenant);
+  const tenantMembership = resolveTenantMembership(host.currentUser, selectedTenant);
   const tenantDisplayName = String(tenantMembership?.tenant_name || '').trim()
     || String(tenantMembership?.tenant_identifier || '').trim()
     || selectedTenant;
-  const isSuperAdmin = !!host.currentUser?.user?.is_super_admin;
-  const tenantRole = tenantMembership?.role || '';
-  const isTenantAdmin = tenantRole === 'admin';
-  const isTenantEditor = tenantRole === 'editor';
-  const canUploadTenantAssets = isSuperAdmin || isTenantAdmin || isTenantEditor;
-  const canDeleteTenantAssets = isSuperAdmin || isTenantAdmin;
-  const canEditKeywords = isSuperAdmin || isTenantAdmin || isTenantEditor;
-  const canManageTenantUsers = isSuperAdmin || isTenantAdmin;
-  const canManageProviders = isSuperAdmin || isTenantAdmin;
-  const canManageJobs = isSuperAdmin || isTenantAdmin;
+  const isSuperAdmin = userIsSuperAdmin(host.currentUser);
+  const canUploadTenantAssets = allowByPermissionOrRole(
+    host.currentUser,
+    selectedTenant,
+    'image.variant.manage',
+    ['admin', 'editor'],
+  );
+  const canDeleteTenantAssets = allowByPermissionOrRole(
+    host.currentUser,
+    selectedTenant,
+    'tenant.settings.manage',
+    ['admin'],
+  );
+  const canEditKeywords = allowByPermissionOrRole(
+    host.currentUser,
+    selectedTenant,
+    'image.tag',
+    ['admin', 'editor'],
+  );
+  const canManageTenantUsers = allowByPermissionOrRole(
+    host.currentUser,
+    selectedTenant,
+    'tenant.users.manage',
+    ['admin'],
+  );
+  const canViewUsers = canViewTenantUsers(host.currentUser, selectedTenant);
+  const canManageProviders = allowByPermissionOrRole(
+    host.currentUser,
+    selectedTenant,
+    'provider.manage',
+    ['admin'],
+  );
+  const canManageJobs = allowByPermissionOrRole(
+    host.currentUser,
+    selectedTenant,
+    'tenant.jobs.view',
+    ['admin'],
+  );
+  const unavailableLibraryTabs = [
+    !canViewUsers ? 'Users' : null,
+    !canManageProviders ? 'Providers' : null,
+    !canManageJobs ? 'Jobs' : null,
+  ].filter(Boolean);
   const libraryTabActive = host.activeTab === 'library';
   const defaultLibrarySubTab = 'assets';
   const rawLibrarySubTab = host.activeLibrarySubTab || defaultLibrarySubTab;
   const librarySubTab = (rawLibrarySubTab === 'keywords' || rawLibrarySubTab === 'assets'
-    || (rawLibrarySubTab === 'users' && canManageTenantUsers)
+    || (rawLibrarySubTab === 'users' && canViewUsers)
     || (rawLibrarySubTab === 'providers' && canManageProviders)
     || (rawLibrarySubTab === 'jobs' && canManageJobs))
     ? rawLibrarySubTab
@@ -91,31 +119,36 @@ export function renderAuxTabContent(host, { formatCurateDate }) {
           >
             <i class="fas fa-tags mr-2"></i>Keywords
           </button>
-          ${canManageTenantUsers ? html`
-            <button
-              class="admin-subtab ${librarySubTab === 'users' ? 'active' : ''}"
-              @click=${() => host.activeLibrarySubTab = 'users'}
-            >
-              <i class="fas fa-users mr-2"></i>Users
-            </button>
-          ` : html``}
-          ${canManageProviders ? html`
-            <button
-              class="admin-subtab ${librarySubTab === 'providers' ? 'active' : ''}"
-              @click=${() => host.activeLibrarySubTab = 'providers'}
-            >
-              <i class="fas fa-database mr-2"></i>Providers
-            </button>
-          ` : html``}
-          ${canManageJobs ? html`
-            <button
-              class="admin-subtab ${librarySubTab === 'jobs' ? 'active' : ''}"
-              @click=${() => host.activeLibrarySubTab = 'jobs'}
-            >
-              <i class="fas fa-list-check mr-2"></i>Jobs
-            </button>
-          ` : html``}
+          <button
+            class="admin-subtab ${librarySubTab === 'users' ? 'active' : ''}"
+            ?disabled=${!canViewUsers}
+            title=${canViewUsers ? 'Manage tenant users' : 'Requires tenant user permissions'}
+            @click=${() => host.activeLibrarySubTab = 'users'}
+          >
+            <i class="fas fa-users mr-2"></i>Users
+          </button>
+          <button
+            class="admin-subtab ${librarySubTab === 'providers' ? 'active' : ''}"
+            ?disabled=${!canManageProviders}
+            title=${canManageProviders ? 'Manage provider integrations' : 'Requires provider.manage permission'}
+            @click=${() => host.activeLibrarySubTab = 'providers'}
+          >
+            <i class="fas fa-database mr-2"></i>Providers
+          </button>
+          <button
+            class="admin-subtab ${librarySubTab === 'jobs' ? 'active' : ''}"
+            ?disabled=${!canManageJobs}
+            title=${canManageJobs ? 'View and manage tenant jobs' : 'Requires tenant.jobs.view permission'}
+            @click=${() => host.activeLibrarySubTab = 'jobs'}
+          >
+            <i class="fas fa-list-check mr-2"></i>Jobs
+          </button>
         </div>
+        ${unavailableLibraryTabs.length ? html`
+          <div class="admin-subtabs-hint">
+            Unavailable for your role: ${unavailableLibraryTabs.join(', ')}
+          </div>
+        ` : html``}
         ${librarySubTab === 'assets' ? html`
           <assets-admin
             .tenant=${host.tenant}
@@ -162,6 +195,7 @@ export function renderAuxTabContent(host, { formatCurateDate }) {
             <tenant-users-admin
               .tenant=${host.tenant}
               .tenantName=${tenantDisplayName}
+              .canView=${canViewUsers}
               .canManage=${canManageTenantUsers}
               .isSuperAdmin=${isSuperAdmin}
             ></tenant-users-admin>

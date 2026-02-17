@@ -1,6 +1,13 @@
 import { LitElement, html } from 'lit';
 import { getSystemSettings, getTenantsPublic } from '../services/api.js';
 import { supabase } from '../services/supabase.js';
+import {
+    canCurateTenant,
+    canViewTenantUsers,
+    hasAnyTenantUsersAccess,
+    normalizeTenantRef,
+    userIsSuperAdmin,
+} from './shared/tenant-permissions.js';
 import './app-header.css';
 
 class AppHeader extends LitElement {
@@ -168,55 +175,19 @@ class AppHeader extends LitElement {
   }
 
   _isAdmin() {
-      return this.currentUser?.user?.is_super_admin || false;
-  }
-
-  _resolveMembershipTenantId(tenantRef) {
-      const normalizedRef = this._normalizeTenantValue(tenantRef);
-      if (!normalizedRef) return '';
-      const memberships = this.currentUser?.tenants || [];
-      for (const membership of memberships) {
-          const membershipTenantId = this._normalizeTenantValue(membership?.tenant_id);
-          const membershipIdentifier = this._normalizeTenantValue(membership?.tenant_identifier);
-          if (
-              normalizedRef === membershipTenantId
-              || (membershipIdentifier && normalizedRef === membershipIdentifier)
-          ) {
-              return membershipTenantId || normalizedRef;
-          }
-      }
-      return normalizedRef;
-  }
-
-  _getTenantRole() {
-      const tenantId = this._resolveMembershipTenantId(this._getEffectiveTenantId());
-      if (!tenantId) return null;
-      const memberships = this.currentUser?.tenants || [];
-      const match = memberships.find(
-          (membership) => this._normalizeTenantValue(membership?.tenant_id) === tenantId
-      );
-      return match?.role || null;
+      return userIsSuperAdmin(this.currentUser);
   }
 
   _canCurateFromUser() {
-      const role = this._getTenantRole();
-      if (!role) {
-          return true;
-      }
-      return role !== 'user';
+      return canCurateTenant(this.currentUser, this._getEffectiveTenantId());
   }
 
   _canManageTenantUsersFromUser() {
-      return this._isAdmin() || this._getTenantRole() === 'admin';
-  }
-
-  _hasAnyTenantAdminMembership() {
-      const memberships = this.currentUser?.tenants || [];
-      return memberships.some((membership) => this._normalizeTenantValue(membership?.role) === 'admin');
+      return canViewTenantUsers(this.currentUser, this._getEffectiveTenantId());
   }
 
   _canOpenSystemAdmin() {
-      return this._isAdmin() || this._hasAnyTenantAdminMembership();
+      return this._isAdmin() || hasAnyTenantUsersAccess(this.currentUser);
   }
 
   async _handleLogout() {
@@ -242,8 +213,7 @@ class AppHeader extends LitElement {
   }
 
   _normalizeTenantValue(value) {
-      if (typeof value !== 'string') return '';
-      return value.trim();
+      return normalizeTenantRef(value);
   }
 
   _getStoredTenant() {

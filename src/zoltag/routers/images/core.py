@@ -15,7 +15,7 @@ from google.cloud import storage
 import numpy as np
 
 from zoltag.dependencies import get_db, get_tenant, get_tenant_setting
-from zoltag.auth.dependencies import get_current_user, require_tenant_role_from_header
+from zoltag.auth.dependencies import get_current_user, require_tenant_permission_from_header
 from zoltag.auth.models import UserProfile
 from zoltag.list_visibility import is_tenant_admin_user
 from zoltag.asset_helpers import load_assets_for_images
@@ -2599,7 +2599,7 @@ async def get_asset(
 @router.delete("/images/{image_id}", response_model=dict, operation_id="delete_image")
 async def delete_image(
     image_id: int,
-    _current_user: UserProfile = Depends(require_tenant_role_from_header("admin")),
+    _current_user: UserProfile = Depends(require_tenant_permission_from_header("tenant.settings.manage")),
     tenant: Tenant = Depends(get_tenant),
     db: Session = Depends(get_db),
 ):

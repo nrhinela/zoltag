@@ -3,7 +3,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Body
 from sqlalchemy.orm import Session
 
-from zoltag.auth.dependencies import require_tenant_role_from_header
+from zoltag.auth.dependencies import require_tenant_permission_from_header
 from zoltag.auth.models import UserProfile
 from zoltag.dependencies import get_db, get_tenant
 from zoltag.tenant import Tenant
@@ -19,7 +19,7 @@ async def update_image_rating(
     rating: int = Body(..., embed=True),
     tenant: Tenant = Depends(get_tenant),
     db: Session = Depends(get_db),
-    _current_user: UserProfile = Depends(require_tenant_role_from_header("editor")),
+    _current_user: UserProfile = Depends(require_tenant_permission_from_header("image.rate")),
 ):
     """Update the rating for an image (0-3)."""
     if rating is not None and (rating < 0 or rating > 3):

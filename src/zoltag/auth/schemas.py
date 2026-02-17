@@ -32,6 +32,9 @@ class TenantMembershipResponse(BaseModel):
     tenant_identifier: Optional[str] = Field(None, description="Tenant identifier")
     tenant_name: str = Field(..., description="Tenant display name")
     role: TenantRole = Field(..., description="User's role in tenant (admin|editor|user)")
+    role_key: Optional[str] = Field(None, description="Resolved RBAC role key for this tenant membership")
+    role_label: Optional[str] = Field(None, description="Resolved RBAC role label for this tenant membership")
+    permissions: Optional[List[str]] = Field(None, description="Effective permission keys for this tenant membership")
     accepted_at: Optional[datetime] = Field(None, description="When membership was accepted")
 
     class Config:
@@ -109,12 +112,15 @@ class ApproveUserRequest(BaseModel):
 class UpdateTenantMembershipRequest(BaseModel):
     """Update an existing tenant membership role."""
 
-    role: TenantRole = Field(..., description="Role (admin|editor|user)")
+    role: Optional[TenantRole] = Field(None, description="Legacy role (admin|editor|user)")
+    role_key: Optional[str] = Field(None, description="Tenant role key to assign (RBAC)")
+    role_id: Optional[UUID4] = Field(None, description="Tenant role UUID to assign (RBAC)")
 
     class Config:
         json_schema_extra = {
             "example": {
-                "role": "admin"
+                "role": "admin",
+                "role_key": "admin",
             }
         }
 

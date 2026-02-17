@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from google.cloud import storage
 from uuid import uuid4
 
-from zoltag.auth.dependencies import require_tenant_role_from_header
+from zoltag.auth.dependencies import require_tenant_permission_from_header
 from zoltag.auth.models import UserProfile
 from zoltag.asset_helpers import AssetReadinessError, load_assets_for_images, resolve_image_storage
 from zoltag.dependencies import get_db, get_tenant
@@ -158,7 +158,7 @@ async def upload_and_ingest_image(
     dedup_policy: str = Query("keep_both", description="Dedup policy: keep_both or skip_duplicate"),
     tenant: Tenant = Depends(get_tenant),
     db: Session = Depends(get_db),
-    current_user: UserProfile = Depends(require_tenant_role_from_header("user")),
+    current_user: UserProfile = Depends(require_tenant_permission_from_header("image.variant.manage")),
 ):
     """Upload one image, persist original + thumbnail, and create Asset/ImageMetadata rows."""
     policy = (dedup_policy or "keep_both").strip().lower()

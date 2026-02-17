@@ -6,7 +6,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Body
 from sqlalchemy.orm import Session
 
-from zoltag.auth.dependencies import require_tenant_role_from_header
+from zoltag.auth.dependencies import require_tenant_permission_from_header
 from zoltag.auth.models import UserProfile
 from zoltag.dependencies import get_db, get_tenant
 from zoltag.metadata import KeywordThreshold
@@ -25,7 +25,7 @@ async def list_keyword_thresholds(
     tag_type: Optional[str] = None,
     tenant: Tenant = Depends(get_tenant),
     db: Session = Depends(get_db),
-    current_user: UserProfile = Depends(require_tenant_role_from_header("admin")),
+    current_user: UserProfile = Depends(require_tenant_permission_from_header("tenant.settings.manage")),
 ):
     """List all keyword thresholds for the tenant, joined with keyword/category info."""
     # Load keywords with category names
@@ -87,7 +87,7 @@ async def set_keyword_threshold_manual(
     threshold_manual: Optional[float] = Body(default=None, embed=True),
     tenant: Tenant = Depends(get_tenant),
     db: Session = Depends(get_db),
-    current_user: UserProfile = Depends(require_tenant_role_from_header("admin")),
+    current_user: UserProfile = Depends(require_tenant_permission_from_header("tenant.settings.manage")),
 ):
     """Set or clear the manual threshold override for a keyword+tag_type."""
     # Verify keyword belongs to tenant

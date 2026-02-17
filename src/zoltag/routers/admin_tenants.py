@@ -10,7 +10,7 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from zoltag.dependencies import get_db, get_secret
 from zoltag.integrations import TenantIntegrationRepository
-from zoltag.auth.dependencies import get_current_user
+from zoltag.auth.dependencies import get_current_user, get_effective_membership_permissions
 from zoltag.auth.models import UserProfile, UserTenant
 from zoltag.metadata import Tenant as TenantModel
 from zoltag.tenant_scope import tenant_reference_filter, tenant_column_filter_for_values
@@ -84,20 +84,26 @@ def _require_super_admin(user: UserProfile) -> None:
         raise HTTPException(status_code=403, detail="Super admin role required")
 
 
-def _user_is_tenant_admin(db: Session, user: UserProfile, tenant: TenantModel) -> bool:
+def _user_has_tenant_permission(
+    db: Session,
+    user: UserProfile,
+    tenant: TenantModel,
+    permission_key: str,
+) -> bool:
     membership = db.query(UserTenant).filter(
         UserTenant.supabase_uid == user.supabase_uid,
         tenant_column_filter_for_values(UserTenant, str(tenant.id)),
         UserTenant.accepted_at.isnot(None),
-        UserTenant.role == "admin",
     ).first()
-    return membership is not None
+    if membership is None:
+        return False
+    return permission_key in get_effective_membership_permissions(db, membership)
 
 
 def _require_tenant_admin_or_super_admin(db: Session, user: UserProfile, tenant: TenantModel) -> None:
     if user.is_super_admin:
         return
-    if _user_is_tenant_admin(db, user, tenant):
+    if _user_has_tenant_permission(db, user, tenant, "tenant.settings.manage"):
         return
     raise HTTPException(status_code=403, detail="Admin role required for this tenant")
 
@@ -112,13 +118,14 @@ async def list_tenants(
     if user.is_super_admin:
         tenant_filter_ids = None
     else:
-        tenant_filter_ids = [
-            row[0]
-            for row in db.query(UserTenant.tenant_id).filter(
+        memberships = db.query(UserTenant).filter(
                 UserTenant.supabase_uid == user.supabase_uid,
                 UserTenant.accepted_at.isnot(None),
-                UserTenant.role == "admin",
             ).all()
+        tenant_filter_ids = [
+            membership.tenant_id
+            for membership in memberships
+            if "tenant.settings.manage" in get_effective_membership_permissions(db, membership)
         ]
         if not tenant_filter_ids:
             return []

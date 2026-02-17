@@ -13,6 +13,7 @@ import {
   getAssetVariantContent,
 } from '../services/api.js';
 import { renderImageGrid } from './shared/image-grid.js';
+import { allowByPermissionOrRole } from './shared/tenant-permissions.js';
 
 class ListEditor extends LitElement {
   static styles = [tailwind, css`
@@ -211,19 +212,12 @@ class ListEditor extends LitElement {
   }
 
   _isTenantAdmin() {
-    const isSuperAdmin = !!this.currentUser?.user?.is_super_admin;
-    if (isSuperAdmin) return true;
-    const tenantRef = String(this.tenant || '').trim();
-    if (!tenantRef) return false;
-    const memberships = Array.isArray(this.currentUser?.tenants) ? this.currentUser.tenants : [];
-    return memberships.some((membership) => {
-      if (String(membership?.role || '').trim().toLowerCase() !== 'admin') {
-        return false;
-      }
-      const membershipTenantId = String(membership?.tenant_id || '').trim();
-      const membershipIdentifier = String(membership?.tenant_identifier || '').trim();
-      return tenantRef === membershipTenantId || (membershipIdentifier && tenantRef === membershipIdentifier);
-    });
+    return allowByPermissionOrRole(
+      this.currentUser,
+      this.tenant,
+      'tenant.settings.manage',
+      ['admin'],
+    );
   }
 
   _getListVisibilityTabs() {

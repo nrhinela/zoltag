@@ -1189,14 +1189,97 @@ export async function getTenantUsers(tenantId) {
  * Update user role in the current tenant (tenant admin scope)
  * @param {string} tenantId - Tenant ID
  * @param {string} supabaseUid - User UUID
- * @param {'user'|'editor'|'admin'} role - Updated role
+ * @param {string|Object} roleOrAssignment - Legacy role string or RBAC assignment payload
  * @returns {Promise<Object>} Success payload
  */
-export async function updateTenantUserRole(tenantId, supabaseUid, role) {
+export async function updateTenantUserRole(tenantId, supabaseUid, roleOrAssignment) {
+    const payload = (typeof roleOrAssignment === 'string')
+        ? { role: roleOrAssignment }
+        : { ...(roleOrAssignment || {}) };
     return fetchWithAuth(`/admin/tenant-users/${supabaseUid}/role`, {
         method: 'PATCH',
         tenantId,
-        body: JSON.stringify({ role })
+        body: JSON.stringify(payload)
+    });
+}
+
+/**
+ * List active RBAC permission catalog entries for tenant role configuration
+ * @param {string} tenantId - Tenant ID
+ * @returns {Promise<Object>} Permission catalog payload
+ */
+export async function getTenantPermissionCatalog(tenantId) {
+    return fetchWithAuth('/admin/permissions/catalog', { tenantId });
+}
+
+/**
+ * List tenant RBAC roles
+ * @param {string} tenantId - Tenant ID
+ * @param {Object} options - Query options
+ * @param {boolean} options.includeInactive - Include inactive roles
+ * @returns {Promise<Object>} Role list payload
+ */
+export async function getTenantRoles(tenantId, options = {}) {
+    const params = new URLSearchParams();
+    if (options.includeInactive) params.append('include_inactive', 'true');
+    const suffix = params.toString() ? `?${params.toString()}` : '';
+    return fetchWithAuth(`/admin/roles${suffix}`, { tenantId });
+}
+
+/**
+ * Create a custom tenant role
+ * @param {string} tenantId - Tenant ID
+ * @param {Object} payload - Role payload
+ * @returns {Promise<Object>} Created role
+ */
+export async function createTenantRole(tenantId, payload) {
+    return fetchWithAuth('/admin/roles', {
+        method: 'POST',
+        tenantId,
+        body: JSON.stringify(payload || {})
+    });
+}
+
+/**
+ * Update tenant role metadata
+ * @param {string} tenantId - Tenant ID
+ * @param {string} roleId - Role UUID
+ * @param {Object} payload - Partial update payload
+ * @returns {Promise<Object>} Updated role
+ */
+export async function updateTenantRole(tenantId, roleId, payload) {
+    return fetchWithAuth(`/admin/roles/${roleId}`, {
+        method: 'PATCH',
+        tenantId,
+        body: JSON.stringify(payload || {})
+    });
+}
+
+/**
+ * Replace tenant role permissions
+ * @param {string} tenantId - Tenant ID
+ * @param {string} roleId - Role UUID
+ * @param {Array<string>} permissionKeys - Permission keys
+ * @returns {Promise<Object>} Updated role
+ */
+export async function replaceTenantRolePermissions(tenantId, roleId, permissionKeys = []) {
+    return fetchWithAuth(`/admin/roles/${roleId}/permissions`, {
+        method: 'PUT',
+        tenantId,
+        body: JSON.stringify({ permission_keys: permissionKeys })
+    });
+}
+
+/**
+ * Delete a tenant role
+ * @param {string} tenantId - Tenant ID
+ * @param {string} roleId - Role UUID
+ * @returns {Promise<Object>} Delete result
+ */
+export async function deleteTenantRole(tenantId, roleId) {
+    return fetchWithAuth(`/admin/roles/${roleId}`, {
+        method: 'DELETE',
+        tenantId
     });
 }
 

@@ -12,7 +12,7 @@ from google.cloud import storage
 from google.api_core.exceptions import NotFound
 
 from zoltag.dependencies import get_db, get_tenant
-from zoltag.auth.dependencies import require_tenant_role_from_header
+from zoltag.auth.dependencies import require_tenant_permission_from_header
 from zoltag.auth.models import UserProfile
 from zoltag.tenant import Tenant
 from zoltag.metadata import Asset, AssetDerivative, ImageMetadata
@@ -87,7 +87,7 @@ async def upload_asset_variant(
     variant: Optional[str] = Form(default=None),
     tenant: Tenant = Depends(get_tenant),
     db: Session = Depends(get_db),
-    current_user: UserProfile = Depends(require_tenant_role_from_header("editor")),
+    current_user: UserProfile = Depends(require_tenant_permission_from_header("image.variant.manage")),
 ):
     """Upload and create a derivative variant record for an image asset."""
     _image, asset = _get_image_and_asset_or_409(db, tenant, image_id)
@@ -143,7 +143,7 @@ async def update_asset_variant(
     payload: dict = Body(...),
     tenant: Tenant = Depends(get_tenant),
     db: Session = Depends(get_db),
-    current_user: UserProfile = Depends(require_tenant_role_from_header("editor")),
+    current_user: UserProfile = Depends(require_tenant_permission_from_header("image.variant.manage")),
 ):
     """Update derivative variant metadata and optionally rename backing object."""
     _ = current_user
@@ -199,7 +199,7 @@ async def delete_asset_variant(
     variant_id: UUID,
     tenant: Tenant = Depends(get_tenant),
     db: Session = Depends(get_db),
-    current_user: UserProfile = Depends(require_tenant_role_from_header("editor")),
+    current_user: UserProfile = Depends(require_tenant_permission_from_header("image.variant.manage")),
 ):
     """Delete a derivative variant and remove its backing object from storage."""
     _ = current_user

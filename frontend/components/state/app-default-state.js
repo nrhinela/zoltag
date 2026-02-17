@@ -84,7 +84,7 @@ export function initializeAppDefaultState(host) {
   host.searchTotal = 0;
   host.searchPinnedImageId = null;
   host.searchSimilarityAssetUuid = null;
-  host.activeSearchSubTab = host.activeSearchSubTab || 'home';
+  host.activeSearchSubTab = host.activeSearchSubTab || 'landing';
   host.pendingSearchExploreSelection = null;
   host.pendingVectorstoreQuery = null;
   host.pendingVectorstoreQueryToken = 0;

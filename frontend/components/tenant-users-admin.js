@@ -7,12 +7,18 @@ import {
   createTenantInvitation,
   getTenantInvitations,
   cancelTenantInvitation,
+  getTenantRoles,
+  getTenantPermissionCatalog,
+  createTenantRole,
+  updateTenantRole,
+  deleteTenantRole,
 } from '../services/api.js';
 
 class TenantUsersAdmin extends LitElement {
   static properties = {
     tenant: { type: String },
     tenantName: { type: String },
+    canView: { type: Boolean },
     canManage: { type: Boolean },
     isSuperAdmin: { type: Boolean },
     users: { type: Array },
@@ -28,6 +34,18 @@ class TenantUsersAdmin extends LitElement {
     inviteRole: { type: String },
     inviteSubmitting: { type: Boolean },
     inviteLink: { type: String },
+    roles: { type: Array },
+    permissionCatalog: { type: Array },
+    rolesLoading: { type: Boolean },
+    showRoleModal: { type: Boolean },
+    editingRole: { type: Object },
+    roleFormKey: { type: String },
+    roleFormLabel: { type: String },
+    roleFormDescription: { type: String },
+    roleFormActive: { type: Boolean },
+    roleFormPermissions: { type: Array },
+    roleSubmitting: { type: Boolean },
+    roleDeleting: { type: Boolean },
   };
 
   static styles = [
@@ -246,6 +264,9 @@ class TenantUsersAdmin extends LitElement {
         background: #fff;
         border-radius: 12px;
         width: min(560px, 92vw);
+        max-height: 90vh;
+        display: flex;
+        flex-direction: column;
         box-shadow: 0 20px 40px rgba(0, 0, 0, 0.25);
       }
 
@@ -266,6 +287,7 @@ class TenantUsersAdmin extends LitElement {
 
       .modal-content {
         padding: 16px 20px 20px;
+        overflow-y: auto;
       }
 
       .modal-close {
@@ -360,6 +382,63 @@ class TenantUsersAdmin extends LitElement {
         padding: 9px 10px;
         font-size: 14px;
       }
+
+      .section-header {
+        margin-top: 24px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      .section-title {
+        margin: 0;
+        font-size: 22px;
+        font-weight: 700;
+        color: #111827;
+      }
+
+      .checkbox-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+        gap: 8px;
+        margin-top: 8px;
+      }
+
+      .checkbox-row {
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+        border: 1px solid #e5e7eb;
+        border-radius: 8px;
+        padding: 8px;
+      }
+
+      .checkbox-row input {
+        margin-top: 2px;
+      }
+
+      .checkbox-label {
+        font-size: 13px;
+        color: #111827;
+      }
+
+      .checkbox-hint {
+        display: block;
+        font-size: 11px;
+        color: #6b7280;
+        margin-top: 2px;
+      }
+
+      .permissions-scroll {
+        max-height: min(42vh, 360px);
+        overflow-y: auto;
+        border: 1px solid #e5e7eb;
+        border-radius: 8px;
+        padding: 8px;
+        background: #f9fafb;
+      }
     `,
   ];
 
@@ -367,6 +446,7 @@ class TenantUsersAdmin extends LitElement {
     super();
     this.tenant = '';
     this.tenantName = '';
+    this.canView = false;
     this.canManage = false;
     this.isSuperAdmin = false;
     this.users = [];
@@ -382,6 +462,18 @@ class TenantUsersAdmin extends LitElement {
     this.inviteRole = 'user';
     this.inviteSubmitting = false;
     this.inviteLink = '';
+    this.roles = [];
+    this.permissionCatalog = [];
+    this.rolesLoading = false;
+    this.showRoleModal = false;
+    this.editingRole = null;
+    this.roleFormKey = '';
+    this.roleFormLabel = '';
+    this.roleFormDescription = '';
+    this.roleFormActive = true;
+    this.roleFormPermissions = [];
+    this.roleSubmitting = false;
+    this.roleDeleting = false;
   }
 
   connectedCallback() {
@@ -390,7 +482,7 @@ class TenantUsersAdmin extends LitElement {
   }
 
   updated(changedProperties) {
-    if (changedProperties.has('tenant') || changedProperties.has('canManage')) {
+    if (changedProperties.has('tenant') || changedProperties.has('canManage') || changedProperties.has('canView')) {
       this._loadData();
     }
   }
@@ -399,6 +491,7 @@ class TenantUsersAdmin extends LitElement {
     await Promise.all([
       this._loadUsers(),
       this._loadInvitations(),
+      this._loadRoles(),
     ]);
   }
 
@@ -407,20 +500,65 @@ class TenantUsersAdmin extends LitElement {
     return Boolean(user.is_super_admin);
   }
 
+  _normalizeRole(role) {
+    return String(role || 'user').trim().toLowerCase();
+  }
+
+  _effectiveRoleValue(entity) {
+    const roleKey = String(entity?.role_key || '').trim();
+    if (roleKey) return roleKey;
+    return this._normalizeRole(entity?.role);
+  }
+
   _roleLabel(role) {
-    if (role === 'admin') return 'Admin';
-    if (role === 'editor') return 'Editor';
+    const normalized = this._normalizeRole(role);
+    if (normalized === 'admin') return 'Admin';
+    if (normalized === 'editor') return 'Editor';
     return 'User';
   }
 
   _roleBadgeClass(role) {
-    if (role === 'admin') return 'badge-admin';
-    if (role === 'editor') return 'badge-editor';
+    const normalized = this._normalizeRole(role);
+    if (normalized === 'admin') return 'badge-admin';
+    if (normalized === 'editor') return 'badge-editor';
     return 'badge-user';
   }
 
+  _roleDisplayLabel(entity) {
+    const explicit = String(entity?.role_label || '').trim();
+    if (explicit) return explicit;
+    const roleValue = this._effectiveRoleValue(entity);
+    return this._roleLabel(roleValue);
+  }
+
+  _activeRoles() {
+    const roles = Array.isArray(this.roles) ? this.roles : [];
+    return roles.filter((role) => role?.is_active !== false);
+  }
+
+  _activeRolesOrFallback() {
+    const activeRoles = this._activeRoles();
+    if (activeRoles.length) return activeRoles;
+    return [
+      { role_key: 'user', label: 'User' },
+      { role_key: 'editor', label: 'Editor' },
+      { role_key: 'admin', label: 'Admin' },
+    ];
+  }
+
+  _legacyAssignableRoles() {
+    const allowed = new Set(['user', 'editor', 'admin']);
+    const available = this._activeRoles().filter((role) => allowed.has(this._normalizeRole(role?.role_key)));
+    if (available.length) return available;
+    return [
+      { role_key: 'user', label: 'User' },
+      { role_key: 'editor', label: 'Editor' },
+      { role_key: 'admin', label: 'Admin' },
+    ];
+  }
+
   async _loadUsers() {
-    if (!this.tenant || !this.canManage) {
+    if (!this.tenant || !this.canView) {
       this.users = [];
       this.loading = false;
       return;
@@ -439,7 +577,7 @@ class TenantUsersAdmin extends LitElement {
   }
 
   async _loadInvitations() {
-    if (!this.tenant || !this.canManage) {
+    if (!this.tenant || !this.canView) {
       this.invitations = [];
       this.invitationsLoading = false;
       return;
@@ -457,6 +595,31 @@ class TenantUsersAdmin extends LitElement {
     }
   }
 
+  async _loadRoles() {
+    if (!this.tenant || !this.canManage) {
+      this.roles = [];
+      this.permissionCatalog = [];
+      this.rolesLoading = false;
+      return;
+    }
+    this.rolesLoading = true;
+    try {
+      const [rolesResult, catalogResult] = await Promise.all([
+        getTenantRoles(this.tenant, { includeInactive: true }),
+        getTenantPermissionCatalog(this.tenant),
+      ]);
+      this.roles = Array.isArray(rolesResult?.roles) ? rolesResult.roles : [];
+      this.permissionCatalog = Array.isArray(catalogResult?.permissions) ? catalogResult.permissions : [];
+    } catch (error) {
+      console.error('Failed to load tenant roles:', error);
+      this.error = error.message || 'Failed to load role configuration';
+      this.roles = [];
+      this.permissionCatalog = [];
+    } finally {
+      this.rolesLoading = false;
+    }
+  }
+
   _formatDate(value) {
     if (!value) return '-';
     const date = new Date(value);
@@ -465,9 +628,9 @@ class TenantUsersAdmin extends LitElement {
   }
 
   _openEdit(user) {
-    if (!user || this._isAdminProtected(user)) return;
+    if (!this.canManage || !user || this._isAdminProtected(user)) return;
     this.editingUser = user;
-    this.editRole = user.role || 'user';
+    this.editRole = this._effectiveRoleValue(user);
     this.error = '';
   }
 
@@ -477,11 +640,11 @@ class TenantUsersAdmin extends LitElement {
   }
 
   async _saveRole() {
-    if (!this.editingUser) return;
+    if (!this.canManage || !this.editingUser) return;
     this.saving = true;
     this.error = '';
     try {
-      await updateTenantUserRole(this.tenant, this.editingUser.supabase_uid, this.editRole);
+      await updateTenantUserRole(this.tenant, this.editingUser.supabase_uid, { role_key: this.editRole });
       await this._loadUsers();
       this._closeEdit();
     } catch (error) {
@@ -509,6 +672,7 @@ class TenantUsersAdmin extends LitElement {
   }
 
   _openInviteModal() {
+    if (!this.canManage) return;
     this.showInviteModal = true;
     this.inviteEmail = '';
     this.inviteRole = 'user';
@@ -551,7 +715,7 @@ class TenantUsersAdmin extends LitElement {
     this.error = '';
     try {
       this.inviteLink = '';
-      const result = await createTenantInvitation(this.tenant, email, this.inviteRole || 'user');
+      const result = await createTenantInvitation(this.tenant, email, this._normalizeRole(this.inviteRole || 'user'));
       const token = String(result?.token || '').trim();
       const apiInvitationLink = String(result?.invitation_link || '').trim();
       this.inviteLink = apiInvitationLink || (token ? this._buildInvitationLink(token) : '');
@@ -579,6 +743,115 @@ class TenantUsersAdmin extends LitElement {
     } catch (error) {
       console.error('Failed to cancel invitation:', error);
       this.error = error.message || 'Failed to cancel invitation';
+    }
+  }
+
+  _openRoleModal(role = null) {
+    if (!this.canManage) return;
+    this.editingRole = role || null;
+    this.roleFormKey = String(role?.role_key || '').trim();
+    this.roleFormLabel = String(role?.label || '').trim();
+    this.roleFormDescription = String(role?.description || '').trim();
+    this.roleFormActive = role?.is_active !== false;
+    this.roleFormPermissions = Array.isArray(role?.permission_keys) ? [...role.permission_keys] : [];
+    this.showRoleModal = true;
+    this.roleSubmitting = false;
+    this.roleDeleting = false;
+    this.error = '';
+  }
+
+  _closeRoleModal() {
+    this.showRoleModal = false;
+    this.editingRole = null;
+    this.roleSubmitting = false;
+    this.roleDeleting = false;
+  }
+
+  _toggleRolePermission(permissionKey, checked) {
+    const key = String(permissionKey || '').trim();
+    if (!key) return;
+    const next = new Set(this.roleFormPermissions || []);
+    if (checked) {
+      next.add(key);
+    } else {
+      next.delete(key);
+    }
+    this.roleFormPermissions = Array.from(next);
+  }
+
+  _permissionGroups() {
+    const grouped = new Map();
+    for (const permission of (this.permissionCatalog || [])) {
+      const category = String(permission?.category || 'other').trim() || 'other';
+      const bucket = grouped.get(category) || [];
+      bucket.push(permission);
+      grouped.set(category, bucket);
+    }
+    return Array.from(grouped.entries()).sort(([a], [b]) => a.localeCompare(b));
+  }
+
+  async _saveRoleDefinition() {
+    if (!this.canManage) return;
+    const roleKey = String(this.roleFormKey || '').trim().toLowerCase();
+    const label = String(this.roleFormLabel || '').trim();
+    if (!this.editingRole && !roleKey) {
+      this.error = 'Role key is required';
+      return;
+    }
+    if (!label) {
+      this.error = 'Role label is required';
+      return;
+    }
+
+    const payload = {
+      label,
+      description: String(this.roleFormDescription || '').trim(),
+      is_active: !!this.roleFormActive,
+      permission_keys: Array.isArray(this.roleFormPermissions) ? this.roleFormPermissions : [],
+    };
+    if (!this.editingRole) {
+      payload.role_key = roleKey;
+    }
+
+    this.roleSubmitting = true;
+    this.error = '';
+    try {
+      if (this.editingRole?.id) {
+        await updateTenantRole(this.tenant, this.editingRole.id, payload);
+      } else {
+        await createTenantRole(this.tenant, payload);
+      }
+      await this._loadRoles();
+      await this._loadUsers();
+      this._closeRoleModal();
+    } catch (error) {
+      console.error('Failed to save role definition:', error);
+      this.error = error.message || 'Failed to save role definition';
+      this.roleSubmitting = false;
+    }
+  }
+
+  async _deleteRoleDefinition() {
+    if (!this.canManage || !this.editingRole?.id || this.editingRole?.is_system) return;
+    const memberCount = Number(this.editingRole?.member_count || 0);
+    if (memberCount > 0) {
+      this.error = 'Cannot delete a role while it is assigned to users.';
+      return;
+    }
+    const roleLabel = String(this.editingRole?.label || this.editingRole?.role_key || 'this role').trim();
+    const confirmed = confirm(`Delete role "${roleLabel}"?`);
+    if (!confirmed) return;
+    this.roleDeleting = true;
+    this.error = '';
+    try {
+      await deleteTenantRole(this.tenant, this.editingRole.id);
+      await this._loadRoles();
+      await this._loadUsers();
+      this._closeRoleModal();
+    } catch (error) {
+      console.error('Failed to delete role definition:', error);
+      this.error = error.message || 'Failed to delete role';
+      this.roleDeleting = false;
     }
   }
 
@@ -615,11 +888,59 @@ class TenantUsersAdmin extends LitElement {
                 <td>${this._formatDate(invitation.created_at)}</td>
                 <td>${this._formatDate(invitation.expires_at)}</td>
                 <td>
-                  <button
-                    class="btn btn-danger btn-small"
-                    @click=${() => this._cancelInvitation(invitation)}
-                  >
-                    Cancel
+                  ${this.canManage ? html`
+                    <button
+                      class="btn btn-danger btn-small"
+                      @click=${() => this._cancelInvitation(invitation)}
+                    >
+                      Cancel
+                    </button>
+                  ` : html`<span class="hint">Read-only</span>`}
+                </td>
+              </tr>
+            `)}
+          </tbody>
+        </table>
+      </div>
+    `;
+  }
+
+  _renderRolesTable() {
+    if (!this.canManage) return html``;
+    if (this.rolesLoading) {
+      return html`<div class="loading"><i class="fas fa-spinner fa-spin mr-2"></i>Loading roles...</div>`;
+    }
+    if (!this.roles.length) {
+      return html`<div class="empty">No tenant roles found.</div>`;
+    }
+    return html`
+      <div class="table-wrap invite-table">
+        <table>
+          <thead>
+            <tr>
+              <th>Role</th>
+              <th>Key</th>
+              <th>Status</th>
+              <th>Members</th>
+              <th>Permissions</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${this.roles.map((role) => html`
+              <tr>
+                <td><span class="name">${role.label || role.role_key}</span></td>
+                <td><span class="email">${role.role_key}</span></td>
+                <td>
+                  <span class="badge ${role.is_active ? 'badge-approved' : 'badge-disabled'}">
+                    ${role.is_active ? 'Active' : 'Disabled'}
+                  </span>
+                </td>
+                <td>${Number(role.member_count || 0)}</td>
+                <td>${Array.isArray(role.permission_keys) ? role.permission_keys.length : 0}</td>
+                <td>
+                  <button class="btn btn-primary btn-small" @click=${() => this._openRoleModal(role)}>
+                    Edit
                   </button>
                 </td>
               </tr>
@@ -656,6 +977,7 @@ class TenantUsersAdmin extends LitElement {
           <tbody>
             ${this.users.map((user) => {
               const protectedAdmin = this._isAdminProtected(user);
+              const canEdit = this.canManage && !protectedAdmin;
               return html`
                 <tr>
                   <td><span class="name">${user.display_name || 'No name'}</span></td>
@@ -671,8 +993,8 @@ class TenantUsersAdmin extends LitElement {
                     </span>
                   </td>
                   <td>
-                    <span class="badge ${this._roleBadgeClass(user.role)}>
-                      ${this._roleLabel(user.role)}
+                    <span class="badge ${this._roleBadgeClass(this._effectiveRoleValue(user))}">
+                      ${this._roleDisplayLabel(user)}
                     </span>
                   </td>
                   <td>${this._formatDate(user.created_at)}</td>
@@ -680,14 +1002,14 @@ class TenantUsersAdmin extends LitElement {
                     <div class="row-actions">
                       <button
                         class="btn btn-primary"
-                        ?disabled=${protectedAdmin}
+                        ?disabled=${!canEdit}
                         @click=${() => this._openEdit(user)}
-                        title=${protectedAdmin ? 'Admin users are visible but cannot be edited here' : 'Edit user'}
+                        title=${canEdit ? 'Edit user' : (protectedAdmin ? 'Admin users are visible but cannot be edited here' : 'Insufficient permission')}
                       >
                         <i class="fas fa-pen mr-1"></i>Edit
                       </button>
                     </div>
-                    ${protectedAdmin ? html`<div class="hint mt-1">Admin user (read-only)</div>` : ''}
+                    ${!canEdit ? html`<div class="hint mt-1">${protectedAdmin ? 'Admin user (read-only)' : 'Read-only for your role'}</div>` : ''}
                   </td>
                 </tr>
               `;
@@ -699,7 +1021,7 @@ class TenantUsersAdmin extends LitElement {
   }
 
   render() {
-    if (!this.canManage) {
+    if (!this.canView) {
       return html`
         <div class="card">
           <div class="card-header">
@@ -711,7 +1033,7 @@ class TenantUsersAdmin extends LitElement {
           <div class="card-content">
             <div class="access-denied">
               <i class="fas fa-lock mr-2"></i>
-              Tenant admin role is required to manage users.
+              You do not have permission to view tenant users.
             </div>
           </div>
         </div>
@@ -726,9 +1048,11 @@ class TenantUsersAdmin extends LitElement {
             <p class="card-subtitle">Manage users assigned to tenant <strong>${this.tenantName || this.tenant}</strong>.</p>
           </div>
           <div class="header-actions">
-            <button class="invite-btn" @click=${this._openInviteModal}>
-              <i class="fas fa-user-plus mr-1"></i>Invite User
-            </button>
+            ${this.canManage ? html`
+              <button class="invite-btn" @click=${this._openInviteModal}>
+                <i class="fas fa-user-plus mr-1"></i>Invite User
+              </button>
+            ` : html``}
             <button class="refresh-btn" @click=${this._loadData} ?disabled=${this.loading || this.invitationsLoading}>
               <i class="fas fa-rotate-right mr-1"></i>Refresh
             </button>
@@ -736,6 +1060,9 @@ class TenantUsersAdmin extends LitElement {
         </div>
         <div class="card-content">
           ${this.error ? html`<div class="error">${this.error}</div>` : ''}
+          ${!this.canManage ? html`
+            <div class="hint mb-3">Read only for your role.</div>
+          ` : html``}
           ${this.inviteLink ? html`
             <div class="invite-success">
               <div>
@@ -758,6 +1085,16 @@ class TenantUsersAdmin extends LitElement {
             <p class="invite-status">Invited users keep their pre-assigned role after registration and invitation acceptance.</p>
             ${this._renderInvitationsTable()}
           </div>
+          ${this.canManage ? html`
+            <div class="section-header">
+              <h3 class="section-title">Roles & Permissions</h3>
+              <button class="btn btn-primary btn-small" @click=${() => this._openRoleModal(null)}>
+                <i class="fas fa-plus mr-1"></i>New Role
+              </button>
+            </div>
+            <div class="invite-status">Manage tenant role labels and permission mappings.</div>
+            ${this._renderRolesTable()}
+          ` : html``}
         </div>
       </div>
 
@@ -783,9 +1120,9 @@ class TenantUsersAdmin extends LitElement {
                   }}
                   ?disabled=${this.saving}
                 >
-                  <option value="user">User</option>
-                  <option value="editor">Editor</option>
-                  <option value="admin">Admin</option>
+                  ${this._activeRolesOrFallback().map((role) => html`
+                    <option value=${role.role_key}>${role.label || role.role_key}</option>
+                  `)}
                 </select>
               </div>
               <div class="modal-actions">
@@ -796,6 +1133,111 @@ class TenantUsersAdmin extends LitElement {
                   <button class="btn btn-secondary" @click=${this._closeEdit} ?disabled=${this.saving}>Cancel</button>
                   <button class="btn btn-primary" @click=${this._saveRole} ?disabled=${this.saving}>
                     ${this.saving ? html`<i class="fas fa-spinner fa-spin mr-1"></i>Saving...` : html`Save`}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      ` : html``}
+
+      ${this.showRoleModal ? html`
+        <div class="modal-overlay" @click=${this._closeRoleModal}>
+          <div class="modal" @click=${(e) => e.stopPropagation()}>
+            <div class="modal-header">
+              <h3 class="modal-title">${this.editingRole ? 'Edit Role' : 'Create Role'}</h3>
+              <button class="modal-close" @click=${this._closeRoleModal}>x</button>
+            </div>
+            <div class="modal-content">
+              <div class="field">
+                <label class="label" for="role-key">Role Key</label>
+                <input
+                  id="role-key"
+                  class="inline-input"
+                  .value=${this.roleFormKey}
+                  @input=${(e) => { this.roleFormKey = e.target.value; }}
+                  placeholder="example: reviewer"
+                  ?disabled=${this.roleSubmitting || !!this.editingRole?.is_system || !!this.editingRole}
+                />
+                <div class="hint">Lowercase key used for assignment. System role keys are fixed.</div>
+              </div>
+              <div class="field">
+                <label class="label" for="role-label">Label</label>
+                <input
+                  id="role-label"
+                  class="inline-input"
+                  .value=${this.roleFormLabel}
+                  @input=${(e) => { this.roleFormLabel = e.target.value; }}
+                  placeholder="Role label"
+                  ?disabled=${this.roleSubmitting}
+                />
+              </div>
+              <div class="field">
+                <label class="label" for="role-description">Description</label>
+                <input
+                  id="role-description"
+                  class="inline-input"
+                  .value=${this.roleFormDescription}
+                  @input=${(e) => { this.roleFormDescription = e.target.value; }}
+                  placeholder="Optional description"
+                  ?disabled=${this.roleSubmitting}
+                />
+              </div>
+              <div class="field">
+                <label class="label" for="role-active">Status</label>
+                <select
+                  id="role-active"
+                  .value=${this.roleFormActive ? 'active' : 'inactive'}
+                  @change=${(e) => { this.roleFormActive = e.target.value === 'active'; }}
+                  ?disabled=${this.roleSubmitting}
+                >
+                  <option value="active">Active</option>
+                  <option value="inactive">Inactive</option>
+                </select>
+              </div>
+              <div class="field">
+                <span class="label">Permissions</span>
+                <div class="permissions-scroll">
+                  ${this._permissionGroups().map(([category, permissions]) => html`
+                    <div class="hint" style="font-weight: 700; text-transform: uppercase; margin-top: 10px;">${category}</div>
+                    <div class="checkbox-grid">
+                      ${permissions.map((permission) => {
+                        const key = String(permission?.key || '').trim();
+                        const checked = (this.roleFormPermissions || []).includes(key);
+                        return html`
+                          <label class="checkbox-row">
+                            <input
+                              type="checkbox"
+                              .checked=${checked}
+                              @change=${(e) => this._toggleRolePermission(key, e.target.checked)}
+                              ?disabled=${this.roleSubmitting}
+                            />
+                            <span class="checkbox-label">
+                              ${key}
+                              <span class="checkbox-hint">${permission.description || ''}</span>
+                            </span>
+                          </label>
+                        `;
+                      })}
+                    </div>
+                  `)}
+                </div>
+              </div>
+              <div class="modal-actions">
+                ${(this.editingRole && !this.editingRole.is_system) ? html`
+                  <button
+                    class="btn btn-danger"
+                    @click=${this._deleteRoleDefinition}
+                    ?disabled=${this.roleSubmitting || this.roleDeleting || Number(this.editingRole?.member_count || 0) > 0}
+                    title=${Number(this.editingRole?.member_count || 0) > 0 ? 'Role is assigned to users' : 'Delete role'}
+                  >
+                    ${this.roleDeleting ? html`<i class="fas fa-spinner fa-spin mr-1"></i>Deleting...` : html`Delete`}
+                  </button>
+                ` : html`<span></span>`}
+                <div class="row-actions">
+                  <button class="btn btn-secondary" @click=${this._closeRoleModal} ?disabled=${this.roleSubmitting || this.roleDeleting}>Cancel</button>
+                  <button class="btn btn-primary" @click=${this._saveRoleDefinition} ?disabled=${this.roleSubmitting || this.roleDeleting}>
+                  ${this.roleSubmitting ? html`<i class="fas fa-spinner fa-spin mr-1"></i>Saving...` : html`Save`}
                   </button>
                 </div>
               </div>
@@ -832,9 +1274,11 @@ class TenantUsersAdmin extends LitElement {
                   @change=${(e) => { this.inviteRole = e.target.value; }}
                   ?disabled=${this.inviteSubmitting}
                 >
-                  <option value="user">User</option>
-                  <option value="editor">Editor</option>
-                  <option value="admin">Admin</option>
+                  ${this._legacyAssignableRoles().map((role) => html`
+                    <option value=${this._normalizeRole(role.role_key)}>
+                      ${role.label || this._roleLabel(role.role_key)}
+                    </option>
+                  `)}
                 </select>
               </div>
               <div class="hint">

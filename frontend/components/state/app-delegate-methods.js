@@ -278,7 +278,7 @@ export function bindAppDelegateMethods(host) {
       ? Number(sourceImage.id)
       : null;
     host.searchSimilarityAssetUuid = sourceAssetUuid || null;
-    host.activeSearchSubTab = 'home';
+    host.activeSearchSubTab = 'advanced';
     host.pendingSearchExploreSelection = null;
     host._handleCurateEditorClose?.();
     host.curateEditorImageSet = [];
