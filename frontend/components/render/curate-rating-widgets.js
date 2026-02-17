@@ -1,6 +1,10 @@
 import { html } from 'lit';
 
 export function renderCurateRatingWidget(host, image) {
+  const canRate = typeof host?._canCurate === 'function' ? host._canCurate() : true;
+  if (!canRate) {
+    return html``;
+  }
   return html`
     <div class="curate-thumb-rating-widget" @click=${(e) => e.stopPropagation()}>
       ${host._curateRatingBurstIds?.has(image.id) ? html`

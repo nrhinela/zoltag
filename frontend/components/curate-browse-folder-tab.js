@@ -117,6 +117,7 @@ export class CurateBrowseFolderTab extends LitElement {
       operators: {},
       categoryFilterOperator: undefined,
       categoryFilterSource: 'permatags',
+      textQuery: '',
     };
     this.listExcludeId = '';
 
@@ -948,6 +949,7 @@ export class CurateBrowseFolderTab extends LitElement {
       operators: {},
       categoryFilterSource: 'permatags',
       filenameQuery: '',
+      textQuery: '',
       listId: undefined,
       listExcludeId: undefined,
       rating: undefined,
@@ -997,6 +999,9 @@ export class CurateBrowseFolderTab extends LitElement {
           break;
         case 'filename':
           nextFilters.filenameQuery = chip.value || '';
+          break;
+        case 'text_search':
+          nextFilters.textQuery = chip.value || '';
           break;
       }
     });
@@ -1258,7 +1263,7 @@ export class CurateBrowseFolderTab extends LitElement {
             .keywords=${this.keywords}
             .activeFilters=${this.browseChipFilters}
             .lists=${this._lists}
-            .availableFilterTypes=${['keyword', 'rating', 'list', 'filename']}
+            .availableFilterTypes=${['keyword', 'rating', 'list', 'filename', 'text_search']}
             .renderSortControls=${() => html`
               <div class="flex items-center gap-2">
                 <span class="text-sm font-semibold text-gray-700">Sort:</span>

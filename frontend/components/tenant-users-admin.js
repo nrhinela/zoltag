@@ -12,6 +12,7 @@ import {
 class TenantUsersAdmin extends LitElement {
   static properties = {
     tenant: { type: String },
+    tenantName: { type: String },
     canManage: { type: Boolean },
     isSuperAdmin: { type: Boolean },
     users: { type: Array },
@@ -365,6 +366,7 @@ class TenantUsersAdmin extends LitElement {
   constructor() {
     super();
     this.tenant = '';
+    this.tenantName = '';
     this.canManage = false;
     this.isSuperAdmin = false;
     this.users = [];
@@ -720,7 +722,7 @@ class TenantUsersAdmin extends LitElement {
         <div class="card-header">
           <div>
             <h2 class="card-title">Tenant Users</h2>
-            <p class="card-subtitle">Manage users assigned to tenant <strong>${this.tenant}</strong>.</p>
+            <p class="card-subtitle">Manage users assigned to tenant <strong>${this.tenantName || this.tenant}</strong>.</p>
           </div>
           <div class="header-actions">
             <button class="invite-btn" @click=${this._openInviteModal}>

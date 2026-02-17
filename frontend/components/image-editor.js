@@ -947,9 +947,9 @@ class ImageEditor extends LitElement {
       background: rgba(30, 64, 175, 0.95);
     }
     .curate-thumb-similar-link-icon {
-      width: 16px;
-      height: 16px;
-      fill: currentColor;
+      font-size: 17px;
+      font-weight: 700;
+      line-height: 1;
       pointer-events: none;
     }
     .curate-thumb-date {
@@ -1499,7 +1499,7 @@ class ImageEditor extends LitElement {
   }
 
   async _handleSaveMarketingNote() {
-    if (!this.image || !this.tenant || this.marketingNoteSaving) return;
+    if (!this.canCurate || !this.image || !this.tenant || this.marketingNoteSaving) return;
     this.marketingNoteSaving = true;
     this.marketingNoteError = '';
     try {
@@ -1894,7 +1894,7 @@ class ImageEditor extends LitElement {
   }
 
   async _handleRatingClick(value) {
-    if (!this.details || !this.tenant || this.ratingSaving) return;
+    if (!this.canCurate || !this.details || !this.tenant || this.ratingSaving) return;
     this._triggerRatingBurst();
     this.ratingSaving = true;
     this.ratingError = '';
@@ -2495,13 +2495,15 @@ class ImageEditor extends LitElement {
                 placeholder="Marketing description..."
                 .value=${this.marketingNote}
                 @input=${(e) => { this.marketingNote = e.target.value; }}
+                ?disabled=${!this.canCurate}
               ></textarea>
               <div class="flex items-center gap-2">
                 <button
                   class="text-xs text-blue-600 hover:text-blue-700 disabled:opacity-50"
-                  ?disabled=${this.marketingNoteSaving}
+                  ?disabled=${this.marketingNoteSaving || !this.canCurate}
                   @click=${this._handleSaveMarketingNote}
                 >${this.marketingNoteSaving ? 'Saving…' : 'Save'}</button>
+                ${!this.canCurate ? html`<span class="text-xs text-gray-500">Read only for your role.</span>` : html``}
                 ${this.marketingNoteError ? html`<span class="text-xs text-red-500">${this.marketingNoteError}</span>` : html``}
               </div>
             </div>
@@ -2746,6 +2748,7 @@ class ImageEditor extends LitElement {
 
   _renderRatingControl({ showHeading = true } = {}) {
     if (!this.details) return html``;
+    const canRate = Boolean(this.canCurate);
     return html`
       <div class="space-y-2">
         ${showHeading ? html`<div class="text-xs font-semibold text-gray-600 uppercase">Rating</div>` : html``}
@@ -2756,10 +2759,10 @@ class ImageEditor extends LitElement {
             ` : html``}
             <button
               type="button"
-              class="detail-rating-trash cursor-pointer mx-0.5 ${this.details.rating == 0 ? 'text-red-600' : 'text-gray-600 hover:text-gray-900'}"
+              class="detail-rating-trash cursor-pointer mx-0.5 ${this.details.rating == 0 ? 'text-red-600' : `text-gray-600 ${canRate ? 'hover:text-gray-900' : ''}`}"
               title="0 stars"
-              ?disabled=${this.ratingSaving}
-              @click=${() => this._handleRatingClick(0)}
+              ?disabled=${this.ratingSaving || !canRate}
+              @click=${() => (canRate ? this._handleRatingClick(0) : null)}
             >
               ${this.details.rating == 0 ? '❌' : '🗑'}
             </button>
@@ -2767,10 +2770,10 @@ class ImageEditor extends LitElement {
               ${[1, 2, 3].map((star) => html`
                 <button
                   type="button"
-                  class="cursor-pointer mx-0.5 ${this.details.rating && this.details.rating >= star ? 'text-yellow-500' : 'text-gray-500 hover:text-gray-900'}"
+                  class="cursor-pointer mx-0.5 ${this.details.rating && this.details.rating >= star ? 'text-yellow-500' : `text-gray-500 ${canRate ? 'hover:text-gray-900' : ''}`}"
                   title="${star} star${star > 1 ? 's' : ''}"
-                  ?disabled=${this.ratingSaving}
-                  @click=${() => this._handleRatingClick(star)}
+                  ?disabled=${this.ratingSaving || !canRate}
+                  @click=${() => (canRate ? this._handleRatingClick(star) : null)}
                 >
                   ${this.details.rating && this.details.rating >= star ? '★' : '☆'}
                 </button>
@@ -2778,6 +2781,7 @@ class ImageEditor extends LitElement {
             </span>
           </div>
           ${this.ratingSaving ? html`<span class="text-xs text-gray-500">Saving...</span>` : ''}
+          ${!canRate ? html`<span class="text-xs text-gray-500">Read only for your role.</span>` : ''}
         </div>
         ${this.ratingError ? html`<div class="text-xs text-red-600">${this.ratingError}</div>` : ''}
       </div>

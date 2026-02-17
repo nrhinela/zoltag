@@ -105,6 +105,7 @@ function wireFilterPanelListeners(host) {
     host.curateMediaType = mediaType === 'image' || mediaType === 'video' ? mediaType : 'all';
     host.curateDropboxPathPrefix = filters.dropboxPathPrefix || '';
     host.curateFilenameQuery = filters.filenameQuery || '';
+    host.curateTextQuery = filters.textQuery || '';
     host.curateListId = filters.listId || '';
     host.curateListExcludeId = filters.listExcludeId || '';
     host.curateCategoryFilterOperator = filters.categoryFilterOperator ?? undefined;
@@ -128,6 +129,7 @@ function wireFilterPanelListeners(host) {
     host.curateAuditMediaType = mediaType === 'image' || mediaType === 'video' ? mediaType : 'all';
     host.curateAuditDropboxPathPrefix = filters.dropboxPathPrefix || '';
     host.curateAuditFilenameQuery = filters.filenameQuery || '';
+    host.curateAuditTextQuery = filters.textQuery || '';
     if (filters.permatagKeyword !== undefined) {
       host.curateAuditKeyword = filters.permatagKeyword || '';
     }

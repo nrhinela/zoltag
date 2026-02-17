@@ -219,15 +219,7 @@ export function renderImageGrid(config) {
               @pointerdown=${(event) => event.stopPropagation()}
               @click=${emitOpenSimilarInSearch}
             >
-              <svg
-                class="curate-thumb-similar-link-icon"
-                viewBox="0 0 24 24"
-                focusable="false"
-                aria-hidden="true"
-              >
-                <path d="M10.59 13.41a1 1 0 0 0 1.41 1.41l3.54-3.54a3 3 0 0 0-4.24-4.24L9.17 9.17a1 1 0 1 0 1.41 1.41l2.12-2.12a1 1 0 0 1 1.42 1.42z"></path>
-                <path d="M13.41 10.59a1 1 0 0 0-1.41-1.41l-3.54 3.54a3 3 0 0 0 4.24 4.24l2.13-2.13a1 1 0 0 0-1.42-1.41l-2.12 2.12a1 1 0 1 1-1.41-1.41z"></path>
-              </svg>
+              <span class="curate-thumb-similar-link-icon" aria-hidden="true">≈</span>
             </button>
             ${showAiScore && renderCurateAiMLScore ? renderCurateAiMLScore(image) : ''}
             ${showPermatags && renderCuratePermatagSummary ? renderCuratePermatagSummary(image) : ''}

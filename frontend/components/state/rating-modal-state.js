@@ -24,6 +24,7 @@ export class RatingModalStateController extends BaseStateController {
    * @param {Array<number>} imageIds - Image IDs to rate
    */
   showExploreRatingDialog(imageIds) {
+    if (typeof this.host._canCurate === 'function' && !this.host._canCurate()) return;
     this.setHostProperties({
       _curateRatingModalImageIds: imageIds,
       _curateRatingModalSource: 'explore',
@@ -36,6 +37,7 @@ export class RatingModalStateController extends BaseStateController {
    * @param {Array<number>} imageIds - Image IDs to rate
    */
   showAuditRatingDialog(imageIds) {
+    if (typeof this.host._canCurate === 'function' && !this.host._canCurate()) return;
     this.setHostProperties({
       _curateRatingModalImageIds: imageIds,
       _curateRatingModalSource: 'audit',
@@ -98,6 +100,7 @@ export class RatingModalStateController extends BaseStateController {
    * @param {number} rating - Rating value (0-3)
    */
   async applyExploreRating(imageIds, rating) {
+    if (typeof this.host._canCurate === 'function' && !this.host._canCurate()) return;
     const tenant = this.getHostProperty('tenant');
     try {
       const promises = imageIds.map((imageId) => {
@@ -129,6 +132,7 @@ export class RatingModalStateController extends BaseStateController {
    * @param {number} rating - Rating value (0-3)
    */
   async applyAuditRating(imageIds, rating) {
+    if (typeof this.host._canCurate === 'function' && !this.host._canCurate()) return;
     const tenant = this.getHostProperty('tenant');
     try {
       await Promise.all(imageIds.map((imageId) =>

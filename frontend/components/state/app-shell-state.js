@@ -25,7 +25,13 @@ export class AppShellStateController extends BaseStateController {
   async loadCurrentUser() {
     try {
       this.host.currentUser = await getCurrentUser();
-      const canonicalTenant = this.resolveTenantRef(this.host.tenant);
+      const memberships = Array.isArray(this.host.currentUser?.tenants)
+        ? this.host.currentUser.tenants
+        : [];
+      const fallbackSingleTenant = memberships.length === 1
+        ? normalizeTenantValue(String(memberships[0]?.tenant_id ?? ''))
+        : '';
+      const canonicalTenant = this.resolveTenantRef(this.host.tenant) || fallbackSingleTenant;
       if (canonicalTenant && canonicalTenant !== this.host.tenant) {
         this.host.tenant = canonicalTenant;
         try {

@@ -387,6 +387,7 @@ export function renderHomeTabContent(host, { navCards, formatCurateDate }) {
 }
 
 export function renderSearchTabContent(host, { formatCurateDate }) {
+  const canRate = typeof host._canCurate === 'function' ? host._canCurate() : true;
   return html`
     <search-tab
       slot="search"
@@ -407,7 +408,7 @@ export function renderSearchTabContent(host, { formatCurateDate }) {
       .imageStats=${host.imageStats}
       .searchOrderBy=${host.searchOrderBy}
       .searchDateOrder=${host.searchOrderDirection}
-      .renderCurateRatingWidget=${(image) => renderCurateRatingWidget(host, image)}
+      .renderCurateRatingWidget=${canRate ? ((image) => renderCurateRatingWidget(host, image)) : null}
       .renderCurateRatingStatic=${renderCurateRatingStatic}
       .renderCuratePermatagSummary=${renderCuratePermatagSummary}
       .formatCurateDate=${formatCurateDate}

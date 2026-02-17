@@ -14,6 +14,7 @@ export function buildCurateFilterObject(state, overrides = {}) {
     categoryFilterSource: 'permatags',
     dropboxPathPrefix: overrides.dropboxPathPrefix !== undefined ? overrides.dropboxPathPrefix : state.curateDropboxPathPrefix,
     filenameQuery: overrides.filenameQuery !== undefined ? overrides.filenameQuery : state.curateFilenameQuery,
+    textQuery: overrides.textQuery !== undefined ? overrides.textQuery : state.curateTextQuery,
     listId: overrides.listId !== undefined ? overrides.listId : state.curateListId,
     listExcludeId: overrides.listExcludeId !== undefined ? overrides.listExcludeId : state.curateListExcludeId,
   };
@@ -51,6 +52,7 @@ export function buildCurateAuditFilterObject(state, overrides = {}) {
     hideZeroRating: state.curateAuditHideDeleted,
     dropboxPathPrefix: overrides.dropboxPathPrefix !== undefined ? overrides.dropboxPathPrefix : state.curateAuditDropboxPathPrefix,
     filenameQuery: overrides.filenameQuery !== undefined ? overrides.filenameQuery : state.curateAuditFilenameQuery,
+    textQuery: overrides.textQuery !== undefined ? overrides.textQuery : state.curateAuditTextQuery,
   };
 
   if (useAiSort) {

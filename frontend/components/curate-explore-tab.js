@@ -117,6 +117,7 @@ export class CurateExploreTab extends LitElement {
     mediaType: { type: String },
     dropboxPathPrefix: { type: String },
     filenameQuery: { type: String },
+    textQuery: { type: String },
     listFilterId: { type: [String, Number] },
     listFilterMode: { type: String },
     dropboxFolders: { type: Array },
@@ -183,6 +184,7 @@ export class CurateExploreTab extends LitElement {
     this.mediaType = 'all';
     this.dropboxPathPrefix = '';
     this.filenameQuery = '';
+    this.textQuery = '';
     this.listFilterId = '';
     this.listFilterMode = 'include';
     this.dropboxFolders = [];
@@ -1049,6 +1051,15 @@ export class CurateExploreTab extends LitElement {
         value: this.filenameQuery,
         displayLabel: 'Filename',
         displayValue: this.filenameQuery,
+      });
+    }
+
+    if (this.textQuery) {
+      filters.push({
+        type: 'text_search',
+        value: this.textQuery,
+        displayLabel: 'Text search',
+        displayValue: this.textQuery,
       });
     }
 

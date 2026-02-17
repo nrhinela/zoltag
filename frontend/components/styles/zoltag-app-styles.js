@@ -1133,9 +1133,9 @@ export const zoltagAppStyles = css`
         background: rgba(30, 64, 175, 0.95);
     }
     .curate-thumb-similar-link-icon {
-        width: 16px;
-        height: 16px;
-        fill: currentColor;
+        font-size: 17px;
+        font-weight: 700;
+        line-height: 1;
         pointer-events: none;
     }
     @keyframes curate-burst {

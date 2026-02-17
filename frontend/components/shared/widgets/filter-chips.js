@@ -28,6 +28,7 @@ class FilterChips extends LitElement {
     keywordMultiSelect: { type: Boolean },
     keywordSearchQuery: { type: String },
     filenameFilterQuery: { type: String },
+    textSearchFilterQuery: { type: String },
   };
 
   constructor() {
@@ -51,6 +52,7 @@ class FilterChips extends LitElement {
     this.keywordMultiSelect = true;
     this.keywordSearchQuery = '';
     this.filenameFilterQuery = '';
+    this.textSearchFilterQuery = '';
   }
 
   _getKeywordFilter() {
@@ -130,6 +132,7 @@ class FilterChips extends LitElement {
       { type: 'folder', label: 'Folder', icon: '📂' },
       { type: 'list', label: 'List', icon: '🧾' },
       { type: 'filename', label: 'Filename', icon: '📝' },
+      { type: 'text_search', label: 'Text search', icon: '🔎' },
     ];
     const allowed = Array.isArray(this.availableFilterTypes) && this.availableFilterTypes.length
       ? new Set(this.availableFilterTypes)
@@ -165,6 +168,10 @@ class FilterChips extends LitElement {
       const existing = (this.activeFilters || []).find((filter) => filter.type === 'filename');
       this.filenameFilterQuery = existing?.value || '';
     }
+    if (type === 'text_search') {
+      const existing = (this.activeFilters || []).find((filter) => filter.type === 'text_search');
+      this.textSearchFilterQuery = existing?.value || '';
+    }
   }
 
   _handleEditFilter(type, index) {
@@ -184,6 +191,10 @@ class FilterChips extends LitElement {
     if (type === 'filename') {
       const existing = this.activeFilters[index];
       this.filenameFilterQuery = existing?.value || '';
+    }
+    if (type === 'text_search') {
+      const existing = this.activeFilters[index];
+      this.textSearchFilterQuery = existing?.value || '';
     }
   }
 
@@ -369,6 +380,33 @@ class FilterChips extends LitElement {
     this.filterMenuOpen = false;
   }
 
+  _handleTextSearchInput(value) {
+    this.textSearchFilterQuery = String(value || '');
+  }
+
+  _clearTextSearchFilter() {
+    this.textSearchFilterQuery = '';
+    this._removeFilterByType('text_search');
+    this.valueSelectorOpen = null;
+    this.filterMenuOpen = false;
+  }
+
+  _applyTextSearchFilter() {
+    const trimmed = (this.textSearchFilterQuery || '').trim();
+    if (!trimmed) {
+      this._removeFilterByType('text_search');
+    } else {
+      this._addFilter({
+        type: 'text_search',
+        value: trimmed,
+        displayLabel: 'Text search',
+        displayValue: trimmed,
+      });
+    }
+    this.valueSelectorOpen = null;
+    this.filterMenuOpen = false;
+  }
+
   _removeFilterByType(type) {
     const nextFilters = (this.activeFilters || []).filter((filter) => filter.type !== type);
     if (nextFilters.length === (this.activeFilters || []).length) return;
@@ -403,6 +441,8 @@ class FilterChips extends LitElement {
       this.listFilterMode = 'include';
     } else if (removed?.type === 'filename') {
       this.filenameFilterQuery = '';
+    } else if (removed?.type === 'text_search') {
+      this.textSearchFilterQuery = '';
     }
     this.dispatchEvent(new CustomEvent('filters-changed', {
       detail: { filters: this.activeFilters },
@@ -462,6 +502,8 @@ class FilterChips extends LitElement {
         return this._renderListSelector();
       case 'filename':
         return this._renderFilenameSelector();
+      case 'text_search':
+        return this._renderTextSearchSelector();
       default:
         return html``;
     }
@@ -788,6 +830,55 @@ class FilterChips extends LitElement {
               <button
                 class="px-3 py-1.5 rounded-lg text-xs bg-gray-900 text-white hover:bg-gray-800"
                 @click=${() => this._applyFilenameFilter()}
+                type="button"
+              >
+                Apply
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  _renderTextSearchSelector() {
+    return html`
+      <div class="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-50 w-full max-w-none">
+        <div class="p-4">
+          <div class="text-sm font-semibold text-gray-700 mb-2">Text search</div>
+          <input
+            type="text"
+            class="w-full px-3 py-2 border rounded-lg text-sm"
+            placeholder="Describe what you want to find..."
+            .value=${this.textSearchFilterQuery || ''}
+            @input=${(e) => this._handleTextSearchInput(e.target.value)}
+            @keydown=${(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                e.stopPropagation();
+                this._applyTextSearchFilter();
+              } else if (e.key === 'Escape') {
+                e.preventDefault();
+                e.stopPropagation();
+                this.valueSelectorOpen = null;
+              }
+            }}
+          >
+          <div class="mt-3 flex items-center justify-between gap-2">
+            <div class="text-xs text-gray-500">
+              Uses vectorstore semantic + lexical search.
+            </div>
+            <div class="flex items-center gap-2">
+              <button
+                class="px-3 py-1.5 border rounded-lg text-xs text-gray-700 hover:bg-gray-50"
+                @click=${() => this._clearTextSearchFilter()}
+                type="button"
+              >
+                Clear
+              </button>
+              <button
+                class="px-3 py-1.5 rounded-lg text-xs bg-gray-900 text-white hover:bg-gray-800"
+                @click=${() => this._applyTextSearchFilter()}
                 type="button"
               >
                 Apply

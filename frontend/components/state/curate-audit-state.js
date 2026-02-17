@@ -204,6 +204,7 @@ export class CurateAuditStateController extends BaseStateController {
     let nextHideDeleted = true;
     let nextDropboxPathPrefix = '';
     let nextFilenameQuery = '';
+    let nextTextQuery = '';
     let nextMediaType = 'all';
 
     chips.forEach((chip) => {
@@ -222,6 +223,9 @@ export class CurateAuditStateController extends BaseStateController {
           break;
         case 'filename':
           nextFilenameQuery = chip.value || '';
+          break;
+        case 'text_search':
+          nextTextQuery = chip.value || '';
           break;
         case 'media':
           nextMediaType = chip.value === 'video' ? 'video' : (chip.value === 'image' ? 'image' : 'all');
@@ -249,6 +253,7 @@ export class CurateAuditStateController extends BaseStateController {
     this.host.curateAuditMediaType = nextMediaType;
     this.host.curateAuditDropboxPathPrefix = nextDropboxPathPrefix;
     this.host.curateAuditFilenameQuery = nextFilenameQuery;
+    this.host.curateAuditTextQuery = nextTextQuery;
     this.host.curateAuditPageOffset = 0;
     this.host.curateAuditOffset = 0;
     this.host.curateAuditLoadAll = false;
@@ -780,6 +785,7 @@ export class CurateAuditStateController extends BaseStateController {
       curateAuditHideDeleted: true,
       curateAuditMinRating: null,
       curateAuditFilenameQuery: '',
+      curateAuditTextQuery: '',
       curateAuditNoPositivePermatags: false,
       curateAuditTargets: [],
       curateAuditImages: [],
@@ -807,6 +813,7 @@ export class CurateAuditStateController extends BaseStateController {
       curateAuditHideDeleted: host.curateAuditHideDeleted,
       curateAuditMinRating: host.curateAuditMinRating,
       curateAuditFilenameQuery: host.curateAuditFilenameQuery,
+      curateAuditTextQuery: host.curateAuditTextQuery,
       curateAuditNoPositivePermatags: host.curateAuditNoPositivePermatags,
       curateAuditTargets: Array.isArray(host.curateAuditTargets) ? [...host.curateAuditTargets] : [],
       curateAuditImages: Array.isArray(host.curateAuditImages) ? [...host.curateAuditImages] : [],
@@ -864,6 +871,7 @@ export class CurateAuditStateController extends BaseStateController {
     this.host.curateAuditMediaType = 'all';
     this.host.curateAuditDropboxPathPrefix = '';
     this.host.curateAuditFilenameQuery = '';
+    this.host.curateAuditTextQuery = '';
     this.requestUpdate();
   }
 }

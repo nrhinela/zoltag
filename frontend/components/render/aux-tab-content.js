@@ -52,6 +52,9 @@ export function renderAuxTabContent(host, { formatCurateDate }) {
       );
     }
   );
+  const tenantDisplayName = String(tenantMembership?.tenant_name || '').trim()
+    || String(tenantMembership?.tenant_identifier || '').trim()
+    || selectedTenant;
   const isSuperAdmin = !!host.currentUser?.user?.is_super_admin;
   const tenantRole = tenantMembership?.role || '';
   const isTenantAdmin = tenantRole === 'admin';
@@ -88,6 +91,14 @@ export function renderAuxTabContent(host, { formatCurateDate }) {
           >
             <i class="fas fa-tags mr-2"></i>Keywords
           </button>
+          ${canManageTenantUsers ? html`
+            <button
+              class="admin-subtab ${librarySubTab === 'users' ? 'active' : ''}"
+              @click=${() => host.activeLibrarySubTab = 'users'}
+            >
+              <i class="fas fa-users mr-2"></i>Users
+            </button>
+          ` : html``}
           ${canManageProviders ? html`
             <button
               class="admin-subtab ${librarySubTab === 'providers' ? 'active' : ''}"
@@ -150,6 +161,7 @@ export function renderAuxTabContent(host, { formatCurateDate }) {
           <div class="mt-2">
             <tenant-users-admin
               .tenant=${host.tenant}
+              .tenantName=${tenantDisplayName}
               .canManage=${canManageTenantUsers}
               .isSuperAdmin=${isSuperAdmin}
             ></tenant-users-admin>

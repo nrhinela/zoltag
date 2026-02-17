@@ -708,6 +708,7 @@ export class SearchTab extends LitElement {
   }
 
   _applySearchHotspotRating(ids, rating) {
+    if (typeof this.renderCurateRatingWidget !== 'function') return;
     const uniqueIds = [...new Set(ids)].filter((id) => Number.isFinite(Number(id)));
     if (!uniqueIds.length) return;
     uniqueIds.forEach((id) => {
@@ -1686,6 +1687,16 @@ export class SearchTab extends LitElement {
       });
     }
 
+    const textQuery = (filters.textQuery || '').trim();
+    if (textQuery) {
+      nextChips.push({
+        type: 'text_search',
+        value: textQuery,
+        displayLabel: 'Text search',
+        displayValue: textQuery,
+      });
+    }
+
     if (mediaType === 'image' || mediaType === 'video') {
       nextChips.push({
         type: 'media',
@@ -2012,6 +2023,9 @@ export class SearchTab extends LitElement {
           break;
         case 'filename':
           searchFilters.filenameQuery = chip.value || '';
+          break;
+        case 'text_search':
+          searchFilters.textQuery = chip.value || '';
           break;
         case 'media':
           searchFilters.mediaType = chip.value === 'video' ? 'video' : (chip.value === 'image' ? 'image' : 'all');

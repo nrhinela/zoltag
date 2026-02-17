@@ -49,7 +49,7 @@ async def upsert_asset_note(
     body: str = Body(..., embed=True),
     tenant: Tenant = Depends(get_tenant),
     db: Session = Depends(get_db),
-    current_user: UserProfile = Depends(require_tenant_role_from_header("user")),
+    current_user: UserProfile = Depends(require_tenant_role_from_header("editor")),
 ):
     """Create or replace a note of the given type for an asset."""
     asset_id = _resolve_asset_id(image_id, tenant, db)

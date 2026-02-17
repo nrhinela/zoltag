@@ -25,6 +25,7 @@ export function initializeAppDefaultState(host) {
   host.curateCategoryFilterOperator = undefined;
   host.curateDropboxPathPrefix = '';
   host.curateFilenameQuery = '';
+  host.curateTextQuery = '';
   host.curateListId = '';
   host.curateListExcludeId = '';
   host.curateFilters = buildCurateFilterObject(host);
@@ -70,6 +71,7 @@ export function initializeAppDefaultState(host) {
   host.curateAuditNoPositivePermatags = false;
   host.curateAuditDropboxPathPrefix = '';
   host.curateAuditFilenameQuery = '';
+  host.curateAuditTextQuery = '';
   host.curateHomeRefreshing = false;
   host.curateStatsLoading = false;
   host.curateAdvancedOpen = false;

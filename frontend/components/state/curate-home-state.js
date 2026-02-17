@@ -212,6 +212,7 @@ export class CurateHomeStateController extends BaseStateController {
     let nextNoPositivePermatags = false;
     let nextDropboxPathPrefix = '';
     let nextFilenameQuery = '';
+    let nextTextQuery = '';
     let nextMediaType = 'all';
     let nextHideDeleted = true;
     let nextListId = '';
@@ -257,6 +258,9 @@ export class CurateHomeStateController extends BaseStateController {
         case 'filename':
           nextFilenameQuery = chip.value || '';
           break;
+        case 'text_search':
+          nextTextQuery = chip.value || '';
+          break;
         case 'media':
           nextMediaType = chip.value === 'video' ? 'video' : (chip.value === 'image' ? 'image' : 'all');
           break;
@@ -287,6 +291,7 @@ export class CurateHomeStateController extends BaseStateController {
       curateMediaType: nextMediaType,
       curateDropboxPathPrefix: nextDropboxPathPrefix,
       curateFilenameQuery: nextFilenameQuery,
+      curateTextQuery: nextTextQuery,
       curateListId: nextListId,
       curateListExcludeId: nextListExcludeId,
       curateCategoryFilterOperator: nextCategoryFilterOperator,
@@ -451,6 +456,7 @@ export class CurateHomeStateController extends BaseStateController {
       curateKeywordOperators: {},
       curateDropboxPathPrefix: '',
       curateFilenameQuery: '',
+      curateTextQuery: '',
       curateListId: '',
       curateListExcludeId: '',
       curateFilters: buildCurateFilterObject(this.host),
@@ -486,6 +492,7 @@ export class CurateHomeStateController extends BaseStateController {
       curateKeywordOperators: { ...(host.curateKeywordOperators || {}) },
       curateDropboxPathPrefix: host.curateDropboxPathPrefix,
       curateFilenameQuery: host.curateFilenameQuery,
+      curateTextQuery: host.curateTextQuery,
       curateListId: host.curateListId,
       curateListExcludeId: host.curateListExcludeId,
       curateFilters: { ...(host.curateFilters || {}) },
@@ -670,6 +677,7 @@ export class CurateHomeStateController extends BaseStateController {
     this.host.curateKeywordOperators = {};
     this.host.curateDropboxPathPrefix = '';
     this.host.curateFilenameQuery = '';
+    this.host.curateTextQuery = '';
     this.host.curateListId = '';
     this.host.curateListExcludeId = '';
     this.host.curateFilters = buildCurateFilterObject(this.host, { resetOffset: true });
