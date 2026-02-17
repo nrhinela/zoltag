@@ -63,6 +63,26 @@ async def warm_jwks_cache():
 
 
 @app.on_event("startup")
+async def audit_model_config_startup():
+    """Emit startup audit logs for active and deprecated model settings."""
+    audit = settings.model_config_audit()
+    logger.info(
+        "Model config: tagging_model=%s zeroshot_tag_threshold=%s trained_tag_threshold=%s "
+        "keyword_model_min_positive=%s upload_generate_embeddings=%s",
+        audit["tagging_model"],
+        audit["zeroshot_tag_threshold"],
+        audit["trained_tag_threshold"],
+        audit["keyword_model_min_positive"],
+        audit["upload_generate_embeddings"],
+    )
+    if audit["deprecated_env_vars_present"]:
+        logger.warning(
+            "Deprecated model env vars detected (ignored): %s",
+            ", ".join(audit["deprecated_env_vars_present"]),
+        )
+
+
+@app.on_event("startup")
 async def start_worker_mode():
     """Start background queue worker when service runs in worker mode."""
     if not settings.worker_mode:

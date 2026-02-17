@@ -234,7 +234,7 @@ class RecomputeZeroShotTagsCommand(CliCommand):
                                 image_embedding,
                                 keywords,
                                 text_embeddings,
-                                threshold=settings.keyword_model_threshold
+                                threshold=settings.zeroshot_tag_threshold
                             )
                             all_tags.extend(category_tags)
 

@@ -143,7 +143,10 @@ class ZoltagApp extends LitElement {
       providerAdminError: { type: String },
       _homeLoadingCount: { type: Number },
       assetsRefreshToken: { type: Number },
+      homeVectorstoreQuery: { type: String },
       pendingSearchExploreSelection: { type: Object },
+      pendingVectorstoreQuery: { type: String },
+      pendingVectorstoreQueryToken: { type: Number },
       pendingListSelectionId: { type: [String, Number] },
       pendingListSelectionToken: { type: Number },
   }
@@ -167,7 +170,10 @@ class ZoltagApp extends LitElement {
       this.activeSystemSubTab = 'cli';
       this.homeRecommendationsTab = 'lists';
       this.assetsRefreshToken = 0;
+      this.homeVectorstoreQuery = '';
       this.pendingSearchExploreSelection = null;
+      this.pendingVectorstoreQuery = null;
+      this.pendingVectorstoreQueryToken = 0;
       this.pendingListSelectionId = null;
       this.pendingListSelectionToken = 0;
 

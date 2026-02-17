@@ -181,6 +181,7 @@ export function renderCurateTabContent(host, { formatCurateDate }) {
               host.curateSimilarityAssetUuid = e?.detail?.assetUuid || null;
             }}
             @list-filter-exclude=${host._handleCurateListExcludeFromRightPanel}
+            @open-similar-in-search=${host._handleOpenSimilarInSearch}
           ></curate-explore-tab>
         </div>
       ` : html``}
@@ -204,6 +205,7 @@ export function renderCurateTabContent(host, { formatCurateDate }) {
               host.curateOrderDirection = e.detail.dateOrder;
             }}
             @image-clicked=${(e) => host._handleCurateImageClick(e.detail.event, e.detail.image, e.detail.imageSet)}
+            @open-similar-in-search=${host._handleOpenSimilarInSearch}
           ></curate-browse-folder-tab>
         </div>
       ` : html``}
@@ -262,6 +264,7 @@ export function renderCurateTabContent(host, { formatCurateDate }) {
             }}
             @rating-drop=${(e) => host._handleCurateAuditRatingDrop(e.detail.event)}
             @curate-audit-filters-changed=${host._handleCurateAuditChipFiltersChanged}
+            @open-similar-in-search=${host._handleOpenSimilarInSearch}
           ></curate-audit-tab>
         </div>
       ` : html``}

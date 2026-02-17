@@ -9,6 +9,7 @@ export function initializeAppDefaultState(host) {
   host.homeLoading = false;
   host._homeLoadingCount = 0;
   host.homeRecommendationsTab = host.homeRecommendationsTab || 'lists';
+  host.homeVectorstoreQuery = '';
   host.imageStats = null;
   host.mlTrainingStats = null;
   host.tagStatsBySource = {};
@@ -83,6 +84,8 @@ export function initializeAppDefaultState(host) {
   host.searchSimilarityAssetUuid = null;
   host.activeSearchSubTab = host.activeSearchSubTab || 'home';
   host.pendingSearchExploreSelection = null;
+  host.pendingVectorstoreQuery = null;
+  host.pendingVectorstoreQueryToken = 0;
   host.pendingListSelectionId = null;
   host.pendingListSelectionToken = host.pendingListSelectionToken || 0;
   host.currentUser = null;

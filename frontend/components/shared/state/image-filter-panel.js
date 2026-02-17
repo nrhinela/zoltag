@@ -56,6 +56,7 @@ export class ImageFilterPanel {
       ratingOperator: undefined,
       dropboxPathPrefix: '',
       filenameQuery: '',
+      textQuery: '',
       mediaType: 'all',
       permatagPositiveMissing: false,
       listId: undefined,
@@ -226,6 +227,7 @@ export class ImageFilterPanel {
       ratingOperator: undefined,
       dropboxPathPrefix: '',
       filenameQuery: '',
+      textQuery: '',
       mediaType: 'all',
       permatagPositiveMissing: false,
     };

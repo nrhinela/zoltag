@@ -6,10 +6,8 @@ export async function getImages(tenantId, filters = {}) {
 
 
   if (filters.search) {
-      // The backend doesn't seem to have a direct text search endpoint,
-      // but the old frontend had a client-side search. We will add a 'keywords'
-      // parameter for now, which is a deprecated feature of the API, but might work.
-      params.append('keywords', filters.search);
+    // Map legacy search input to backend hybrid text query.
+    params.append('text_query', filters.search);
   }
 
   if (filters.sort) {

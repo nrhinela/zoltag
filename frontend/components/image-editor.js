@@ -914,6 +914,44 @@ class ImageEditor extends LitElement {
       font-size: 12px;
       line-height: 1;
     }
+    .curate-thumb-similar-link {
+      position: absolute;
+      right: 8px;
+      bottom: 8px;
+      width: 28px;
+      height: 28px;
+      padding: 0;
+      cursor: pointer;
+      appearance: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 999px;
+      border: 1px solid rgba(191, 219, 254, 0.95);
+      background: rgba(15, 23, 42, 0.86);
+      color: #eff6ff;
+      box-shadow: 0 6px 14px rgba(15, 23, 42, 0.35);
+      opacity: 0;
+      transform: translateY(3px);
+      transition: opacity 0.14s ease, transform 0.14s ease, background-color 0.14s ease;
+      pointer-events: auto;
+      z-index: 13;
+    }
+    .curate-thumb-similar-link:hover,
+    .curate-thumb-similar-link:focus-visible,
+    .curate-thumb-similar-link:active {
+      opacity: 1;
+      transform: translateY(0);
+    }
+    .curate-thumb-similar-link:hover {
+      background: rgba(30, 64, 175, 0.95);
+    }
+    .curate-thumb-similar-link-icon {
+      width: 16px;
+      height: 16px;
+      fill: currentColor;
+      pointer-events: none;
+    }
     .curate-thumb-date {
       position: absolute;
       left: 6px;

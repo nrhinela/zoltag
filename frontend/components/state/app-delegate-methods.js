@@ -4,6 +4,7 @@ import {
   getCurateHomeFetchKey,
 } from '../shared/curate-filters.js';
 import { shouldAutoRefreshCurateStats } from '../shared/curate-stats.js';
+import { getSimilarImages } from '../../services/api.js';
 
 export function bindAppDelegateMethods(host) {
   host._getCurateDefaultState = () => host._curateHomeState.getDefaultState();
@@ -243,11 +244,35 @@ export function bindAppDelegateMethods(host) {
     };
   };
 
-  host._handleOpenSimilarInSearch = (event) => {
+  host._handleOpenSimilarInSearch = async (event) => {
     const { sourceImage, sourceAssetUuid, dedupedImages } = _buildSimilarOpenPayload(event);
-    if (!dedupedImages.length) return;
+    let imagesForSearch = dedupedImages;
 
-    host.searchImages = dedupedImages.map((image) => ({ ...image }));
+    // Grid-launch path usually provides only source image; fetch similar results on demand.
+    if (imagesForSearch.length <= 1 && Number.isFinite(Number(sourceImage?.id))) {
+      try {
+        const payload = await getSimilarImages(host.tenant, Number(sourceImage.id), {
+          limit: 60,
+          sameMediaType: true,
+        });
+        const fetched = Array.isArray(payload?.images) ? payload.images : [];
+        const merged = [];
+        const seen = new Set();
+        [sourceImage, ...fetched].forEach((image) => {
+          const imageId = Number(image?.id);
+          if (!Number.isFinite(imageId) || seen.has(imageId)) return;
+          seen.add(imageId);
+          merged.push(image);
+        });
+        imagesForSearch = merged;
+      } catch (error) {
+        console.error('Failed to load similar images for search open action', error);
+      }
+    }
+
+    if (!imagesForSearch.length) return;
+
+    host.searchImages = imagesForSearch.map((image) => ({ ...image }));
     host.searchTotal = host.searchImages.length;
     host.searchPinnedImageId = Number.isFinite(Number(sourceImage?.id))
       ? Number(sourceImage.id)

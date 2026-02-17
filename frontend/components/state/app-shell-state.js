@@ -110,6 +110,8 @@ export class AppShellStateController extends BaseStateController {
       }
       if (tab === 'search') {
         this.host.activeSearchSubTab = subTab || 'home';
+        this.host.pendingSearchExploreSelection = null;
+        this.host.pendingVectorstoreQuery = null;
       }
       if (tab === 'library' && subTab === 'keywords' && adminSubTab) {
         this.host.activeAdminSubTab = adminSubTab;
@@ -120,6 +122,7 @@ export class AppShellStateController extends BaseStateController {
     if (detail === 'search') {
       this.host.activeSearchSubTab = 'home';
       this.host.pendingSearchExploreSelection = null;
+      this.host.pendingVectorstoreQuery = null;
     }
     if (detail === 'lists') {
       this.host.pendingListSelectionId = null;
@@ -132,6 +135,9 @@ export class AppShellStateController extends BaseStateController {
     const subTab = event?.detail?.subTab;
     const adminSubTab = event?.detail?.adminSubTab;
     const exploreSelection = event?.detail?.exploreSelection || null;
+    const vectorstoreQuery = typeof event?.detail?.vectorstoreQuery === 'string'
+      ? event.detail.vectorstoreQuery.trim()
+      : '';
     const listSelection = event?.detail?.listSelection || null;
     if (tab === 'library' && subTab) {
       this.host.activeLibrarySubTab = subTab;
@@ -147,6 +153,10 @@ export class AppShellStateController extends BaseStateController {
     }
     if (tab === 'search') {
       this.host.pendingSearchExploreSelection = exploreSelection;
+      this.host.pendingVectorstoreQuery = vectorstoreQuery || null;
+      if (vectorstoreQuery) {
+        this.host.pendingVectorstoreQueryToken = (this.host.pendingVectorstoreQueryToken || 0) + 1;
+      }
     }
     if (tab === 'lists') {
       const listId = listSelection?.listId ?? null;
@@ -280,6 +290,8 @@ export class AppShellStateController extends BaseStateController {
     this.host.homeSubTab = 'overview';
     this.host.activeSearchSubTab = 'home';
     this.host.pendingSearchExploreSelection = null;
+    this.host.pendingVectorstoreQuery = null;
+    this.host.pendingVectorstoreQueryToken = 0;
     this.host.pendingListSelectionId = null;
     this.host.pendingListSelectionToken = 0;
     this.host._tabBootstrapped = new Set();

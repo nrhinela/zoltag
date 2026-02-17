@@ -189,6 +189,7 @@ export function renderAuxTabContent(host, { formatCurateDate }) {
             host.pendingListSelectionId = null;
           }}
           @image-selected=${(e) => host._handleCurateImageClick(null, e.detail.image, e.detail.imageSet)}
+          @open-similar-in-search=${host._handleOpenSimilarInSearch}
         ></list-editor>
       </div>
     ` : html``}

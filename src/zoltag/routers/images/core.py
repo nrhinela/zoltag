@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 import threading
 import time
 from typing import Dict, List, Optional, Tuple
@@ -28,7 +29,7 @@ from zoltag.metadata import (
     Permatag,
 )
 from zoltag.models.config import Keyword, PhotoListItem
-from zoltag.tagging import calculate_tags
+from zoltag.tagging import calculate_tags, get_tagger
 from zoltag.config.db_utils import load_keywords_map
 from zoltag.settings import settings
 from zoltag.tenant_scope import tenant_column_filter
@@ -74,6 +75,12 @@ SIMILARITY_CACHE_MAX_ENTRIES = 12
 _similarity_cache_lock = threading.Lock()
 _similarity_index_cache = {}
 _pgvector_capability_cache: Dict[str, bool] = {}
+TEXT_QUERY_EMBEDDING_CACHE_TTL_SECONDS = 1800
+TEXT_QUERY_EMBEDDING_CACHE_MAX_ENTRIES = 256
+_text_query_embedding_cache_lock = threading.Lock()
+_text_query_embedding_cache: Dict[Tuple[str, str], dict] = {}
+HYBRID_TEXT_PREFILTER_BASE = 2000
+HYBRID_TEXT_PREFILTER_MAX = 12000
 
 
 def _build_similarity_index(
@@ -219,6 +226,349 @@ def _to_pgvector_literal(values: np.ndarray) -> str:
     return "[" + ",".join(f"{float(value):.10g}" for value in values.tolist()) + "]"
 
 
+def _normalize_hybrid_weights(
+    vector_weight: Optional[float],
+    lexical_weight: Optional[float],
+) -> Tuple[float, float]:
+    try:
+        vector = float(vector_weight if vector_weight is not None else 0.7)
+    except (TypeError, ValueError):
+        vector = 0.7
+    try:
+        lexical = float(lexical_weight if lexical_weight is not None else 0.3)
+    except (TypeError, ValueError):
+        lexical = 0.3
+
+    vector = max(0.0, vector)
+    lexical = max(0.0, lexical)
+    total = vector + lexical
+    if total <= 1e-9:
+        return 0.7, 0.3
+    return vector / total, lexical / total
+
+
+def _compute_hybrid_text_prefilter_limit(
+    limit: int,
+    offset: int,
+) -> int:
+    safe_limit = max(1, int(limit or 100))
+    safe_offset = max(0, int(offset or 0))
+    requested_upper_bound = safe_offset + safe_limit
+    window = max(
+        HYBRID_TEXT_PREFILTER_BASE,
+        safe_limit * 20,
+        requested_upper_bound * 3,
+    )
+    return min(HYBRID_TEXT_PREFILTER_MAX, int(window))
+
+
+def _tokenize_text_query(text_query: str) -> Tuple[str, List[str]]:
+    normalized = " ".join(str(text_query or "").strip().lower().split())
+    if not normalized:
+        return "", []
+    raw_tokens = re.findall(r"[a-z0-9][a-z0-9_-]{1,}", normalized)
+    tokens: List[str] = []
+    seen = set()
+    for token in raw_tokens:
+        if token in seen:
+            continue
+        seen.add(token)
+        tokens.append(token)
+    return normalized, tokens
+
+
+def _get_text_query_embedding(
+    text_query: str,
+) -> np.ndarray:
+    normalized_query, _ = _tokenize_text_query(text_query)
+    if not normalized_query:
+        raise ValueError("text_query is empty")
+
+    model_name = str(getattr(settings, "tagging_model", "siglip") or "siglip")
+    cache_key = (model_name, normalized_query)
+    now = time.time()
+    with _text_query_embedding_cache_lock:
+        cached = _text_query_embedding_cache.get(cache_key)
+        if cached and (now - float(cached.get("built_at", 0.0))) <= TEXT_QUERY_EMBEDDING_CACHE_TTL_SECONDS:
+            return np.asarray(cached["vector"], dtype=np.float32)
+
+    tagger = get_tagger(model_type=model_name)
+    if not hasattr(tagger, "build_text_embeddings"):
+        raise RuntimeError(f"Tagger {model_name} does not support text embeddings")
+
+    _, text_embeddings = tagger.build_text_embeddings([
+        {"keyword": normalized_query, "prompt": normalized_query},
+    ])
+    if text_embeddings is None:
+        raise RuntimeError("Text embedding generation returned no tensor")
+
+    first_embedding = text_embeddings[0]
+    if hasattr(first_embedding, "detach"):
+        first_embedding = first_embedding.detach().cpu().numpy()
+    vector = np.asarray(first_embedding, dtype=np.float32).reshape(-1)
+    norm = float(np.linalg.norm(vector))
+    if norm <= 1e-12:
+        raise RuntimeError("Text embedding has zero magnitude")
+    vector = vector / norm
+
+    with _text_query_embedding_cache_lock:
+        _text_query_embedding_cache[cache_key] = {
+            "built_at": now,
+            "vector": vector,
+        }
+        if len(_text_query_embedding_cache) > TEXT_QUERY_EMBEDDING_CACHE_MAX_ENTRIES:
+            oldest_key = min(
+                _text_query_embedding_cache.keys(),
+                key=lambda key: float(_text_query_embedding_cache[key].get("built_at", 0.0)),
+            )
+            if oldest_key != cache_key:
+                _text_query_embedding_cache.pop(oldest_key, None)
+
+    return vector
+
+
+def _string_match_score(
+    text_value: str,
+    normalized_query: str,
+    query_tokens: List[str],
+    phrase_weight: float,
+    token_weight: float,
+    token_cap: float,
+) -> float:
+    text_normalized = str(text_value or "").strip().lower()
+    if not text_normalized:
+        return 0.0
+
+    score = phrase_weight if normalized_query and normalized_query in text_normalized else 0.0
+    token_score = 0.0
+    for token in query_tokens:
+        if token in text_normalized:
+            token_score += token_weight
+    score += min(token_cap, token_score)
+    return score
+
+
+def _compute_lexical_scores_for_candidates(
+    db: Session,
+    tenant: Tenant,
+    candidate_rows: List,
+    normalized_query: str,
+    query_tokens: List[str],
+) -> Dict[int, float]:
+    if not candidate_rows or (not normalized_query and not query_tokens):
+        return {}
+
+    asset_to_image_id = {}
+    filename_by_image_id = {}
+    for row in candidate_rows:
+        image_id = int(row.image_id)
+        filename_by_image_id[image_id] = str(row.filename or "")
+        if row.asset_id is not None:
+            asset_to_image_id[row.asset_id] = image_id
+
+    if not asset_to_image_id and not filename_by_image_id:
+        return {}
+
+    raw_score_by_image_id: Dict[int, float] = {}
+
+    asset_ids = list(asset_to_image_id.keys())
+    if asset_ids:
+        positive_rows = db.query(
+            Permatag.asset_id.label("asset_id"),
+            Keyword.keyword.label("keyword"),
+        ).join(
+            Keyword,
+            and_(
+                Keyword.id == Permatag.keyword_id,
+                tenant_column_filter(Keyword, tenant),
+            ),
+        ).filter(
+            tenant_column_filter(Permatag, tenant),
+            Permatag.asset_id.in_(asset_ids),
+            Permatag.signum == 1,
+        ).all()
+
+        for row in positive_rows:
+            image_id = asset_to_image_id.get(row.asset_id)
+            if image_id is None:
+                continue
+            delta = _string_match_score(
+                row.keyword,
+                normalized_query=normalized_query,
+                query_tokens=query_tokens,
+                phrase_weight=0.9,
+                token_weight=0.2,
+                token_cap=0.8,
+            )
+            if delta > 0:
+                raw_score_by_image_id[image_id] = raw_score_by_image_id.get(image_id, 0.0) + delta
+
+        negative_rows = db.query(
+            Permatag.asset_id.label("asset_id"),
+            Keyword.keyword.label("keyword"),
+        ).join(
+            Keyword,
+            and_(
+                Keyword.id == Permatag.keyword_id,
+                tenant_column_filter(Keyword, tenant),
+            ),
+        ).filter(
+            tenant_column_filter(Permatag, tenant),
+            Permatag.asset_id.in_(asset_ids),
+            Permatag.signum == -1,
+        ).all()
+
+        for row in negative_rows:
+            image_id = asset_to_image_id.get(row.asset_id)
+            if image_id is None:
+                continue
+            penalty = _string_match_score(
+                row.keyword,
+                normalized_query=normalized_query,
+                query_tokens=query_tokens,
+                phrase_weight=0.7,
+                token_weight=0.15,
+                token_cap=0.6,
+            )
+            if penalty > 0:
+                raw_score_by_image_id[image_id] = raw_score_by_image_id.get(image_id, 0.0) - penalty
+
+    for image_id, filename in filename_by_image_id.items():
+        filename_bonus = _string_match_score(
+            filename,
+            normalized_query=normalized_query,
+            query_tokens=query_tokens,
+            phrase_weight=0.4,
+            token_weight=0.08,
+            token_cap=0.4,
+        )
+        if filename_bonus > 0:
+            raw_score_by_image_id[image_id] = raw_score_by_image_id.get(image_id, 0.0) + filename_bonus
+
+    positive_values = [value for value in raw_score_by_image_id.values() if value > 0]
+    if not positive_values:
+        return {}
+    max_value = max(positive_values)
+    if max_value <= 1e-9:
+        return {}
+    return {
+        image_id: min(1.0, max(0.0, value / max_value))
+        for image_id, value in raw_score_by_image_id.items()
+        if value > 0
+    }
+
+
+def _rank_candidates_with_hybrid_scores(
+    db: Session,
+    tenant: Tenant,
+    candidate_rows: List,
+    text_query: str,
+    order_by_value: Optional[str],
+    date_order: str,
+    vector_weight: float,
+    lexical_weight: float,
+) -> Tuple[List[int], Dict[int, float], Dict[int, float], Dict[int, float]]:
+    if not candidate_rows:
+        return [], {}, {}, {}
+
+    normalized_query, query_tokens = _tokenize_text_query(text_query)
+    semantic_scores: Dict[int, float] = {}
+    lexical_scores: Dict[int, float] = _compute_lexical_scores_for_candidates(
+        db=db,
+        tenant=tenant,
+        candidate_rows=candidate_rows,
+        normalized_query=normalized_query,
+        query_tokens=query_tokens,
+    )
+
+    try:
+        query_vector = _get_text_query_embedding(normalized_query)
+        index = _get_similarity_index(
+            db=db,
+            tenant=tenant,
+            media_type=None,
+            embedding_dim=int(query_vector.size),
+        )
+        matrix = index.get("matrix")
+        indexed_ids = index.get("image_ids")
+        if matrix is not None and indexed_ids is not None and matrix.size and indexed_ids.size:
+            similarities = np.dot(matrix, query_vector)
+            similarities = np.clip((similarities + 1.0) / 2.0, 0.0, 1.0)
+            candidate_id_set = {int(row.image_id) for row in candidate_rows}
+            for image_id, similarity in zip(indexed_ids.tolist(), similarities.tolist()):
+                image_id_int = int(image_id)
+                if image_id_int in candidate_id_set:
+                    semantic_scores[image_id_int] = float(similarity)
+    except Exception as exc:  # noqa: BLE001 - keep search functional even if embedding model fails.
+        logger.warning("Hybrid search semantic scoring unavailable; falling back to lexical/date ranking: %s", exc)
+
+    hybrid_scores: Dict[int, float] = {}
+
+    def _date_sort_key(row) -> float:
+        if order_by_value == "processed":
+            date_value = row.last_processed or row.created_at
+        elif order_by_value == "created_at":
+            date_value = row.created_at
+        else:
+            date_value = row.capture_timestamp or row.modified_time
+        if not date_value:
+            return float("inf")
+        timestamp = date_value.timestamp()
+        return -timestamp if date_order == "desc" else timestamp
+
+    def _rating_sort_key(row) -> Tuple[int, float]:
+        if row.rating is None:
+            return (1, 0.0)
+        value = float(row.rating)
+        return (0, -value if date_order == "desc" else value)
+
+    def _id_sort_key(image_id: int) -> int:
+        return -image_id if date_order == "desc" else image_id
+
+    ranked_rows = []
+    for row in candidate_rows:
+        image_id = int(row.image_id)
+        semantic = float(semantic_scores.get(image_id, 0.0))
+        lexical = float(lexical_scores.get(image_id, 0.0))
+        hybrid = (vector_weight * semantic) + (lexical_weight * lexical)
+        hybrid_scores[image_id] = hybrid
+        ranked_rows.append((row, hybrid, semantic, lexical))
+
+    if order_by_value == "image_id":
+        ranked_rows.sort(
+            key=lambda payload: (
+                -payload[1],
+                -payload[2],
+                -payload[3],
+                _id_sort_key(int(payload[0].image_id)),
+            )
+        )
+    elif order_by_value == "rating":
+        ranked_rows.sort(
+            key=lambda payload: (
+                -payload[1],
+                -payload[2],
+                -payload[3],
+                _rating_sort_key(payload[0]),
+                _date_sort_key(payload[0]),
+                _id_sort_key(int(payload[0].image_id)),
+            )
+        )
+    else:
+        ranked_rows.sort(
+            key=lambda payload: (
+                -payload[1],
+                -payload[2],
+                -payload[3],
+                _date_sort_key(payload[0]),
+                _id_sort_key(int(payload[0].image_id)),
+            )
+        )
+
+    ordered_ids = [int(payload[0].image_id) for payload in ranked_rows]
+    return ordered_ids, hybrid_scores, semantic_scores, lexical_scores
+
+
 def _fetch_similar_ids_with_pgvector(
     db: Session,
     tenant: Tenant,
@@ -355,6 +705,9 @@ async def list_images(
     media_type: Optional[str] = None,
     dropbox_path_prefix: Optional[str] = None,
     filename_query: Optional[str] = None,
+    text_query: Optional[str] = None,
+    hybrid_vector_weight: float = 0.7,
+    hybrid_lexical_weight: float = 0.3,
     permatag_keyword: Optional[str] = None,
     permatag_category: Optional[str] = None,
     permatag_signum: Optional[int] = None,
@@ -398,6 +751,11 @@ async def list_images(
     media_type_value = (media_type or "all").strip().lower()
     if media_type_value not in {"all", "image", "video"}:
         media_type_value = "all"
+    text_query_value = str(text_query or "").strip()
+    vector_weight_value, lexical_weight_value = _normalize_hybrid_weights(
+        hybrid_vector_weight,
+        hybrid_lexical_weight,
+    )
 
     base_query, subqueries_list, exclude_subqueries_list, has_empty_filter = build_image_query_with_subqueries(
         db,
@@ -447,6 +805,61 @@ async def list_images(
         if rn is None:
             return current_offset
         return max(int(rn) - 1, 0)
+
+    def resolve_anchor_offset_for_sorted_ids(sorted_ids: List[int], current_offset: int) -> int:
+        if anchor_id is None:
+            return current_offset
+        try:
+            return sorted_ids.index(anchor_id)
+        except ValueError:
+            return current_offset
+
+    def build_candidate_rows_from_query(query, max_rows: Optional[int] = None):
+        candidate_query = query.with_entities(
+            ImageMetadata.id.label("image_id"),
+            ImageMetadata.asset_id.label("asset_id"),
+            ImageMetadata.filename.label("filename"),
+            ImageMetadata.capture_timestamp.label("capture_timestamp"),
+            ImageMetadata.modified_time.label("modified_time"),
+            ImageMetadata.last_processed.label("last_processed"),
+            ImageMetadata.created_at.label("created_at"),
+            ImageMetadata.rating.label("rating"),
+        )
+        if max_rows and int(max_rows) > 0:
+            candidate_query = candidate_query.limit(int(max_rows))
+        return candidate_query.all()
+
+    def build_candidate_rows_from_ids(image_ids: List[int], max_rows: Optional[int] = None):
+        if not image_ids:
+            return []
+        candidate_query = db.query(
+            ImageMetadata.id.label("image_id"),
+            ImageMetadata.asset_id.label("asset_id"),
+            ImageMetadata.filename.label("filename"),
+            ImageMetadata.capture_timestamp.label("capture_timestamp"),
+            ImageMetadata.modified_time.label("modified_time"),
+            ImageMetadata.last_processed.label("last_processed"),
+            ImageMetadata.created_at.label("created_at"),
+            ImageMetadata.rating.label("rating"),
+        ).filter(
+            tenant_column_filter(ImageMetadata, tenant),
+            ImageMetadata.id.in_(image_ids)
+        ).order_by(*order_by_clauses)
+        if max_rows and int(max_rows) > 0:
+            candidate_query = candidate_query.limit(int(max_rows))
+        return candidate_query.all()
+
+    def load_images_by_ordered_ids(ordered_ids: List[int]):
+        if not ordered_ids:
+            return []
+        image_rows = db.query(ImageMetadata).filter(
+            tenant_column_filter(ImageMetadata, tenant),
+            ImageMetadata.id.in_(ordered_ids)
+        ).options(
+            load_only(*LIST_IMAGES_LOAD_ONLY_COLUMNS)
+        ).all()
+        image_map = {img.id: img for img in image_rows}
+        return [image_map[image_id] for image_id in ordered_ids if image_id in image_map]
 
     total = 0
     ml_effective_threshold = None
@@ -542,7 +955,23 @@ async def list_images(
                             return (1, 0)
                         score = -rating_value if date_order == "desc" else rating_value
                         return (0, score)
-                    if order_by_value == "image_id":
+                    if text_query_value:
+                        prefilter_limit = _compute_hybrid_text_prefilter_limit(limit, offset)
+                        candidate_rows = build_candidate_rows_from_ids(
+                            unique_image_ids,
+                            max_rows=prefilter_limit,
+                        )
+                        sorted_ids, _, _, _ = _rank_candidates_with_hybrid_scores(
+                            db=db,
+                            tenant=tenant,
+                            candidate_rows=candidate_rows,
+                            text_query=text_query_value,
+                            order_by_value=order_by_value,
+                            date_order=date_order,
+                            vector_weight=vector_weight_value,
+                            lexical_weight=lexical_weight_value,
+                        )
+                    elif order_by_value == "image_id":
                         sorted_ids = sorted(
                             unique_image_ids,
                             key=lambda img_id: -img_id if date_order == "desc" else img_id
@@ -585,26 +1014,13 @@ async def list_images(
 
                     # Apply anchor offset if requested
                     if anchor_id is not None and limit is not None:
-                        try:
-                            anchor_index = sorted_ids.index(anchor_id)
-                            offset = anchor_index
-                        except ValueError:
-                            pass
+                        offset = resolve_anchor_offset_for_sorted_ids(sorted_ids, offset)
 
                     # Apply offset and limit
                     paginated_ids = builder.paginate_id_list(sorted_ids, offset, limit)
 
                     # Now fetch full ImageMetadata objects in order
-                    if paginated_ids:
-                        # Preserve order from pagination
-                        images = db.query(ImageMetadata).filter(
-                            ImageMetadata.id.in_(paginated_ids)
-                        ).all()
-                        # Re-sort to match paginated_ids order
-                        id_to_image = {img.id: img for img in images}
-                        images = [id_to_image[img_id] for img_id in paginated_ids if img_id in id_to_image]
-                    else:
-                        images = []
+                    images = load_images_by_ordered_ids(paginated_ids)
                 else:
                     images = []
                     total = 0
@@ -771,7 +1187,32 @@ async def list_images(
         query = builder.apply_subqueries(query, subqueries_list, exclude_subqueries_list)
         query = query.options(load_only(*LIST_IMAGES_LOAD_ONLY_COLUMNS))
 
-        if order_by_value == "ml_score" and ml_keyword_id:
+        if text_query_value:
+            prefilter_limit = _compute_hybrid_text_prefilter_limit(limit, offset)
+            ordered_candidate_query = query.order_by(*order_by_clauses)
+            candidate_rows = build_candidate_rows_from_query(
+                ordered_candidate_query,
+                max_rows=prefilter_limit,
+            )
+            if candidate_rows:
+                sorted_ids, _, _, _ = _rank_candidates_with_hybrid_scores(
+                    db=db,
+                    tenant=tenant,
+                    candidate_rows=candidate_rows,
+                    text_query=text_query_value,
+                    order_by_value=order_by_value,
+                    date_order=date_order,
+                    vector_weight=vector_weight_value,
+                    lexical_weight=lexical_weight_value,
+                )
+            else:
+                sorted_ids = []
+            total = len(sorted_ids)
+            if anchor_id is not None and limit is not None:
+                offset = resolve_anchor_offset_for_sorted_ids(sorted_ids, offset)
+            paginated_ids = sorted_ids[offset: offset + limit] if limit else sorted_ids[offset:]
+            images = load_images_by_ordered_ids(paginated_ids)
+        elif order_by_value == "ml_score" and ml_keyword_id:
             # Apply ML score ordering and require matching ML-tag rows for this keyword.
             query, ml_scores, ml_effective_threshold = builder.apply_ml_score_ordering(
                 query,
@@ -954,6 +1395,9 @@ async def list_images(
         "limit": limit,
         "offset": offset,
         "ml_effective_threshold": ml_effective_threshold,
+        "text_query": text_query_value or None,
+        "hybrid_vector_weight": vector_weight_value if text_query_value else None,
+        "hybrid_lexical_weight": lexical_weight_value if text_query_value else None,
     }
 
 

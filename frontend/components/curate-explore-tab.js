@@ -515,6 +515,17 @@ export class CurateExploreTab extends LitElement {
     this._handleCurateChipFiltersChanged({ detail: { filters: nextFilters } });
   }
 
+  _scrollToTopForSimilarityMode() {
+    if (typeof window === 'undefined') return;
+    window.requestAnimationFrame(() => {
+      try {
+        window.scrollTo({ top: 0, behavior: 'auto' });
+      } catch {
+        window.scrollTo(0, 0);
+      }
+    });
+  }
+
   _handleListsRequested() {
     this._ensureListsLoaded();
   }
@@ -577,6 +588,13 @@ export class CurateExploreTab extends LitElement {
     }
     if (changedProperties.has('rightPanelTool') && this.rightPanelTool === 'lists') {
       this._ensureListsLoaded();
+    }
+    if (changedProperties.has('curateSimilarityAssetUuid')) {
+      const previousValue = String(changedProperties.get('curateSimilarityAssetUuid') || '').trim();
+      const currentValue = String(this.curateSimilarityAssetUuid || '').trim();
+      if (currentValue && currentValue !== previousValue) {
+        this._scrollToTopForSimilarityMode();
+      }
     }
     if (
       changedProperties.has('tenant')

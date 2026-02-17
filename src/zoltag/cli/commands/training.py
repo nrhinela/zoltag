@@ -23,14 +23,12 @@ from zoltag.cli.base import CliCommand
 @click.command(name='train-keyword-models')
 @click.option('--tenant-id', required=True, help='Tenant ID')
 @click.option('--min-positive', default=None, type=int, help='Minimum positive examples per keyword')
-@click.option('--min-negative', default=None, type=int, help='Minimum negative examples per keyword')
 def train_keyword_models_command(
     tenant_id: str,
     min_positive: Optional[int],
-    min_negative: Optional[int]
 ):
     """Train keyword classification models for a tenant."""
-    cmd = TrainKeywordModelsCommand(tenant_id, min_positive, min_negative)
+    cmd = TrainKeywordModelsCommand(tenant_id, min_positive)
     cmd.run()
 
 
@@ -61,12 +59,10 @@ class TrainKeywordModelsCommand(CliCommand):
         self,
         tenant_id: str,
         min_positive: Optional[int],
-        min_negative: Optional[int]
     ):
         super().__init__()
         self.tenant_id = tenant_id
         self.min_positive = min_positive
-        self.min_negative = min_negative
 
     def run(self):
         """Execute train keyword models command."""
@@ -89,7 +85,6 @@ class TrainKeywordModelsCommand(CliCommand):
             model_name=model_name,
             model_version=model_version,
             min_positive=self.min_positive or settings.keyword_model_min_positive,
-            min_negative=self.min_negative or settings.keyword_model_min_negative,
         )
         self.db.commit()
         click.echo(f"✓ Trained: {result['trained']} · Skipped: {result['skipped']}")
@@ -260,8 +255,7 @@ class RecomputeTrainedTagsCommand(CliCommand):
                             model_name=model_name,
                             model_version=model_version,
                             model_type=settings.tagging_model,
-                            threshold=settings.keyword_model_threshold,
-                            model_weight=settings.keyword_model_weight,
+                            threshold=settings.trained_tag_threshold,
                             embedding=embedding_row.embedding,
                             keyword_id_map=keyword_id_map
                         )
@@ -283,8 +277,7 @@ class RecomputeTrainedTagsCommand(CliCommand):
                             model_name=model_name,
                             model_version=model_version,
                             model_type=settings.tagging_model,
-                            threshold=settings.keyword_model_threshold,
-                            model_weight=settings.keyword_model_weight,
+                            threshold=settings.trained_tag_threshold,
                             keyword_id_map=keyword_id_map
                         )
                     processed += 1

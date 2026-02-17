@@ -7,17 +7,18 @@ import { html } from 'lit';
 export function renderSimilarityModeHeader({ onContinue } = {}) {
   const handleContinue = typeof onContinue === 'function' ? onContinue : null;
   return html`
-    <div class="w-full flex items-center justify-between gap-3">
-      <div class="text-lg sm:text-xl font-extrabold tracking-tight text-gray-900">Similarity Results</div>
+    <div class="w-full flex items-center gap-3">
       ${handleContinue ? html`
         <button
           type="button"
-          class="inline-flex items-center px-3 py-1.5 rounded-lg border border-blue-300 text-blue-700 text-sm font-semibold hover:bg-blue-50"
+          class="inline-flex items-center gap-1 text-blue-700 text-sm font-semibold hover:underline"
           @click=${handleContinue}
         >
-          Continue
+          <span aria-hidden="true">←</span>
+          <span>Back</span>
         </button>
       ` : html``}
+      <div class="text-lg sm:text-xl font-extrabold tracking-tight text-gray-900">Similarity Results</div>
     </div>
   `;
 }

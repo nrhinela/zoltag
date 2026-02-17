@@ -24,8 +24,8 @@ async def get_system_config():
         "version": "0.1.0",
         "api_url": settings.api_url if hasattr(settings, 'api_url') else "/api",
         "debug": settings.debug,
-        "use_keyword_models": settings.use_keyword_models,
-        "keyword_model_weight": settings.keyword_model_weight,
+        "zeroshot_tag_threshold": settings.zeroshot_tag_threshold,
+        "trained_tag_threshold": settings.trained_tag_threshold,
         "gcp_project_id": settings.gcp_project_id,
         "gcp_region": settings.gcp_region,
         "storage_bucket_name": settings.storage_bucket_name

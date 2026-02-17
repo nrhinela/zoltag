@@ -97,14 +97,6 @@ export async function fetchWithAuth(url, options = {}) {
 export async function getImages(tenantId, filters = {}) {
   const params = new URLSearchParams();
 
-  // Legacy search parameter
-  if (filters.search) {
-    // The backend doesn't seem to have a direct text search endpoint,
-    // but the old frontend had a client-side search. We will add a 'keywords'
-    // parameter for now, which is a deprecated feature of the API, but might work.
-    params.append('keywords', filters.search);
-  }
-
   // Add parameters by category
   addMiscParams(params, filters);
   addRatingParams(params, filters);
