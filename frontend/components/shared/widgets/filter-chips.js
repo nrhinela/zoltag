@@ -22,6 +22,7 @@ class FilterChips extends LitElement {
     searchDropboxQuery: { type: String },
     renderSortControls: { type: Object },
     renderFiltersActions: { type: Object },
+    hideFiltersSection: { type: Boolean },
     lists: { type: Array },
     listFilterMode: { type: String },
     keywordMultiSelect: { type: Boolean },
@@ -44,6 +45,7 @@ class FilterChips extends LitElement {
     this.searchDropboxQuery = '';
     this.renderSortControls = null;
     this.renderFiltersActions = null;
+    this.hideFiltersSection = false;
     this.lists = [];
     this.listFilterMode = 'include';
     this.keywordMultiSelect = true;
@@ -124,6 +126,7 @@ class FilterChips extends LitElement {
     const all = [
       { type: 'keyword', label: 'Keywords', icon: '🏷️' },
       { type: 'rating', label: 'Rating', icon: '⭐' },
+      { type: 'media', label: 'Media Type', icon: '🎬' },
       { type: 'folder', label: 'Folder', icon: '📂' },
       { type: 'list', label: 'List', icon: '🧾' },
       { type: 'filename', label: 'Filename', icon: '📝' },
@@ -301,6 +304,24 @@ class FilterChips extends LitElement {
     this._addFilter(filter);
   }
 
+  _handleMediaSelect(mediaType) {
+    const normalized = String(mediaType || '').trim().toLowerCase();
+    if (normalized !== 'image' && normalized !== 'video') {
+      this._removeFilterByType('media');
+      this.valueSelectorOpen = null;
+      this.filterMenuOpen = false;
+      return;
+    }
+    this._addFilter({
+      type: 'media',
+      value: normalized,
+      displayLabel: 'Media',
+      displayValue: normalized === 'video' ? 'Videos' : 'Photos',
+    });
+    this.valueSelectorOpen = null;
+    this.filterMenuOpen = false;
+  }
+
   _handleListModeChange(mode) {
     this.listFilterMode = mode === 'exclude' ? 'exclude' : 'include';
   }
@@ -433,6 +454,8 @@ class FilterChips extends LitElement {
         return this._renderKeywordSelector();
       case 'rating':
         return this._renderRatingSelector();
+      case 'media':
+        return this._renderMediaSelector();
       case 'folder':
         return this._renderFolderSelector();
       case 'list':
@@ -589,6 +612,38 @@ class FilterChips extends LitElement {
                   ${rating === 0
                     ? html`<span class="ml-0">${label}</span>`
                     : html`<span class="text-yellow-500" aria-hidden="true">★</span><span class="ml-1">${label}</span>`}
+                </button>
+              `;
+            })}
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  _renderMediaSelector() {
+    const currentValue = ((this.activeFilters || []).find((filter) => filter.type === 'media')?.value || '').toLowerCase();
+    const options = [
+      { value: 'all', label: 'All media' },
+      { value: 'image', label: 'Photos only' },
+      { value: 'video', label: 'Videos only' },
+    ];
+    return html`
+      <div class="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-50 min-w-[260px] max-w-[340px]">
+        <div class="p-4">
+          <div class="text-sm font-semibold text-gray-700 mb-3">Media Type</div>
+          <div class="space-y-2">
+            ${options.map((option) => {
+              const isActive = option.value === 'all'
+                ? !currentValue
+                : currentValue === option.value;
+              return html`
+                <button
+                  class=${`w-full text-left px-3 py-2 border rounded-lg text-sm transition-colors ${isActive ? 'bg-blue-50 border-blue-300 text-blue-800' : 'hover:bg-gray-50 border-gray-200 text-gray-700'}`}
+                  @click=${() => this._handleMediaSelect(option.value)}
+                  type="button"
+                >
+                  ${option.label}
                 </button>
               `;
             })}
@@ -773,74 +828,110 @@ class FilterChips extends LitElement {
       ? this.renderSortControls()
       : (this.renderSortControls || html``);
     const hasSortControls = !!this.renderSortControls;
+    const showFiltersSection = !this.hideFiltersSection;
 
     return html`
       <div class="bg-white rounded-lg shadow p-4">
-        <!-- FILTERS Section -->
-        <div class="mb-4">
-          <div class="flex flex-wrap items-center gap-2">
-            <span class="text-sm font-semibold text-gray-700">Filters:</span>
-            <!-- Add filter button (kept first for layout stability) -->
-            <div class="relative flex-none">
-              <button
-                @click=${this._handleAddFilterClick}
-                class="inline-flex items-center gap-2 px-3 py-1.5 border border-gray-300 rounded-full text-sm text-gray-700 hover:bg-gray-50"
-              >
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
-                </svg>
-                <span>Add filter</span>
-                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
-                </svg>
-              </button>
-            </div>
-            <!-- Active filter chips -->
-            ${this.activeFilters.map((filter, index) => {
-              if (filter.type === 'keyword') {
-                const keywordState = this._normalizeKeywordFilter(filter);
-                const totalKeywords = Object.values(keywordState.keywordsByCategory || {}).reduce((total, set) => total + set.size, 0);
-                const keywordOperator = keywordState.operator || 'OR';
+        ${showFiltersSection ? html`
+          <!-- FILTERS Section -->
+          <div class="mb-4">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="text-sm font-semibold text-gray-700">Filters:</span>
+              <!-- Add filter button (kept first for layout stability) -->
+              <div class="relative flex-none">
+                <button
+                  @click=${this._handleAddFilterClick}
+                  class="inline-flex items-center gap-2 px-3 py-1.5 border border-gray-300 rounded-full text-sm text-gray-700 hover:bg-gray-50"
+                >
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+                  </svg>
+                  <span>Add filter</span>
+                  <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                  </svg>
+                </button>
+              </div>
+              <!-- Active filter chips -->
+              ${this.activeFilters.map((filter, index) => {
+                if (filter.type === 'keyword') {
+                  const keywordState = this._normalizeKeywordFilter(filter);
+                  const totalKeywords = Object.values(keywordState.keywordsByCategory || {}).reduce((total, set) => total + set.size, 0);
+                  const keywordOperator = keywordState.operator || 'OR';
+                  return html`
+                    <div class="inline-flex items-center gap-2 px-3 py-1.5 bg-blue-50 border border-blue-200 rounded-full text-sm cursor-pointer hover:bg-blue-100 flex-wrap"
+                         @click=${() => this._handleEditFilter(filter.type, index)}>
+                      <span class="font-medium text-blue-900">${filter.displayLabel}:</span>
+                      ${!keywordState.untagged && totalKeywords > 1 ? html`
+                        <button
+                          class="px-2 py-0.5 border border-blue-200 rounded-full text-[10px] text-blue-700 hover:bg-blue-100"
+                          @click=${(e) => { e.stopPropagation(); this._toggleKeywordOperator(); }}
+                          title="Toggle match mode"
+                        >
+                          ${keywordOperator === 'AND' ? 'All' : 'Any'}
+                        </button>
+                      ` : html``}
+                      ${keywordState.untagged ? html`
+                        <span class="text-blue-700">Untagged</span>
+                      ` : html`
+                        <span class="inline-flex flex-wrap items-center gap-2 text-blue-700">
+                          ${Object.entries(keywordState.keywordsByCategory || {}).map(([category, keywords]) => {
+                            return html`
+                              <span class="inline-flex items-center gap-2">
+                                <span class="text-blue-900 font-medium">${category}</span>
+                                <span class="inline-flex flex-wrap items-center gap-1">
+                                  ${Array.from(keywords).map((keyword) => html`
+                                    <span class="inline-flex items-center gap-1 px-2 py-0.5 bg-white/70 border border-blue-200 rounded-full text-xs">
+                                      ${keyword}
+                                      <button
+                                        class="text-blue-600 hover:text-blue-800"
+                                        @click=${(e) => { e.stopPropagation(); this._handleKeywordRemove(category, keyword); }}
+                                        aria-label="Remove keyword"
+                                      >
+                                        ×
+                                      </button>
+                                    </span>
+                                  `)}
+                                </span>
+                              </span>
+                            `;
+                          })}
+                        </span>
+                      `}
+                      <button
+                        @click=${(e) => { e.stopPropagation(); this._removeFilter(index); }}
+                        class="ml-1 text-blue-600 hover:text-blue-800"
+                        aria-label="Remove filter"
+                      >
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                        </svg>
+                      </button>
+                    </div>
+                  `;
+                }
+                if (filter.type === 'similarity') {
+                  return html`
+                    <div class="inline-flex items-center gap-2 px-3 py-1.5 bg-blue-50 border border-blue-200 rounded-full text-sm">
+                      <span class="font-medium text-blue-900">Similarity:<span class="text-blue-700">${filter.displayValue}</span></span>
+                      <button
+                        @click=${(e) => { e.stopPropagation(); this._removeFilter(index); }}
+                        class="ml-1 text-blue-600 hover:text-blue-800"
+                        aria-label="Remove filter"
+                      >
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                        </svg>
+                      </button>
+                    </div>
+                  `;
+                }
+
                 return html`
-                  <div class="inline-flex items-center gap-2 px-3 py-1.5 bg-blue-50 border border-blue-200 rounded-full text-sm cursor-pointer hover:bg-blue-100 flex-wrap"
+                  <div class="inline-flex items-center gap-2 px-3 py-1.5 bg-blue-50 border border-blue-200 rounded-full text-sm cursor-pointer hover:bg-blue-100"
                        @click=${() => this._handleEditFilter(filter.type, index)}>
                     <span class="font-medium text-blue-900">${filter.displayLabel}:</span>
-                    ${!keywordState.untagged && totalKeywords > 1 ? html`
-                      <button
-                        class="px-2 py-0.5 border border-blue-200 rounded-full text-[10px] text-blue-700 hover:bg-blue-100"
-                        @click=${(e) => { e.stopPropagation(); this._toggleKeywordOperator(); }}
-                        title="Toggle match mode"
-                      >
-                        ${keywordOperator === 'AND' ? 'All' : 'Any'}
-                      </button>
-                    ` : html``}
-                    ${keywordState.untagged ? html`
-                      <span class="text-blue-700">Untagged</span>
-                    ` : html`
-                      <span class="inline-flex flex-wrap items-center gap-2 text-blue-700">
-                        ${Object.entries(keywordState.keywordsByCategory || {}).map(([category, keywords]) => {
-                          return html`
-                            <span class="inline-flex items-center gap-2">
-                              <span class="text-blue-900 font-medium">${category}</span>
-                              <span class="inline-flex flex-wrap items-center gap-1">
-                                ${Array.from(keywords).map((keyword) => html`
-                                  <span class="inline-flex items-center gap-1 px-2 py-0.5 bg-white/70 border border-blue-200 rounded-full text-xs">
-                                    ${keyword}
-                                    <button
-                                      class="text-blue-600 hover:text-blue-800"
-                                      @click=${(e) => { e.stopPropagation(); this._handleKeywordRemove(category, keyword); }}
-                                      aria-label="Remove keyword"
-                                    >
-                                      ×
-                                    </button>
-                                  </span>
-                                `)}
-                              </span>
-                            </span>
-                          `;
-                        })}
-                      </span>
-                    `}
+                    <span class="text-blue-700">${filter.displayValue}</span>
                     <button
                       @click=${(e) => { e.stopPropagation(); this._removeFilter(index); }}
                       class="ml-1 text-blue-600 hover:text-blue-800"
@@ -852,40 +943,23 @@ class FilterChips extends LitElement {
                     </button>
                   </div>
                 `;
-              }
-
-              return html`
-                <div class="inline-flex items-center gap-2 px-3 py-1.5 bg-blue-50 border border-blue-200 rounded-full text-sm cursor-pointer hover:bg-blue-100"
-                     @click=${() => this._handleEditFilter(filter.type, index)}>
-                  <span class="font-medium text-blue-900">${filter.displayLabel}:</span>
-                  <span class="text-blue-700">${filter.displayValue}</span>
-                  <button
-                    @click=${(e) => { e.stopPropagation(); this._removeFilter(index); }}
-                    class="ml-1 text-blue-600 hover:text-blue-800"
-                    aria-label="Remove filter"
-                  >
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-                    </svg>
-                  </button>
+              })}
+              ${this.renderFiltersActions ? html`
+                <div class="ml-auto flex items-center">
+                  ${this.renderFiltersActions()}
                 </div>
-              `;
-            })}
-            ${this.renderFiltersActions ? html`
-              <div class="ml-auto flex items-center">
-                ${this.renderFiltersActions()}
-              </div>
-            ` : ''}
+              ` : ''}
+            </div>
+            <div class="relative w-full">
+              ${this.filterMenuOpen ? this._renderFilterMenu() : ''}
+              ${this._renderValueSelector()}
+            </div>
           </div>
-          <div class="relative w-full">
-            ${this.filterMenuOpen ? this._renderFilterMenu() : ''}
-            ${this._renderValueSelector()}
-          </div>
-        </div>
+        ` : html``}
 
         <!-- SORT & DISPLAY Section -->
         ${hasSortControls ? html`
-          <div class="border-t pt-4">
+          <div class=${showFiltersSection ? 'border-t pt-4' : ''}>
             <div class="flex flex-wrap items-center gap-4">
               ${sortControls}
             </div>

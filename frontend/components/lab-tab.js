@@ -155,6 +155,7 @@ export class LabTab extends LitElement {
       ratingOperator,
       reviewed: filters.reviewed ?? undefined,
       dropboxPathPrefix: filters.dropbox_path_prefix || '',
+      textQuery: this.nlQuery || '',
       categoryFilterSource: 'permatags',
       permatagPositiveMissing: false,
       listId: undefined,
@@ -286,7 +287,7 @@ export class LabTab extends LitElement {
           <div class="border border-gray-200 rounded-xl bg-white shadow-sm p-4 mb-6">
             <div class="flex flex-wrap items-center gap-3">
               <div class="text-lg font-semibold text-gray-900">Natural search</div>
-              <span class="text-xs text-gray-500">Experimental. Results use permatags only.</span>
+              <span class="text-xs text-gray-500">Experimental. Results use hybrid semantic + permatag ranking.</span>
             </div>
           <div class="mt-3 flex flex-wrap gap-3 items-center">
             <input

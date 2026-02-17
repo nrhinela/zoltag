@@ -1,9 +1,12 @@
 import { LitElement, html, css } from 'lit';
 import {
   getImageDetails,
+  getSimilarImages,
   getKeywords,
   addPermatag,
   getFullImage,
+  getImagePlayback,
+  getImagePlaybackStream,
   setRating,
   refreshImageMetadata,
   propagateDropboxTags,
@@ -13,10 +16,20 @@ import {
   deleteAssetVariant,
   getAssetVariantContent,
   inspectAssetVariant,
+  getAssetNote,
+  upsertAssetNote,
 } from '../services/api.js';
 import { tailwind } from './tailwind-lit.js';
 import { propertyGridStyles, renderPropertyRows, renderPropertySection } from './shared/widgets/property-grid.js';
+import { formatCurateDate, formatDurationMs } from './shared/formatting.js';
+import { renderImageGrid } from './shared/image-grid.js';
+import { renderCuratePermatagSummary } from './render/curate-image-fragments.js';
+import { renderCurateRatingStatic } from './render/curate-rating-widgets.js';
 import './shared/widgets/keyword-dropdown.js';
+
+const SIMILAR_WARMUP_DELAY_MS = 300;
+const similarWarmupInflight = new Map();
+const similarWarmupCompleted = new Set();
 
 class ImageEditor extends LitElement {
   static styles = [tailwind, propertyGridStyles, css`
@@ -157,12 +170,94 @@ class ImageEditor extends LitElement {
       background: #f3f4f6;
       flex-shrink: 0;
     }
+    .image-wrap video {
+      width: 100%;
+      height: 100%;
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+      border-radius: 12px;
+      border: 1px solid #e5e7eb;
+      background: #111827;
+      flex-shrink: 0;
+    }
+    .image-media-pill {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      z-index: 10;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: rgba(15, 23, 42, 0.84);
+      color: #e2e8f0;
+      font-size: 11px;
+      line-height: 1;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      pointer-events: none;
+      box-shadow: 0 6px 16px rgba(15, 23, 42, 0.26);
+    }
+    .image-media-pill .duration {
+      color: #f8fafc;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: 0.01em;
+    }
     .image-wrap.image-full img {
       width: 100%;
       height: 100%;
       max-width: 100%;
       max-height: 100%;
       object-fit: contain;
+    }
+    .image-wrap.image-full video {
+      width: 100%;
+      height: 100%;
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+    }
+    .video-loading-surface {
+      width: 100%;
+      height: 100%;
+      max-width: 100%;
+      max-height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 12px;
+      border: 1px solid #1f2937;
+      background: #111827;
+      color: #cbd5e1;
+      font-size: 12px;
+      letter-spacing: 0.01em;
+    }
+    .video-playback-status {
+      position: absolute;
+      bottom: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      border-radius: 999px;
+      border: 1px solid #e5e7eb;
+      background: rgba(17, 24, 39, 0.78);
+      color: #f9fafb;
+      font-size: 11px;
+      box-shadow: 0 6px 16px rgba(15, 23, 42, 0.25);
+    }
+    .video-playback-retry {
+      border: 1px solid #93c5fd;
+      background: #eff6ff;
+      color: #1d4ed8;
+      border-radius: 999px;
+      padding: 3px 8px;
+      font-size: 10px;
+      font-weight: 600;
     }
     .high-res-button {
       position: absolute;
@@ -646,6 +741,278 @@ class ImageEditor extends LitElement {
       min-height: 0;
       overflow: auto;
     }
+    .similar-fullscreen {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      padding: 16px 18px;
+      flex: 1;
+      min-height: 0;
+      overflow: hidden;
+    }
+    .similar-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      font-size: 12px;
+      color: #4b5563;
+    }
+    .similar-header-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .similar-open-search {
+      border: 1px solid #2563eb;
+      border-radius: 8px;
+      padding: 6px 8px;
+      background: #eff6ff;
+      color: #1d4ed8;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .similar-open-search:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+    .similar-refresh {
+      border: 1px solid #d1d5db;
+      border-radius: 8px;
+      padding: 6px 8px;
+      background: #f9fafb;
+      color: #374151;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .similar-refresh:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+    .similar-grid-wrap {
+      min-height: 0;
+      overflow: auto;
+      --curate-thumb-size: 150px;
+    }
+    .similar-grid-wrap .curate-grid {
+      gap: 10px;
+    }
+    .similar-grid-wrap .curate-thumb-tile {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .similar-grid-wrap .curate-thumb-footer {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .similar-item-meta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      color: #4b5563;
+      font-size: 11px;
+      font-variant-numeric: tabular-nums;
+    }
+    .similar-open-button {
+      border: 1px solid #2563eb;
+      border-radius: 8px;
+      padding: 6px 8px;
+      background: #eff6ff;
+      color: #1d4ed8;
+      font-size: 11px;
+      cursor: pointer;
+      width: 100%;
+    }
+    .curate-grid {
+      display: grid;
+      gap: 2px;
+      grid-template-columns: repeat(auto-fill, minmax(var(--curate-thumb-size, 110px), 1fr));
+      user-select: none;
+    }
+    .curate-thumb-wrapper {
+      position: relative;
+      border-radius: 10px;
+      transition: box-shadow 0.15s ease, transform 0.15s ease;
+    }
+    .curate-thumb-wrapper:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 8px 18px rgba(17, 24, 39, 0.18);
+    }
+    .curate-thumb {
+      width: 100%;
+      aspect-ratio: 1 / 1;
+      object-fit: cover;
+      border-radius: 8px;
+      border: 1px solid #e5e7eb;
+      background: #f3f4f6;
+      cursor: pointer;
+    }
+    .curate-thumb-play-overlay {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      pointer-events: none;
+      z-index: 9;
+    }
+    .curate-thumb-play-icon {
+      width: clamp(30px, 28%, 52px);
+      height: clamp(30px, 28%, 52px);
+      fill: rgba(255, 255, 255, 0.96);
+      background: rgba(15, 23, 42, 0.55);
+      border-radius: 999px;
+      padding: 8px;
+      box-shadow: 0 8px 18px rgba(15, 23, 42, 0.38);
+    }
+    .curate-thumb-media-pill {
+      position: absolute;
+      top: 6px;
+      right: 6px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(15, 23, 42, 0.88);
+      color: #e2e8f0;
+      padding: 4px 7px;
+      border-radius: 999px;
+      font-size: 10px;
+      line-height: 1;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+      pointer-events: none;
+      z-index: 11;
+      box-shadow: 0 4px 12px rgba(15, 23, 42, 0.28);
+    }
+    .curate-thumb-media-pill-label {
+      color: #bfdbfe;
+    }
+    .curate-thumb-media-pill-duration {
+      color: #f8fafc;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: 0.01em;
+    }
+    .curate-thumb-rating-static {
+      position: absolute;
+      top: 6px;
+      right: 6px;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      background: rgba(255, 255, 255, 0.9);
+      color: #111827;
+      padding: 4px 6px;
+      border-radius: 999px;
+      box-shadow: 0 4px 12px rgba(17, 24, 39, 0.18);
+      z-index: 10;
+      pointer-events: none;
+    }
+    .curate-thumb-rating-static span {
+      font-size: 12px;
+      line-height: 1;
+    }
+    .curate-thumb-similar-link {
+      position: absolute;
+      right: 8px;
+      bottom: 8px;
+      width: 28px;
+      height: 28px;
+      padding: 0;
+      cursor: pointer;
+      appearance: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 999px;
+      border: 1px solid rgba(191, 219, 254, 0.95);
+      background: rgba(15, 23, 42, 0.86);
+      color: #eff6ff;
+      box-shadow: 0 6px 14px rgba(15, 23, 42, 0.35);
+      opacity: 0;
+      transform: translateY(3px);
+      transition: opacity 0.14s ease, transform 0.14s ease, background-color 0.14s ease;
+      pointer-events: auto;
+      z-index: 13;
+    }
+    .curate-thumb-similar-link:hover,
+    .curate-thumb-similar-link:focus-visible,
+    .curate-thumb-similar-link:active {
+      opacity: 1;
+      transform: translateY(0);
+    }
+    .curate-thumb-similar-link:hover {
+      background: rgba(30, 64, 175, 0.95);
+    }
+    .curate-thumb-similar-link-icon {
+      width: 16px;
+      height: 16px;
+      fill: currentColor;
+      pointer-events: none;
+    }
+    .curate-thumb-date {
+      position: absolute;
+      left: 6px;
+      right: 6px;
+      bottom: 1px;
+      font-size: 10px;
+      line-height: 1.2;
+      color: #f9fafb;
+      background: rgba(17, 24, 39, 0.65);
+      padding: 2px 6px;
+      border-radius: 6px;
+      text-align: center;
+      pointer-events: none;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .curate-thumb-id {
+      margin-right: 6px;
+      font-weight: 600;
+      color: #e5e7eb;
+    }
+    .curate-thumb-icon {
+      margin-right: 4px;
+      font-size: 11px;
+    }
+    .curate-thumb-rating {
+      position: absolute;
+      left: 6px;
+      right: 6px;
+      bottom: 19px;
+      font-size: 10px;
+      color: #f9fafb;
+      background: rgba(17, 24, 39, 0.65);
+      padding: 2px 6px;
+      border-radius: 6px;
+      text-align: center;
+      display: block;
+      pointer-events: none;
+    }
+    .curate-thumb-rating-label {
+      display: block;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      text-align: center;
+      padding: 0 6px;
+    }
+    .curate-drop {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 180px;
+      color: #9ca3af;
+      font-size: 12px;
+      border: 1px dashed #d1d5db;
+      border-radius: 8px;
+      padding: 16px;
+      text-align: center;
+    }
     .variant-preview-wrap {
       width: 100%;
       height: 72px;
@@ -920,6 +1287,12 @@ class ImageEditor extends LitElement {
     fullImageUrl: { type: String },
     fullImageLoading: { type: Boolean },
     fullImageError: { type: String },
+    videoPlaybackUrl: { type: String },
+    videoPlaybackLoading: { type: Boolean },
+    videoPlaybackError: { type: String },
+    similarImages: { type: Array },
+    similarLoading: { type: Boolean },
+    similarError: { type: String },
     ratingSaving: { type: Boolean },
     ratingError: { type: String },
     metadataRefreshing: { type: Boolean },
@@ -940,6 +1313,10 @@ class ImageEditor extends LitElement {
     fullscreenZoom: { type: Number },
     fullscreenFitMode: { type: Boolean },
     canEditTags: { type: Boolean },
+    canCurate: { type: Boolean },
+    marketingNote: { type: String },
+    marketingNoteSaving: { type: Boolean },
+    marketingNoteError: { type: String },
   };
 
   constructor() {
@@ -959,12 +1336,21 @@ class ImageEditor extends LitElement {
     this.fullImageUrl = '';
     this.fullImageLoading = false;
     this.fullImageError = '';
+    this.videoPlaybackUrl = '';
+    this.videoPlaybackLoading = false;
+    this.videoPlaybackError = '';
+    this.similarImages = [];
+    this.similarLoading = false;
+    this.similarError = '';
     this._fullImageAbortController = null;
+    this._videoPlaybackAbortController = null;
+    this._videoPlaybackObjectUrl = '';
     this._fullImageLoadTimer = null;
     this._fullImageLoadDelayMs = 0;
     this._fullImageRapidDelayMs = 120;
     this._fullImageRapidThresholdMs = 200;
     this._fullImageLastNavTs = 0;
+    this._similarWarmupTimer = null;
     this.ratingSaving = false;
     this.ratingError = '';
     this.metadataRefreshing = false;
@@ -988,6 +1374,10 @@ class ImageEditor extends LitElement {
     this.fullscreenZoom = 50;
     this.fullscreenFitMode = false;
     this.canEditTags = true;
+    this.canCurate = false;
+    this.marketingNote = '';
+    this.marketingNoteSaving = false;
+    this.marketingNoteError = '';
     this._ratingBurstActive = false;
     this._ratingBurstTimer = null;
     this._suppressPermatagRefresh = false;
@@ -1013,6 +1403,10 @@ class ImageEditor extends LitElement {
         this.activeTab = 'edit';
       }
     }
+    if (changedProperties.has('open') && this.open) {
+      this._scheduleFullImageLoad();
+      this._scheduleVideoPlaybackLoad();
+    }
   }
 
   connectedCallback() {
@@ -1022,8 +1416,10 @@ class ImageEditor extends LitElement {
 
   disconnectedCallback() {
     window.removeEventListener('permatags-changed', this._handlePermatagEvent);
+    this._clearSimilarWarmupTimer();
     this._revokeVariantPreviewUrls();
     this._resetFullImage();
+    this._resetVideoPlayback();
     this._restoreBodyScroll();
     super.disconnectedCallback();
   }
@@ -1051,7 +1447,10 @@ class ImageEditor extends LitElement {
   willUpdate(changedProperties) {
     const shouldLoad = this.embedded || this.open;
     if (shouldLoad && (changedProperties.has('image') || changedProperties.has('tenant'))) {
+      this._clearSimilarWarmupTimer();
       this._resetFullImage();
+      this._resetVideoPlayback();
+      this._resetSimilarResults();
       this._resetVariantEditor();
       this.fetchDetails();
       this.fetchKeywords();
@@ -1059,12 +1458,18 @@ class ImageEditor extends LitElement {
     if (changedProperties.has('details')) {
       this._syncTagSubTab();
       this._scheduleFullImageLoad();
+      this._scheduleVideoPlaybackLoad();
+      if (this.open || this.embedded) {
+        this._scheduleSimilarWarmup();
+      }
       if (this.activeTab === 'variants') {
         this._loadAssetVariants();
       }
     }
     if (changedProperties.has('open') && !this.open && !this.embedded) {
+      this._clearSimilarWarmupTimer();
       this._resetFullImage();
+      this._resetVideoPlayback();
     }
   }
 
@@ -1074,11 +1479,37 @@ class ImageEditor extends LitElement {
     this.error = '';
     try {
       this.details = await getImageDetails(this.tenant, this.image.id);
+      this._fetchMarketingNote();
     } catch (error) {
       this.error = 'Failed to load image details.';
       console.error('ImageEditor: fetchDetails failed', error);
     } finally {
       this.loading = false;
+    }
+  }
+
+  async _fetchMarketingNote() {
+    if (!this.image || !this.tenant) return;
+    try {
+      const result = await getAssetNote(this.tenant, this.image.id, 'marketing');
+      this.marketingNote = result.body ?? '';
+    } catch (error) {
+      console.error('ImageEditor: failed to load marketing note', error);
+    }
+  }
+
+  async _handleSaveMarketingNote() {
+    if (!this.image || !this.tenant || this.marketingNoteSaving) return;
+    this.marketingNoteSaving = true;
+    this.marketingNoteError = '';
+    try {
+      const result = await upsertAssetNote(this.tenant, this.image.id, 'marketing', this.marketingNote);
+      this.marketingNote = result.body ?? '';
+    } catch (error) {
+      this.marketingNoteError = 'Failed to save note.';
+      console.error('ImageEditor: failed to save marketing note', error);
+    } finally {
+      this.marketingNoteSaving = false;
     }
   }
 
@@ -1118,6 +1549,7 @@ class ImageEditor extends LitElement {
   }
 
   _close() {
+    this._pauseInlineVideo();
     this.dispatchEvent(new CustomEvent('close', { bubbles: true, composed: true }));
   }
 
@@ -1125,8 +1557,110 @@ class ImageEditor extends LitElement {
     this.activeTab = tab;
     if (tab === 'image') {
       this._loadFullImage();
+    } else if (tab === 'similar') {
+      this._loadSimilarImages();
     } else if (tab === 'variants') {
       this._loadAssetVariants();
+    }
+  }
+
+  _resetSimilarResults() {
+    this.similarImages = [];
+    this.similarLoading = false;
+    this.similarError = '';
+  }
+
+  _getSimilarWarmupKey() {
+    if (!this.tenant || !this.details?.id) return null;
+    const mediaType = String(this._inferMediaType(this.details) || 'image').toLowerCase();
+    return `${this.tenant}::${mediaType}`;
+  }
+
+  _clearSimilarWarmupTimer() {
+    if (!this._similarWarmupTimer) return;
+    clearTimeout(this._similarWarmupTimer);
+    this._similarWarmupTimer = null;
+  }
+
+  _scheduleSimilarWarmup() {
+    if (!this.details?.id || !this.tenant) return;
+    if (this.activeTab === 'similar') return;
+    const warmupKey = this._getSimilarWarmupKey();
+    if (!warmupKey || similarWarmupCompleted.has(warmupKey) || similarWarmupInflight.has(warmupKey)) {
+      return;
+    }
+    this._clearSimilarWarmupTimer();
+    this._similarWarmupTimer = window.setTimeout(() => {
+      this._similarWarmupTimer = null;
+      this._warmSimilarCache().catch(() => {});
+    }, SIMILAR_WARMUP_DELAY_MS);
+  }
+
+  async _warmSimilarCache() {
+    const sourceImageId = this.details?.id;
+    const warmupKey = this._getSimilarWarmupKey();
+    if (!sourceImageId || !warmupKey || !this.tenant) return;
+    if (similarWarmupCompleted.has(warmupKey)) return;
+
+    const existingWarmup = similarWarmupInflight.get(warmupKey);
+    if (existingWarmup) {
+      await existingWarmup;
+      return;
+    }
+
+    const warmupPromise = (async () => {
+      await getSimilarImages(this.tenant, sourceImageId, {
+        limit: 1,
+        sameMediaType: true,
+      });
+      similarWarmupCompleted.add(warmupKey);
+    })();
+
+    similarWarmupInflight.set(warmupKey, warmupPromise);
+    try {
+      await warmupPromise;
+    } catch (error) {
+      console.debug('ImageEditor: similar warmup skipped', error);
+    } finally {
+      similarWarmupInflight.delete(warmupKey);
+    }
+  }
+
+  async _loadSimilarImages(force = false) {
+    if (!this.details?.id || !this.tenant) return;
+    if (!force && (this.similarLoading || this.similarImages.length > 0)) return;
+    const sourceImageId = this.details.id;
+    const warmupKey = this._getSimilarWarmupKey();
+    const existingWarmup = warmupKey ? similarWarmupInflight.get(warmupKey) : null;
+    if (existingWarmup) {
+      try {
+        await existingWarmup;
+      } catch {
+        // Warmup is opportunistic only; continue with direct fetch.
+      }
+    }
+    this.similarLoading = true;
+    this.similarError = '';
+    try {
+      const payload = await getSimilarImages(this.tenant, sourceImageId, {
+        limit: 60,
+        sameMediaType: true,
+      });
+      if (this.details?.id !== sourceImageId) {
+        return;
+      }
+      this.similarImages = Array.isArray(payload?.images) ? payload.images : [];
+    } catch (error) {
+      if (this.details?.id !== sourceImageId) {
+        return;
+      }
+      this.similarImages = [];
+      this.similarError = error?.message || 'Failed to load similar images.';
+      console.error('ImageEditor: failed to load similar images', error);
+    } finally {
+      if (this.details?.id === sourceImageId) {
+        this.similarLoading = false;
+      }
     }
   }
 
@@ -1403,6 +1937,15 @@ class ImageEditor extends LitElement {
     this.fullImageError = '';
   }
 
+  _resetVideoPlayback() {
+    this._cancelVideoPlaybackLoad();
+    this._revokeVideoPlaybackObjectUrl();
+    this.videoPlaybackUrl = '';
+    this.videoPlaybackLoading = false;
+    this.videoPlaybackError = '';
+    this._pauseInlineVideo();
+  }
+
   _cancelFullImageLoad() {
     if (this._fullImageLoadTimer) {
       clearTimeout(this._fullImageLoadTimer);
@@ -1414,9 +1957,109 @@ class ImageEditor extends LitElement {
     }
   }
 
+  _cancelVideoPlaybackLoad() {
+    if (this._videoPlaybackAbortController) {
+      this._videoPlaybackAbortController.abort();
+      this._videoPlaybackAbortController = null;
+    }
+  }
+
+  _scheduleVideoPlaybackLoad() {
+    if (!this.details || !this.tenant) return;
+    if (!this.open && !this.embedded) return;
+    if (!this._isVideoMedia(this.details)) {
+      this._resetVideoPlayback();
+      return;
+    }
+    this._loadVideoPlayback();
+  }
+
+  async _loadVideoPlayback({ force = false } = {}) {
+    if (!this.details || !this.tenant) return;
+    if (!this._isVideoMedia(this.details)) return;
+    if (!force && (this.videoPlaybackLoading || this.videoPlaybackUrl)) return;
+
+    this._cancelVideoPlaybackLoad();
+    this.videoPlaybackLoading = true;
+    this.videoPlaybackError = '';
+    if (force) {
+      this._revokeVideoPlaybackObjectUrl();
+      this.videoPlaybackUrl = '';
+      this._pauseInlineVideo();
+    }
+    const imageId = this.details.id;
+    const controller = new AbortController();
+    this._videoPlaybackAbortController = controller;
+    try {
+      const payload = await getImagePlayback(this.tenant, imageId, { signal: controller.signal });
+      if (controller.signal.aborted || this.details?.id !== imageId) {
+        return;
+      }
+      const playbackMode = String(payload?.mode || '').trim().toLowerCase();
+      if (playbackMode === 'proxy_stream') {
+        const streamBlob = await getImagePlaybackStream(this.tenant, imageId, { signal: controller.signal });
+        if (controller.signal.aborted || this.details?.id !== imageId) {
+          return;
+        }
+        const objectUrl = URL.createObjectURL(streamBlob);
+        this._revokeVideoPlaybackObjectUrl();
+        this._videoPlaybackObjectUrl = objectUrl;
+        this.videoPlaybackUrl = objectUrl;
+        return;
+      }
+      const nextUrl = String(payload?.playback_url || '').trim();
+      if (!nextUrl) {
+        throw new Error('Playback URL unavailable');
+      }
+      this._revokeVideoPlaybackObjectUrl();
+      this.videoPlaybackUrl = nextUrl;
+    } catch (error) {
+      if (error?.name === 'AbortError') {
+        return;
+      }
+      this.videoPlaybackError = error?.message || 'Failed to load video playback URL.';
+      console.error('ImageEditor: video playback load failed', error);
+    } finally {
+      if (this._videoPlaybackAbortController === controller) {
+        this._videoPlaybackAbortController = null;
+      }
+      this.videoPlaybackLoading = false;
+    }
+  }
+
+  _pauseInlineVideo() {
+    const videoEl = this.renderRoot?.querySelector('.image-video-player');
+    if (videoEl && typeof videoEl.pause === 'function') {
+      videoEl.pause();
+    }
+  }
+
+  _revokeVideoPlaybackObjectUrl() {
+    if (!this._videoPlaybackObjectUrl) return;
+    try {
+      URL.revokeObjectURL(this._videoPlaybackObjectUrl);
+    } catch (_error) {
+      // no-op
+    }
+    this._videoPlaybackObjectUrl = '';
+  }
+
+  _handleVideoPlaybackError() {
+    if (!this._isVideoMedia(this.details)) return;
+    if (!this.videoPlaybackUrl || this.videoPlaybackLoading) return;
+    this.videoPlaybackError = this.videoPlaybackError || 'Video playback failed.';
+  }
+
+  _handleVideoPlaybackLoaded() {
+    if (this.videoPlaybackError) {
+      this.videoPlaybackError = '';
+    }
+  }
+
   _scheduleFullImageLoad() {
     if (!this.details || !this.tenant) return;
     if (!this.open && !this.embedded) return;
+    if (this._isVideoMedia(this.details)) return;
     if (this.fullImageUrl || this.fullImageLoading) return;
     this._cancelFullImageLoad();
     const now = Date.now();
@@ -1437,6 +2080,7 @@ class ImageEditor extends LitElement {
 
   async _loadFullImage() {
     if (!this.details || !this.tenant) return;
+    if (this._isVideoMedia(this.details)) return;
     if (this.fullImageUrl || this.fullImageLoading) return;
     this._cancelFullImageLoad();
     this.fullImageLoading = true;
@@ -1662,6 +2306,33 @@ class ImageEditor extends LitElement {
     return `${size.toFixed(size >= 100 ? 0 : size >= 10 ? 1 : 2)} ${units[unitIndex]}`;
   }
 
+  _inferMediaType(details = this.details) {
+    const mediaType = String(details?.media_type || '').trim().toLowerCase();
+    if (mediaType === 'video' || mediaType === 'image') {
+      return mediaType;
+    }
+    const mimeType = String(details?.mime_type || '').trim().toLowerCase();
+    if (mimeType.startsWith('video/')) {
+      return 'video';
+    }
+    return 'image';
+  }
+
+  _isVideoMedia(details = this.details) {
+    return this._inferMediaType(details) === 'video';
+  }
+
+  _formatMediaType(details = this.details) {
+    return this._isVideoMedia(details) ? 'Video' : 'Photo';
+  }
+
+  _formatMediaDuration(details = this.details, { placeholder = '--' } = {}) {
+    if (!this._isVideoMedia(details)) {
+      return placeholder;
+    }
+    return formatDurationMs(details?.duration_ms, { placeholder });
+  }
+
   _normalizeSourceProvider(value) {
     if (!value) return '';
     return String(value).trim().toLowerCase();
@@ -1748,6 +2419,16 @@ class ImageEditor extends LitElement {
               value: sourceProvider,
             },
             {
+              label: 'Media',
+              value: this._formatMediaType(this.details),
+            },
+            ...(this._isVideoMedia(this.details)
+              ? [{
+                  label: 'Duration',
+                  value: this._formatMediaDuration(this.details, { placeholder: 'Unknown' }),
+                }]
+              : []),
+            {
               label: 'Source',
               value: sourceHref
                 ? html`<a class="prop-link" href=${sourceHref} target="_blank" rel="noopener noreferrer">${sourcePath || sourceHref}</a>`
@@ -1803,6 +2484,28 @@ class ImageEditor extends LitElement {
               { scroll: true },
             )
             : html`<div class="empty-text">No active tags.</div>`,
+        })}
+
+        ${renderPropertySection({
+          title: 'Notes',
+          body: html`
+            <div class="flex flex-col gap-2">
+              <textarea
+                class="w-full rounded border border-gray-300 p-2 text-sm resize-y min-h-[80px]"
+                placeholder="Marketing description..."
+                .value=${this.marketingNote}
+                @input=${(e) => { this.marketingNote = e.target.value; }}
+              ></textarea>
+              <div class="flex items-center gap-2">
+                <button
+                  class="text-xs text-blue-600 hover:text-blue-700 disabled:opacity-50"
+                  ?disabled=${this.marketingNoteSaving}
+                  @click=${this._handleSaveMarketingNote}
+                >${this.marketingNoteSaving ? 'Saving…' : 'Save'}</button>
+                ${this.marketingNoteError ? html`<span class="text-xs text-red-500">${this.marketingNoteError}</span>` : html``}
+              </div>
+            </div>
+          `,
         })}
 
         ${(this.canEditTags && this._normalizeSourceProvider(this.details?.source_provider) === 'dropbox') ? renderPropertySection({
@@ -1996,6 +2699,8 @@ class ImageEditor extends LitElement {
         ${renderPropertySection({
           title: 'File',
           rows: [
+            { label: 'Media type', value: this._formatMediaType(details) },
+            { label: 'Duration', value: this._formatMediaDuration(details) },
             { label: 'Dimensions', value: dimensions },
             { label: 'Format', value: details.format || 'Unknown' },
             { label: 'MIME type', value: details.mime_type || 'Unknown' },
@@ -2133,6 +2838,9 @@ class ImageEditor extends LitElement {
         <button class="tab-button ${this.activeTab === 'tags' ? 'active' : ''}" @click=${() => this._setTab('tags')}>
           Tags
         </button>
+        <button class="tab-button ${this.activeTab === 'similar' ? 'active' : ''}" @click=${() => this._setTab('similar')}>
+          Similar
+        </button>
         <button class="tab-button ${this.activeTab === 'variants' ? 'active' : ''}" @click=${() => this._setTab('variants')}>
           Variants
         </button>
@@ -2162,6 +2870,144 @@ class ImageEditor extends LitElement {
         >
           Next →
         </button>
+      </div>
+    `;
+  }
+
+  _formatSimilarityScore(score) {
+    const numericScore = Number(score);
+    if (!Number.isFinite(numericScore)) return '--';
+    const percent = Math.max(-100, Math.min(100, Math.round(numericScore * 100)));
+    return `${percent}% match`;
+  }
+
+  _handleSimilarImageSelected(event, image) {
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
+    if (!image?.id) return;
+    const imageSet = Array.isArray(this.similarImages)
+      ? [...this.similarImages]
+      : [image];
+    this.dispatchEvent(new CustomEvent('image-selected', {
+      detail: { image, imageSet },
+      bubbles: true,
+      composed: true,
+    }));
+  }
+
+  _handleOpenSimilarInSearch() {
+    if (this.similarLoading) return;
+    const images = Array.isArray(this.similarImages)
+      ? this.similarImages.filter((image) => image?.id !== undefined && image?.id !== null)
+      : [];
+    if (!images.length) return;
+    this.dispatchEvent(new CustomEvent('open-similar-in-search', {
+      detail: {
+        sourceImageId: this.details?.id ?? null,
+        sourceAssetUuid: this.details?.asset_id || this.details?.asset_uuid || null,
+        sourceImage: this.details ? { ...this.details } : null,
+        images: images.map((image) => ({ ...image })),
+      },
+      bubbles: true,
+      composed: true,
+    }));
+  }
+
+  _handleOpenSimilarInCurate() {
+    if (this.similarLoading) return;
+    const images = Array.isArray(this.similarImages)
+      ? this.similarImages.filter((image) => image?.id !== undefined && image?.id !== null)
+      : [];
+    if (!images.length) return;
+    this.dispatchEvent(new CustomEvent('open-similar-in-curate', {
+      detail: {
+        sourceImageId: this.details?.id ?? null,
+        sourceAssetUuid: this.details?.asset_id || this.details?.asset_uuid || null,
+        sourceImage: this.details ? { ...this.details } : null,
+        images: images.map((image) => ({ ...image })),
+      },
+      bubbles: true,
+      composed: true,
+    }));
+  }
+
+  _renderSimilarTab() {
+    const hasError = !!this.similarError;
+    const canOpenInSearch = !this.similarLoading && Array.isArray(this.similarImages) && this.similarImages.length > 0;
+    const canOpenInCurate = this.canCurate && canOpenInSearch;
+    const emptyMessage = this.similarLoading
+      ? 'Finding similar images...'
+      : hasError
+        ? this.similarError
+        : 'No similar images found.';
+    return html`
+      <div class="similar-fullscreen">
+        <div class="similar-header">
+          <span>Top visual matches for this image.</span>
+          <div class="similar-header-actions">
+            <button
+              type="button"
+              class="similar-open-search"
+              @click=${this._handleOpenSimilarInSearch}
+              ?disabled=${!canOpenInSearch}
+            >
+              Open in Search
+            </button>
+            ${this.canCurate ? html`
+              <button
+                type="button"
+                class="similar-open-search"
+                @click=${this._handleOpenSimilarInCurate}
+                ?disabled=${!canOpenInCurate}
+              >
+                Open in Curate
+              </button>
+            ` : html``}
+            <button
+              type="button"
+              class="similar-refresh"
+              @click=${() => this._loadSimilarImages(true)}
+              ?disabled=${this.similarLoading}
+            >
+              ${this.similarLoading ? 'Refreshing...' : 'Refresh'}
+            </button>
+          </div>
+        </div>
+        <div class="similar-grid-wrap">
+          ${renderImageGrid({
+            images: this.similarImages,
+            selection: [],
+            flashSelectionIds: new Set(),
+            renderFunctions: {
+              renderCurateRatingStatic,
+              renderCuratePermatagSummary,
+              formatCurateDate,
+            },
+            eventHandlers: {
+              onImageClick: (event, image) => this._handleSimilarImageSelected(event, image),
+              onDragStart: (event) => {
+                event.preventDefault();
+              },
+            },
+            options: {
+              showPermatags: true,
+              emptyMessage,
+              renderItemFooter: (image) => html`
+                <div class="similar-item-meta">
+                  <span>#${image.id}</span>
+                  <span>${this._formatSimilarityScore(image.similarity_score)}</span>
+                </div>
+                <button
+                  type="button"
+                  class="similar-open-button"
+                  @click=${(event) => this._handleSimilarImageSelected(event, image)}
+                >
+                  Open
+                </button>
+              `,
+            },
+          })}
+        </div>
       </div>
     `;
   }
@@ -2423,7 +3269,13 @@ class ImageEditor extends LitElement {
     const imageSrc = this.fullImageUrl
       ? this.fullImageUrl
       : (this.details.thumbnail_url || `/api/v1/images/${this.details.id}/thumbnail`);
-    const showHighResButton = !this.fullImageUrl && !this.fullImageLoading;
+    const isVideoMedia = this._isVideoMedia(this.details);
+    const videoDuration = isVideoMedia ? this._formatMediaDuration(this.details) : '';
+    const showVideoStatus = isVideoMedia && (
+      (this.videoPlaybackLoading && !this.videoPlaybackUrl)
+      || !!this.videoPlaybackError
+    );
+    const showHighResButton = !isVideoMedia && !this.fullImageUrl && !this.fullImageLoading;
     const imageContainerClasses = `image-container ${this.isActualSize ? 'zoomed' : ''}`;
     const rightPaneContent = this.activeTab === 'metadata'
       ? this._renderMetadataTab()
@@ -2440,13 +3292,59 @@ class ImageEditor extends LitElement {
         </div>
       `;
     }
+    if (this.activeTab === 'similar') {
+      return html`
+        <div class="variants-layout">
+          ${this._renderTopTabs()}
+          ${this._renderSimilarTab()}
+          ${this._renderImageNavigation()}
+        </div>
+      `;
+    }
 
     return html`
       ${this._renderTopTabs()}
       <div class="panel-body">
         <div class="image-wrap image-full">
           <div class="${imageContainerClasses}">
-            <img src="${imageSrc}" alt="${this.details.filename}">
+            ${isVideoMedia ? html`
+              ${this.videoPlaybackUrl ? html`
+                <video
+                  class="image-video-player"
+                  controls
+                  preload="metadata"
+                  ?autoplay=${false}
+                  src="${this.videoPlaybackUrl}"
+                  @error=${this._handleVideoPlaybackError}
+                  @loadedmetadata=${this._handleVideoPlaybackLoaded}
+                  @canplay=${this._handleVideoPlaybackLoaded}
+                ></video>
+              ` : html`
+                <div class="video-loading-surface" aria-live="polite">
+                  Loading video...
+                </div>
+              `}
+            ` : html`
+              <img src="${imageSrc}" alt="${this.details.filename}">
+            `}
+            ${isVideoMedia ? html`
+              <div class="image-media-pill">
+                <span>VIDEO</span>
+                ${videoDuration ? html`<span class="duration">${videoDuration}</span>` : html``}
+              </div>
+              ${showVideoStatus ? html`
+                <div class="video-playback-status" aria-live="polite">
+                  ${this.videoPlaybackLoading
+                    ? html`<span>Loading video…</span>`
+                    : html`
+                      <span>${this.videoPlaybackError || 'Playback unavailable.'}</span>
+                      <button class="video-playback-retry" @click=${() => this._loadVideoPlayback({ force: true })}>
+                        Retry
+                      </button>
+                    `}
+                </div>
+              ` : html``}
+            ` : html``}
             ${showHighResButton ? html`
               <button class="high-res-button" @click=${this._loadFullImage}>High Res</button>
             ` : this.fullImageLoading ? html`
@@ -2460,7 +3358,7 @@ class ImageEditor extends LitElement {
           </div>
         </div>
         <div class="panel-right">
-          <div class="mt-3" style="flex: 1; min-height: 0; overflow: auto;">
+          <div style="flex: 1; min-height: 0; overflow: auto;">
             ${rightPaneContent}
           </div>
         </div>

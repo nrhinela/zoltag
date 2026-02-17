@@ -626,8 +626,7 @@ def build_embeddings(tenant_id: str, limit: Optional[int], force: bool):
 @cli.command()
 @click.option('--tenant-id', required=True, help='Tenant ID for which to train models')
 @click.option('--min-positive', default=None, type=int, help='Minimum positive examples required for a keyword to be trained')
-@click.option('--min-negative', default=None, type=int, help='Minimum negative examples required for a keyword to be trained')
-def train_keyword_models(tenant_id: str, min_positive: Optional[int], min_negative: Optional[int]):
+def train_keyword_models(tenant_id: str, min_positive: Optional[int]):
     """Train custom ML keyword models from user-verified image tags.
 
     This command builds tenant-specific keyword classifier models by:
@@ -657,7 +656,6 @@ def train_keyword_models(tenant_id: str, min_positive: Optional[int], min_negati
         model_name=model_name,
         model_version=model_version,
         min_positive=min_positive or settings.keyword_model_min_positive,
-        min_negative=min_negative or settings.keyword_model_min_negative,
     )
     session.commit()
     click.echo(f"✓ Trained: {result['trained']} · Skipped: {result['skipped']}")
@@ -804,8 +802,7 @@ def recompute_trained_tags(tenant_id: str, batch_size: int, limit: Optional[int]
                 model_name=model_name,
                 model_version=model_version,
                 model_type=settings.tagging_model,
-                threshold=settings.keyword_model_threshold,
-                model_weight=settings.keyword_model_weight
+                threshold=settings.trained_tag_threshold,
             )
             processed += 1
             if limit is not None and processed >= limit:
@@ -909,14 +906,14 @@ def show_config(tenant_id: str):
         session.close()
 
 
-@cli.command(name='recompute-siglip-tags')
-@click.option('--tenant-id', required=True, help='Tenant ID for which to recompute SigLIP tags')
+@cli.command(name='recompute-zeroshot-tags')
+@click.option('--tenant-id', required=True, help='Tenant ID for which to recompute zero-shot tags')
 @click.option('--batch-size', default=50, type=int, help='Process images in batches')
 @click.option('--limit', default=None, type=int, help='Limit number of images to process')
 @click.option('--offset', default=0, type=int, help='Offset into image list')
-@click.option('--replace', is_flag=True, default=False, help='Replace existing SigLIP tags')
-@click.option('--older-than-days', default=None, type=float, help='Only process images with SigLIP tags older than this many days')
-def recompute_siglip_tags(
+@click.option('--replace', is_flag=True, default=False, help='Replace existing zero-shot tags')
+@click.option('--older-than-days', default=None, type=float, help='Only process images with zero-shot tags older than this many days')
+def recompute_zeroshot_tags(
     tenant_id: str,
     batch_size: int,
     limit: Optional[int],
@@ -924,10 +921,10 @@ def recompute_siglip_tags(
     replace: bool,
     older_than_days: Optional[float]
 ):
-    """Recompute SigLIP-based keyword tags for all images in a tenant."""
-    from zoltag.cli.commands.tagging import RecomputeSiglipTagsCommand
+    """Recompute zero-shot keyword tags for all images in a tenant."""
+    from zoltag.cli.commands.tagging import RecomputeZeroShotTagsCommand
 
-    cmd = RecomputeSiglipTagsCommand(
+    cmd = RecomputeZeroShotTagsCommand(
         tenant_id,
         batch_size,
         limit,
@@ -1197,7 +1194,7 @@ def sync_dropbox(tenant_id: str, count: int):
                         image_data=thumbnail_data,
                         keywords_by_category=by_category,
                         model_type=settings.tagging_model,
-                        threshold=settings.keyword_model_threshold
+                        threshold=settings.zeroshot_tag_threshold
                     )
 
                     click.echo(f"  Found {len(all_tags)} tags")

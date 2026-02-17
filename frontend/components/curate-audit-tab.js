@@ -3,6 +3,7 @@ import { enqueueCommand } from '../services/command-queue.js';
 import { getDropboxFolders } from '../services/api.js';
 import { createSelectionHandlers } from './shared/selection-handlers.js';
 import { renderResultsPagination } from './shared/pagination-controls.js';
+import { renderResultsViewControls } from './shared/results-view-controls.js';
 import { renderSelectableImageGrid } from './shared/selectable-image-grid.js';
 import { getKeywordsByCategory, getKeywordsByCategoryFromList } from './shared/keyword-utils.js';
 import {
@@ -56,11 +57,13 @@ export class CurateAuditTab extends LitElement {
     mode: { type: String }, // 'existing' or 'missing'
     aiEnabled: { type: Boolean },
     aiModel: { type: String }, // 'siglip' or 'trained'
+    mlThreshold: { type: Number }, // effective threshold applied to AI results, or null
     images: { type: Array },
     thumbSize: { type: Number },
     keywordCategory: { type: String },
     keywords: { type: Array },
     minRating: { type: Object },
+    mediaType: { type: String },
     dropboxPathPrefix: { type: String },
     filenameQuery: { type: String },
     dropboxFolders: { type: Array },
@@ -108,11 +111,13 @@ export class CurateAuditTab extends LitElement {
     this.mode = 'existing';
     this.aiEnabled = false;
     this.aiModel = 'siglip';
+    this.mlThreshold = null;
     this.images = [];
     this.thumbSize = 120;
     this.keywordCategory = '';
     this.keywords = [];
     this.minRating = null;
+    this.mediaType = 'all';
     this.dropboxPathPrefix = '';
     this.filenameQuery = '';
     this.dropboxFolders = [];
@@ -819,6 +824,16 @@ export class CurateAuditTab extends LitElement {
       });
     }
 
+    const mediaType = String(this.mediaType || 'all').trim().toLowerCase();
+    if (mediaType === 'image' || mediaType === 'video') {
+      filters.push({
+        type: 'media',
+        value: mediaType,
+        displayLabel: 'Media',
+        displayValue: mediaType === 'video' ? 'Videos' : 'Photos',
+      });
+    }
+
     return filters;
   }
 
@@ -877,7 +892,7 @@ export class CurateAuditTab extends LitElement {
               .keywords=${this.keywords}
               .activeFilters=${activeFilters}
               .dropboxFolders=${this.dropboxFolders || []}
-              .availableFilterTypes=${['keyword', 'rating', 'folder', 'filename']}
+              .availableFilterTypes=${['keyword', 'rating', 'media', 'folder', 'filename']}
               .keywordMultiSelect=${false}
               @filters-changed=${this._handleAuditChipFiltersChanged}
               @folder-search=${this._handleAuditDropboxInput}
@@ -946,38 +961,31 @@ export class CurateAuditTab extends LitElement {
 
           <div class="curate-layout" style="--curate-thumb-size: ${this.thumbSize}px;">
             <div class="curate-pane">
-              <div class="curate-pane-header">
-                <div class="curate-pane-header-row">
-                  <span>${this.auditResultsView === 'history' ? 'Hotspot History' : leftLabel}</span>
-                  <div class="curate-audit-toggle">
-                    <button
-                      class=${this.auditResultsView === 'results' ? 'active' : ''}
-                      @click=${() => this._setAuditResultsView('results')}
-                    >
-                      Results
-                    </button>
-                    <button
-                      class=${this.auditResultsView === 'history' ? 'active' : ''}
-                      @click=${() => this._setAuditResultsView('history')}
-                    >
-                      Hotspot History
-                    </button>
-                  </div>
-                  <div class="curate-pane-header-actions">
-                    ${this.auditResultsView === 'results' && this.keyword && !this.loadAll ? html`
-                      ${renderResultsPagination({
-                        total: paginationTotal,
-                        offset,
-                        limit,
-                        count: leftImages.length,
-                        onPrev: this._handlePagePrev,
-                        onNext: this._handlePageNext,
-                        onLimitChange: this._handleLimitChange,
-                        disabled: this.loading,
-                      })}
-                    ` : html``}
-                  </div>
-                </div>
+              <div class="curate-pane-header curate-pane-header--audit">
+                <span class="curate-pane-header-title">
+                  ${this.auditResultsView === 'history' ? 'Hotspot History' : leftLabel}
+                  ${this.aiEnabled && this.mode === 'missing' && this.mlThreshold != null ? html`
+                    <span class="text-xs font-normal text-gray-500 ml-2">
+                      score &ge; <span class="font-mono">${this.mlThreshold.toFixed(4)}</span>
+                    </span>
+                  ` : ''}
+                </span>
+                ${renderResultsViewControls({
+                  view: this.auditResultsView,
+                  onChange: (nextView) => this._setAuditResultsView(nextView),
+                  actions: this.auditResultsView === 'results' && this.keyword && !this.loadAll
+                    ? renderResultsPagination({
+                      total: paginationTotal,
+                      offset,
+                      limit,
+                      count: leftImages.length,
+                      onPrev: this._handlePagePrev,
+                      onNext: this._handlePageNext,
+                      onLimitChange: this._handleLimitChange,
+                      disabled: this.loading,
+                    })
+                    : null,
+                })}
               </div>
               ${this.loading ? html`
                 <div class="curate-loading-overlay" aria-label="Loading">

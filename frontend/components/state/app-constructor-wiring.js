@@ -91,6 +91,7 @@ function wireFilterPanelListeners(host) {
   };
 
   const syncCurateHomeStateFromFilters = (filters = {}) => {
+    const mediaType = String(filters.mediaType || 'all').toLowerCase();
     const nextMinRating = filters.ratingOperator === 'is_null'
       ? 'unrated'
       : (filters.rating !== undefined && filters.rating !== null && filters.rating !== '' ? filters.rating : null);
@@ -101,6 +102,7 @@ function wireFilterPanelListeners(host) {
     host.curateKeywordFilters = normalizeKeywords(filters.keywords);
     host.curateKeywordOperators = { ...(filters.operators || {}) };
     host.curateNoPositivePermatags = Boolean(filters.permatagPositiveMissing);
+    host.curateMediaType = mediaType === 'image' || mediaType === 'video' ? mediaType : 'all';
     host.curateDropboxPathPrefix = filters.dropboxPathPrefix || '';
     host.curateFilenameQuery = filters.filenameQuery || '';
     host.curateListId = filters.listId || '';
@@ -115,6 +117,7 @@ function wireFilterPanelListeners(host) {
   };
 
   const syncCurateAuditStateFromFilters = (filters = {}) => {
+    const mediaType = String(filters.mediaType || 'all').toLowerCase();
     const nextMinRating = filters.ratingOperator === 'is_null'
       ? 'unrated'
       : (filters.rating !== undefined && filters.rating !== null && filters.rating !== '' ? filters.rating : null);
@@ -122,6 +125,7 @@ function wireFilterPanelListeners(host) {
     host.curateAuditHideDeleted = filters.hideZeroRating !== undefined
       ? Boolean(filters.hideZeroRating)
       : host.curateAuditHideDeleted;
+    host.curateAuditMediaType = mediaType === 'image' || mediaType === 'video' ? mediaType : 'all';
     host.curateAuditDropboxPathPrefix = filters.dropboxPathPrefix || '';
     host.curateAuditFilenameQuery = filters.filenameQuery || '';
     if (filters.permatagKeyword !== undefined) {
@@ -147,6 +151,8 @@ function wireFilterPanelListeners(host) {
     if (detail.tabId === 'search') {
       host.searchImages = [...detail.images];
       host.searchTotal = detail.total || 0;
+      host.searchPinnedImageId = null;
+      host.searchSimilarityAssetUuid = null;
     }
   });
 
@@ -158,6 +164,8 @@ function wireFilterPanelListeners(host) {
     if (detail.tabId === 'curate-home') {
       host.curateImages = [...detail.images];
       host.curateTotal = detail.total || 0;
+      host.curatePinnedImageId = null;
+      host.curateSimilarityAssetUuid = null;
     }
   });
 

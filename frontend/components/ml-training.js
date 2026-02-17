@@ -1,6 +1,6 @@
 import { LitElement, html, css } from 'lit';
 import { tailwind } from './tailwind-lit.js';
-import { getMlTrainingImages, getMlTrainingStats, getSystemSettings } from '../services/api.js';
+import { getMlTrainingImages, getMlTrainingStats } from '../services/api.js';
 
 class MlTraining extends LitElement {
   static styles = [tailwind, css`
@@ -52,7 +52,6 @@ class MlTraining extends LitElement {
     offset: { type: Number },
     isLoading: { type: Boolean },
     error: { type: String },
-    useKeywordModels: { type: Boolean },
     stats: { type: Object },
   };
 
@@ -66,29 +65,17 @@ class MlTraining extends LitElement {
     this.offset = 0;
     this.isLoading = false;
     this.error = '';
-    this.useKeywordModels = null;
     this.stats = null;
   }
 
   connectedCallback() {
     super.connectedCallback();
-    this.fetchSystemConfig();
   }
 
   updated(changedProperties) {
     if (changedProperties.has('tenant')) {
       this.fetchImages();
       this.fetchStats();
-    }
-  }
-
-  async fetchSystemConfig() {
-    try {
-      const data = await getSystemSettings();
-      this.useKeywordModels = data.use_keyword_models ?? null;
-    } catch (error) {
-      console.error('Failed to fetch ML training config:', error);
-      this.useKeywordModels = null;
     }
   }
 

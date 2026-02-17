@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 from sqlalchemy.exc import OperationalError
@@ -160,22 +160,6 @@ def score_image_with_models(
     return scores
 
 
-def compute_combined_scores(
-    prompt_scores: Iterable[Tuple[str, float]],
-    model_scores: Dict[str, float],
-    model_weight: float
-) -> Dict[str, float]:
-    """Blend prompt scores with model scores."""
-    combined = {}
-    for keyword, prompt_score in prompt_scores:
-        if keyword in model_scores:
-            combined_score = model_weight * model_scores[keyword] + (1.0 - model_weight) * prompt_score
-        else:
-            combined_score = prompt_score
-        combined[keyword] = float(combined_score)
-    return combined
-
-
 def recompute_trained_tags_for_image(
     db: Session,
     tenant_id: str,
@@ -188,7 +172,6 @@ def recompute_trained_tags_for_image(
     model_version: str,
     model_type: str,
     threshold: float,
-    model_weight: float,
     embedding: Optional[List[float]] = None,
     keyword_id_map: Optional[Dict[str, int]] = None,
     asset_id=None,
@@ -271,10 +254,8 @@ def score_keywords_for_categories(
     keywords_by_category: Dict[str, List[dict]],
     model_type: str,
     threshold: float,
-    model_scores: Optional[Dict[str, float]] = None,
-    model_weight: float = 0.6
 ) -> List[Tuple[str, float]]:
-    """Compute keyword scores per category with optional model blending."""
+    """Compute keyword scores per category from the active zero-shot model."""
     tagger = get_tagger(model_type=model_type)
     all_tags: List[Tuple[str, float]] = []
 
@@ -287,8 +268,7 @@ def score_keywords_for_categories(
         if not eligible_keywords:
             continue
         prompt_scores = tagger.tag_image(image_data, eligible_keywords, threshold=0.0)
-        combined_scores = compute_combined_scores(prompt_scores, model_scores or {}, model_weight)
-        for keyword, score in combined_scores.items():
+        for keyword, score in prompt_scores:
             if score >= threshold:
                 all_tags.append((keyword, score))
 
@@ -302,7 +282,6 @@ def build_keyword_models(
     model_name: str,
     model_version: str,
     min_positive: int = 2,
-    min_negative: int = 2,
 ) -> Dict[str, int]:
     """Create or update keyword models using permatag labels."""
     permatags = db.query(Permatag).filter(

@@ -1,16 +1,23 @@
 """Core image endpoints: list, get, asset."""
 
 import json
-from typing import Optional
+import logging
+import re
+import threading
+import time
+from typing import Dict, List, Optional, Tuple
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import func, distinct, and_, case, cast, Text, literal
+from sqlalchemy import func, distinct, and_, case, cast, Text, literal, text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, load_only
 from google.cloud import storage
+import numpy as np
 
 from zoltag.dependencies import get_db, get_tenant, get_tenant_setting
-from zoltag.auth.dependencies import require_tenant_role_from_header
+from zoltag.auth.dependencies import get_current_user, require_tenant_role_from_header
 from zoltag.auth.models import UserProfile
+from zoltag.list_visibility import is_tenant_admin_user
 from zoltag.asset_helpers import load_assets_for_images
 from zoltag.tenant import Tenant
 from zoltag.metadata import (
@@ -22,7 +29,7 @@ from zoltag.metadata import (
     Permatag,
 )
 from zoltag.models.config import Keyword, PhotoListItem
-from zoltag.tagging import calculate_tags
+from zoltag.tagging import calculate_tags, get_tagger
 from zoltag.config.db_utils import load_keywords_map
 from zoltag.settings import settings
 from zoltag.tenant_scope import tenant_column_filter
@@ -33,6 +40,7 @@ from zoltag.routers.images._shared import (
 
 # Sub-router with no prefix/tags (inherits from parent)
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 # Columns required by /images list response + ordering logic.
 LIST_IMAGES_LOAD_ONLY_COLUMNS = (
@@ -62,10 +70,626 @@ LIST_IMAGES_LOAD_ONLY_COLUMNS = (
     ImageMetadata.rating,
 )
 
+SIMILARITY_CACHE_TTL_SECONDS = 300
+SIMILARITY_CACHE_MAX_ENTRIES = 12
+_similarity_cache_lock = threading.Lock()
+_similarity_index_cache = {}
+_pgvector_capability_cache: Dict[str, bool] = {}
+TEXT_QUERY_EMBEDDING_CACHE_TTL_SECONDS = 1800
+TEXT_QUERY_EMBEDDING_CACHE_MAX_ENTRIES = 256
+_text_query_embedding_cache_lock = threading.Lock()
+_text_query_embedding_cache: Dict[Tuple[str, str], dict] = {}
+HYBRID_TEXT_PREFILTER_BASE = 2000
+HYBRID_TEXT_PREFILTER_MAX = 12000
+
+
+def _build_similarity_index(
+    db: Session,
+    tenant: Tenant,
+    media_type: Optional[str],
+    embedding_dim: int,
+) -> dict:
+    query = db.query(
+        ImageMetadata.id.label("image_id"),
+        ImageEmbedding.embedding.label("embedding"),
+    ).join(
+        ImageEmbedding,
+        and_(
+            ImageEmbedding.asset_id == ImageMetadata.asset_id,
+            tenant_column_filter(ImageEmbedding, tenant),
+            ImageEmbedding.embedding.is_not(None),
+        ),
+    ).filter(
+        tenant_column_filter(ImageMetadata, tenant),
+        ImageMetadata.asset_id.is_not(None),
+    )
+
+    if media_type:
+        query = query.join(
+            Asset,
+            and_(
+                Asset.id == ImageMetadata.asset_id,
+                tenant_column_filter(Asset, tenant),
+            ),
+        ).filter(
+            func.lower(func.coalesce(Asset.media_type, "image")) == media_type
+        )
+
+    rows = query.all()
+    image_ids = []
+    vectors = []
+    for row in rows:
+        embedding = row.embedding
+        if not embedding:
+            continue
+        vec = np.asarray(embedding, dtype=np.float32)
+        if vec.ndim != 1 or vec.size != embedding_dim:
+            continue
+        norm = float(np.linalg.norm(vec))
+        if norm <= 1e-12:
+            continue
+        image_ids.append(int(row.image_id))
+        vectors.append(vec / norm)
+
+    if not vectors:
+        matrix = np.empty((0, embedding_dim), dtype=np.float32)
+        ids = np.empty((0,), dtype=np.int64)
+    else:
+        matrix = np.vstack(vectors)
+        ids = np.asarray(image_ids, dtype=np.int64)
+
+    return {
+        "built_at": time.time(),
+        "matrix": matrix,
+        "image_ids": ids,
+        "media_type": media_type or "",
+        "embedding_dim": embedding_dim,
+    }
+
+
+def _get_similarity_index(
+    db: Session,
+    tenant: Tenant,
+    media_type: Optional[str],
+    embedding_dim: int,
+) -> dict:
+    key = (str(tenant.id), media_type or "", int(embedding_dim))
+    now = time.time()
+    with _similarity_cache_lock:
+        cached = _similarity_index_cache.get(key)
+        if cached and (now - float(cached.get("built_at", 0))) <= SIMILARITY_CACHE_TTL_SECONDS:
+            return cached
+
+    built = _build_similarity_index(
+        db=db,
+        tenant=tenant,
+        media_type=media_type,
+        embedding_dim=embedding_dim,
+    )
+    with _similarity_cache_lock:
+        _similarity_index_cache[key] = built
+        if len(_similarity_index_cache) > SIMILARITY_CACHE_MAX_ENTRIES:
+            oldest_key = min(
+                _similarity_index_cache.keys(),
+                key=lambda cache_key: float(_similarity_index_cache[cache_key].get("built_at", 0.0)),
+            )
+            if oldest_key != key:
+                _similarity_index_cache.pop(oldest_key, None)
+    return built
+
+
+def _pgvector_cache_key(db: Session) -> str:
+    bind = db.get_bind()
+    return str(bind.engine.url)
+
+
+def _set_pgvector_capability(db: Session, can_use: bool) -> None:
+    _pgvector_capability_cache[_pgvector_cache_key(db)] = bool(can_use)
+
+
+def _is_pgvector_ready(db: Session) -> bool:
+    bind = db.get_bind()
+    if bind.dialect.name != "postgresql":
+        return False
+
+    cache_key = _pgvector_cache_key(db)
+    cached = _pgvector_capability_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    try:
+        row = db.execute(
+            text(
+                """
+                SELECT
+                    EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector') AS has_extension,
+                    EXISTS (
+                        SELECT 1
+                        FROM information_schema.columns
+                        WHERE table_schema = 'public'
+                          AND table_name = 'image_embeddings'
+                          AND column_name = 'embedding_vec'
+                    ) AS has_embedding_vec
+                """
+            )
+        ).mappings().first()
+        can_use = bool(row and row["has_extension"] and row["has_embedding_vec"])
+        _pgvector_capability_cache[cache_key] = can_use
+        return can_use
+    except SQLAlchemyError:
+        db.rollback()
+        _pgvector_capability_cache[cache_key] = False
+        return False
+
+
+def _to_pgvector_literal(values: np.ndarray) -> str:
+    return "[" + ",".join(f"{float(value):.10g}" for value in values.tolist()) + "]"
+
+
+def _normalize_hybrid_weights(
+    vector_weight: Optional[float],
+    lexical_weight: Optional[float],
+) -> Tuple[float, float]:
+    try:
+        vector = float(vector_weight if vector_weight is not None else 0.7)
+    except (TypeError, ValueError):
+        vector = 0.7
+    try:
+        lexical = float(lexical_weight if lexical_weight is not None else 0.3)
+    except (TypeError, ValueError):
+        lexical = 0.3
+
+    vector = max(0.0, vector)
+    lexical = max(0.0, lexical)
+    total = vector + lexical
+    if total <= 1e-9:
+        return 0.7, 0.3
+    return vector / total, lexical / total
+
+
+def _compute_hybrid_text_prefilter_limit(
+    limit: int,
+    offset: int,
+) -> int:
+    safe_limit = max(1, int(limit or 100))
+    safe_offset = max(0, int(offset or 0))
+    requested_upper_bound = safe_offset + safe_limit
+    window = max(
+        HYBRID_TEXT_PREFILTER_BASE,
+        safe_limit * 20,
+        requested_upper_bound * 3,
+    )
+    return min(HYBRID_TEXT_PREFILTER_MAX, int(window))
+
+
+def _tokenize_text_query(text_query: str) -> Tuple[str, List[str]]:
+    normalized = " ".join(str(text_query or "").strip().lower().split())
+    if not normalized:
+        return "", []
+    raw_tokens = re.findall(r"[a-z0-9][a-z0-9_-]{1,}", normalized)
+    tokens: List[str] = []
+    seen = set()
+    for token in raw_tokens:
+        if token in seen:
+            continue
+        seen.add(token)
+        tokens.append(token)
+    return normalized, tokens
+
+
+def _get_text_query_embedding(
+    text_query: str,
+) -> np.ndarray:
+    normalized_query, _ = _tokenize_text_query(text_query)
+    if not normalized_query:
+        raise ValueError("text_query is empty")
+
+    model_name = str(getattr(settings, "tagging_model", "siglip") or "siglip")
+    cache_key = (model_name, normalized_query)
+    now = time.time()
+    with _text_query_embedding_cache_lock:
+        cached = _text_query_embedding_cache.get(cache_key)
+        if cached and (now - float(cached.get("built_at", 0.0))) <= TEXT_QUERY_EMBEDDING_CACHE_TTL_SECONDS:
+            return np.asarray(cached["vector"], dtype=np.float32)
+
+    tagger = get_tagger(model_type=model_name)
+    if not hasattr(tagger, "build_text_embeddings"):
+        raise RuntimeError(f"Tagger {model_name} does not support text embeddings")
+
+    _, text_embeddings = tagger.build_text_embeddings([
+        {"keyword": normalized_query, "prompt": normalized_query},
+    ])
+    if text_embeddings is None:
+        raise RuntimeError("Text embedding generation returned no tensor")
+
+    first_embedding = text_embeddings[0]
+    if hasattr(first_embedding, "detach"):
+        first_embedding = first_embedding.detach().cpu().numpy()
+    vector = np.asarray(first_embedding, dtype=np.float32).reshape(-1)
+    norm = float(np.linalg.norm(vector))
+    if norm <= 1e-12:
+        raise RuntimeError("Text embedding has zero magnitude")
+    vector = vector / norm
+
+    with _text_query_embedding_cache_lock:
+        _text_query_embedding_cache[cache_key] = {
+            "built_at": now,
+            "vector": vector,
+        }
+        if len(_text_query_embedding_cache) > TEXT_QUERY_EMBEDDING_CACHE_MAX_ENTRIES:
+            oldest_key = min(
+                _text_query_embedding_cache.keys(),
+                key=lambda key: float(_text_query_embedding_cache[key].get("built_at", 0.0)),
+            )
+            if oldest_key != cache_key:
+                _text_query_embedding_cache.pop(oldest_key, None)
+
+    return vector
+
+
+def _string_match_score(
+    text_value: str,
+    normalized_query: str,
+    query_tokens: List[str],
+    phrase_weight: float,
+    token_weight: float,
+    token_cap: float,
+) -> float:
+    text_normalized = str(text_value or "").strip().lower()
+    if not text_normalized:
+        return 0.0
+
+    score = phrase_weight if normalized_query and normalized_query in text_normalized else 0.0
+    token_score = 0.0
+    for token in query_tokens:
+        if token in text_normalized:
+            token_score += token_weight
+    score += min(token_cap, token_score)
+    return score
+
+
+def _compute_lexical_scores_for_candidates(
+    db: Session,
+    tenant: Tenant,
+    candidate_rows: List,
+    normalized_query: str,
+    query_tokens: List[str],
+) -> Dict[int, float]:
+    if not candidate_rows or (not normalized_query and not query_tokens):
+        return {}
+
+    asset_to_image_id = {}
+    filename_by_image_id = {}
+    for row in candidate_rows:
+        image_id = int(row.image_id)
+        filename_by_image_id[image_id] = str(row.filename or "")
+        if row.asset_id is not None:
+            asset_to_image_id[row.asset_id] = image_id
+
+    if not asset_to_image_id and not filename_by_image_id:
+        return {}
+
+    raw_score_by_image_id: Dict[int, float] = {}
+
+    asset_ids = list(asset_to_image_id.keys())
+    if asset_ids:
+        positive_rows = db.query(
+            Permatag.asset_id.label("asset_id"),
+            Keyword.keyword.label("keyword"),
+        ).join(
+            Keyword,
+            and_(
+                Keyword.id == Permatag.keyword_id,
+                tenant_column_filter(Keyword, tenant),
+            ),
+        ).filter(
+            tenant_column_filter(Permatag, tenant),
+            Permatag.asset_id.in_(asset_ids),
+            Permatag.signum == 1,
+        ).all()
+
+        for row in positive_rows:
+            image_id = asset_to_image_id.get(row.asset_id)
+            if image_id is None:
+                continue
+            delta = _string_match_score(
+                row.keyword,
+                normalized_query=normalized_query,
+                query_tokens=query_tokens,
+                phrase_weight=0.9,
+                token_weight=0.2,
+                token_cap=0.8,
+            )
+            if delta > 0:
+                raw_score_by_image_id[image_id] = raw_score_by_image_id.get(image_id, 0.0) + delta
+
+        negative_rows = db.query(
+            Permatag.asset_id.label("asset_id"),
+            Keyword.keyword.label("keyword"),
+        ).join(
+            Keyword,
+            and_(
+                Keyword.id == Permatag.keyword_id,
+                tenant_column_filter(Keyword, tenant),
+            ),
+        ).filter(
+            tenant_column_filter(Permatag, tenant),
+            Permatag.asset_id.in_(asset_ids),
+            Permatag.signum == -1,
+        ).all()
+
+        for row in negative_rows:
+            image_id = asset_to_image_id.get(row.asset_id)
+            if image_id is None:
+                continue
+            penalty = _string_match_score(
+                row.keyword,
+                normalized_query=normalized_query,
+                query_tokens=query_tokens,
+                phrase_weight=0.7,
+                token_weight=0.15,
+                token_cap=0.6,
+            )
+            if penalty > 0:
+                raw_score_by_image_id[image_id] = raw_score_by_image_id.get(image_id, 0.0) - penalty
+
+    for image_id, filename in filename_by_image_id.items():
+        filename_bonus = _string_match_score(
+            filename,
+            normalized_query=normalized_query,
+            query_tokens=query_tokens,
+            phrase_weight=0.4,
+            token_weight=0.08,
+            token_cap=0.4,
+        )
+        if filename_bonus > 0:
+            raw_score_by_image_id[image_id] = raw_score_by_image_id.get(image_id, 0.0) + filename_bonus
+
+    positive_values = [value for value in raw_score_by_image_id.values() if value > 0]
+    if not positive_values:
+        return {}
+    max_value = max(positive_values)
+    if max_value <= 1e-9:
+        return {}
+    return {
+        image_id: min(1.0, max(0.0, value / max_value))
+        for image_id, value in raw_score_by_image_id.items()
+        if value > 0
+    }
+
+
+def _rank_candidates_with_hybrid_scores(
+    db: Session,
+    tenant: Tenant,
+    candidate_rows: List,
+    text_query: str,
+    order_by_value: Optional[str],
+    date_order: str,
+    vector_weight: float,
+    lexical_weight: float,
+) -> Tuple[List[int], Dict[int, float], Dict[int, float], Dict[int, float]]:
+    if not candidate_rows:
+        return [], {}, {}, {}
+
+    normalized_query, query_tokens = _tokenize_text_query(text_query)
+    semantic_scores: Dict[int, float] = {}
+    lexical_scores: Dict[int, float] = _compute_lexical_scores_for_candidates(
+        db=db,
+        tenant=tenant,
+        candidate_rows=candidate_rows,
+        normalized_query=normalized_query,
+        query_tokens=query_tokens,
+    )
+
+    try:
+        query_vector = _get_text_query_embedding(normalized_query)
+        index = _get_similarity_index(
+            db=db,
+            tenant=tenant,
+            media_type=None,
+            embedding_dim=int(query_vector.size),
+        )
+        matrix = index.get("matrix")
+        indexed_ids = index.get("image_ids")
+        if matrix is not None and indexed_ids is not None and matrix.size and indexed_ids.size:
+            similarities = np.dot(matrix, query_vector)
+            similarities = np.clip((similarities + 1.0) / 2.0, 0.0, 1.0)
+            candidate_id_set = {int(row.image_id) for row in candidate_rows}
+            for image_id, similarity in zip(indexed_ids.tolist(), similarities.tolist()):
+                image_id_int = int(image_id)
+                if image_id_int in candidate_id_set:
+                    semantic_scores[image_id_int] = float(similarity)
+    except Exception as exc:  # noqa: BLE001 - keep search functional even if embedding model fails.
+        logger.warning("Hybrid search semantic scoring unavailable; falling back to lexical/date ranking: %s", exc)
+
+    hybrid_scores: Dict[int, float] = {}
+
+    def _date_sort_key(row) -> float:
+        if order_by_value == "processed":
+            date_value = row.last_processed or row.created_at
+        elif order_by_value == "created_at":
+            date_value = row.created_at
+        else:
+            date_value = row.capture_timestamp or row.modified_time
+        if not date_value:
+            return float("inf")
+        timestamp = date_value.timestamp()
+        return -timestamp if date_order == "desc" else timestamp
+
+    def _rating_sort_key(row) -> Tuple[int, float]:
+        if row.rating is None:
+            return (1, 0.0)
+        value = float(row.rating)
+        return (0, -value if date_order == "desc" else value)
+
+    def _id_sort_key(image_id: int) -> int:
+        return -image_id if date_order == "desc" else image_id
+
+    ranked_rows = []
+    for row in candidate_rows:
+        image_id = int(row.image_id)
+        semantic = float(semantic_scores.get(image_id, 0.0))
+        lexical = float(lexical_scores.get(image_id, 0.0))
+        hybrid = (vector_weight * semantic) + (lexical_weight * lexical)
+        hybrid_scores[image_id] = hybrid
+        ranked_rows.append((row, hybrid, semantic, lexical))
+
+    if order_by_value == "image_id":
+        ranked_rows.sort(
+            key=lambda payload: (
+                -payload[1],
+                -payload[2],
+                -payload[3],
+                _id_sort_key(int(payload[0].image_id)),
+            )
+        )
+    elif order_by_value == "rating":
+        ranked_rows.sort(
+            key=lambda payload: (
+                -payload[1],
+                -payload[2],
+                -payload[3],
+                _rating_sort_key(payload[0]),
+                _date_sort_key(payload[0]),
+                _id_sort_key(int(payload[0].image_id)),
+            )
+        )
+    else:
+        ranked_rows.sort(
+            key=lambda payload: (
+                -payload[1],
+                -payload[2],
+                -payload[3],
+                _date_sort_key(payload[0]),
+                _id_sort_key(int(payload[0].image_id)),
+            )
+        )
+
+    ordered_ids = [int(payload[0].image_id) for payload in ranked_rows]
+    return ordered_ids, hybrid_scores, semantic_scores, lexical_scores
+
+
+def _fetch_similar_ids_with_pgvector(
+    db: Session,
+    tenant: Tenant,
+    source_image_id: int,
+    source_asset_id,
+    source_vector: np.ndarray,
+    limit: int,
+    min_score: Optional[float],
+    media_type: Optional[str],
+) -> Optional[Tuple[List[int], Dict[int, float]]]:
+    if not _is_pgvector_ready(db):
+        return None
+
+    query_vector = _to_pgvector_literal(source_vector)
+    media_filter = media_type.lower() if media_type else None
+    params = {
+        "tenant_id": tenant.id,
+        "source_image_id": int(source_image_id),
+        "source_asset_id": source_asset_id,
+        "query_vec": query_vector,
+        "min_score": float(min_score) if min_score is not None else None,
+    }
+
+    try:
+        # Phase 1: true KNN candidate fetch (index-friendly ORDER BY <=> on image_embeddings only).
+        initial_candidate_limit = min(max(int(limit) * 4, 120), 800)
+        max_candidate_limit = min(max(int(limit) * 20, 3000), 12000)
+        candidate_limit = initial_candidate_limit
+        top_image_ids: List[int] = []
+        score_by_image_id: Dict[int, float] = {}
+
+        while True:
+            candidate_rows = db.execute(
+                text(
+                    """
+                    SELECT
+                        ie.asset_id,
+                        1 - (ie.embedding_vec <=> CAST(:query_vec AS vector)) AS similarity_score
+                    FROM image_embeddings ie
+                    WHERE ie.asset_id IS NOT NULL
+                      AND ie.asset_id <> :source_asset_id
+                      AND ie.embedding_vec IS NOT NULL
+                    ORDER BY ie.embedding_vec <=> CAST(:query_vec AS vector)
+                    LIMIT :candidate_limit
+                    """
+                ),
+                {**params, "candidate_limit": int(candidate_limit)},
+            ).mappings().all()
+
+            if not candidate_rows:
+                break
+
+            candidate_asset_ids = [row["asset_id"] for row in candidate_rows if row.get("asset_id") is not None]
+            if not candidate_asset_ids:
+                break
+
+            # Phase 2: hydrate image ids/media types for candidates and apply tenant/media/min-score filters.
+            image_rows = db.query(
+                ImageMetadata.id.label("image_id"),
+                ImageMetadata.asset_id.label("asset_id"),
+                func.lower(func.coalesce(Asset.media_type, "image")).label("media_type"),
+            ).outerjoin(
+                Asset,
+                and_(
+                    Asset.id == ImageMetadata.asset_id,
+                    tenant_column_filter(Asset, tenant),
+                ),
+            ).filter(
+                tenant_column_filter(ImageMetadata, tenant),
+                ImageMetadata.asset_id.in_(candidate_asset_ids),
+            ).all()
+
+            image_by_asset = {
+                row.asset_id: (int(row.image_id), str(row.media_type or "image").lower())
+                for row in image_rows
+                if row.asset_id is not None
+            }
+
+            for row in candidate_rows:
+                asset_id = row.get("asset_id")
+                if asset_id is None:
+                    continue
+                image_info = image_by_asset.get(asset_id)
+                if not image_info:
+                    continue
+                image_id, candidate_media_type = image_info
+                if image_id == int(source_image_id):
+                    continue
+                if media_filter and candidate_media_type != media_filter:
+                    continue
+                score = float(row.get("similarity_score") or 0.0)
+                if min_score is not None and score < float(min_score):
+                    continue
+                if image_id in score_by_image_id:
+                    continue
+                top_image_ids.append(image_id)
+                score_by_image_id[image_id] = round(score, 4)
+                if len(top_image_ids) >= int(limit):
+                    break
+
+            if len(top_image_ids) >= int(limit):
+                break
+            if len(candidate_rows) < int(candidate_limit):
+                break
+            if candidate_limit >= max_candidate_limit:
+                break
+
+            candidate_limit = min(candidate_limit * 2, max_candidate_limit)
+    except SQLAlchemyError as exc:
+        db.rollback()
+        _set_pgvector_capability(db, False)
+        logger.warning("pgvector similarity query failed; falling back to in-memory index: %s", exc)
+        return None
+
+    return top_image_ids, score_by_image_id
+
 
 @router.get("/images", response_model=dict, operation_id="list_images")
 async def list_images(
     tenant: Tenant = Depends(get_tenant),
+    current_user: UserProfile = Depends(get_current_user),
     limit: int = 100,
     offset: int = 0,
     anchor_id: Optional[int] = None,
@@ -78,8 +702,12 @@ async def list_images(
     rating_operator: str = "eq",
     hide_zero_rating: bool = False,
     reviewed: Optional[bool] = None,
+    media_type: Optional[str] = None,
     dropbox_path_prefix: Optional[str] = None,
     filename_query: Optional[str] = None,
+    text_query: Optional[str] = None,
+    hybrid_vector_weight: float = 0.7,
+    hybrid_lexical_weight: float = 0.3,
     permatag_keyword: Optional[str] = None,
     permatag_category: Optional[str] = None,
     permatag_signum: Optional[int] = None,
@@ -120,16 +748,27 @@ async def list_images(
     if order_by_value == "ml_score" and not ml_keyword_id:
         order_by_value = None
     constrain_to_ml_matches = order_by_value == "ml_score" and ml_keyword_id is not None
+    media_type_value = (media_type or "all").strip().lower()
+    if media_type_value not in {"all", "image", "video"}:
+        media_type_value = "all"
+    text_query_value = str(text_query or "").strip()
+    vector_weight_value, lexical_weight_value = _normalize_hybrid_weights(
+        hybrid_vector_weight,
+        hybrid_lexical_weight,
+    )
 
     base_query, subqueries_list, exclude_subqueries_list, has_empty_filter = build_image_query_with_subqueries(
         db,
         tenant,
+        current_user=current_user,
+        is_tenant_admin=is_tenant_admin_user(db, tenant, current_user),
         list_id=list_id,
         list_exclude_id=list_exclude_id,
         rating=rating,
         rating_operator=rating_operator,
         hide_zero_rating=hide_zero_rating,
         reviewed=reviewed,
+        media_type=None if media_type_value == "all" else media_type_value,
         dropbox_path_prefix=dropbox_path_prefix,
         filename_query=filename_query,
         permatag_keyword=permatag_keyword,
@@ -167,7 +806,63 @@ async def list_images(
             return current_offset
         return max(int(rn) - 1, 0)
 
+    def resolve_anchor_offset_for_sorted_ids(sorted_ids: List[int], current_offset: int) -> int:
+        if anchor_id is None:
+            return current_offset
+        try:
+            return sorted_ids.index(anchor_id)
+        except ValueError:
+            return current_offset
+
+    def build_candidate_rows_from_query(query, max_rows: Optional[int] = None):
+        candidate_query = query.with_entities(
+            ImageMetadata.id.label("image_id"),
+            ImageMetadata.asset_id.label("asset_id"),
+            ImageMetadata.filename.label("filename"),
+            ImageMetadata.capture_timestamp.label("capture_timestamp"),
+            ImageMetadata.modified_time.label("modified_time"),
+            ImageMetadata.last_processed.label("last_processed"),
+            ImageMetadata.created_at.label("created_at"),
+            ImageMetadata.rating.label("rating"),
+        )
+        if max_rows and int(max_rows) > 0:
+            candidate_query = candidate_query.limit(int(max_rows))
+        return candidate_query.all()
+
+    def build_candidate_rows_from_ids(image_ids: List[int], max_rows: Optional[int] = None):
+        if not image_ids:
+            return []
+        candidate_query = db.query(
+            ImageMetadata.id.label("image_id"),
+            ImageMetadata.asset_id.label("asset_id"),
+            ImageMetadata.filename.label("filename"),
+            ImageMetadata.capture_timestamp.label("capture_timestamp"),
+            ImageMetadata.modified_time.label("modified_time"),
+            ImageMetadata.last_processed.label("last_processed"),
+            ImageMetadata.created_at.label("created_at"),
+            ImageMetadata.rating.label("rating"),
+        ).filter(
+            tenant_column_filter(ImageMetadata, tenant),
+            ImageMetadata.id.in_(image_ids)
+        ).order_by(*order_by_clauses)
+        if max_rows and int(max_rows) > 0:
+            candidate_query = candidate_query.limit(int(max_rows))
+        return candidate_query.all()
+
+    def load_images_by_ordered_ids(ordered_ids: List[int]):
+        if not ordered_ids:
+            return []
+        image_rows = db.query(ImageMetadata).filter(
+            tenant_column_filter(ImageMetadata, tenant),
+            ImageMetadata.id.in_(ordered_ids)
+        ).options(
+            load_only(*LIST_IMAGES_LOAD_ONLY_COLUMNS)
+        ).all()
+        image_map = {img.id: img for img in image_rows}
+        return [image_map[image_id] for image_id in ordered_ids if image_id in image_map]
+
     total = 0
+    ml_effective_threshold = None
 
     # Handle per-category filters if provided
     if order_by_value == "processed":
@@ -260,7 +955,23 @@ async def list_images(
                             return (1, 0)
                         score = -rating_value if date_order == "desc" else rating_value
                         return (0, score)
-                    if order_by_value == "image_id":
+                    if text_query_value:
+                        prefilter_limit = _compute_hybrid_text_prefilter_limit(limit, offset)
+                        candidate_rows = build_candidate_rows_from_ids(
+                            unique_image_ids,
+                            max_rows=prefilter_limit,
+                        )
+                        sorted_ids, _, _, _ = _rank_candidates_with_hybrid_scores(
+                            db=db,
+                            tenant=tenant,
+                            candidate_rows=candidate_rows,
+                            text_query=text_query_value,
+                            order_by_value=order_by_value,
+                            date_order=date_order,
+                            vector_weight=vector_weight_value,
+                            lexical_weight=lexical_weight_value,
+                        )
+                    elif order_by_value == "image_id":
                         sorted_ids = sorted(
                             unique_image_ids,
                             key=lambda img_id: -img_id if date_order == "desc" else img_id
@@ -303,26 +1014,13 @@ async def list_images(
 
                     # Apply anchor offset if requested
                     if anchor_id is not None and limit is not None:
-                        try:
-                            anchor_index = sorted_ids.index(anchor_id)
-                            offset = anchor_index
-                        except ValueError:
-                            pass
+                        offset = resolve_anchor_offset_for_sorted_ids(sorted_ids, offset)
 
                     # Apply offset and limit
                     paginated_ids = builder.paginate_id_list(sorted_ids, offset, limit)
 
                     # Now fetch full ImageMetadata objects in order
-                    if paginated_ids:
-                        # Preserve order from pagination
-                        images = db.query(ImageMetadata).filter(
-                            ImageMetadata.id.in_(paginated_ids)
-                        ).all()
-                        # Re-sort to match paginated_ids order
-                        id_to_image = {img.id: img for img in images}
-                        images = [id_to_image[img_id] for img_id in paginated_ids if img_id in id_to_image]
-                    else:
-                        images = []
+                    images = load_images_by_ordered_ids(paginated_ids)
                 else:
                     images = []
                     total = 0
@@ -489,15 +1187,54 @@ async def list_images(
         query = builder.apply_subqueries(query, subqueries_list, exclude_subqueries_list)
         query = query.options(load_only(*LIST_IMAGES_LOAD_ONLY_COLUMNS))
 
-        if order_by_value == "ml_score" and ml_keyword_id:
+        if text_query_value:
+            prefilter_limit = _compute_hybrid_text_prefilter_limit(limit, offset)
+            ordered_candidate_query = query.order_by(*order_by_clauses)
+            candidate_rows = build_candidate_rows_from_query(
+                ordered_candidate_query,
+                max_rows=prefilter_limit,
+            )
+            if candidate_rows:
+                sorted_ids, _, _, _ = _rank_candidates_with_hybrid_scores(
+                    db=db,
+                    tenant=tenant,
+                    candidate_rows=candidate_rows,
+                    text_query=text_query_value,
+                    order_by_value=order_by_value,
+                    date_order=date_order,
+                    vector_weight=vector_weight_value,
+                    lexical_weight=lexical_weight_value,
+                )
+            else:
+                sorted_ids = []
+            total = len(sorted_ids)
+            if anchor_id is not None and limit is not None:
+                offset = resolve_anchor_offset_for_sorted_ids(sorted_ids, offset)
+            paginated_ids = sorted_ids[offset: offset + limit] if limit else sorted_ids[offset:]
+            images = load_images_by_ordered_ids(paginated_ids)
+        elif order_by_value == "ml_score" and ml_keyword_id:
             # Apply ML score ordering and require matching ML-tag rows for this keyword.
-            query, ml_scores = builder.apply_ml_score_ordering(
+            query, ml_scores, ml_effective_threshold = builder.apply_ml_score_ordering(
                 query,
                 ml_keyword_id,
                 ml_tag_type,
                 require_match=True,
             )
             total = builder.get_total_count(query)
+            if total == 0 and ml_effective_threshold is None:
+                # If no threshold is configured and there are no ML matches,
+                # fall back to showing the underlying filtered result set
+                # ordered by ML score (nulls last) so users still see results.
+                query = base_query
+                query = builder.apply_subqueries(query, subqueries_list, exclude_subqueries_list)
+                query = query.options(load_only(*LIST_IMAGES_LOAD_ONLY_COLUMNS))
+                query, ml_scores, ml_effective_threshold = builder.apply_ml_score_ordering(
+                    query,
+                    ml_keyword_id,
+                    ml_tag_type,
+                    require_match=False,
+                )
+                total = builder.get_total_count(query)
             # Build order clauses with ML score priority
             if order_by_value == "processed":
                 order_by_date_clause = func.coalesce(ImageMetadata.last_processed, ImageMetadata.created_at)
@@ -639,6 +1376,9 @@ async def list_images(
             "created_at": img.created_at.isoformat() if img.created_at else None,
             "thumbnail_path": storage_info.thumbnail_key,
             "thumbnail_url": storage_info.thumbnail_url,
+            "media_type": (storage_info.asset.media_type if storage_info.asset else None) or "image",
+            "mime_type": storage_info.asset.mime_type if storage_info.asset else None,
+            "duration_ms": storage_info.asset.duration_ms if storage_info.asset else None,
             "tags_applied": img.tags_applied,
             "faces_detected": img.faces_detected,
             "rating": img.rating,
@@ -653,7 +1393,11 @@ async def list_images(
         "images": images_list,
         "total": total,
         "limit": limit,
-        "offset": offset
+        "offset": offset,
+        "ml_effective_threshold": ml_effective_threshold,
+        "text_query": text_query_value or None,
+        "hybrid_vector_weight": vector_weight_value if text_query_value else None,
+        "hybrid_lexical_weight": lexical_weight_value if text_query_value else None,
     }
 
 
@@ -829,6 +1573,9 @@ async def list_duplicate_images(
             "created_at": img.created_at.isoformat() if img.created_at else None,
             "thumbnail_path": storage_info.thumbnail_key,
             "thumbnail_url": storage_info.thumbnail_url,
+            "media_type": (storage_info.asset.media_type if storage_info.asset else None) or "image",
+            "mime_type": storage_info.asset.mime_type if storage_info.asset else None,
+            "duration_ms": storage_info.asset.duration_ms if storage_info.asset else None,
             "rating": img.rating,
             "permatags": image_permatags,
             "duplicate_group": duplicate_key,
@@ -843,6 +1590,193 @@ async def list_duplicate_images(
         "limit": requested_limit,
         "offset": offset,
         "has_more": has_more,
+    }
+
+
+@router.get("/images/{image_id}/similar", response_model=dict, operation_id="get_similar_images")
+def get_similar_images(
+    image_id: int,
+    tenant: Tenant = Depends(get_tenant),
+    limit: int = 40,
+    min_score: Optional[float] = None,
+    same_media_type: bool = True,
+    db: Session = Depends(get_db),
+):
+    """Return top embedding-similar images for a given image."""
+    requested_limit = max(1, min(int(limit or 40), 200))
+    if min_score is not None:
+        if min_score < -1.0 or min_score > 1.0:
+            raise HTTPException(status_code=400, detail="min_score must be between -1.0 and 1.0")
+
+    source_image = db.query(ImageMetadata).filter(
+        ImageMetadata.id == image_id,
+        tenant_column_filter(ImageMetadata, tenant),
+    ).options(
+        load_only(*LIST_IMAGES_LOAD_ONLY_COLUMNS)
+    ).first()
+    if not source_image:
+        raise HTTPException(status_code=404, detail="Image not found")
+    if source_image.asset_id is None:
+        raise HTTPException(status_code=400, detail="Image has no linked asset")
+
+    source_embedding = db.query(ImageEmbedding).filter(
+        tenant_column_filter(ImageEmbedding, tenant),
+        ImageEmbedding.asset_id == source_image.asset_id,
+        ImageEmbedding.embedding.is_not(None),
+    ).first()
+    if not source_embedding or not source_embedding.embedding:
+        raise HTTPException(status_code=400, detail="Embedding not found for source image")
+
+    source_vector = np.asarray(source_embedding.embedding, dtype=np.float32)
+    if source_vector.ndim != 1 or source_vector.size == 0:
+        raise HTTPException(status_code=400, detail="Invalid source embedding")
+    source_norm = float(np.linalg.norm(source_vector))
+    if source_norm <= 1e-12:
+        raise HTTPException(status_code=400, detail="Source embedding has zero magnitude")
+    source_unit_vector = source_vector / source_norm
+
+    source_storage_info = _resolve_storage_or_409(image=source_image, tenant=tenant, db=db)
+    source_media_type = ((source_storage_info.asset.media_type if source_storage_info.asset else None) or "image").lower()
+    similarity_media_type = source_media_type if same_media_type else None
+
+    pgvector_ranked = _fetch_similar_ids_with_pgvector(
+        db=db,
+        tenant=tenant,
+        source_image_id=int(source_image.id),
+        source_asset_id=source_image.asset_id,
+        source_vector=source_unit_vector,
+        limit=requested_limit,
+        min_score=min_score,
+        media_type=similarity_media_type,
+    )
+
+    if pgvector_ranked is not None:
+        top_image_ids, score_by_image_id = pgvector_ranked
+    else:
+        index = _get_similarity_index(
+            db=db,
+            tenant=tenant,
+            media_type=similarity_media_type,
+            embedding_dim=int(source_vector.size),
+        )
+        matrix = index["matrix"]
+        candidate_ids = index["image_ids"]
+        if matrix.size == 0 or candidate_ids.size == 0:
+            top_image_ids = []
+            score_by_image_id = {}
+        else:
+            scores = np.dot(matrix, source_unit_vector)
+            keep_mask = candidate_ids != int(source_image.id)
+            filtered_ids = candidate_ids[keep_mask]
+            filtered_scores = scores[keep_mask]
+
+            if min_score is not None and filtered_ids.size > 0:
+                score_mask = filtered_scores >= float(min_score)
+                filtered_scores = filtered_scores[score_mask]
+                filtered_ids = filtered_ids[score_mask]
+
+            if filtered_ids.size == 0:
+                top_image_ids = []
+                score_by_image_id = {}
+            else:
+                if requested_limit < filtered_scores.size:
+                    top_unsorted = np.argpartition(filtered_scores, -requested_limit)[-requested_limit:]
+                    ordered_indices = top_unsorted[np.argsort(filtered_scores[top_unsorted])[::-1]]
+                else:
+                    ordered_indices = np.argsort(filtered_scores)[::-1]
+
+                top_image_ids = [int(filtered_ids[int(idx)]) for idx in ordered_indices]
+                score_by_image_id = {
+                    int(filtered_ids[int(idx)]): round(float(filtered_scores[int(idx)]), 4)
+                    for idx in ordered_indices
+                }
+
+    if not top_image_ids:
+        return {
+            "tenant_id": tenant.id,
+            "source_image_id": source_image.id,
+            "source_asset_id": str(source_image.asset_id),
+            "source_media_type": source_media_type,
+            "same_media_type": bool(same_media_type),
+            "images": [],
+            "count": 0,
+            "limit": requested_limit,
+        }
+
+    top_images = db.query(ImageMetadata).filter(
+        tenant_column_filter(ImageMetadata, tenant),
+        ImageMetadata.id.in_(top_image_ids),
+    ).options(
+        load_only(*LIST_IMAGES_LOAD_ONLY_COLUMNS)
+    ).all()
+    images_by_id = {int(img.id): img for img in top_images}
+    ordered_images = [images_by_id[img_id] for img_id in top_image_ids if img_id in images_by_id]
+    assets_by_id = load_assets_for_images(db, ordered_images)
+    asset_id_to_image_id = {img.asset_id: int(img.id) for img in ordered_images if img.asset_id is not None}
+    asset_ids = list(asset_id_to_image_id.keys())
+    permatags = db.query(Permatag).filter(
+        Permatag.asset_id.in_(asset_ids),
+        tenant_column_filter(Permatag, tenant),
+    ).all() if asset_ids else []
+    keyword_ids = {tag.keyword_id for tag in permatags}
+    keywords_map = load_keywords_map(db, tenant.id, keyword_ids)
+    permatags_by_image = {}
+    for tag in permatags:
+        image_row_id = asset_id_to_image_id.get(tag.asset_id)
+        if image_row_id is None:
+            continue
+        kw_info = keywords_map.get(tag.keyword_id, {"keyword": "unknown", "category": "unknown"})
+        permatags_by_image.setdefault(image_row_id, []).append({
+            "id": tag.id,
+            "keyword": kw_info["keyword"],
+            "category": kw_info["category"],
+            "signum": tag.signum,
+        })
+
+    images_list = []
+    for image_row in ordered_images:
+        try:
+            storage_info = _resolve_storage_or_409(
+                image=image_row,
+                tenant=tenant,
+                db=db,
+                assets_by_id=assets_by_id,
+            )
+        except HTTPException:
+            continue
+        similarity_score = score_by_image_id.get(int(image_row.id), 0.0)
+        image_permatags = permatags_by_image.get(int(image_row.id), [])
+        images_list.append({
+            "id": image_row.id,
+            "asset_id": storage_info.asset_id,
+            "filename": image_row.filename,
+            "width": image_row.width,
+            "height": image_row.height,
+            "file_size": image_row.file_size,
+            "capture_timestamp": image_row.capture_timestamp.isoformat() if image_row.capture_timestamp else None,
+            "modified_time": image_row.modified_time.isoformat() if image_row.modified_time else None,
+            "created_at": image_row.created_at.isoformat() if image_row.created_at else None,
+            "source_provider": storage_info.source_provider,
+            "source_key": storage_info.source_key,
+            "source_url": _build_source_url(storage_info, tenant, image_row),
+            "thumbnail_url": storage_info.thumbnail_url,
+            "media_type": (storage_info.asset.media_type if storage_info.asset else None) or "image",
+            "mime_type": storage_info.asset.mime_type if storage_info.asset else None,
+            "duration_ms": storage_info.asset.duration_ms if storage_info.asset else None,
+            "rating": image_row.rating,
+            "permatags": image_permatags,
+            "similarity_score": similarity_score,
+        })
+
+    return {
+        "tenant_id": tenant.id,
+        "source_image_id": source_image.id,
+        "source_asset_id": str(source_image.asset_id),
+        "source_media_type": source_media_type,
+        "same_media_type": bool(same_media_type),
+        "images": images_list,
+        "count": len(images_list),
+        "limit": requested_limit,
     }
 
 
@@ -953,6 +1887,9 @@ async def get_image(
         "perceptual_hash": image.perceptual_hash,
         "thumbnail_path": storage_info.thumbnail_key,
         "thumbnail_url": storage_info.thumbnail_url,
+        "media_type": (storage_info.asset.media_type if storage_info.asset else None) or "image",
+        "mime_type": storage_info.asset.mime_type if storage_info.asset else None,
+        "duration_ms": storage_info.asset.duration_ms if storage_info.asset else None,
         "rating": image.rating,
         "reviewed_at": reviewed_at.isoformat() if reviewed_at else None,
         "tags": machine_tags_list,
@@ -992,6 +1929,7 @@ async def get_image_asset(
         "source_rev": storage_info.source_rev,
         "source_url": _build_source_url(storage_info, tenant, image),
         "filename": asset.filename if asset else image.filename,
+        "media_type": (asset.media_type if asset else None) or "image",
         "mime_type": asset.mime_type if asset else None,
         "width": asset.width if asset and asset.width is not None else image.width,
         "height": asset.height if asset and asset.height is not None else image.height,
@@ -1035,6 +1973,7 @@ async def get_asset(
         "source_url": _build_source_url(asset, tenant, image=None),
         "thumbnail_key": asset.thumbnail_key,
         "thumbnail_url": tenant.get_thumbnail_url(settings, asset.thumbnail_key),
+        "media_type": asset.media_type,
         "mime_type": asset.mime_type,
         "width": asset.width,
         "height": asset.height,

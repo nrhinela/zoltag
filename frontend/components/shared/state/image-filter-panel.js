@@ -34,6 +34,7 @@ import {
   addCategoryFilterParams,
   addOrderingParams,
   addMiscParams,
+  addMediaTypeParams,
 } from '../../../services/api-params.js';
 
 export class ImageFilterPanel {
@@ -55,6 +56,8 @@ export class ImageFilterPanel {
       ratingOperator: undefined,
       dropboxPathPrefix: '',
       filenameQuery: '',
+      textQuery: '',
+      mediaType: 'all',
       permatagPositiveMissing: false,
       listId: undefined,
       listExcludeId: undefined,
@@ -122,6 +125,7 @@ export class ImageFilterPanel {
     addCategoryFilterParams(params, this.filters);
     addOrderingParams(params, this.filters);
     addMiscParams(params, this.filters);
+    addMediaTypeParams(params, this.filters);
 
     return params;
   }
@@ -141,6 +145,9 @@ export class ImageFilterPanel {
 
       const images = Array.isArray(result) ? result : (result.images || []);
       const total = Array.isArray(result) ? null : (result.total || 0);
+      const payload = Array.isArray(result)
+        ? { images, total }
+        : { ...result, images, total };
 
       this._emit('images-loaded', {
         tabId: this.tabId,
@@ -148,7 +155,7 @@ export class ImageFilterPanel {
         total,
       });
 
-      return { images, total };
+      return payload;
     } catch (error) {
       this._emit('error', {
         tabId: this.tabId,
@@ -220,6 +227,8 @@ export class ImageFilterPanel {
       ratingOperator: undefined,
       dropboxPathPrefix: '',
       filenameQuery: '',
+      textQuery: '',
+      mediaType: 'all',
       permatagPositiveMissing: false,
     };
     this._emit('filters-changed', { tabId: this.tabId, filters: this.filters });
@@ -266,6 +275,9 @@ export class ImageFilterPanel {
       }
       if (Array.isArray(filters.dropboxPathPrefix)) {
         filters.dropboxPathPrefix = filters.dropboxPathPrefix[0] || '';
+      }
+      if (!filters.mediaType) {
+        filters.mediaType = 'all';
       }
       this.updateFilters(filters);
     } catch (error) {

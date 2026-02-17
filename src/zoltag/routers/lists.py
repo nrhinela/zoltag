@@ -2,12 +2,21 @@
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Body
+from fastapi import APIRouter, Depends, HTTPException, Body, Query
 from sqlalchemy import func, and_
 from sqlalchemy.orm import Session
 
 from zoltag.asset_helpers import AssetReadinessError, load_assets_for_images, resolve_image_storage
 from zoltag.dependencies import get_db, get_tenant, get_tenant_setting
+from zoltag.list_visibility import (
+    can_edit_list,
+    can_view_list,
+    get_list_scope_clause,
+    is_list_owner,
+    is_tenant_admin_user,
+    normalize_list_visibility,
+    normalize_list_scope,
+)
 from zoltag.tenant import Tenant
 from zoltag.models.config import PhotoList, PhotoListItem, Keyword, KeywordCategory
 from zoltag.metadata import AssetDerivative, ImageMetadata, MachineTag, Permatag
@@ -44,29 +53,130 @@ def _tenant_filter(model, tenant: Tenant | str):
     return tenant_column_filter_for_values(model, tenant, tenant)
 
 
-def get_most_recent_list(db: Session, tenant: Tenant | str):
-    """Get the most recently created list for a tenant."""
-    return db.query(PhotoList).filter(
-        _tenant_filter(PhotoList, tenant)
-    ).order_by(PhotoList.created_at.desc()).first()
+def _list_permissions(*, list_row: PhotoList, current_user: UserProfile, is_tenant_admin: bool) -> dict:
+    return {
+        "visibility": normalize_list_visibility(getattr(list_row, "visibility", None)),
+        "is_owner": is_list_owner(list_row, current_user),
+        "can_edit": can_edit_list(list_row, user=current_user, is_tenant_admin=is_tenant_admin),
+    }
+
+
+def _serialize_list_row(
+    *,
+    list_row: PhotoList,
+    created_by_name: str | None,
+    item_count: int,
+    current_user: UserProfile,
+    is_tenant_admin: bool,
+) -> dict:
+    permissions = _list_permissions(
+        list_row=list_row,
+        current_user=current_user,
+        is_tenant_admin=is_tenant_admin,
+    )
+    return {
+        "id": list_row.id,
+        "title": list_row.title,
+        "notebox": list_row.notebox,
+        "visibility": permissions["visibility"],
+        "is_owner": permissions["is_owner"],
+        "can_edit": permissions["can_edit"],
+        "created_at": list_row.created_at,
+        "updated_at": list_row.updated_at,
+        "created_by_uid": list_row.created_by_uid,
+        "created_by_name": created_by_name,
+        "item_count": int(item_count or 0),
+    }
+
+
+def _query_lists_for_scope(
+    *,
+    db: Session,
+    tenant: Tenant | str,
+    current_user: UserProfile,
+    scope: str = "default",
+    is_tenant_admin: bool,
+):
+    query = db.query(PhotoList).filter(_tenant_filter(PhotoList, tenant))
+    clause = get_list_scope_clause(user=current_user, scope=scope, is_tenant_admin=is_tenant_admin)
+    if clause is not None:
+        query = query.filter(clause)
+    return query
+
+
+def get_most_recent_list(
+    db: Session,
+    tenant: Tenant | str,
+    *,
+    current_user: UserProfile,
+    is_tenant_admin: bool,
+):
+    """Get the most recently created accessible list for a tenant."""
+    return (
+        _query_lists_for_scope(
+            db=db,
+            tenant=tenant,
+            current_user=current_user,
+            scope="default",
+            is_tenant_admin=is_tenant_admin,
+        )
+        .order_by(PhotoList.created_at.desc(), PhotoList.id.desc())
+        .first()
+    )
+
+
+def _get_accessible_list_or_404(
+    *,
+    db: Session,
+    tenant: Tenant,
+    list_id: int,
+    current_user: UserProfile,
+    is_tenant_admin: bool,
+) -> PhotoList:
+    list_row = db.query(PhotoList).filter(
+        PhotoList.id == list_id,
+        tenant_column_filter(PhotoList, tenant),
+    ).first()
+    if not list_row:
+        raise HTTPException(status_code=404, detail="List not found")
+    if not can_view_list(list_row, user=current_user, is_tenant_admin=is_tenant_admin):
+        raise HTTPException(status_code=404, detail="List not found")
+    return list_row
 
 
 @router.get("/recent", response_model=dict)
 async def get_recent_list(
     tenant: Tenant = Depends(get_tenant),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: UserProfile = Depends(get_current_user),
 ):
     """Get the most recently created list for the tenant (if any)."""
-    recent = get_most_recent_list(db, tenant)
+    is_tenant_admin = is_tenant_admin_user(db, tenant, current_user)
+    recent = get_most_recent_list(
+        db,
+        tenant,
+        current_user=current_user,
+        is_tenant_admin=is_tenant_admin,
+    )
     if not recent:
         return {}
+    created_by_name = None
+    if recent.created_by_uid:
+        user = db.query(UserProfile.display_name).filter(
+            UserProfile.supabase_uid == recent.created_by_uid
+        ).first()
+        created_by_name = user[0] if user else None
+    item_count = db.query(func.count(PhotoListItem.id)).filter(
+        PhotoListItem.list_id == recent.id
+    ).scalar() or 0
     return {
-        "id": recent.id,
-        "title": recent.title,
-        "notebox": recent.notebox,
-        "created_at": recent.created_at,
-        "updated_at": recent.updated_at,
-        "created_by_uid": recent.created_by_uid
+        **_serialize_list_row(
+            list_row=recent,
+            created_by_name=created_by_name,
+            item_count=item_count,
+            current_user=current_user,
+            is_tenant_admin=is_tenant_admin,
+        )
     }
 
 
@@ -74,43 +184,55 @@ async def get_recent_list(
 async def get_list(
     list_id: int,
     tenant: Tenant = Depends(get_tenant),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: UserProfile = Depends(get_current_user),
 ):
     """Get a single list by ID for the tenant."""
-    lst = db.query(PhotoList).filter(
-        PhotoList.id == list_id,
-        tenant_column_filter(PhotoList, tenant),
-    ).first()
-    if not lst:
-        raise HTTPException(status_code=404, detail="List not found")
+    is_tenant_admin = is_tenant_admin_user(db, tenant, current_user)
+    lst = _get_accessible_list_or_404(
+        db=db,
+        tenant=tenant,
+        list_id=list_id,
+        current_user=current_user,
+        is_tenant_admin=is_tenant_admin,
+    )
     item_count = db.query(func.count(PhotoListItem.id)).filter(
         PhotoListItem.list_id == lst.id
     ).scalar() or 0
-    return {
-        "id": lst.id,
-        "title": lst.title,
-        "notebox": lst.notebox,
-        "created_at": lst.created_at,
-        "updated_at": lst.updated_at,
-        "created_by_uid": lst.created_by_uid,
-        "item_count": item_count
-    }
+    created_by_name = None
+    if lst.created_by_uid:
+        user = db.query(UserProfile.display_name).filter(
+            UserProfile.supabase_uid == lst.created_by_uid
+        ).first()
+        created_by_name = user[0] if user else None
+    return _serialize_list_row(
+        list_row=lst,
+        created_by_name=created_by_name,
+        item_count=item_count,
+        current_user=current_user,
+        is_tenant_admin=is_tenant_admin,
+    )
 
 
 @router.delete("/items/{item_id}", response_model=dict)
 async def delete_list_item(
     item_id: int,
     tenant: Tenant = Depends(get_tenant),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: UserProfile = Depends(get_current_user),
 ):
     """Remove a photo from a list by PhotoListItem ID (must belong to tenant)."""
-    item = db.query(PhotoListItem).join(
+    item_row = db.query(PhotoListItem, PhotoList).join(
         PhotoList, PhotoListItem.list_id == PhotoList.id
     ).filter(
         PhotoListItem.id == item_id,
         tenant_column_filter(PhotoList, tenant),
     ).first()
-    if not item:
+    if not item_row:
+        raise HTTPException(status_code=404, detail="List item not found")
+    item, list_row = item_row
+    is_tenant_admin = is_tenant_admin_user(db, tenant, current_user)
+    if not can_view_list(list_row, user=current_user, is_tenant_admin=is_tenant_admin):
         raise HTTPException(status_code=404, detail="List item not found")
     db.delete(item)
     db.commit()
@@ -121,6 +243,7 @@ async def delete_list_item(
 async def create_list(
     title: str = Body(...),
     notebox: Optional[str] = Body(None),
+    visibility: Optional[str] = Body("shared"),
     tenant: Tenant = Depends(get_tenant),
     db: Session = Depends(get_db),
     current_user: UserProfile = Depends(get_current_user)
@@ -129,23 +252,40 @@ async def create_list(
     new_list = assign_tenant_scope(PhotoList(
         title=title,
         notebox=notebox,
+        visibility=normalize_list_visibility(visibility, default="shared"),
         created_by_uid=current_user.supabase_uid if current_user else None
     ), tenant)
     db.add(new_list)
     db.commit()
     db.refresh(new_list)
-    return {"id": new_list.id, "title": new_list.title}
+    return {
+        "id": new_list.id,
+        "title": new_list.title,
+        "visibility": normalize_list_visibility(new_list.visibility),
+    }
 
 
 @router.get("", response_model=list)
 async def list_lists(
+    visibility_scope: str = Query(default="default"),
     tenant: Tenant = Depends(get_tenant),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: UserProfile = Depends(get_current_user),
 ):
-    """List all lists for the tenant."""
-    lists = db.query(PhotoList).filter(
-        tenant_column_filter(PhotoList, tenant)
-    ).order_by(PhotoList.created_at.asc()).all()
+    """List tenant lists by visibility scope."""
+    is_tenant_admin = is_tenant_admin_user(db, tenant, current_user)
+    normalized_scope = normalize_list_scope(visibility_scope)
+    lists = (
+        _query_lists_for_scope(
+            db=db,
+            tenant=tenant,
+            current_user=current_user,
+            scope=normalized_scope,
+            is_tenant_admin=is_tenant_admin,
+        )
+        .order_by(func.lower(PhotoList.title).asc(), PhotoList.created_at.asc(), PhotoList.id.asc())
+        .all()
+    )
     counts = dict(
         db.query(PhotoListItem.list_id, func.count(PhotoListItem.id))
         .join(PhotoList, PhotoListItem.list_id == PhotoList.id)
@@ -164,16 +304,14 @@ async def list_lists(
             user_names = {u[0]: u[1] for u in users}
 
     return [
-        {
-            "id": l.id,
-            "title": l.title,
-            "notebox": l.notebox,
-            "created_at": l.created_at,
-            "updated_at": l.updated_at,
-            "created_by_uid": l.created_by_uid,
-            "created_by_name": user_names.get(l.created_by_uid) if l.created_by_uid else None,
-            "item_count": counts.get(l.id, 0)
-        } for l in lists
+        _serialize_list_row(
+            list_row=l,
+            created_by_name=user_names.get(l.created_by_uid) if l.created_by_uid else None,
+            item_count=counts.get(l.id, 0),
+            current_user=current_user,
+            is_tenant_admin=is_tenant_admin,
+        )
+        for l in lists
     ]
 
 
@@ -182,20 +320,28 @@ async def edit_list(
     list_id: int,
     title: Optional[str] = Body(None),
     notebox: Optional[str] = Body(None),
+    visibility: Optional[str] = Body(None),
     tenant: Tenant = Depends(get_tenant),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: UserProfile = Depends(get_current_user),
 ):
     """Edit a list (title and/or notebox)."""
-    lst = db.query(PhotoList).filter(
-        PhotoList.id == list_id,
-        tenant_column_filter(PhotoList, tenant),
-    ).first()
-    if not lst:
-        raise HTTPException(status_code=404, detail="List not found")
+    is_tenant_admin = is_tenant_admin_user(db, tenant, current_user)
+    lst = _get_accessible_list_or_404(
+        db=db,
+        tenant=tenant,
+        list_id=list_id,
+        current_user=current_user,
+        is_tenant_admin=is_tenant_admin,
+    )
+    if not can_edit_list(lst, user=current_user, is_tenant_admin=is_tenant_admin):
+        raise HTTPException(status_code=403, detail="Only list owner or admin can edit this list")
     if title is not None:
         lst.title = title
     if notebox is not None:
         lst.notebox = notebox
+    if visibility is not None:
+        lst.visibility = normalize_list_visibility(visibility, default=normalize_list_visibility(lst.visibility))
     db.commit()
     db.refresh(lst)
 
@@ -207,31 +353,33 @@ async def edit_list(
         ).first()
         created_by_name = user[0] if user else None
 
-    return {
-        "id": lst.id,
-        "title": lst.title,
-        "notebox": lst.notebox,
-        "created_at": lst.created_at,
-        "updated_at": lst.updated_at,
-        "created_by_uid": lst.created_by_uid,
-        "created_by_name": created_by_name,
-        "item_count": len(lst.items)
-    }
+    return _serialize_list_row(
+        list_row=lst,
+        created_by_name=created_by_name,
+        item_count=len(lst.items),
+        current_user=current_user,
+        is_tenant_admin=is_tenant_admin,
+    )
 
 
 @router.delete("/{list_id:int}", response_model=dict)
 async def delete_list(
     list_id: int,
     tenant: Tenant = Depends(get_tenant),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: UserProfile = Depends(get_current_user),
 ):
     """Delete a list and its items."""
-    lst = db.query(PhotoList).filter(
-        PhotoList.id == list_id,
-        tenant_column_filter(PhotoList, tenant),
-    ).first()
-    if not lst:
-        raise HTTPException(status_code=404, detail="List not found")
+    is_tenant_admin = is_tenant_admin_user(db, tenant, current_user)
+    lst = _get_accessible_list_or_404(
+        db=db,
+        tenant=tenant,
+        list_id=list_id,
+        current_user=current_user,
+        is_tenant_admin=is_tenant_admin,
+    )
+    if not can_edit_list(lst, user=current_user, is_tenant_admin=is_tenant_admin):
+        raise HTTPException(status_code=403, detail="Only list owner or admin can delete this list")
     db.delete(lst)
     db.commit()
     return {"deleted": True}
@@ -242,15 +390,18 @@ async def get_list_items(
     list_id: int,
     ids_only: bool = False,
     tenant: Tenant = Depends(get_tenant),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: UserProfile = Depends(get_current_user),
 ):
     """Get all items in a list, ordered by added_at ascending."""
-    lst = db.query(PhotoList).filter(
-        PhotoList.id == list_id,
-        tenant_column_filter(PhotoList, tenant),
-    ).first()
-    if not lst:
-        raise HTTPException(status_code=404, detail="List not found")
+    is_tenant_admin = is_tenant_admin_user(db, tenant, current_user)
+    _get_accessible_list_or_404(
+        db=db,
+        tenant=tenant,
+        list_id=list_id,
+        current_user=current_user,
+        is_tenant_admin=is_tenant_admin,
+    )
     if ids_only:
         items = (
             db.query(
@@ -423,18 +574,21 @@ async def add_photo_to_specific_list(
     list_id: int,
     req: AddPhotoRequest,
     tenant: Tenant = Depends(get_tenant),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: UserProfile = Depends(get_current_user),
 ):
     """Add a photo to a specific list."""
     photo_id = req.photo_id
 
     # Verify list belongs to tenant
-    lst = db.query(PhotoList).filter(
-        PhotoList.id == list_id,
-        tenant_column_filter(PhotoList, tenant),
-    ).first()
-    if not lst:
-        raise HTTPException(status_code=404, detail="List not found")
+    is_tenant_admin = is_tenant_admin_user(db, tenant, current_user)
+    _get_accessible_list_or_404(
+        db=db,
+        tenant=tenant,
+        list_id=list_id,
+        current_user=current_user,
+        is_tenant_admin=is_tenant_admin,
+    )
 
     image = db.query(ImageMetadata.id, ImageMetadata.asset_id).filter(
         ImageMetadata.id == photo_id,
@@ -478,7 +632,8 @@ async def add_photo_to_specific_list(
 async def add_photo_to_list(
     req: AddPhotoRequest,
     tenant: Tenant = Depends(get_tenant),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: UserProfile = Depends(get_current_user),
 ):
     """Add a photo to the most recently created list. If no lists exist, create one and add the photo."""
     photo_id = req.photo_id
@@ -492,11 +647,19 @@ async def add_photo_to_list(
     if asset_id is None:
         raise HTTPException(status_code=409, detail="Image has no asset_id")
 
-    recent = get_most_recent_list(db, tenant)
+    is_tenant_admin = is_tenant_admin_user(db, tenant, current_user)
+    recent = get_most_recent_list(
+        db,
+        tenant,
+        current_user=current_user,
+        is_tenant_admin=is_tenant_admin,
+    )
     if not recent:
         # Auto-create new list
         recent = assign_tenant_scope(PhotoList(
-            title="Untitled List"
+            title="Untitled List",
+            visibility="shared",
+            created_by_uid=current_user.supabase_uid if current_user else None,
         ), tenant)
         db.add(recent)
         db.commit()

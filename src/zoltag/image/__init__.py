@@ -1,12 +1,17 @@
-"""Image processing and feature extraction."""
+"""Image and video processing helpers."""
 
 import io
+import json
+import os
+import shutil
+import subprocess
+import tempfile
 from pathlib import Path
-from typing import BinaryIO, Tuple
+from typing import Tuple
 
 import imagehash
 import numpy as np
-from PIL import Image, ExifTags
+from PIL import Image, ExifTags, ImageDraw
 import cv2
 
 # Register HEIC support if available
@@ -157,6 +162,181 @@ class ImageProcessor:
             "perceptual_hash": self.compute_perceptual_hash(image),
             "color_histogram": self.compute_color_histogram(image).tolist(),
         }
+
+
+SUPPORTED_VIDEO_FORMATS = {
+    ".mp4",
+    ".mov",
+    ".m4v",
+    ".avi",
+    ".mkv",
+    ".webm",
+    ".mpeg",
+    ".mpg",
+    ".wmv",
+}
+
+
+def is_supported_video_file(filename: str, mime_type: str | None = None) -> bool:
+    """Return True if filename/mime represent a supported video asset."""
+    mime = (mime_type or "").strip().lower()
+    if mime.startswith("video/"):
+        return True
+    suffix = Path(filename or "").suffix.lower()
+    return suffix in SUPPORTED_VIDEO_FORMATS
+
+
+def is_supported_media_file(filename: str, mime_type: str | None = None) -> bool:
+    """Return True for supported image or video files."""
+    if is_supported_video_file(filename, mime_type=mime_type):
+        return True
+    return ImageProcessor().is_supported(filename or "")
+
+
+class VideoProcessor:
+    """Extract thumbnail and metadata from video bytes."""
+
+    def __init__(self, thumbnail_size: Tuple[int, int] = (256, 256), seek_seconds: float = 1.0):
+        self.thumbnail_size = thumbnail_size
+        self.seek_seconds = max(0.0, float(seek_seconds or 0.0))
+        self._image_processor = ImageProcessor(thumbnail_size=thumbnail_size)
+
+    def create_placeholder_thumbnail(self) -> bytes:
+        """Generate a fallback thumbnail when no frame is available."""
+        width = int(self.thumbnail_size[0] or 256)
+        height = int(self.thumbnail_size[1] or 256)
+        image = Image.new("RGB", (width, height), color=(45, 49, 56))
+        draw = ImageDraw.Draw(image)
+        tri_w = max(28, width // 5)
+        tri_h = max(36, height // 4)
+        cx = width // 2
+        cy = height // 2
+        points = [
+            (cx - tri_w // 2, cy - tri_h // 2),
+            (cx - tri_w // 2, cy + tri_h // 2),
+            (cx + tri_w // 2, cy),
+        ]
+        draw.polygon(points, fill=(239, 242, 247))
+        return self._image_processor.create_thumbnail(image)
+
+    def extract_features(self, data: bytes, filename: str = "video") -> dict:
+        """Extract metadata and a representative poster thumbnail."""
+        suffix = Path(filename or "video.mp4").suffix or ".mp4"
+        temp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as temp_file:
+                temp_file.write(data)
+                temp_path = temp_file.name
+
+            width, height, duration_ms, format_name = self._probe_video(temp_path)
+            frame_bytes = self._extract_frame(temp_path, seek_seconds=self.seek_seconds)
+            thumbnail_bytes = None
+            if frame_bytes:
+                try:
+                    frame_image = self._image_processor.load_image(frame_bytes)
+                    thumbnail_bytes = self._image_processor.create_thumbnail(frame_image)
+                except Exception:
+                    thumbnail_bytes = None
+            if thumbnail_bytes is None:
+                thumbnail_bytes = self.create_placeholder_thumbnail()
+
+            return {
+                "thumbnail": thumbnail_bytes,
+                "width": width,
+                "height": height,
+                "duration_ms": duration_ms,
+                "format": format_name or suffix.lstrip(".").upper() or None,
+            }
+        finally:
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except Exception:
+                    pass
+
+    def _probe_video(self, video_path: str) -> tuple[int | None, int | None, int | None, str | None]:
+        if shutil.which("ffprobe") is None:
+            return None, None, None, None
+        cmd = [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration,format_name:stream=width,height,duration",
+            "-select_streams",
+            "v:0",
+            "-of",
+            "json",
+            video_path,
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        except Exception:
+            return None, None, None, None
+
+        try:
+            payload = json.loads(result.stdout or "{}")
+        except Exception:
+            payload = {}
+
+        stream = ((payload.get("streams") or [None])[0]) or {}
+        fmt = payload.get("format") or {}
+        width = _to_int(stream.get("width"))
+        height = _to_int(stream.get("height"))
+        duration_ms = _duration_to_ms(stream.get("duration")) or _duration_to_ms(fmt.get("duration"))
+        format_name = None
+        if fmt.get("format_name"):
+            format_name = str(fmt.get("format_name")).split(",")[0].upper()
+        return width, height, duration_ms, format_name
+
+    def _extract_frame(self, video_path: str, seek_seconds: float = 1.0) -> bytes | None:
+        if shutil.which("ffmpeg") is None:
+            return None
+        seek_value = max(0.0, float(seek_seconds or 0.0))
+        cmd = [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-ss",
+            f"{seek_value:.3f}",
+            "-i",
+            video_path,
+            "-frames:v",
+            "1",
+            "-f",
+            "image2pipe",
+            "-vcodec",
+            "mjpeg",
+            "pipe:1",
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, check=True)
+        except Exception:
+            return None
+        data = result.stdout or b""
+        return data if data else None
+
+
+def _to_int(value) -> int | None:
+    try:
+        if value is None:
+            return None
+        return int(float(value))
+    except Exception:
+        return None
+
+
+def _duration_to_ms(value) -> int | None:
+    try:
+        if value is None:
+            return None
+        seconds = float(value)
+        if not np.isfinite(seconds) or seconds < 0:
+            return None
+        return int(round(seconds * 1000))
+    except Exception:
+        return None
 
 
 class FaceDetector:

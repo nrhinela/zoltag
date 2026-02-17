@@ -53,6 +53,8 @@ export class SearchStateController extends BaseStateController {
     this.resetSearchListDraft();
     this.host.searchImages = [];
     this.host.searchTotal = 0;
+    this.host.searchPinnedImageId = null;
+    this.host.searchSimilarityAssetUuid = null;
     this.host.searchDropboxPathPrefix = '';
     this.host.searchDropboxQuery = '';
     this.host.searchDropboxOptions = [];

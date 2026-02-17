@@ -1,5 +1,6 @@
 """Application settings and environment configuration."""
 
+import os
 from typing import Optional
 from pathlib import Path
 
@@ -61,15 +62,18 @@ class Settings(BaseSettings):
     asset_write_legacy_fields: bool = False
     
     # Models
-    face_detection_model: str = "hog"  # 'hog' or 'cnn'
-    embedding_model: str = "clip-vit-base-patch32"
-    tagging_model: str = "siglip"  # Currently only 'siglip' is active (clip and siglip2 are commented out)
-    use_keyword_models: bool = False
-    keyword_model_weight: float = 0.6
-    keyword_model_threshold: float = 0.25
+    # Primary active model selector for zero-shot tagging and embedding generation.
+    # Current supported active value in code paths is 'siglip'.
+    tagging_model: str = "siglip"
+    # Minimum confidence required to persist zero-shot tags.
+    # Higher values reduce recall; lower values increase tag volume.
+    zeroshot_tag_threshold: float = 0.25
+    # Minimum confidence required to persist trained-model tags.
+    trained_tag_threshold: float = 0.25
+    # Minimum positive permatag examples required before training a keyword model.
     keyword_model_min_positive: int = 2
-    keyword_model_min_negative: int = 2
-    upload_generate_embeddings: bool = False
+    # If true, generate embeddings during upload/ingest. If false, embeddings are generated later by batch jobs.
+    upload_generate_embeddings: bool = True
     
     # API
     api_host: str = "0.0.0.0"
@@ -104,6 +108,26 @@ class Settings(BaseSettings):
     def is_development(self) -> bool:
         """Check if running in development environment."""
         return self.environment.lower() == "dev"
+
+    def model_config_audit(self) -> dict:
+        """Return startup model-config audit metadata for logging."""
+        deprecated_env_vars = [
+            "FACE_DETECTION_MODEL",
+            "EMBEDDING_MODEL",
+            "USE_KEYWORD_MODELS",
+            "KEYWORD_MODEL_WEIGHT",
+            "KEYWORD_MODEL_THRESHOLD",
+            "KEYWORD_MODEL_MIN_NEGATIVE",
+        ]
+        present_deprecated = [key for key in deprecated_env_vars if os.getenv(key) is not None]
+        return {
+            "tagging_model": self.tagging_model,
+            "zeroshot_tag_threshold": self.zeroshot_tag_threshold,
+            "trained_tag_threshold": self.trained_tag_threshold,
+            "keyword_model_min_positive": self.keyword_model_min_positive,
+            "upload_generate_embeddings": self.upload_generate_embeddings,
+            "deprecated_env_vars_present": present_deprecated,
+        }
 
 
 settings = Settings()

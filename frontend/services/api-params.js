@@ -113,4 +113,32 @@ export function addMiscParams(params, filters = {}) {
   appendIf(params, 'reviewed', filters.reviewed, filters.reviewed !== undefined && filters.reviewed !== '');
   appendIf(params, 'dropbox_path_prefix', filters.dropboxPathPrefix, filters.dropboxPathPrefix !== undefined && filters.dropboxPathPrefix !== null && filters.dropboxPathPrefix !== '');
   appendIf(params, 'filename_query', filters.filenameQuery, filters.filenameQuery !== undefined && filters.filenameQuery !== null && filters.filenameQuery !== '');
+  const textQuery = filters.textQuery !== undefined && filters.textQuery !== null && filters.textQuery !== ''
+    ? filters.textQuery
+    : filters.search;
+  appendIf(params, 'text_query', textQuery, textQuery !== undefined && textQuery !== null && textQuery !== '');
+  appendIf(
+    params,
+    'hybrid_vector_weight',
+    filters.hybridVectorWeight,
+    filters.hybridVectorWeight !== undefined && filters.hybridVectorWeight !== null && filters.hybridVectorWeight !== ''
+  );
+  appendIf(
+    params,
+    'hybrid_lexical_weight',
+    filters.hybridLexicalWeight,
+    filters.hybridLexicalWeight !== undefined && filters.hybridLexicalWeight !== null && filters.hybridLexicalWeight !== ''
+  );
+}
+
+/**
+ * Build media type filter parameter.
+ * @param {Object} filters - Filter object
+ * @param {URLSearchParams} params - URLSearchParams to append to
+ */
+export function addMediaTypeParams(params, filters = {}) {
+  const raw = String(filters.mediaType ?? '').trim().toLowerCase();
+  if (raw === 'image' || raw === 'video') {
+    params.append('media_type', raw);
+  }
 }

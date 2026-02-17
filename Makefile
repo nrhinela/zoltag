@@ -3,10 +3,11 @@
 .PHONY: help install test lint format clean deploy migrate dev worker dev-backend dev-frontend dev-css dev-clean
 .PHONY: db-dev db-prod db-migrate-prod db-migrate-dev db-create-migration
 .PHONY: deploy-api deploy-worker deploy-all status logs-api logs-worker env-check
-.PHONY: train-and-recompute daily
+.PHONY: train-and-recompute daily verify-video-rollout
 
 # Default environment
 ENV ?= prod
+WORKERS ?= 1
 PROJECT_ID = photocat-483622
 REGION = us-central1
 DEV_PID_FILE = .dev-pids
@@ -45,10 +46,13 @@ help:
 	@echo "  env-check          Show current environment configuration"
 	@echo "  train-and-recompute Train keyword models and recompute tags"
 	@echo "  daily              Sync Dropbox then train + recompute tags"
+	@echo "  verify-video-rollout Verify video-thumbnail rollout (DB + optional API smoke checks)"
+	@echo "                      Use VERIFY_ARGS='--skip-api' etc to pass script flags"
 	@echo ""
 	@echo "Environment variables:"
 	@echo "  ENV=dev|prod       Target environment (default: dev)"
 	@echo "  TENANT_ID          Tenant ID for train-and-recompute target"
+	@echo "  WORKERS=<n>        Number of worker processes for 'make worker' (default: 1)"
 
 # ============================================================================
 # Development
@@ -157,7 +161,39 @@ dev-css:
 
 worker:
 	@echo "Starting background worker..."
-	WORKER_MODE=true python3 -m zoltag.worker
+	@if [ ! -f .env ]; then \
+		echo "ERROR: .env file not found. Please create one with DATABASE_URL set."; \
+		exit 1; \
+	fi
+	@if ! printf '%s' "$(WORKERS)" | grep -Eq '^[0-9]+$$'; then \
+		echo "ERROR: WORKERS must be a positive integer"; \
+		exit 1; \
+	fi
+	@if [ "$(WORKERS)" -lt 1 ]; then \
+		echo "ERROR: WORKERS must be >= 1"; \
+		exit 1; \
+	fi
+	@PY_CMD=".venv/bin/python"; \
+	if [ ! -x "$$PY_CMD" ]; then \
+		PY_CMD="python3"; \
+	fi; \
+	set -a && . ./.env && set +a && \
+	if [ "$(WORKERS)" -eq 1 ]; then \
+		PYTHONPATH=src WORKER_MODE=true "$$PY_CMD" -m zoltag.worker; \
+	else \
+		echo "Launching $(WORKERS) worker processes..."; \
+		pids=""; \
+		trap 'echo "Stopping workers..."; for pid in $$pids; do kill $$pid 2>/dev/null || true; done; wait; exit 0' INT TERM; \
+		i=1; \
+		while [ $$i -le "$(WORKERS)" ]; do \
+			PYTHONPATH=src WORKER_MODE=true "$$PY_CMD" -m zoltag.worker & \
+			pid=$$!; \
+			pids="$$pids $$pid"; \
+			echo "  worker $$i pid=$$pid"; \
+			i=$$((i+1)); \
+		done; \
+		wait; \
+	fi
 
 # ============================================================================
 # Database Management
@@ -320,8 +356,8 @@ train-and-recompute:
 	zoltag train-keyword-models --tenant-id $(TENANT_ID)
 	@echo "Recomputing trained tags..."
 	zoltag recompute-trained-tags --tenant-id $(TENANT_ID) --replace
-	@echo "Recomputing SigLIP tags..."
-	zoltag recompute-siglip-tags --replace --tenant-id $(TENANT_ID)
+	@echo "Recomputing zero-shot tags..."
+	zoltag recompute-zeroshot-tags --replace --tenant-id $(TENANT_ID)
 	@echo "Done!"
 
 daily:
@@ -334,3 +370,15 @@ daily:
 	zoltag sync-dropbox --tenant-id $(TENANT_ID)
 	@echo "Running train-and-recompute..."
 	$(MAKE) train-and-recompute TENANT_ID=$(TENANT_ID)
+
+verify-video-rollout:
+	@echo "Running video-thumbnail rollout verification..."
+	@set -e; \
+	if [ -f .env ]; then \
+		set -a; . ./.env; set +a; \
+	fi; \
+	PY_CMD=".venv/bin/python"; \
+	if [ ! -x "$$PY_CMD" ]; then \
+		PY_CMD="python3"; \
+	fi; \
+	"$$PY_CMD" scripts/verify_video_thumbnail_rollout.py $(VERIFY_ARGS)

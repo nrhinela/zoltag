@@ -71,7 +71,7 @@ export class CurateAuditStateController extends BaseStateController {
    * @param {string} model - Model identifier
    */
   handleAiModelChange(model) {
-    this.host.curateAuditAiModel = this.host.curateAuditAiModel === model ? '' : model;
+    this.host.curateAuditAiModel = model;
     this.host.curateAuditOffset = 0;
     this.host.curateAuditTotal = null;
     this.host.curateAuditLoadAll = false;
@@ -204,6 +204,7 @@ export class CurateAuditStateController extends BaseStateController {
     let nextHideDeleted = true;
     let nextDropboxPathPrefix = '';
     let nextFilenameQuery = '';
+    let nextMediaType = 'all';
 
     chips.forEach((chip) => {
       switch (chip.type) {
@@ -221,6 +222,9 @@ export class CurateAuditStateController extends BaseStateController {
           break;
         case 'filename':
           nextFilenameQuery = chip.value || '';
+          break;
+        case 'media':
+          nextMediaType = chip.value === 'video' ? 'video' : (chip.value === 'image' ? 'image' : 'all');
           break;
         default:
           break;
@@ -242,6 +246,7 @@ export class CurateAuditStateController extends BaseStateController {
     this.host.curateAuditCategory = nextCategory;
     this.host.curateAuditMinRating = nextMinRating;
     this.host.curateAuditHideDeleted = nextHideDeleted;
+    this.host.curateAuditMediaType = nextMediaType;
     this.host.curateAuditDropboxPathPrefix = nextDropboxPathPrefix;
     this.host.curateAuditFilenameQuery = nextFilenameQuery;
     this.host.curateAuditPageOffset = 0;
@@ -730,6 +735,7 @@ export class CurateAuditStateController extends BaseStateController {
       const total = Array.isArray(result)
         ? null
         : (Number.isFinite(result?.total) ? result.total : null);
+      const mlEffectiveThreshold = Array.isArray(result) ? null : (result?.ml_effective_threshold ?? null);
 
       if (append) {
         this.host.curateAuditImages = [...(existingImages || []), ...images];
@@ -745,6 +751,7 @@ export class CurateAuditStateController extends BaseStateController {
         this.host.curateAuditOffset = images.length;
         this.host.curateAuditTotal = images.length;
       }
+      this.host.curateAuditMlThreshold = mlEffectiveThreshold;
       this.host._curateAuditLastFetchKey = fetchKey;
       this.requestUpdate();
     } catch (error) {
@@ -769,6 +776,7 @@ export class CurateAuditStateController extends BaseStateController {
       curateAuditCategory: null,
       curateAuditAiEnabled: false,
       curateAuditAiModel: null,
+      curateAuditMediaType: 'all',
       curateAuditHideDeleted: true,
       curateAuditMinRating: null,
       curateAuditFilenameQuery: '',
@@ -795,6 +803,7 @@ export class CurateAuditStateController extends BaseStateController {
       curateAuditCategory: host.curateAuditCategory,
       curateAuditAiEnabled: host.curateAuditAiEnabled,
       curateAuditAiModel: host.curateAuditAiModel,
+      curateAuditMediaType: host.curateAuditMediaType,
       curateAuditHideDeleted: host.curateAuditHideDeleted,
       curateAuditMinRating: host.curateAuditMinRating,
       curateAuditFilenameQuery: host.curateAuditFilenameQuery,
@@ -852,6 +861,7 @@ export class CurateAuditStateController extends BaseStateController {
     this.host.curateAuditPageOffset = 0;
     this.host.curateAuditAiEnabled = false;
     this.host.curateAuditAiModel = '';
+    this.host.curateAuditMediaType = 'all';
     this.host.curateAuditDropboxPathPrefix = '';
     this.host.curateAuditFilenameQuery = '';
     this.requestUpdate();

@@ -138,6 +138,8 @@ export function renderHomeTabContent(host, { navCards, formatCurateDate }) {
   const homeLists = [...(host.homeLists || [])]
     .sort((a, b) => (a.title || '').localeCompare(b.title || ''));
   const homeRecommendationsTab = host.homeRecommendationsTab === 'keywords' ? 'keywords' : 'lists';
+  const vectorstoreLaunchQuery = String(host.homeVectorstoreQuery || '');
+  const trimmedVectorstoreLaunchQuery = vectorstoreLaunchQuery.trim();
 
   const ctaCards = [
     {
@@ -232,10 +234,43 @@ export function renderHomeTabContent(host, { navCards, formatCurateDate }) {
       },
     });
   };
+  const handleVectorstoreLaunchInput = (event) => {
+    host.homeVectorstoreQuery = event?.target?.value || '';
+  };
+  const handleVectorstoreLaunchSubmit = (event) => {
+    event.preventDefault();
+    const query = String(host.homeVectorstoreQuery || '').trim();
+    if (!query) return;
+    host._handleHomeNavigate({
+      detail: {
+        tab: 'search',
+        subTab: 'vectorstore',
+        vectorstoreQuery: query,
+      },
+    });
+  };
 
   return html`
     <div slot="home" class="home-tab-shell">
       <div class="container">
+        <form class="home-vectorstore-launch" @submit=${handleVectorstoreLaunchSubmit}>
+          <div class="home-vectorstore-launch-row">
+            <input
+              id="home-vectorstore-launch-input"
+              class="home-vectorstore-launch-input"
+              type="text"
+              .value=${vectorstoreLaunchQuery}
+              @input=${handleVectorstoreLaunchInput}
+            >
+            <button
+              type="submit"
+              class="home-vectorstore-launch-button"
+              ?disabled=${!trimmedVectorstoreLaunchQuery}
+            >
+              Search
+            </button>
+          </div>
+        </form>
         <div class="home-overview-layout">
           <div class="home-overview-left">
             <div class="home-cta-grid home-cta-grid-quad">
@@ -358,9 +393,13 @@ export function renderSearchTabContent(host, { formatCurateDate }) {
       .tenant=${host.tenant}
       .searchSubTab=${host.activeSearchSubTab || 'home'}
       .initialExploreSelection=${host.pendingSearchExploreSelection}
+      .initialVectorstoreQuery=${host.pendingVectorstoreQuery || ''}
+      .initialVectorstoreQueryToken=${host.pendingVectorstoreQueryToken || 0}
       .searchFilterPanel=${host.searchFilterPanel}
       .searchImages=${host.searchImages}
       .searchTotal=${host.searchTotal}
+      .searchPinnedImageId=${host.searchPinnedImageId}
+      .searchSimilarityAssetUuid=${host.searchSimilarityAssetUuid}
       .curateThumbSize=${host.curateThumbSize}
       .tagStatsBySource=${host.tagStatsBySource}
       .activeCurateTagSource=${host.activeCurateTagSource}
@@ -379,10 +418,17 @@ export function renderSearchTabContent(host, { formatCurateDate }) {
       @explore-selection-applied=${() => {
         host.pendingSearchExploreSelection = null;
       }}
+      @vectorstore-query-applied=${() => {
+        host.pendingVectorstoreQuery = null;
+      }}
+      @search-similarity-context-changed=${(event) => {
+        host.searchSimilarityAssetUuid = event?.detail?.assetUuid || null;
+      }}
       @search-images-optimistic-remove=${host._handleSearchOptimisticRemove}
       @thumb-size-changed=${(e) => host.curateThumbSize = e.detail.size}
       @image-clicked=${(e) => host._handleCurateImageClick(e.detail.event, e.detail.image, e.detail.imageSet)}
       @image-selected=${(e) => host._handleCurateImageClick(null, e.detail.image, e.detail.imageSet)}
+      @open-similar-in-search=${host._handleOpenSimilarInSearch}
     ></search-tab>
   `;
 }

@@ -4,6 +4,7 @@ import {
   getCurateHomeFetchKey,
 } from '../shared/curate-filters.js';
 import { shouldAutoRefreshCurateStats } from '../shared/curate-stats.js';
+import { getSimilarImages } from '../../services/api.js';
 
 export function bindAppDelegateMethods(host) {
   host._getCurateDefaultState = () => host._curateHomeState.getDefaultState();
@@ -209,6 +210,102 @@ export function bindAppDelegateMethods(host) {
 
   host._handleCurateImageClick = (event, image, imageSet) =>
     host._curateHomeState.handleCurateImageClick(event, image, imageSet);
+
+  const _buildSimilarOpenPayload = (event) => {
+    const sourceImage = event?.detail?.sourceImage || null;
+    const similarImages = Array.isArray(event?.detail?.images)
+      ? event.detail.images
+      : [];
+    const orderedImages = [];
+    if (sourceImage?.id !== undefined && sourceImage?.id !== null) {
+      orderedImages.push(sourceImage);
+    }
+    orderedImages.push(...similarImages);
+
+    const dedupedImages = [];
+    const seenIds = new Set();
+    orderedImages.forEach((image) => {
+      const imageId = Number(image?.id);
+      if (!Number.isFinite(imageId) || seenIds.has(imageId)) return;
+      seenIds.add(imageId);
+      dedupedImages.push(image);
+    });
+
+    const sourceAssetUuid = String(
+      sourceImage?.asset_id
+      || sourceImage?.asset_uuid
+      || event?.detail?.sourceAssetUuid
+      || ''
+    ).trim();
+    return {
+      sourceImage,
+      sourceAssetUuid: sourceAssetUuid || null,
+      dedupedImages,
+    };
+  };
+
+  host._handleOpenSimilarInSearch = async (event) => {
+    const { sourceImage, sourceAssetUuid, dedupedImages } = _buildSimilarOpenPayload(event);
+    let imagesForSearch = dedupedImages;
+
+    // Grid-launch path usually provides only source image; fetch similar results on demand.
+    if (imagesForSearch.length <= 1 && Number.isFinite(Number(sourceImage?.id))) {
+      try {
+        const payload = await getSimilarImages(host.tenant, Number(sourceImage.id), {
+          limit: 60,
+          sameMediaType: true,
+        });
+        const fetched = Array.isArray(payload?.images) ? payload.images : [];
+        const merged = [];
+        const seen = new Set();
+        [sourceImage, ...fetched].forEach((image) => {
+          const imageId = Number(image?.id);
+          if (!Number.isFinite(imageId) || seen.has(imageId)) return;
+          seen.add(imageId);
+          merged.push(image);
+        });
+        imagesForSearch = merged;
+      } catch (error) {
+        console.error('Failed to load similar images for search open action', error);
+      }
+    }
+
+    if (!imagesForSearch.length) return;
+
+    host.searchImages = imagesForSearch.map((image) => ({ ...image }));
+    host.searchTotal = host.searchImages.length;
+    host.searchPinnedImageId = Number.isFinite(Number(sourceImage?.id))
+      ? Number(sourceImage.id)
+      : null;
+    host.searchSimilarityAssetUuid = sourceAssetUuid || null;
+    host.activeSearchSubTab = 'home';
+    host.pendingSearchExploreSelection = null;
+    host._handleCurateEditorClose?.();
+    host.curateEditorImageSet = [];
+    host.curateEditorImageIndex = -1;
+    host._appShellState.setActiveTab('search');
+  };
+
+  host._handleOpenSimilarInCurate = (event) => {
+    if (!host._canCurate?.()) return;
+    const { sourceImage, sourceAssetUuid, dedupedImages } = _buildSimilarOpenPayload(event);
+    if (!dedupedImages.length) return;
+
+    host.curateSubTab = 'main';
+    host.curateImages = dedupedImages.map((image) => ({ ...image }));
+    host.curateTotal = host.curateImages.length;
+    host.curatePinnedImageId = Number.isFinite(Number(sourceImage?.id))
+      ? Number(sourceImage.id)
+      : null;
+    host.curateSimilarityAssetUuid = sourceAssetUuid || null;
+    host.curatePageOffset = 0;
+    host.curateDragSelection = [];
+    host.curateLoading = false;
+    host._handleCurateEditorClose?.();
+    host.curateEditorImageSet = [];
+    host.curateEditorImageIndex = -1;
+    host._appShellState.setActiveTab('curate');
+  };
 
   host._handleZoomToPhoto = async (event) =>
     host._curateExploreState.handleZoomToPhoto(event);

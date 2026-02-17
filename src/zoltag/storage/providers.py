@@ -5,6 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+import mimetypes
 from typing import Any, Callable, Dict, Optional, Sequence
 
 import httpx
@@ -60,6 +61,12 @@ class StorageProvider(ABC):
     @abstractmethod
     def get_thumbnail(self, source_key: str, size: str = "w640h480") -> Optional[bytes]:
         """Fetch a thumbnail if available; return None when unsupported."""
+
+    def get_playback_url(self, source_key: str, expires_seconds: int = 300) -> Optional[str]:
+        """Return a temporary browser-playable URL for media when supported."""
+        _ = source_key
+        _ = expires_seconds
+        return None
 
     def resolve_source_key(self, source_key: Optional[str], image: Any = None) -> Optional[str]:
         """Resolve source key from storage data with optional legacy fallback."""
@@ -133,7 +140,7 @@ class DropboxStorageProvider(StorageProvider):
             size=size,
             content_hash=getattr(metadata, "content_hash", None),
             revision=getattr(metadata, "rev", None),
-            mime_type=None,
+            mime_type=mimetypes.guess_type(getattr(metadata, "name", source_key.rsplit("/", 1)[-1]))[0],
         )
 
     def list_image_entries(self, sync_folders: Optional[Sequence[str]] = None) -> list[ProviderEntry]:
@@ -201,6 +208,10 @@ class DropboxStorageProvider(StorageProvider):
                         time_value = str(time_taken)
                     exif_overrides["DateTimeOriginal"] = time_value
                     exif_overrides["DateTime"] = time_value
+                duration_value = getattr(media_info, "duration", None)
+                duration_ms = _coerce_duration_to_ms(duration_value, assume_ms=True)
+                if duration_ms is not None:
+                    provider_properties["media.duration_ms"] = duration_ms
 
         for group in getattr(metadata, "property_groups", []) or []:
             template_name = getattr(group, "template_id", "")
@@ -234,6 +245,16 @@ class DropboxStorageProvider(StorageProvider):
                 return None
             _, response = self._client.files_get_thumbnail_v2(source_key, size=target_size)
             return response.content
+        return None
+
+    def get_playback_url(self, source_key: str, expires_seconds: int = 300) -> Optional[str]:
+        _ = expires_seconds  # Dropbox temporary link TTL is provider-controlled.
+        if hasattr(self._client, "files_get_temporary_link"):
+            result = self._client.files_get_temporary_link(source_key)
+            return str(getattr(result, "link", "") or "").strip() or None
+        if hasattr(self._client, "get_temporary_link"):
+            value = self._client.get_temporary_link(source_key)
+            return str(value or "").strip() or None
         return None
 
     def resolve_source_key(self, source_key: Optional[str], image: Any = None) -> Optional[str]:
@@ -291,11 +312,12 @@ class GoogleDriveStorageProvider(StorageProvider):
 
     def list_image_entries(self, sync_folders: Optional[Sequence[str]] = None) -> list[ProviderEntry]:
         folders = [folder.strip() for folder in (sync_folders or []) if isinstance(folder, str) and folder.strip()]
+        media_query = "(mimeType contains 'image/' or mimeType contains 'video/')"
         if not folders:
-            queries = ["trashed = false and mimeType contains 'image/'"]
+            queries = [f"trashed = false and {media_query}"]
         else:
             queries = [
-                f"'{folder}' in parents and trashed = false and mimeType contains 'image/'"
+                f"'{folder}' in parents and trashed = false and {media_query}"
                 for folder in folders
             ]
 
@@ -319,8 +341,13 @@ class GoogleDriveStorageProvider(StorageProvider):
         provider_properties: Dict[str, Any] = {}
 
         media = file_obj.get("imageMediaMetadata") or {}
+        video_media = file_obj.get("videoMediaMetadata") or {}
         width = media.get("width")
         height = media.get("height")
+        if width is None:
+            width = video_media.get("width")
+        if height is None:
+            height = video_media.get("height")
         if width is not None:
             exif_overrides["ImageWidth"] = width
         if height is not None:
@@ -330,6 +357,9 @@ class GoogleDriveStorageProvider(StorageProvider):
         if timestamp:
             exif_overrides["DateTimeOriginal"] = timestamp
             exif_overrides["DateTime"] = timestamp
+        duration_ms = _coerce_duration_to_ms(video_media.get("durationMillis"), assume_ms=True)
+        if duration_ms is not None:
+            provider_properties["media.duration_ms"] = duration_ms
 
         location = media.get("location") or {}
         latitude = location.get("latitude")
@@ -386,7 +416,9 @@ class GoogleDriveStorageProvider(StorageProvider):
                 "fields": (
                     "nextPageToken,files("
                     "id,name,mimeType,size,md5Checksum,modifiedTime,createdTime,version,"
-                    "imageMediaMetadata(width,height,time,location),appProperties,properties"
+                    "imageMediaMetadata(width,height,time,location),"
+                    "videoMediaMetadata(width,height,durationMillis),"
+                    "appProperties,properties"
                     ")"
                 ),
                 "orderBy": "modifiedTime desc",
@@ -415,7 +447,9 @@ class GoogleDriveStorageProvider(StorageProvider):
             params={
                 "fields": (
                     "id,name,mimeType,size,md5Checksum,modifiedTime,createdTime,version,"
-                    "imageMediaMetadata(width,height,time,location),appProperties,properties"
+                    "imageMediaMetadata(width,height,time,location),"
+                    "videoMediaMetadata(width,height,durationMillis),"
+                    "appProperties,properties"
                 ),
                 "supportsAllDrives": "true",
             },
@@ -550,6 +584,18 @@ class ManagedStorageProvider(StorageProvider):
         _ = size
         return None
 
+    def get_playback_url(self, source_key: str, expires_seconds: int = 300) -> Optional[str]:
+        blob = self._bucket.blob(source_key)
+        ttl_seconds = max(60, int(expires_seconds or 300))
+        try:
+            return blob.generate_signed_url(
+                version="v4",
+                expiration=timedelta(seconds=ttl_seconds),
+                method="GET",
+            )
+        except Exception:
+            return None
+
 
 def create_storage_provider(
     provider_name: str,
@@ -620,3 +666,19 @@ def _parse_iso_datetime(value: Optional[str]) -> Optional[datetime]:
     if parsed.tzinfo is not None:
         return parsed.astimezone(timezone.utc).replace(tzinfo=None)
     return parsed
+
+
+def _coerce_duration_to_ms(value: Any, *, assume_ms: bool = False) -> Optional[int]:
+    try:
+        if value is None:
+            return None
+        if hasattr(value, "total_seconds"):
+            return int(round(float(value.total_seconds()) * 1000))
+        numeric = float(value)
+        if numeric < 0:
+            return None
+        if assume_ms:
+            return int(round(numeric))
+        return int(round(numeric * 1000))
+    except Exception:
+        return None

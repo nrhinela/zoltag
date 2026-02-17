@@ -1,5 +1,6 @@
 import { LitElement, html, css } from 'lit';
 import { tailwind } from './tailwind-lit.js';
+import './admin-tabs.js';
 import {
   getLists,
   createList,
@@ -85,6 +86,7 @@ class ListEditor extends LitElement {
 
   static properties = {
     tenant: { type: String },
+    currentUser: { type: Object },
     lists: { type: Array },
     editingList: { type: Object },
     selectedList: { type: Object },
@@ -96,6 +98,7 @@ class ListEditor extends LitElement {
     isLoadingLists: { type: Boolean },
     listSortKey: { type: String },
     listSortDir: { type: String },
+    listVisibilityScope: { type: String },
     initialSelectedListId: { type: [String, Number] },
     initialSelectedListToken: { type: Number },
     thumbSize: { type: Number },
@@ -107,6 +110,7 @@ class ListEditor extends LitElement {
 
   constructor() {
     super();
+    this.currentUser = null;
     this.lists = [];
     this.editingList = null;
     this.selectedList = null;
@@ -116,8 +120,9 @@ class ListEditor extends LitElement {
     this.downloadIncludeVariants = true;
     this.isLoadingItems = false;
     this.isLoadingLists = false;
-    this.listSortKey = 'id';
+    this.listSortKey = 'title';
     this.listSortDir = 'asc';
+    this.listVisibilityScope = 'default';
     this.initialSelectedListId = null;
     this.initialSelectedListToken = 0;
     this.thumbSize = 190;
@@ -149,6 +154,7 @@ class ListEditor extends LitElement {
 
   willUpdate(changedProperties) {
     if (changedProperties.has('tenant')) {
+      this.listVisibilityScope = 'default';
       this.fetchLists();
       this.selectedList = null;
       this.listItems = [];
@@ -204,6 +210,56 @@ class ListEditor extends LitElement {
     this._isVisible = isNowVisible;
   }
 
+  _isTenantAdmin() {
+    const isSuperAdmin = !!this.currentUser?.user?.is_super_admin;
+    if (isSuperAdmin) return true;
+    const tenantRef = String(this.tenant || '').trim();
+    if (!tenantRef) return false;
+    const memberships = Array.isArray(this.currentUser?.tenants) ? this.currentUser.tenants : [];
+    return memberships.some((membership) => {
+      if (String(membership?.role || '').trim().toLowerCase() !== 'admin') {
+        return false;
+      }
+      const membershipTenantId = String(membership?.tenant_id || '').trim();
+      const membershipIdentifier = String(membership?.tenant_identifier || '').trim();
+      return tenantRef === membershipTenantId || (membershipIdentifier && tenantRef === membershipIdentifier);
+    });
+  }
+
+  _getListVisibilityTabs() {
+    const tabs = [
+      { id: 'default', label: 'Default' },
+      { id: 'private', label: 'Private' },
+    ];
+    if (this._isTenantAdmin()) {
+      tabs.push({ id: 'all', label: 'All' });
+    }
+    return tabs;
+  }
+
+  _getActiveVisibilityScope() {
+    const tabs = this._getListVisibilityTabs();
+    const current = String(this.listVisibilityScope || '').trim().toLowerCase();
+    if (tabs.some((tab) => tab.id === current)) {
+      return current;
+    }
+    return tabs[0]?.id || 'default';
+  }
+
+  async _handleVisibilityTabChanged(event) {
+    const tabId = String(event?.detail?.tabId || '').trim().toLowerCase();
+    const tabs = this._getListVisibilityTabs();
+    if (!tabs.some((tab) => tab.id === tabId)) {
+      return;
+    }
+    if (tabId === this.listVisibilityScope) {
+      return;
+    }
+    this.listVisibilityScope = tabId;
+    this._closeListView();
+    await this.fetchLists({ force: true });
+  }
+
   async fetchLists({ force = false } = {}) {
     if (!this.tenant) {
       console.warn('fetchLists: Tenant ID is not available.');
@@ -211,8 +267,25 @@ class ListEditor extends LitElement {
     }
     this.isLoadingLists = true;
     try {
-      const fetchedLists = await getLists(this.tenant, { force });
+      const activeVisibilityScope = this._getActiveVisibilityScope();
+      if (activeVisibilityScope !== this.listVisibilityScope) {
+        this.listVisibilityScope = activeVisibilityScope;
+      }
+      const fetchedLists = await getLists(this.tenant, {
+        force,
+        visibilityScope: activeVisibilityScope,
+      });
       this.lists = fetchedLists;
+      if (this.selectedList) {
+        const refreshedSelectedList = fetchedLists.find(
+          (entry) => String(entry?.id) === String(this.selectedList?.id)
+        );
+        if (refreshedSelectedList) {
+          this.selectedList = refreshedSelectedList;
+        } else {
+          this._closeListView();
+        }
+      }
       this.dispatchEvent(new CustomEvent('lists-updated', { bubbles: true, composed: true }));
     } catch (error) {
       console.error('Error fetching lists:', error);
@@ -302,6 +375,9 @@ class ListEditor extends LitElement {
   }
 
   _startEditingSelectedList() {
+    if (!this.selectedList?.can_edit) {
+      return;
+    }
     this.editingSelectedList = true;
   }
 
@@ -310,8 +386,13 @@ class ListEditor extends LitElement {
   }
 
   async _saveSelectedListChanges() {
+    if (!this.selectedList?.can_edit) {
+      this.editingSelectedList = false;
+      return;
+    }
     const title = this.querySelector('#edit-list-title')?.value.trim();
     const notebox = this.querySelector('#edit-list-notes')?.value;
+    const visibility = this.querySelector('#edit-list-visibility')?.value || this.selectedList.visibility || 'shared';
 
     if (!title) {
       console.warn('List title cannot be empty');
@@ -323,6 +404,7 @@ class ListEditor extends LitElement {
         id: this.selectedList.id,
         title,
         notebox,
+        visibility,
       });
       this.selectedList = updated;
       this.editingSelectedList = false;
@@ -851,7 +933,7 @@ class ListEditor extends LitElement {
 
   _getSortedLists() {
     const lists = Array.isArray(this.lists) ? [...this.lists] : [];
-    const key = this.listSortKey || 'id';
+    const key = this.listSortKey || 'title';
     const dir = this.listSortDir === 'desc' ? -1 : 1;
     const normalize = (value) => {
       if (value === null || value === undefined) return '';
@@ -878,6 +960,9 @@ class ListEditor extends LitElement {
       } else if (key === 'notebox') {
         left = normalize(a.notebox);
         right = normalize(b.notebox);
+      } else if (key === 'visibility') {
+        left = normalize(a.visibility);
+        right = normalize(b.visibility);
       }
       if (left < right) return -1 * dir;
       if (left > right) return 1 * dir;
@@ -902,6 +987,14 @@ class ListEditor extends LitElement {
     // Check visibility on each render to detect when tab becomes active
     this._checkVisibility();
     const sortedLists = this._getSortedLists();
+    const visibilityTabs = this._getListVisibilityTabs();
+    const selectedVisibilityScope = this._getActiveVisibilityScope();
+    const selectedVisibilityLabel = selectedVisibilityScope === 'private'
+      ? 'Private'
+      : (selectedVisibilityScope === 'all' ? 'All' : 'Default');
+    const selectedVisibilityDescription = selectedVisibilityScope === 'private'
+      ? 'Only your private lists'
+      : (selectedVisibilityScope === 'all' ? 'All tenant lists (admin only)' : 'Shared lists and your own private lists');
 
     return html`
       <div class="p-4">
@@ -942,6 +1035,16 @@ class ListEditor extends LitElement {
               </div>
             </div>
         </div>
+        <div class="mb-4">
+          <admin-tabs
+            .tabs=${visibilityTabs}
+            .activeTab=${selectedVisibilityScope}
+            @tab-changed=${this._handleVisibilityTabChanged}
+          ></admin-tabs>
+          <div class="text-xs text-gray-600 -mt-3">
+            <span class="font-semibold">${selectedVisibilityLabel}:</span> ${selectedVisibilityDescription}
+          </div>
+        </div>
         ${this.selectedList ? html`
           <div class="mb-6">
             <button @click=${this._closeListView} class="text-sm text-blue-600 hover:underline mb-4">← Back to lists</button>
@@ -971,6 +1074,9 @@ class ListEditor extends LitElement {
                     <div>
                       <span class="font-semibold">Created:</span> ${new Date(this.selectedList.created_at).toLocaleDateString()}
                     </div>
+                    <div>
+                      <span class="font-semibold">Visibility:</span> ${this.selectedList.visibility === 'private' ? 'Private' : 'Shared'}
+                    </div>
                   </div>
                   ${this.selectedList.notebox ? html`
                     <p class="text-sm text-gray-600">${this.selectedList.notebox}</p>
@@ -991,7 +1097,9 @@ class ListEditor extends LitElement {
                     ${this.isDownloading ? html`<span class="inline-block w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></span>` : ''}
                     Download
                   </button>
-                  <button @click=${this._startEditingSelectedList} class="bg-green-600 text-white px-3 py-1 rounded text-sm hover:bg-green-700">Edit</button>
+                  ${this.selectedList.can_edit ? html`
+                    <button @click=${this._startEditingSelectedList} class="bg-green-600 text-white px-3 py-1 rounded text-sm hover:bg-green-700">Edit</button>
+                  ` : html``}
                 </div>
               </div>
 
@@ -1086,6 +1194,11 @@ class ListEditor extends LitElement {
                       ${this._renderSortLabel('Notes', 'notebox')}
                     </button>
                   </th>
+                  <th class="py-2 px-4 border-b left-justified-header text-sm font-semibold text-gray-700">
+                    <button class="hover:underline text-left w-full" @click=${() => this._handleListSort('visibility')}>
+                      ${this._renderSortLabel('Visibility', 'visibility')}
+                    </button>
+                  </th>
                   <th class="py-2 px-4 border-b left-justified-header text-sm font-semibold text-gray-700">Actions</th>
                 </tr>
               </thead>
@@ -1098,6 +1211,7 @@ class ListEditor extends LitElement {
                     <td class="py-2 px-4 text-sm text-gray-700">${new Date(list.created_at).toLocaleDateString()}</td>
                     <td class="py-2 px-4 text-sm text-gray-600">${list.created_by_name || '—'}</td>
                     <td class="py-2 px-4 text-sm text-gray-600">${list.notebox || '—'}</td>
+                    <td class="py-2 px-4 text-sm text-gray-700">${list.visibility === 'private' ? 'Private' : 'Shared'}</td>
                     <td class="py-2 px-4 text-left">
                       <button @click=${() => this._selectList(list)} class="bg-slate-900 text-white px-3 py-1 rounded text-sm hover:bg-slate-800 mr-2">View</button>
                     </td>
@@ -1146,6 +1260,17 @@ class ListEditor extends LitElement {
                   class="w-full p-2 border border-gray-300 rounded text-sm"
                   rows="4"
                 ></textarea>
+              </div>
+
+              <div class="mb-4">
+                <label class="block text-sm font-semibold text-gray-700 mb-2">Visibility</label>
+                <select
+                  id="edit-list-visibility"
+                  class="w-full p-2 border border-gray-300 rounded text-sm"
+                >
+                  <option value="shared" ?selected=${String(this.selectedList.visibility || 'shared') === 'shared'}>Shared</option>
+                  <option value="private" ?selected=${String(this.selectedList.visibility || 'shared') === 'private'}>Private</option>
+                </select>
               </div>
             </div>
 

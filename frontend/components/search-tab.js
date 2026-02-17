@@ -16,6 +16,7 @@ import {
 import { createSelectionHandlers } from './shared/selection-handlers.js';
 import { renderResultsPagination } from './shared/pagination-controls.js';
 import { renderSelectableImageGrid } from './shared/selectable-image-grid.js';
+import { renderSimilarityModeHeader } from './shared/similarity-mode-header.js';
 import {
   buildHotspotHistorySessionKey,
   createHotspotHistoryBatch,
@@ -45,12 +46,13 @@ import FolderBrowserPanel from './folder-browser-panel.js';
  *
  * Provides search functionality with two modes:
  * - Search Home: Filter-based image search with list management
+ * - Vectorstore: Text-to-vector hybrid retrieval over indexed embeddings/permatags
  * - Browse by Folder: Browse images grouped by folder
  * - Natural Search: Experimental NL query flow
  * - Explore: Tag chip based navigation
  *
  * @property {String} tenant - Current tenant ID
- * @property {String} searchSubTab - Active subtab ('home', 'browse-by-folder', 'natural-search', 'chips')
+ * @property {String} searchSubTab - Active subtab ('home', 'vectorstore', 'browse-by-folder', 'natural-search', 'chips')
  * @property {Array} searchChipFilters - Current filter chip selections
  * @property {Array} searchDropboxOptions - Dropbox folder options
  * @property {Array} searchImages - Images from filter panel
@@ -90,6 +92,8 @@ export class SearchTab extends LitElement {
     searchImages: { type: Array },
     searchSelectedImages: { type: Object },
     searchTotal: { type: Number },
+    searchPinnedImageId: { type: Number },
+    searchSimilarityAssetUuid: { type: String },
     searchLists: { type: Array },
     searchListId: { type: String, state: true },  // Internal state - not controlled by parent
     searchListTitle: { type: String, state: true },  // Internal state - not controlled by parent
@@ -109,6 +113,8 @@ export class SearchTab extends LitElement {
     searchRefreshing: { type: Boolean },
     hideSubtabs: { type: Boolean },
     initialExploreSelection: { type: Object },
+    initialVectorstoreQuery: { type: String },
+    initialVectorstoreQueryToken: { type: Number },
     curateThumbSize: { type: Number },
     tagStatsBySource: { type: Object },
     activeCurateTagSource: { type: String },
@@ -141,6 +147,9 @@ export class SearchTab extends LitElement {
     searchResultsView: { type: String, state: true },
     _searchHotspotHistoryBatches: { type: Array, state: true },
     _searchHotspotHistoryVisibleBatches: { type: Number, state: true },
+    vectorstoreQuery: { type: String, state: true },
+    vectorstoreLoading: { type: Boolean, state: true },
+    vectorstoreHasSearched: { type: Boolean, state: true },
   };
 
   constructor() {
@@ -153,6 +162,8 @@ export class SearchTab extends LitElement {
     this.searchImages = [];
     this.searchSelectedImages = new Set();
     this.searchTotal = 0;
+    this.searchPinnedImageId = null;
+    this.searchSimilarityAssetUuid = null;
     this.searchLists = [];
     this.searchListId = null;
     this.searchListTitle = '';
@@ -172,6 +183,8 @@ export class SearchTab extends LitElement {
     this.searchRefreshing = false;
     this.hideSubtabs = false;
     this.initialExploreSelection = null;
+    this.initialVectorstoreQuery = '';
+    this.initialVectorstoreQueryToken = 0;
     this.curateThumbSize = 120;
     this.tagStatsBySource = {};
     this.activeCurateTagSource = 'permatags';
@@ -219,6 +232,9 @@ export class SearchTab extends LitElement {
     this.searchResultsView = 'results';
     this._searchHotspotHistoryBatches = [];
     this._searchHotspotHistoryVisibleBatches = 1;
+    this.vectorstoreQuery = '';
+    this.vectorstoreLoading = false;
+    this.vectorstoreHasSearched = false;
     this._searchHotspotHandlers = createHotspotHandlers(this, {
       targetsProperty: 'searchHotspotTargets',
       dragTargetProperty: '_searchHotspotDragTarget',
@@ -253,6 +269,7 @@ export class SearchTab extends LitElement {
     this._searchHistoryOrder = null;
     this._searchHistoryGroupKey = null;
     this._searchFilterPanelHandlers = null;
+    this._appliedInitialVectorstoreQueryToken = 0;
     this._folderBrowserPanelHandlers = null;
     this._searchDropboxFetchTimer = null;
     this._searchListDropRefreshTimer = null;
@@ -301,7 +318,7 @@ export class SearchTab extends LitElement {
     this.searchRefreshing = true;
     try {
       const tasks = [];
-      if (this.searchSubTab === 'home') {
+      if (this.searchSubTab === 'home' || (this.searchSubTab === 'vectorstore' && this.vectorstoreHasSearched)) {
         tasks.push(this.searchFilterPanel?.fetchImages());
       }
       if (this.searchSubTab === 'browse-by-folder') {
@@ -432,6 +449,7 @@ export class SearchTab extends LitElement {
       this._teardownSearchFilterPanel(changedProps.get('searchFilterPanel'));
       this._setupSearchFilterPanel(this.searchFilterPanel);
       this._maybeStartInitialRefresh();
+      void this._maybeApplyInitialVectorstoreQuery();
     }
     if (changedProps.has('rightPanelTool')) {
       try {
@@ -445,6 +463,29 @@ export class SearchTab extends LitElement {
       if (this.hideSubtabs && this.searchSubTab !== 'home') {
         this.searchSubTab = 'home';
         return;
+      }
+      const previousSubTab = changedProps.get('searchSubTab');
+      if (this.searchSubTab === 'vectorstore') {
+        if (previousSubTab !== 'vectorstore') {
+          this.vectorstoreHasSearched = false;
+        }
+        const currentFilters = this.searchFilterPanel?.getState?.() || this.searchFilterPanel?.filters || {};
+        this.vectorstoreQuery = String(currentFilters.textQuery || this.vectorstoreQuery || '');
+      }
+      if (previousSubTab === 'vectorstore' && this.searchSubTab !== 'vectorstore' && this.searchFilterPanel) {
+        const currentFilters = this.searchFilterPanel.getState?.() || this.searchFilterPanel.filters || {};
+        if (currentFilters.textQuery || currentFilters.hybridVectorWeight !== undefined || currentFilters.hybridLexicalWeight !== undefined) {
+          this.searchFilterPanel.updateFilters({
+            ...currentFilters,
+            textQuery: '',
+            hybridVectorWeight: undefined,
+            hybridLexicalWeight: undefined,
+            offset: 0,
+          });
+          if (this.searchSubTab === 'home') {
+            this.searchFilterPanel.fetchImages();
+          }
+        }
       }
       this._maybeStartInitialRefresh();
       if (this.searchSubTab === 'browse-by-folder') {
@@ -474,6 +515,15 @@ export class SearchTab extends LitElement {
       }
     }
 
+    if (changedProps.has('searchSimilarityAssetUuid')) {
+      this._syncChipFiltersFromFilterPanel();
+      const previousValue = String(changedProps.get('searchSimilarityAssetUuid') || '').trim();
+      const currentValue = String(this.searchSimilarityAssetUuid || '').trim();
+      if (currentValue && currentValue !== previousValue) {
+        this._scrollToTopForSimilarityMode();
+      }
+    }
+
     if (changedProps.has('browseByFolderAppliedSelection')) {
       const total = (this.browseByFolderAppliedSelection || []).length;
       if (this.browseByFolderOffset >= total && total > 0) {
@@ -488,6 +538,14 @@ export class SearchTab extends LitElement {
       || changedProps.has('_searchHotspotHistoryVisibleBatches')
     ) {
       this._persistSearchHistorySessionState();
+    }
+
+    if (
+      changedProps.has('initialVectorstoreQuery')
+      || changedProps.has('initialVectorstoreQueryToken')
+      || (changedProps.has('vectorstoreLoading') && !this.vectorstoreLoading)
+    ) {
+      void this._maybeApplyInitialVectorstoreQuery();
     }
   }
 
@@ -1368,6 +1426,91 @@ export class SearchTab extends LitElement {
     }));
   }
 
+  _handleVectorstoreQueryInput(event) {
+    this.vectorstoreQuery = event?.target?.value || '';
+  }
+
+  _handleVectorstoreQueryKeydown(event) {
+    if (event?.key !== 'Enter') return;
+    event.preventDefault();
+    this._runVectorstoreSearch();
+  }
+
+  _scrollToTopForSimilarityMode() {
+    if (typeof window === 'undefined') return;
+    window.requestAnimationFrame(() => {
+      try {
+        window.scrollTo({ top: 0, behavior: 'auto' });
+      } catch {
+        window.scrollTo(0, 0);
+      }
+    });
+  }
+
+  async _maybeApplyInitialVectorstoreQuery() {
+    const token = Number(this.initialVectorstoreQueryToken || 0);
+    const query = String(this.initialVectorstoreQuery || '').trim();
+    if (!token || !query) return;
+    if (token === this._appliedInitialVectorstoreQueryToken) return;
+    if (!this.searchFilterPanel || this.vectorstoreLoading) return;
+
+    this._appliedInitialVectorstoreQueryToken = token;
+    this.vectorstoreQuery = query;
+
+    if (this.searchSubTab !== 'vectorstore') {
+      this.searchSubTab = 'vectorstore';
+      this.dispatchEvent(new CustomEvent('search-subtab-changed', {
+        detail: { subtab: 'vectorstore' },
+        bubbles: true,
+        composed: true,
+      }));
+      await this.updateComplete;
+    }
+
+    await this._runVectorstoreSearch();
+    this.dispatchEvent(new CustomEvent('vectorstore-query-applied', {
+      detail: { token, query },
+      bubbles: true,
+      composed: true,
+    }));
+  }
+
+  async _runVectorstoreSearch() {
+    if (!this.searchFilterPanel) return;
+    if (this.vectorstoreLoading) return;
+    const query = (this.vectorstoreQuery || '').trim();
+    const currentFilters = this.searchFilterPanel.getState?.() || this.searchFilterPanel.filters || {};
+    this.vectorstoreLoading = true;
+    try {
+      this.searchFilterPanel.updateFilters({
+        ...currentFilters,
+        textQuery: query,
+        offset: 0,
+      });
+      await this.searchFilterPanel.fetchImages();
+      this.vectorstoreHasSearched = true;
+    } catch (error) {
+      console.error('Vectorstore search failed:', error);
+    } finally {
+      this.vectorstoreLoading = false;
+    }
+  }
+
+  _clearVectorstoreSearch() {
+    if (!this.searchFilterPanel) return;
+    this.vectorstoreQuery = '';
+    this.vectorstoreHasSearched = false;
+    const currentFilters = this.searchFilterPanel.getState?.() || this.searchFilterPanel.filters || {};
+    this.searchFilterPanel.updateFilters({
+      ...currentFilters,
+      textQuery: '',
+      hybridVectorWeight: undefined,
+      hybridLexicalWeight: undefined,
+      offset: 0,
+    });
+    this.searchFilterPanel.fetchImages();
+  }
+
   _setupSearchFilterPanel(panel) {
     if (!panel) return;
     if (this._searchFilterPanelHandlers?.panel === panel) {
@@ -1458,11 +1601,18 @@ export class SearchTab extends LitElement {
   _syncChipFiltersFromFilterPanel() {
     const filters = this.searchFilterPanel?.getState?.() || this.searchFilterPanel?.filters;
     if (!filters || typeof filters !== 'object') return;
+    if (this.searchSubTab === 'vectorstore') {
+      this.vectorstoreQuery = String(filters.textQuery || '');
+    }
     this._syncChipFiltersFromFilterState(filters);
   }
 
   _syncChipFiltersFromFilterState(filters) {
     const nextChips = [];
+    if (this.searchSubTab === 'vectorstore') {
+      this.vectorstoreQuery = String(filters.textQuery || '');
+    }
+    const mediaType = String(filters.mediaType || filters.media_type || 'all').trim().toLowerCase();
 
     if (filters.permatagPositiveMissing) {
       nextChips.push({
@@ -1536,6 +1686,15 @@ export class SearchTab extends LitElement {
       });
     }
 
+    if (mediaType === 'image' || mediaType === 'video') {
+      nextChips.push({
+        type: 'media',
+        value: mediaType,
+        displayLabel: 'Media',
+        displayValue: mediaType === 'video' ? 'Videos' : 'Photos',
+      });
+    }
+
     if (filters.listExcludeId !== undefined && filters.listExcludeId !== null && filters.listExcludeId !== '') {
       const listExcludeValue = Number(filters.listExcludeId);
       const listId = Number.isFinite(listExcludeValue) ? listExcludeValue : filters.listExcludeId;
@@ -1559,6 +1718,16 @@ export class SearchTab extends LitElement {
         mode: 'include',
         displayLabel: 'List',
         displayValue: listTitle,
+      });
+    }
+
+    const similarityAssetUuid = String(this.searchSimilarityAssetUuid || '').trim();
+    if (similarityAssetUuid) {
+      nextChips.push({
+        type: 'similarity',
+        value: similarityAssetUuid,
+        displayLabel: 'Similarity',
+        displayValue: similarityAssetUuid,
       });
     }
 
@@ -1756,10 +1925,22 @@ export class SearchTab extends LitElement {
   }
 
   _handleChipFiltersChanged(event) {
-    const chips = event.detail.filters;
+    const chips = event.detail.filters || [];
+    const currentFilters = this.searchFilterPanel?.getState?.() || this.searchFilterPanel?.filters || {};
+    const preserveVectorstoreQuery = this.searchSubTab === 'vectorstore';
 
     // Store the chip filters for UI state
     this.searchChipFilters = chips;
+    const similarityChip = chips.find((chip) => chip?.type === 'similarity');
+    const nextSimilarityAssetUuid = String(similarityChip?.value || '').trim() || null;
+    if ((this.searchSimilarityAssetUuid || null) !== nextSimilarityAssetUuid) {
+      this.searchSimilarityAssetUuid = nextSimilarityAssetUuid;
+      this.dispatchEvent(new CustomEvent('search-similarity-context-changed', {
+        detail: { assetUuid: nextSimilarityAssetUuid },
+        bubbles: true,
+        composed: true,
+      }));
+    }
 
     // Build filter object from chip filters
     const searchFilters = {
@@ -1767,6 +1948,7 @@ export class SearchTab extends LitElement {
       offset: 0,
       sortOrder: this.searchDateOrder || 'desc',
       orderBy: this.searchOrderBy || 'photo_creation',
+      mediaType: 'all',
       hideZeroRating: true,
       keywords: {},
       operators: {},
@@ -1774,6 +1956,11 @@ export class SearchTab extends LitElement {
       categoryFilterSource: 'permatags',
       dropboxPathPrefix: '',
       filenameQuery: '',
+      textQuery: preserveVectorstoreQuery
+        ? String(currentFilters.textQuery || this.vectorstoreQuery || '').trim()
+        : '',
+      hybridVectorWeight: preserveVectorstoreQuery ? currentFilters.hybridVectorWeight : undefined,
+      hybridLexicalWeight: preserveVectorstoreQuery ? currentFilters.hybridLexicalWeight : undefined,
       listId: undefined,
       listExcludeId: undefined,
     };
@@ -1826,6 +2013,11 @@ export class SearchTab extends LitElement {
         case 'filename':
           searchFilters.filenameQuery = chip.value || '';
           break;
+        case 'media':
+          searchFilters.mediaType = chip.value === 'video' ? 'video' : (chip.value === 'image' ? 'image' : 'all');
+          break;
+        case 'similarity':
+          break;
       }
     });
 
@@ -1836,6 +2028,13 @@ export class SearchTab extends LitElement {
       this.searchFilterPanel.updateFilters(searchFilters);
       this.searchFilterPanel.fetchImages();
     }
+  }
+
+  _continueFromSimilarityMode() {
+    const nextChips = (this.searchChipFilters || []).filter((chip) => chip?.type !== 'similarity');
+    this.searchPinnedImageId = null;
+    this.searchSimilarityAssetUuid = null;
+    this._handleChipFiltersChanged({ detail: { filters: nextChips } });
   }
 
   _handleSearchListsRequested() {
@@ -2176,8 +2375,15 @@ export class SearchTab extends LitElement {
     const folderOptions = Array.from(new Set([...filteredFolders, ...selectedFolders]))
       .sort((a, b) => a.localeCompare(b));
     const showBrowseByFolderOverlay = this.browseByFolderAccordionOpen || this._hasPendingBrowseByFolderSelection();
-    const searchPagination = this.searchSubTab === 'home'
+    const activeFilterState = this.searchFilterPanel?.getState?.() || this.searchFilterPanel?.filters || {};
+    const activeVectorstoreQuery = String(activeFilterState.textQuery || this.vectorstoreQuery || '').trim();
+    const shouldShowVectorstoreResults = this.searchSubTab !== 'vectorstore' || this.vectorstoreHasSearched;
+    const visibleSearchImages = shouldShowVectorstoreResults ? (this.searchImages || []) : [];
+    const searchPagination = (this.searchSubTab === 'home' || this.searchSubTab === 'vectorstore')
       ? (() => {
+        if (this.searchSubTab === 'vectorstore' && !this.vectorstoreHasSearched) {
+          return html``;
+        }
         const { offset, limit, total, count } = this._getSearchPaginationState();
         return renderResultsPagination({
           offset,
@@ -2293,16 +2499,22 @@ export class SearchTab extends LitElement {
                 Browse by Folder
               </button>
               <button
-                class="curate-subtab ${this.searchSubTab === 'natural-search' ? 'active' : ''}"
-                @click=${() => this._handleSearchSubTabChange('natural-search')}
-              >
-                Natural Search
-              </button>
-              <button
                 class="curate-subtab ${this.searchSubTab === 'chips' ? 'active' : ''}"
                 @click=${() => this._handleSearchSubTabChange('chips')}
               >
                 Explore
+              </button>
+              <button
+                class="curate-subtab ${this.searchSubTab === 'vectorstore' ? 'active' : ''}"
+                @click=${() => this._handleSearchSubTabChange('vectorstore')}
+              >
+                Search - Vectorstore
+              </button>
+              <button
+                class="curate-subtab ${this.searchSubTab === 'natural-search' ? 'active' : ''}"
+                @click=${() => this._handleSearchSubTabChange('natural-search')}
+              >
+                Search - LLM
               </button>
             </div>
 
@@ -2338,44 +2550,80 @@ export class SearchTab extends LitElement {
           </div>
         ` : html``}
 
-        <!-- Search Home Subtab -->
-        ${this.searchSubTab === 'home' ? html`
+        <!-- Search Home / Vectorstore Subtab -->
+        ${(this.searchSubTab === 'home' || this.searchSubTab === 'vectorstore') ? html`
           <div>
-            <!-- Filter Chips Component -->
-            <filter-chips
-              .tenant=${this.tenant}
+	            ${this.searchSubTab === 'vectorstore' ? html`
+	              <div class="bg-white rounded-lg shadow p-4 mb-3 border border-blue-100">
+                <div class="flex flex-wrap items-center gap-2">
+                  <div class="text-sm font-semibold text-gray-900">Search</div>
+                </div>
+                <div class="mt-3 flex flex-wrap gap-2 items-center">
+                  <input
+                    class="flex-1 min-w-[260px] border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                    placeholder="Describe what you want to find (e.g. aerial silks performer in blue light)"
+                    .value=${this.vectorstoreQuery}
+                    @input=${this._handleVectorstoreQueryInput}
+                    @keydown=${this._handleVectorstoreQueryKeydown}
+                  >
+                  <button
+                    class="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+                    ?disabled=${!this.vectorstoreQuery.trim() || this.vectorstoreLoading}
+                    @click=${this._runVectorstoreSearch}
+                  >
+                    ${this.vectorstoreLoading ? 'Thinking...' : 'Search'}
+                  </button>
+                  <button
+                    class="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 text-sm font-semibold hover:bg-gray-50"
+                    ?disabled=${this.vectorstoreLoading}
+                    @click=${this._clearVectorstoreSearch}
+                  >
+                    Clear
+                  </button>
+	                </div>
+	              </div>
+	            ` : html``}
+	            ${(this.searchSubTab !== 'vectorstore' || this.vectorstoreHasSearched) ? html`
+	            <!-- Filter Chips Component -->
+	            <filter-chips
+	              .tenant=${this.tenant}
               .tagStatsBySource=${this.tagStatsBySource}
               .activeCurateTagSource=${this.activeCurateTagSource || 'permatags'}
               .keywords=${this.keywords}
               .imageStats=${this.imageStats}
               .activeFilters=${this.searchChipFilters}
+              .hideFiltersSection=${Boolean(this.searchSimilarityAssetUuid)}
               .dropboxFolders=${this.searchDropboxOptions || []}
               .lists=${this.searchLists}
-              .renderSortControls=${() => html`
-                <div class="flex items-center gap-2">
-                  <span class="text-sm font-semibold text-gray-700">Sort:</span>
-                  <div class="curate-audit-toggle">
-                    <button
-                      class=${this.searchOrderBy === 'rating' ? 'active' : ''}
-                      @click=${() => this._handleCurateQuickSort('rating')}
-                    >
-                      Rating ${this._getCurateQuickSortArrow('rating')}
-                    </button>
-                    <button
-                      class=${this.searchOrderBy === 'photo_creation' ? 'active' : ''}
-                      @click=${() => this._handleCurateQuickSort('photo_creation')}
-                    >
-                      Photo Date ${this._getCurateQuickSortArrow('photo_creation')}
-                    </button>
-                    <button
-                      class=${this.searchOrderBy === 'processed' ? 'active' : ''}
-                      @click=${() => this._handleCurateQuickSort('processed')}
-                    >
-                      Process Date ${this._getCurateQuickSortArrow('processed')}
-                    </button>
+              .renderSortControls=${() => this.searchSimilarityAssetUuid
+                ? renderSimilarityModeHeader({
+                  onContinue: () => this._continueFromSimilarityMode(),
+                })
+                : html`
+                  <div class="flex items-center gap-2">
+                    <span class="text-sm font-semibold text-gray-700">Sort:</span>
+                    <div class="curate-audit-toggle">
+                      <button
+                        class=${this.searchOrderBy === 'rating' ? 'active' : ''}
+                        @click=${() => this._handleCurateQuickSort('rating')}
+                      >
+                        Rating ${this._getCurateQuickSortArrow('rating')}
+                      </button>
+                      <button
+                        class=${this.searchOrderBy === 'photo_creation' ? 'active' : ''}
+                        @click=${() => this._handleCurateQuickSort('photo_creation')}
+                      >
+                        Photo Date ${this._getCurateQuickSortArrow('photo_creation')}
+                      </button>
+                      <button
+                        class=${this.searchOrderBy === 'processed' ? 'active' : ''}
+                        @click=${() => this._handleCurateQuickSort('processed')}
+                      >
+                        Process Date ${this._getCurateQuickSortArrow('processed')}
+                      </button>
+                    </div>
                   </div>
-                </div>
-              `}
+                `}
               @filters-changed=${this._handleChipFiltersChanged}
               @folder-search=${this._handleSearchDropboxInput}
               @lists-requested=${this._handleSearchListsRequested}
@@ -2407,9 +2655,9 @@ export class SearchTab extends LitElement {
                     <div class="p-2">
                       ${searchPagination}
                     </div>
-                    ${this.searchImages && this.searchImages.length > 0 ? html`
+                    ${visibleSearchImages && visibleSearchImages.length > 0 ? html`
                       ${renderSelectableImageGrid({
-                        images: this.searchImages,
+                        images: visibleSearchImages,
                         selection: this.searchDragSelection,
                         flashSelectionIds: this._searchFlashSelectionIds,
                         selectionHandlers: this._searchSelectionHandlers,
@@ -2419,8 +2667,8 @@ export class SearchTab extends LitElement {
                           renderCuratePermatagSummary: this.renderCuratePermatagSummary || this._renderSearchPermatagSummary.bind(this),
                           formatCurateDate: this.formatCurateDate,
                         },
-                        onImageClick: (event, image) => this._handleSearchImageClick(event, image, this.searchImages),
-                        onDragStart: (event, image) => this._handleSearchDragStart(event, image, this.searchImages),
+                        onImageClick: (event, image) => this._handleSearchImageClick(event, image, visibleSearchImages),
+                        onDragStart: (event, image) => this._handleSearchDragStart(event, image, visibleSearchImages),
                         selectionEvents: {
                           pointerDown: (event, index, imageId) => this._handleSearchPointerDown(event, index, imageId),
                           pointerMove: (event) => this._handleSearchPointerMove(event),
@@ -2430,12 +2678,18 @@ export class SearchTab extends LitElement {
                           enableReordering: false,
                           showPermatags: true,
                           showAiScore: false,
+                          pinnedImageIds: Number.isFinite(Number(this.searchPinnedImageId))
+                            ? new Set([Number(this.searchPinnedImageId)])
+                            : null,
+                          pinnedLabel: 'Source',
                           emptyMessage: 'No images found. Adjust filters to search.',
                         },
                       })}
                     ` : html`
                       <div class="p-4 text-center text-gray-500 text-sm">
-                        No images found. Adjust filters to search.
+                        ${this.searchSubTab === 'vectorstore' && !activeVectorstoreQuery
+                          ? 'Enter a query above to run vectorstore search.'
+                          : 'No images found. Adjust filters to search.'}
                       </div>
                     `}
                     <div class="p-2">
@@ -2445,10 +2699,11 @@ export class SearchTab extends LitElement {
                 </div>
               </div>
 
-              ${savedPane}
-            </div>
-          </div>
-        ` : ''}
+	              ${savedPane}
+	            </div>
+	            ` : html``}
+	          </div>
+	        ` : ''}
 
         <!-- Browse by Folder Subtab -->
         ${this.searchSubTab === 'browse-by-folder' ? html`

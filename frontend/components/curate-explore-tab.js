@@ -3,7 +3,9 @@ import { enqueueCommand } from '../services/command-queue.js';
 import { getDropboxFolders, getLists, createList, getListItems } from '../services/api.js';
 import { createSelectionHandlers } from './shared/selection-handlers.js';
 import { renderResultsPagination } from './shared/pagination-controls.js';
+import { renderResultsViewControls } from './shared/results-view-controls.js';
 import { renderSelectableImageGrid } from './shared/selectable-image-grid.js';
+import { renderSimilarityModeHeader } from './shared/similarity-mode-header.js';
 import {
   buildHotspotHistorySessionKey,
   createHotspotHistoryBatch,
@@ -94,6 +96,8 @@ export class CurateExploreTab extends LitElement {
     offset: { type: Number },
     total: { type: Number },
     loading: { type: Boolean },
+    curatePinnedImageId: { type: Number },
+    curateSimilarityAssetUuid: { type: String },
     dragSelection: { type: Array },
     dragSelecting: { type: Boolean },
     dragStartIndex: { type: Number },
@@ -110,6 +114,7 @@ export class CurateExploreTab extends LitElement {
     curateKeywordOperators: { type: Object },
     curateNoPositivePermatags: { type: Boolean },
     minRating: { type: Object },
+    mediaType: { type: String },
     dropboxPathPrefix: { type: String },
     filenameQuery: { type: String },
     listFilterId: { type: [String, Number] },
@@ -157,6 +162,8 @@ export class CurateExploreTab extends LitElement {
     this.offset = 0;
     this.total = 0;
     this.loading = false;
+    this.curatePinnedImageId = null;
+    this.curateSimilarityAssetUuid = null;
     this.dragSelection = [];
     this.dragSelecting = false;
     this.dragStartIndex = null;
@@ -173,6 +180,7 @@ export class CurateExploreTab extends LitElement {
     this.curateKeywordOperators = {};
     this.curateNoPositivePermatags = false;
     this.minRating = null;
+    this.mediaType = 'all';
     this.dropboxPathPrefix = '';
     this.filenameQuery = '';
     this.listFilterId = '';
@@ -483,11 +491,39 @@ export class CurateExploreTab extends LitElement {
 
   _handleCurateChipFiltersChanged(event) {
     const filters = event.detail?.filters || [];
+    const similarityChip = filters.find((chip) => chip?.type === 'similarity');
+    const nextSimilarityAssetUuid = String(similarityChip?.value || '').trim() || null;
+    if ((this.curateSimilarityAssetUuid || null) !== nextSimilarityAssetUuid) {
+      this.curateSimilarityAssetUuid = nextSimilarityAssetUuid;
+      this.dispatchEvent(new CustomEvent('curate-similarity-context-changed', {
+        detail: { assetUuid: nextSimilarityAssetUuid },
+        bubbles: true,
+        composed: true,
+      }));
+    }
     this.dispatchEvent(new CustomEvent('curate-filters-changed', {
       detail: { filters },
       bubbles: true,
       composed: true
     }));
+  }
+
+  _continueFromSimilarityMode() {
+    const nextFilters = this._buildActiveFiltersFromSelection().filter((filter) => filter?.type !== 'similarity');
+    this.curatePinnedImageId = null;
+    this.curateSimilarityAssetUuid = null;
+    this._handleCurateChipFiltersChanged({ detail: { filters: nextFilters } });
+  }
+
+  _scrollToTopForSimilarityMode() {
+    if (typeof window === 'undefined') return;
+    window.requestAnimationFrame(() => {
+      try {
+        window.scrollTo({ top: 0, behavior: 'auto' });
+      } catch {
+        window.scrollTo(0, 0);
+      }
+    });
   }
 
   _handleListsRequested() {
@@ -552,6 +588,13 @@ export class CurateExploreTab extends LitElement {
     }
     if (changedProperties.has('rightPanelTool') && this.rightPanelTool === 'lists') {
       this._ensureListsLoaded();
+    }
+    if (changedProperties.has('curateSimilarityAssetUuid')) {
+      const previousValue = String(changedProperties.get('curateSimilarityAssetUuid') || '').trim();
+      const currentValue = String(this.curateSimilarityAssetUuid || '').trim();
+      if (currentValue && currentValue !== previousValue) {
+        this._scrollToTopForSimilarityMode();
+      }
     }
     if (
       changedProperties.has('tenant')
@@ -981,6 +1024,16 @@ export class CurateExploreTab extends LitElement {
       });
     }
 
+    const mediaType = String(this.mediaType || 'all').trim().toLowerCase();
+    if (mediaType === 'image' || mediaType === 'video') {
+      filters.push({
+        type: 'media',
+        value: mediaType,
+        displayLabel: 'Media',
+        displayValue: mediaType === 'video' ? 'Videos' : 'Photos',
+      });
+    }
+
     if (this.dropboxPathPrefix) {
       filters.push({
         type: 'folder',
@@ -1011,6 +1064,16 @@ export class CurateExploreTab extends LitElement {
         mode,
         displayLabel: 'List',
         displayValue,
+      });
+    }
+
+    const similarityAssetUuid = String(this.curateSimilarityAssetUuid || '').trim();
+    if (similarityAssetUuid) {
+      filters.push({
+        type: 'similarity',
+        value: similarityAssetUuid,
+        displayLabel: 'Similarity',
+        displayValue: similarityAssetUuid,
       });
     }
 
@@ -1365,33 +1428,38 @@ export class CurateExploreTab extends LitElement {
               .keywords=${this.keywords}
               .imageStats=${this.imageStats}
               .activeFilters=${activeFilters}
+              .hideFiltersSection=${Boolean(this.curateSimilarityAssetUuid)}
               .dropboxFolders=${this.dropboxFolders || []}
               .lists=${this._lists}
-              .renderSortControls=${() => html`
-                <div class="flex items-center gap-2">
-                  <span class="text-sm font-semibold text-gray-700">Sort:</span>
-                  <div class="curate-audit-toggle">
-                    <button
-                      class=${this.orderBy === 'rating' ? 'active' : ''}
-                      @click=${() => this._handleCurateQuickSort('rating')}
-                    >
-                      Rating ${this._getCurateQuickSortArrow('rating')}
-                    </button>
-                    <button
-                      class=${this.orderBy === 'photo_creation' ? 'active' : ''}
-                      @click=${() => this._handleCurateQuickSort('photo_creation')}
-                    >
-                      Photo Date ${this._getCurateQuickSortArrow('photo_creation')}
-                    </button>
-                    <button
-                      class=${this.orderBy === 'processed' ? 'active' : ''}
-                      @click=${() => this._handleCurateQuickSort('processed')}
-                    >
-                      Process Date ${this._getCurateQuickSortArrow('processed')}
-                    </button>
+              .renderSortControls=${() => this.curateSimilarityAssetUuid
+                ? renderSimilarityModeHeader({
+                  onContinue: () => this._continueFromSimilarityMode(),
+                })
+                : html`
+                  <div class="flex items-center gap-2">
+                    <span class="text-sm font-semibold text-gray-700">Sort:</span>
+                    <div class="curate-audit-toggle">
+                      <button
+                        class=${this.orderBy === 'rating' ? 'active' : ''}
+                        @click=${() => this._handleCurateQuickSort('rating')}
+                      >
+                        Rating ${this._getCurateQuickSortArrow('rating')}
+                      </button>
+                      <button
+                        class=${this.orderBy === 'photo_creation' ? 'active' : ''}
+                        @click=${() => this._handleCurateQuickSort('photo_creation')}
+                      >
+                        Photo Date ${this._getCurateQuickSortArrow('photo_creation')}
+                      </button>
+                      <button
+                        class=${this.orderBy === 'processed' ? 'active' : ''}
+                        @click=${() => this._handleCurateQuickSort('processed')}
+                      >
+                        Process Date ${this._getCurateQuickSortArrow('processed')}
+                      </button>
+                    </div>
                   </div>
-                </div>
-              `}
+                `}
               @filters-changed=${this._handleCurateChipFiltersChanged}
               @folder-search=${this._handleCurateDropboxInput}
               @lists-requested=${this._handleListsRequested}
@@ -1403,22 +1471,11 @@ export class CurateExploreTab extends LitElement {
         <div class="curate-layout mt-4" style="--curate-thumb-size: ${this.thumbSize}px;">
           <div class="curate-pane">
               <div class="curate-pane-header" style="padding: 4px;">
-                  <div class="curate-pane-header-row">
-                    <div class="curate-audit-toggle">
-                      <button
-                        class=${this.curateResultsView === 'results' ? 'active' : ''}
-                        @click=${() => this._setCurateResultsView('results')}
-                      >
-                        Results
-                      </button>
-                      <button
-                        class=${this.curateResultsView === 'history' ? 'active' : ''}
-                        @click=${() => this._setCurateResultsView('history')}
-                      >
-                        Hotspot History
-                      </button>
-                    </div>
-                    ${this.curateResultsView === 'results' ? renderResultsPagination({
+                ${renderResultsViewControls({
+                  view: this.curateResultsView,
+                  onChange: (nextView) => this._setCurateResultsView(nextView),
+                  actions: this.curateResultsView === 'results'
+                    ? renderResultsPagination({
                       total,
                       offset,
                       limit,
@@ -1427,8 +1484,9 @@ export class CurateExploreTab extends LitElement {
                       onNext: this._handleCuratePageNext,
                       onLimitChange: (e) => this._handleCurateLimitChange(Number(e.target.value)),
                       disabled: this.loading,
-                    }) : html``}
-                  </div>
+                    })
+                    : null,
+                })}
               </div>
               ${this.loading ? html`
                 <div class="curate-loading-overlay" aria-label="Loading">
@@ -1468,6 +1526,10 @@ export class CurateExploreTab extends LitElement {
                         enableReordering: true,
                         showPermatags: true,
                         showAiScore: true,
+                        pinnedImageIds: Number.isFinite(Number(this.curatePinnedImageId))
+                          ? new Set([Number(this.curatePinnedImageId)])
+                          : null,
+                        pinnedLabel: 'Source',
                         emptyMessage: 'No images available.',
                       },
                     })}

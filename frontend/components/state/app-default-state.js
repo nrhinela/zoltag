@@ -9,6 +9,7 @@ export function initializeAppDefaultState(host) {
   host.homeLoading = false;
   host._homeLoadingCount = 0;
   host.homeRecommendationsTab = host.homeRecommendationsTab || 'lists';
+  host.homeVectorstoreQuery = '';
   host.imageStats = null;
   host.mlTrainingStats = null;
   host.tagStatsBySource = {};
@@ -16,6 +17,7 @@ export function initializeAppDefaultState(host) {
   host.curateLimit = 100;
   host.curateOrderBy = 'photo_creation';
   host.curateOrderDirection = 'desc';
+  host.curateMediaType = 'all';
   host.curateHideDeleted = true;
   host.curateMinRating = null;
   host.curateKeywordFilters = {};
@@ -30,6 +32,8 @@ export function initializeAppDefaultState(host) {
   host.curatePageOffset = 0;
   host.curateTotal = null;
   host.curateLoading = false;
+  host.curatePinnedImageId = null;
+  host.curateSimilarityAssetUuid = null;
   host.curateDragSelection = [];
   host.curateDragSelecting = false;
   host.curateDragStartIndex = null;
@@ -60,6 +64,7 @@ export function initializeAppDefaultState(host) {
   host.curateAuditAiModel = '';
   host.curateAuditOrderBy = 'photo_creation';
   host.curateAuditOrderDirection = 'desc';
+  host.curateAuditMediaType = 'all';
   host.curateAuditHideDeleted = true;
   host.curateAuditMinRating = null;
   host.curateAuditNoPositivePermatags = false;
@@ -75,8 +80,12 @@ export function initializeAppDefaultState(host) {
   host.searchOrderDirection = 'desc';
   host.searchImages = [];
   host.searchTotal = 0;
+  host.searchPinnedImageId = null;
+  host.searchSimilarityAssetUuid = null;
   host.activeSearchSubTab = host.activeSearchSubTab || 'home';
   host.pendingSearchExploreSelection = null;
+  host.pendingVectorstoreQuery = null;
+  host.pendingVectorstoreQueryToken = 0;
   host.pendingListSelectionId = null;
   host.pendingListSelectionToken = host.pendingListSelectionToken || 0;
   host.currentUser = null;

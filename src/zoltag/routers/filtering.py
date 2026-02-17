@@ -16,6 +16,8 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, select, or_
 from sqlalchemy.sql import Selectable
 
+from zoltag.auth.models import UserProfile
+from zoltag.list_visibility import can_view_list
 from zoltag.tenant import Tenant
 from zoltag.metadata import Asset, ImageMetadata, MachineTag, Permatag
 from zoltag.models.config import PhotoList, PhotoListItem, Keyword, KeywordCategory
@@ -27,7 +29,9 @@ from zoltag.tenant_scope import tenant_column_filter
 def apply_list_filter(
     db: Session,
     tenant: Tenant,
-    list_id: int
+    list_id: int,
+    current_user: UserProfile,
+    is_tenant_admin: bool = False,
 ) -> Set[int]:
     """Filter images by PhotoList membership.
 
@@ -46,7 +50,7 @@ def apply_list_filter(
         PhotoList.id == list_id,
         tenant_column_filter(PhotoList, tenant),
     ).first()
-    if not lst:
+    if not lst or not can_view_list(lst, user=current_user, is_tenant_admin=is_tenant_admin):
         raise HTTPException(status_code=404, detail="List not found")
 
     list_image_ids = db.query(ImageMetadata.id).join(
@@ -601,7 +605,9 @@ def calculate_relevance_scores(
 def apply_list_filter_subquery(
     db: Session,
     tenant: Tenant,
-    list_id: int
+    list_id: int,
+    current_user: UserProfile,
+    is_tenant_admin: bool = False,
 ) -> Selectable:
     """Return subquery of image IDs in list (not materialized).
 
@@ -620,7 +626,7 @@ def apply_list_filter_subquery(
         PhotoList.id == list_id,
         tenant_column_filter(PhotoList, tenant),
     ).first()
-    if not lst:
+    if not lst or not can_view_list(lst, user=current_user, is_tenant_admin=is_tenant_admin):
         raise HTTPException(status_code=404, detail="List not found")
 
     return db.query(ImageMetadata.id).join(
@@ -860,6 +866,8 @@ def apply_ml_tag_type_filter_subquery(
 def build_image_query_with_subqueries(
     db: Session,
     tenant: Tenant,
+    current_user: UserProfile,
+    is_tenant_admin: bool = False,
     list_id: Optional[int] = None,
     list_exclude_id: Optional[int] = None,
     rating: Optional[int] = None,
@@ -873,6 +881,7 @@ def build_image_query_with_subqueries(
     permatag_positive_missing: bool = False,
     dropbox_path_prefix: Optional[str] = None,
     filename_query: Optional[str] = None,
+    media_type: Optional[str] = None,
     ml_keyword: Optional[str] = None,
     ml_tag_type: Optional[str] = None,
     apply_ml_tag_filter: bool = True,
@@ -898,6 +907,7 @@ def build_image_query_with_subqueries(
         permatag_missing: Whether to exclude permatag matches
         permatag_positive_missing: Whether to exclude images with positive permatags
         filename_query: Case-insensitive partial filename match
+        media_type: Optional media type filter ('image' or 'video')
         ml_keyword: Optional ML keyword to filter by (for zero-shot tagging)
         ml_tag_type: Optional ML tag type (e.g., 'siglip', 'clip') to use with ml_keyword
         apply_ml_tag_filter: Whether to apply explicit ML keyword/type filter subquery
@@ -922,7 +932,13 @@ def build_image_query_with_subqueries(
     # Apply list filter if provided
     if list_id is not None:
         try:
-            list_subquery = apply_list_filter_subquery(db, tenant, list_id)
+            list_subquery = apply_list_filter_subquery(
+                db,
+                tenant,
+                list_id,
+                current_user=current_user,
+                is_tenant_admin=is_tenant_admin,
+            )
             subqueries_list.append(list_subquery)
         except HTTPException:
             # List not found - return empty result
@@ -931,7 +947,13 @@ def build_image_query_with_subqueries(
     # Apply list exclusion filter if provided
     if list_exclude_id is not None:
         try:
-            list_exclude_subquery = apply_list_filter_subquery(db, tenant, list_exclude_id)
+            list_exclude_subquery = apply_list_filter_subquery(
+                db,
+                tenant,
+                list_exclude_id,
+                current_user=current_user,
+                is_tenant_admin=is_tenant_admin,
+            )
             exclude_subqueries_list.append(list_exclude_subquery)
         except HTTPException:
             # List not found - return empty result
@@ -1010,6 +1032,19 @@ def build_image_query_with_subqueries(
                 .subquery()
             )
             subqueries_list.append(filename_subquery)
+
+    if media_type in {"image", "video"}:
+        media_type_subquery = (
+            db.query(ImageMetadata.id)
+            .join(Asset, Asset.id == ImageMetadata.asset_id)
+            .filter(
+                tenant_column_filter(ImageMetadata, tenant),
+                tenant_column_filter(Asset, tenant),
+                Asset.media_type == media_type,
+            )
+            .subquery()
+        )
+        subqueries_list.append(media_type_subquery)
 
     # Apply ML tag type filter if both keyword and tag_type provided
     if apply_ml_tag_filter and ml_keyword and ml_tag_type:

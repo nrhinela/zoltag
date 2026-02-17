@@ -1,4 +1,4 @@
-"""SigLIP tag recompute command."""
+"""Zero-shot tag recompute command."""
 
 import click
 from datetime import datetime, timedelta
@@ -17,14 +17,14 @@ from zoltag.tenant_scope import assign_tenant_scope
 from zoltag.cli.base import CliCommand
 
 
-@click.command(name='recompute-siglip-tags')
+@click.command(name='recompute-zeroshot-tags')
 @click.option('--tenant-id', required=True, help='Tenant ID for which to recompute tags')
 @click.option('--batch-size', default=50, type=int, help='Process images in batches')
 @click.option('--limit', default=None, type=int, help='Limit number of images to process')
 @click.option('--offset', default=0, type=int, help='Offset into image list')
-@click.option('--replace', is_flag=True, default=False, help='Replace existing SigLIP tags')
-@click.option('--older-than-days', default=None, type=float, help='Only process images with SigLIP tags older than this many days')
-def recompute_siglip_tags_command(
+@click.option('--replace', is_flag=True, default=False, help='Replace existing zero-shot tags')
+@click.option('--older-than-days', default=None, type=float, help='Only process images with zero-shot tags older than this many days')
+def recompute_zeroshot_tags_command(
     tenant_id: str,
     batch_size: int,
     limit: Optional[int],
@@ -32,7 +32,7 @@ def recompute_siglip_tags_command(
     replace: bool,
     older_than_days: Optional[float]
 ):
-    """Recompute SigLIP-based keyword tags for all images in a tenant.
+    """Recompute zero-shot keyword tags for all images in a tenant.
 
     This command reprocesses all images using the tenant's configured keyword models to:
 
@@ -45,12 +45,12 @@ def recompute_siglip_tags_command(
     to recalculate keyword assignments with different model weights.
 
     Storage: Tag data is stored in PostgreSQL database, not GCP buckets."""
-    cmd = RecomputeSiglipTagsCommand(tenant_id, batch_size, limit, offset, replace, older_than_days)
+    cmd = RecomputeZeroShotTagsCommand(tenant_id, batch_size, limit, offset, replace, older_than_days)
     cmd.run()
 
 
-class RecomputeSiglipTagsCommand(CliCommand):
-    """Command to recompute SigLIP tags."""
+class RecomputeZeroShotTagsCommand(CliCommand):
+    """Command to recompute zero-shot tags."""
 
     def __init__(
         self,
@@ -70,7 +70,7 @@ class RecomputeSiglipTagsCommand(CliCommand):
         self.older_than_days = older_than_days
 
     def run(self):
-        """Execute recompute SigLIP tags command."""
+        """Execute recompute zero-shot tags command."""
         self.setup_db()
         try:
             self._retag_images()
@@ -78,7 +78,7 @@ class RecomputeSiglipTagsCommand(CliCommand):
             self.cleanup_db()
 
     def _retag_images(self):
-        """Reprocess all images to regenerate SigLIP tags with current keywords."""
+        """Reprocess all images to regenerate zero-shot tags with current keywords."""
         self.tenant = self.load_tenant(self.tenant_id)
 
         # Load config
@@ -234,7 +234,7 @@ class RecomputeSiglipTagsCommand(CliCommand):
                                 image_embedding,
                                 keywords,
                                 text_embeddings,
-                                threshold=settings.keyword_model_threshold
+                                threshold=settings.zeroshot_tag_threshold
                             )
                             all_tags.extend(category_tags)
 
@@ -280,4 +280,4 @@ class RecomputeSiglipTagsCommand(CliCommand):
                 if reached_limit:
                     break
 
-        click.echo(f"\n✓ SigLIP tag recompute complete: {processed} · Skipped: {skipped} · Total: {total}")
+            click.echo(f"\n✓ Zero-shot tag recompute complete: {processed} · Skipped: {skipped} · Total: {total}")

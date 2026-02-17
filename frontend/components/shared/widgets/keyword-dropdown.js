@@ -73,6 +73,19 @@ class KeywordDropdown extends LitElement {
       this.searchQuery = '';
     }
     this.open = !this.open;
+    if (this.open) {
+      this._focusSearchInput();
+    }
+  }
+
+  _focusSearchInput() {
+    this.updateComplete.then(() => {
+      if (!this.open) return;
+      const input = this.renderRoot?.querySelector('[data-role="keyword-search-input"]');
+      if (!input) return;
+      input.focus();
+      input.select();
+    });
   }
 
   _selectValue(value) {
@@ -172,6 +185,7 @@ class KeywordDropdown extends LitElement {
         <div class="sticky top-0 bg-white border-b border-gray-100 p-2">
           <input
             type="text"
+            data-role="keyword-search-input"
             class="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
             placeholder="Search keywords..."
             autofocus

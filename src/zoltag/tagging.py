@@ -111,12 +111,58 @@ class SigLIPTagger:
 
         self.model_name = model_name
         self.model_version = model_name
-        self.model = SiglipModel.from_pretrained(model_name)
-        self.processor = SiglipProcessor.from_pretrained(model_name, use_fast=False)
+        try:
+            self.model = SiglipModel.from_pretrained(model_name)
+            self.processor = SiglipProcessor.from_pretrained(model_name, use_fast=False)
+        except OSError:
+            # Some HF/transformers versions attempt a network HEAD for processor_config.json
+            # even when local cache contains preprocessor_config.json. Fall back to cached files.
+            self.model = SiglipModel.from_pretrained(model_name, local_files_only=True)
+            self.processor = SiglipProcessor.from_pretrained(
+                model_name,
+                use_fast=False,
+                local_files_only=True,
+            )
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.model.to(self.device)
         self.model.eval()
         self.model_type = "siglip"
+
+    @staticmethod
+    def _extract_embedding_tensor(features, source: str) -> torch.Tensor:
+        """Extract a tensor embedding from raw tensor, tuple, or model output objects."""
+        if torch.is_tensor(features):
+            return features
+
+        # Recent transformers versions may return tuples or BaseModelOutputWithPooling.
+        if isinstance(features, tuple):
+            for item in features:
+                if torch.is_tensor(item):
+                    return item
+
+        for attr in ("image_embeds", "text_embeds", "pooler_output", "last_hidden_state"):
+            value = getattr(features, attr, None)
+            if torch.is_tensor(value):
+                if attr == "last_hidden_state" and value.ndim == 3:
+                    # Fallback to CLS token representation when pooled output is absent.
+                    return value[:, 0, :]
+                return value
+
+        raise TypeError(f"Unsupported {source} output type: {type(features)!r}")
+
+    @staticmethod
+    def _normalize_embeddings(embeddings: torch.Tensor) -> torch.Tensor:
+        """L2-normalize embeddings row-wise with shape safeguards."""
+        if embeddings.ndim == 1:
+            embeddings = embeddings.unsqueeze(0)
+        elif embeddings.ndim == 3:
+            embeddings = embeddings[:, 0, :]
+
+        if embeddings.ndim != 2:
+            raise ValueError(f"Expected 2D embedding tensor, got shape {tuple(embeddings.shape)}")
+
+        norms = embeddings.norm(dim=-1, keepdim=True).clamp_min(1e-12)
+        return embeddings / norms
 
     def tag_image(
         self,
@@ -215,8 +261,9 @@ class SigLIPTagger:
                 padding=True
             )
             inputs = {k: v.to(self.device) for k, v in inputs.items()}
-            text_embeds = self.model.get_text_features(**inputs)
-            text_embeds = text_embeds / text_embeds.norm(dim=-1, keepdim=True)
+            text_outputs = self.model.get_text_features(**inputs)
+            text_embeds = self._extract_embedding_tensor(text_outputs, "text_features")
+            text_embeds = self._normalize_embeddings(text_embeds)
 
         return keywords, text_embeds
 
@@ -237,7 +284,7 @@ class SigLIPTagger:
                 dtype=text_embeddings.dtype,
                 device=text_embeddings.device
             )
-            image_tensor = image_tensor / image_tensor.norm(dim=-1, keepdim=True)
+            image_tensor = image_tensor / image_tensor.norm(dim=-1, keepdim=True).clamp_min(1e-12)
             logits = torch.matmul(image_tensor, text_embeddings.t())
             logit_scale = getattr(self.model, "logit_scale", None)
             if logit_scale is not None:
@@ -266,9 +313,9 @@ class SigLIPTagger:
             inputs = self.processor(images=image, return_tensors="pt")
             inputs = {k: v.to(self.device) for k, v in inputs.items()}
             # SigLIP requires text inputs for full forward; use image-only helper instead.
-            image_embeds = self.model.get_image_features(**inputs)
-
-            image_embeds = image_embeds / image_embeds.norm(dim=-1, keepdim=True)
+            image_outputs = self.model.get_image_features(**inputs)
+            image_embeds = self._extract_embedding_tensor(image_outputs, "image_features")
+            image_embeds = self._normalize_embeddings(image_embeds)
             embedding = image_embeds[0].cpu().numpy().tolist()
 
         return embedding

@@ -40,6 +40,7 @@ import { zoltagAppStyles } from './styles/zoltag-app-styles.js';
 import { propertyGridStyles } from './shared/widgets/property-grid.js';
 import { getTenants, getSystemSettings } from '../services/api.js';
 import './library-integrations-admin.js';
+import './library-jobs-admin.js';
 
 class ZoltagApp extends LitElement {
   static styles = [tailwind, zoltagAppStyles, propertyGridStyles];
@@ -66,6 +67,7 @@ class ZoltagApp extends LitElement {
       curateLimit: { type: Number },
       curateOrderBy: { type: String },
       curateOrderDirection: { type: String },
+      curateMediaType: { type: String },
       curateHideDeleted: { type: Boolean },
       curateMinRating: { type: [Number, String] },
       curateKeywordFilters: { type: Object },
@@ -79,6 +81,8 @@ class ZoltagApp extends LitElement {
       curatePageOffset: { type: Number },
       curateTotal: { type: Number },
       curateLoading: { type: Boolean },
+      curatePinnedImageId: { type: Number },
+      curateSimilarityAssetUuid: { type: String },
       curateDragSelection: { type: Array },
       curateDragSelecting: { type: Boolean },
       curateDragStartIndex: { type: Number },
@@ -109,6 +113,7 @@ class ZoltagApp extends LitElement {
       curateAuditAiModel: { type: String },
       curateAuditOrderBy: { type: String },
       curateAuditOrderDirection: { type: String },
+      curateAuditMediaType: { type: String },
       curateAuditHideDeleted: { type: Boolean },
       curateAuditMinRating: { type: [Number, String] },
       curateAuditNoPositivePermatags: { type: Boolean },
@@ -129,6 +134,8 @@ class ZoltagApp extends LitElement {
       searchOrderDirection: { type: String },
       searchImages: { type: Array },
       searchTotal: { type: Number },
+      searchPinnedImageId: { type: Number },
+      searchSimilarityAssetUuid: { type: String },
       currentUser: { type: Object },
       providerAdminTenant: { type: Object },
       providerAdminSystemSettings: { type: Object },
@@ -136,7 +143,10 @@ class ZoltagApp extends LitElement {
       providerAdminError: { type: String },
       _homeLoadingCount: { type: Number },
       assetsRefreshToken: { type: Number },
+      homeVectorstoreQuery: { type: String },
       pendingSearchExploreSelection: { type: Object },
+      pendingVectorstoreQuery: { type: String },
+      pendingVectorstoreQueryToken: { type: Number },
       pendingListSelectionId: { type: [String, Number] },
       pendingListSelectionToken: { type: Number },
   }
@@ -160,7 +170,10 @@ class ZoltagApp extends LitElement {
       this.activeSystemSubTab = 'cli';
       this.homeRecommendationsTab = 'lists';
       this.assetsRefreshToken = 0;
+      this.homeVectorstoreQuery = '';
       this.pendingSearchExploreSelection = null;
+      this.pendingVectorstoreQuery = null;
+      this.pendingVectorstoreQueryToken = 0;
       this.pendingListSelectionId = null;
       this.pendingListSelectionToken = 0;
 

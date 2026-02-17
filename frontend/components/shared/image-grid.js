@@ -11,6 +11,19 @@
  */
 
 import { html } from 'lit';
+import { formatDurationMs } from './formatting.js';
+
+function inferMediaType(image) {
+  const mediaType = String(image?.media_type || '').trim().toLowerCase();
+  if (mediaType === 'video' || mediaType === 'image') {
+    return mediaType;
+  }
+  const mimeType = String(image?.mime_type || '').trim().toLowerCase();
+  if (mimeType.startsWith('video/')) {
+    return 'video';
+  }
+  return 'image';
+}
 
 /**
  * Renders an image grid with full selection, drag & drop, and interaction support
@@ -91,6 +104,7 @@ export function renderImageGrid(config) {
     onPointerDown,
     onPointerMove,
     onPointerEnter,
+    onOpenSimilarInSearch,
   } = eventHandlers;
 
   const {
@@ -99,7 +113,13 @@ export function renderImageGrid(config) {
     showAiScore = false,
     emptyMessage = 'No images available.',
     renderItemFooter,
+    pinnedImageIds = null,
+    pinnedLabel = 'Source',
   } = options;
+
+  const pinnedIdSet = pinnedImageIds instanceof Set
+    ? pinnedImageIds
+    : new Set(Array.isArray(pinnedImageIds) ? pinnedImageIds : []);
 
   const safeImages = (images || []).filter((image) => {
     if (!image) return false;
@@ -121,9 +141,34 @@ export function renderImageGrid(config) {
         const imageId = Number(image.id);
         const isSelected = selection.includes(imageId) || selection.includes(image.id);
         const isFlashing = flashSelectionIds?.has(image.id);
+        const isPinned = pinnedIdSet.has(imageId) || pinnedIdSet.has(image.id);
+        const mediaType = inferMediaType(image);
+        const isVideo = mediaType === 'video';
+        const videoDuration = isVideo ? formatDurationMs(image?.duration_ms) : '';
+        const hasRating = !(image?.rating === null || image?.rating === undefined || image?.rating === '');
+        const sourceAssetUuid = String(image?.asset_id || image?.asset_uuid || '').trim() || null;
+        const emitOpenSimilarInSearch = (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (onOpenSimilarInSearch) {
+            onOpenSimilarInSearch(event, image, safeImages);
+            return;
+          }
+          const target = event.currentTarget;
+          if (!target || typeof target.dispatchEvent !== 'function') return;
+          target.dispatchEvent(new CustomEvent('open-similar-in-search', {
+            bubbles: true,
+            composed: true,
+            detail: {
+              sourceImage: image,
+              sourceAssetUuid,
+              images: [],
+            },
+          }));
+        };
         const thumb = html`
           <div
-            class="curate-thumb-wrapper ${isSelected ? 'selected' : ''}"
+            class="curate-thumb-wrapper ${isSelected ? 'selected' : ''} ${isPinned ? 'pinned-source' : ''}"
             data-image-id="${imageId}"
             draggable="true"
             @dragstart=${(event) => onDragStart?.(event, image)}
@@ -140,14 +185,56 @@ export function renderImageGrid(config) {
               @pointermove=${(event) => onPointerMove?.(event)}
               @pointerenter=${() => onPointerEnter?.(index)}
             >
+            ${isPinned ? html`
+              <span class="curate-thumb-pin-badge" aria-label="${pinnedLabel} image">
+                ${pinnedLabel}
+              </span>
+            ` : html``}
+            ${isVideo ? html`
+              <span class="curate-thumb-play-overlay" aria-hidden="true">
+                <svg
+                  class="curate-thumb-play-icon"
+                  viewBox="0 0 24 24"
+                  focusable="false"
+                >
+                  <path d="M8 6v12l10-6z"></path>
+                </svg>
+              </span>
+            ` : html``}
             ${renderCurateRatingWidget ? renderCurateRatingWidget(image) : ''}
             ${renderCurateRatingStatic ? renderCurateRatingStatic(image) : ''}
+            ${isVideo ? html`
+              <div class="curate-thumb-media-pill ${hasRating ? 'has-rating' : ''}">
+                <span class="curate-thumb-media-pill-label">VIDEO</span>
+                ${videoDuration ? html`<span class="curate-thumb-media-pill-duration">${videoDuration}</span>` : html``}
+              </div>
+            ` : html``}
+            <button
+              type="button"
+              class="curate-thumb-similar-link"
+              title="Similar"
+              aria-label="Similar"
+              draggable="false"
+              tabindex="-1"
+              @pointerdown=${(event) => event.stopPropagation()}
+              @click=${emitOpenSimilarInSearch}
+            >
+              <svg
+                class="curate-thumb-similar-link-icon"
+                viewBox="0 0 24 24"
+                focusable="false"
+                aria-hidden="true"
+              >
+                <path d="M10.59 13.41a1 1 0 0 0 1.41 1.41l3.54-3.54a3 3 0 0 0-4.24-4.24L9.17 9.17a1 1 0 1 0 1.41 1.41l2.12-2.12a1 1 0 0 1 1.42 1.42z"></path>
+                <path d="M13.41 10.59a1 1 0 0 0-1.41-1.41l-3.54 3.54a3 3 0 0 0 4.24 4.24l2.13-2.13a1 1 0 0 0-1.42-1.41l-2.12 2.12a1 1 0 1 1-1.41-1.41z"></path>
+              </svg>
+            </button>
             ${showAiScore && renderCurateAiMLScore ? renderCurateAiMLScore(image) : ''}
             ${showPermatags && renderCuratePermatagSummary ? renderCuratePermatagSummary(image) : ''}
             ${formatCurateDate && formatCurateDate(image) ? html`
               <div class="curate-thumb-date">
                 <span class="curate-thumb-id">#${image.id}</span>
-                <span class="curate-thumb-icon" aria-hidden="true">📷</span>${formatCurateDate(image)}
+                <span class="curate-thumb-icon" aria-hidden="true">${isVideo ? '🎬' : '📷'}</span>${formatCurateDate(image)}
               </div>
             ` : ''}
           </div>

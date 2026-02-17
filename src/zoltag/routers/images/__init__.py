@@ -15,6 +15,7 @@ from .file_serving import router as file_serving_router
 from .asset_variants import router as asset_variants_router
 from .dropbox_sync import router as dropbox_sync_router
 from .stats import router as stats_router
+from .notes import router as notes_router
 
 # Main router with shared prefix and tags
 # Sub-routers inherit these settings and maintain API contract
@@ -36,3 +37,4 @@ router.include_router(people_tagging_router)
 router.include_router(rating_router)
 router.include_router(file_serving_router)
 router.include_router(asset_variants_router)
+router.include_router(notes_router)
