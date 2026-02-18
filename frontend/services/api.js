@@ -892,6 +892,28 @@ export async function updateGlobalJobDefinition(definitionId, payload) {
 }
 
 /**
+ * Delete job definition (super-admin)
+ * @param {string} tenantId
+ * @param {string} definitionId
+ * @returns {Promise<Object>}
+ */
+export async function deleteJobDefinition(tenantId, definitionId) {
+  return fetchWithAuth(`/jobs/definitions/${definitionId}`, {
+    method: 'DELETE',
+    tenantId,
+  });
+}
+
+/**
+ * Delete global job definition (super-admin)
+ * @param {string} definitionId
+ * @returns {Promise<Object>}
+ */
+export async function deleteGlobalJobDefinition(definitionId) {
+  return deleteJobDefinition(undefined, definitionId);
+}
+
+/**
  * List job triggers
  * @param {string} tenantId
  * @param {{includeDisabled?: boolean}} options

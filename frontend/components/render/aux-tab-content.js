@@ -274,6 +274,14 @@ export function renderAuxTabContent(host, { formatCurateDate }) {
 
 export function renderGlobalOverlays(host, { canCurate }) {
   return html`
+    ${host.tenantAccessBlocked ? html`
+      <div class="curate-rating-modal-overlay" aria-live="assertive">
+        <div class="curate-rating-modal-content" role="alertdialog" aria-modal="true">
+          <div class="curate-rating-modal-title">Tenant Access Required</div>
+          <div class="curate-rating-modal-subtitle">${host.tenantAccessBlockedMessage || 'Your user has not been assigned permissions'}</div>
+        </div>
+      </div>
+    ` : html``}
     ${host.queueNotice?.message ? html`
       <div class="fixed top-24 right-4 z-[1200] max-w-md">
         <div class="rounded-lg shadow-lg border px-4 py-3 text-sm ${host.queueNotice.level === 'error'

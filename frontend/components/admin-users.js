@@ -1,5 +1,6 @@
 import { LitElement, html, css } from 'lit';
 import { tailwind } from './tailwind-lit.js';
+import { adminTypography } from './shared/admin-typography.js';
 import {
   fetchWithAuth,
   disableUser,
@@ -39,6 +40,7 @@ class AdminUsers extends LitElement {
 
   static styles = [
     tailwind,
+    adminTypography,
     css`
       :host {
         display: block;
@@ -120,7 +122,6 @@ class AdminUsers extends LitElement {
       }
 
       .user-email {
-        font-family: monospace;
         font-size: 13px;
         color: #6b7280;
         overflow-wrap: anywhere;

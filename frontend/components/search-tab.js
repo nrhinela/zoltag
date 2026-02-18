@@ -648,9 +648,9 @@ export class SearchTab extends LitElement {
   _getRightPanelTools() {
     if (this.canCurate) {
       return [
-        { id: 'tags', label: 'Keywords' },
-        { id: 'lists', label: 'Lists' },
+        { id: 'tags', label: 'Keyword' },
         { id: 'ratings', label: 'Ratings' },
+        { id: 'lists', label: 'Lists' },
       ];
     }
     return [{ id: 'lists', label: 'Lists' }];
@@ -2490,7 +2490,7 @@ export class SearchTab extends LitElement {
     const navRows = [
       {
         key: 'advanced',
-        label: 'Advanced Filter',
+        label: 'Explore',
         subtitle: 'Filter by keyword, rating, list, media type, date, and more. The fastest way to find exactly what you need.',
         accentClass: 'home-cta-search',
         glyphChar: 'F',
@@ -2768,34 +2768,34 @@ export class SearchTab extends LitElement {
           <div class="flex items-center justify-between mb-4">
             <div class="curate-subtabs">
               <button
-                class="curate-subtab ${this.searchSubTab === 'landing' ? 'active' : ''}"
-                @click=${() => this._handleSearchSubTabChange('landing')}
-              >
-                Search Home
-              </button>
-              <button
-                class="curate-subtab ${this.searchSubTab === 'results' ? 'active' : ''}"
-                @click=${() => this._handleSearchSubTabChange('results')}
-              >
-                Search Results
-              </button>
-              <button
                 class="curate-subtab ${this.searchSubTab === 'advanced' ? 'active' : ''}"
                 @click=${() => this._handleSearchSubTabChange('advanced')}
               >
-                Advanced Filter
+                Explore
               </button>
               <button
                 class="curate-subtab ${this.searchSubTab === 'browse-by-folder' ? 'active' : ''}"
                 @click=${() => this._handleSearchSubTabChange('browse-by-folder')}
               >
-                Browse Folders
+                Browse by Folder
               </button>
               <button
                 class="curate-subtab ${this.searchSubTab === 'chips' ? 'active' : ''}"
                 @click=${() => this._handleSearchSubTabChange('chips')}
               >
-                Browse Keywords
+                Browse by Keyword
+              </button>
+              <button
+                class="curate-subtab ${this.searchSubTab === 'results' ? 'active' : ''}"
+                @click=${() => this._handleSearchSubTabChange('results')}
+              >
+                Text Search
+              </button>
+              <button
+                class="curate-subtab ${this.searchSubTab === 'landing' ? 'active' : ''}"
+                @click=${() => this._handleSearchSubTabChange('landing')}
+              >
+                Help
               </button>
             </div>
 

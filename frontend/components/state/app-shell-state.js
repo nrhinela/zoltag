@@ -9,6 +9,7 @@ import {
   hasTenantPermission as hasMembershipPermission,
   normalizeTenantRef,
   resolveTenantMembership,
+  userIsSuperAdmin,
 } from '../shared/tenant-permissions.js';
 
 function normalizeTenantValue(value) {
@@ -29,39 +30,97 @@ export class AppShellStateController extends BaseStateController {
     super(host);
   }
 
+  _getStoredTenantSelection() {
+    try {
+      return normalizeTenantValue(
+        localStorage.getItem('tenantId') || localStorage.getItem('currentTenant') || ''
+      );
+    } catch (_error) {
+      return '';
+    }
+  }
+
+  _setStoredTenantSelection(tenantId) {
+    const normalized = normalizeTenantValue(tenantId);
+    if (!normalized) return;
+    try {
+      localStorage.setItem('tenantId', normalized);
+      localStorage.setItem('currentTenant', normalized);
+    } catch (_error) {
+      // no-op; persistence failures should not block UI
+    }
+  }
+
+  _clearStoredTenantSelection() {
+    try {
+      localStorage.removeItem('tenantId');
+      localStorage.removeItem('currentTenant');
+    } catch (_error) {
+      // no-op; persistence failures should not block UI
+    }
+  }
+
   async loadCurrentUser() {
     try {
       this.host.currentUser = await getCurrentUser();
       const memberships = Array.isArray(this.host.currentUser?.tenants)
         ? this.host.currentUser.tenants
         : [];
+      const isSuperAdmin = userIsSuperAdmin(this.host.currentUser);
+      const storedTenant = normalizeTenantValue(this.host.tenant) || this._getStoredTenantSelection();
+      const storedTenantMembership = resolveTenantMembership(this.host.currentUser, storedTenant);
+      if (!isSuperAdmin && storedTenant && !storedTenantMembership) {
+        this._clearStoredTenantSelection();
+      }
+
       const fallbackSingleTenant = memberships.length === 1
         ? normalizeTenantValue(String(memberships[0]?.tenant_id ?? ''))
         : '';
-      const canonicalTenant = this.resolveTenantRef(this.host.tenant) || fallbackSingleTenant;
+      const canonicalTenant = this.resolveTenantRef(storedTenant) || fallbackSingleTenant;
+      this.host.tenantAccessBlocked = !isSuperAdmin && memberships.length === 0;
+      this.host.tenantAccessBlockedMessage = this.host.tenantAccessBlocked
+        ? 'Your user has not been assigned permissions'
+        : '';
+
+      if (this.host.tenantAccessBlocked) {
+        this.host.tenant = '';
+        this._clearStoredTenantSelection();
+        this.host.searchFilterPanel.setTenant('');
+        this.host.curateHomeFilterPanel.setTenant('');
+        this.host.curateAuditFilterPanel.setTenant('');
+        return;
+      }
+
       if (canonicalTenant && canonicalTenant !== this.host.tenant) {
         this.host.tenant = canonicalTenant;
-        try {
-          localStorage.setItem('tenantId', canonicalTenant);
-          localStorage.setItem('currentTenant', canonicalTenant);
-        } catch (_error) {
-          // no-op; persistence failures should not block UI
-        }
+        this._setStoredTenantSelection(canonicalTenant);
         this.host.searchFilterPanel.setTenant(this.host.tenant);
         this.host.curateHomeFilterPanel.setTenant(this.host.tenant);
         this.host.curateAuditFilterPanel.setTenant(this.host.tenant);
+      } else if (!canonicalTenant && this.host.tenant) {
+        this.host.tenant = '';
+        this._clearStoredTenantSelection();
+        this.host.searchFilterPanel.setTenant('');
+        this.host.curateHomeFilterPanel.setTenant('');
+        this.host.curateAuditFilterPanel.setTenant('');
       }
     } catch (error) {
       console.error('Error fetching current user:', error);
       this.host.currentUser = null;
+      this.host.tenantAccessBlocked = false;
+      this.host.tenantAccessBlockedMessage = '';
     }
   }
 
   resolveTenantRef(rawTenantRef) {
     const tenantRef = normalizeTenantValue(rawTenantRef);
     if (!tenantRef) return '';
+    if (!this.host.currentUser?.user) return tenantRef;
     const membership = resolveTenantMembership(this.host.currentUser, tenantRef);
-    return normalizeTenantValue(String(membership?.tenant_id || '')) || tenantRef;
+    const membershipTenantId = normalizeTenantValue(String(membership?.tenant_id || ''));
+    if (membershipTenantId) return membershipTenantId;
+    if (userIsSuperAdmin(this.host.currentUser)) return tenantRef;
+    return '';
   }
 
   getTenantRole() {
@@ -93,7 +152,7 @@ export class AppShellStateController extends BaseStateController {
       this.host.activeLibrarySubTab = 'assets';
     }
     if (tabName === 'search' && !this.host.activeSearchSubTab) {
-      this.host.activeSearchSubTab = 'landing';
+      this.host.activeSearchSubTab = 'advanced';
     }
     if (tabName === 'curate' && !this.canCurate()) {
       this.host.activeTab = 'home';
@@ -115,7 +174,7 @@ export class AppShellStateController extends BaseStateController {
         this.host.activeLibrarySubTab = subTab;
       }
       if (tab === 'search') {
-        this.host.activeSearchSubTab = subTab || 'landing';
+        this.host.activeSearchSubTab = subTab || 'advanced';
         this.host.pendingSearchExploreSelection = null;
         this.host.pendingVectorstoreQuery = null;
       }
@@ -126,7 +185,7 @@ export class AppShellStateController extends BaseStateController {
       return;
     }
     if (detail === 'search') {
-      this.host.activeSearchSubTab = 'landing';
+      this.host.activeSearchSubTab = 'advanced';
       this.host.pendingSearchExploreSelection = null;
       this.host.pendingVectorstoreQuery = null;
     }
@@ -149,7 +208,7 @@ export class AppShellStateController extends BaseStateController {
       this.host.activeLibrarySubTab = subTab;
     }
     if (tab === 'search') {
-      this.host.activeSearchSubTab = subTab || 'landing';
+      this.host.activeSearchSubTab = subTab || 'advanced';
     }
     if (tab === 'library' && subTab === 'keywords' && adminSubTab) {
       this.host.activeAdminSubTab = adminSubTab;
@@ -256,17 +315,20 @@ export class AppShellStateController extends BaseStateController {
   handleTenantChange(event) {
     const rawTenant = normalizeTenantValue(typeof event?.detail === 'string' ? event.detail : '');
     const nextTenant = this.resolveTenantRef(rawTenant);
-    if (!nextTenant || nextTenant === this.host.tenant) {
+    if (!nextTenant) {
+      if (rawTenant && this.host.currentUser?.user) {
+        this._clearStoredTenantSelection();
+      }
+      return;
+    }
+    if (nextTenant === this.host.tenant) {
       return;
     }
 
     this.host.tenant = nextTenant;
-    try {
-      localStorage.setItem('tenantId', nextTenant);
-      localStorage.setItem('currentTenant', nextTenant);
-    } catch (error) {
-      console.error('Failed to persist tenant selection:', error);
-    }
+    this._setStoredTenantSelection(nextTenant);
+    this.host.tenantAccessBlocked = false;
+    this.host.tenantAccessBlockedMessage = '';
 
     this.host.searchFilterPanel.setTenant(this.host.tenant);
     this.host.curateHomeFilterPanel.setTenant(this.host.tenant);
@@ -294,7 +356,7 @@ export class AppShellStateController extends BaseStateController {
     // Tenant switch always returns to Home and forces a fresh data pull.
     this.host.activeTab = 'home';
     this.host.homeSubTab = 'overview';
-    this.host.activeSearchSubTab = 'landing';
+    this.host.activeSearchSubTab = 'advanced';
     this.host.pendingSearchExploreSelection = null;
     this.host.pendingVectorstoreQuery = null;
     this.host.pendingVectorstoreQueryToken = 0;

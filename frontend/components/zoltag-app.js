@@ -139,6 +139,8 @@ class ZoltagApp extends LitElement {
       searchPinnedImageId: { type: Number },
       searchSimilarityAssetUuid: { type: String },
       currentUser: { type: Object },
+      tenantAccessBlocked: { type: Boolean },
+      tenantAccessBlockedMessage: { type: String },
       providerAdminTenant: { type: Object },
       providerAdminSystemSettings: { type: Object },
       providerAdminLoading: { type: Boolean },
@@ -166,7 +168,7 @@ class ZoltagApp extends LitElement {
       this.showUploadLibraryModal = false;
       this.activeTab = 'home';
       this.homeSubTab = 'overview';
-      this.activeSearchSubTab = 'landing';
+      this.activeSearchSubTab = 'advanced';
       this.activeLibrarySubTab = 'assets';
       this.activeAdminSubTab = 'tagging';
       this.activeSystemSubTab = 'cli';
@@ -201,7 +203,7 @@ class ZoltagApp extends LitElement {
   render() {
     const canCurate = this._canCurate();
     const navCards = [
-      { key: 'search', label: 'Search', subtitle: 'Explore and save results', icon: 'fa-magnifying-glass' },
+      { key: 'search', label: 'Explore', subtitle: 'Explore and save results', icon: 'fa-magnifying-glass' },
       { key: 'curate', label: 'Curate', subtitle: 'Build stories and sets', icon: 'fa-star' },
       { key: 'lists', label: 'Lists', subtitle: 'Organize saved sets', icon: 'fa-list' },
       { key: 'admin', label: 'Keywords', subtitle: 'Manage configuration', icon: 'fa-cog' },

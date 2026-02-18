@@ -1559,9 +1559,9 @@ export class CurateExploreTab extends LitElement {
           </div>
           <right-panel
             .tools=${[
-              { id: 'tags', label: 'Tags' },
-              { id: 'lists', label: 'Lists' },
+              { id: 'tags', label: 'Keyword' },
               { id: 'ratings', label: 'Ratings' },
+              { id: 'lists', label: 'Lists' },
             ]}
             .activeTool=${this.rightPanelTool}
             @tool-changed=${(event) => this._handleRightPanelToolChange(event.detail.tool)}

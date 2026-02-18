@@ -5,6 +5,7 @@ import {
   createGlobalWorkflowDefinition,
   createGlobalJobDefinition,
   createGlobalJobTrigger,
+  deleteGlobalJobDefinition,
   deleteGlobalWorkflowDefinition,
   deleteGlobalJobTrigger,
   getGlobalJobDefinitions,
@@ -27,6 +28,12 @@ function parseJsonObject(value, fieldName) {
   } catch (_error) {
     throw new Error(`${fieldName} must be valid JSON object`);
   }
+}
+
+function formatStepsJson(value) {
+  const steps = Array.isArray(value) ? value : [];
+  if (!steps.length) return '[]';
+  return `[\n  ${steps.map((step) => JSON.stringify(step)).join(',\n  ')}\n]`;
 }
 
 export class AdminJobs extends LitElement {
@@ -257,7 +264,7 @@ export class AdminJobs extends LitElement {
     this.definitions = [];
     this.triggers = [];
     this.workflows = [];
-    this.includeInactiveDefinitions = false;
+    this.includeInactiveDefinitions = true;
     this.includeDisabledTriggers = false;
     this.includeInactiveWorkflows = false;
 
@@ -375,6 +382,9 @@ export class AdminJobs extends LitElement {
 
   async _toggleDefinition(definition, isActive) {
     if (!definition?.id || this.saving) return;
+    if (!isActive && !this.includeInactiveDefinitions) {
+      this.includeInactiveDefinitions = true;
+    }
     this.saving = true;
     this._setError('');
     try {
@@ -382,6 +392,24 @@ export class AdminJobs extends LitElement {
       await this._loadConfig();
     } catch (error) {
       this._setError(error?.message || 'Failed to update definition');
+    } finally {
+      this.saving = false;
+    }
+  }
+
+  async _deleteDefinition(definition) {
+    if (!definition?.id || this.saving) return;
+    const label = String(definition?.key || definition?.id || 'definition');
+    const confirmed = window.confirm(`Delete definition "${label}"?`);
+    if (!confirmed) return;
+    this.saving = true;
+    this._setError('');
+    try {
+      await deleteGlobalJobDefinition(definition.id);
+      this._setSuccess('Definition deleted');
+      await this._loadConfig();
+    } catch (error) {
+      this._setError(error?.message || 'Failed to delete definition');
     } finally {
       this.saving = false;
     }
@@ -649,7 +677,7 @@ export class AdminJobs extends LitElement {
           : !!workflow?.is_active,
         steps: Object.prototype.hasOwnProperty.call(current, 'steps')
           ? String(current.steps ?? '[]')
-          : JSON.stringify(Array.isArray(workflow?.steps) ? workflow.steps : [], null, 2),
+          : formatStepsJson(workflow?.steps),
       };
     }
     this.workflowEdits = next;
@@ -674,12 +702,12 @@ export class AdminJobs extends LitElement {
     const row = (id && this.workflowEdits && this.workflowEdits[id]) ? this.workflowEdits[id] : null;
     if (!row) {
       if (field === 'is_active') return !!workflow?.is_active;
-      if (field === 'steps') return JSON.stringify(Array.isArray(workflow?.steps) ? workflow.steps : [], null, 2);
+      if (field === 'steps') return formatStepsJson(workflow?.steps);
       return String(workflow?.[field] ?? '');
     }
     if (!Object.prototype.hasOwnProperty.call(row, field)) {
       if (field === 'is_active') return !!workflow?.is_active;
-      if (field === 'steps') return JSON.stringify(Array.isArray(workflow?.steps) ? workflow.steps : [], null, 2);
+      if (field === 'steps') return formatStepsJson(workflow?.steps);
       return String(workflow?.[field] ?? '');
     }
     return field === 'is_active' ? !!row[field] : String(row[field] ?? '');
@@ -801,16 +829,31 @@ export class AdminJobs extends LitElement {
           <h3 class="section-title">Global Definitions</h3>
           <div class="row">
             <input class="input field" type="text" placeholder="key" .value=${this.definitionKey} @input=${(e) => { this.definitionKey = e.target.value || ''; }} />
-            <input class="input field" type="text" placeholder="description" .value=${this.definitionDescription} @input=${(e) => { this.definitionDescription = e.target.value || ''; }} />
             <input class="input field" type="number" min="1" placeholder="timeout seconds" .value=${this.definitionTimeoutSeconds} @input=${(e) => { this.definitionTimeoutSeconds = e.target.value || ''; }} />
             <input class="input field" type="number" min="1" placeholder="max attempts" .value=${this.definitionMaxAttempts} @input=${(e) => { this.definitionMaxAttempts = e.target.value || ''; }} />
             <label class="row muted"><input type="checkbox" .checked=${this.definitionActive} @change=${(e) => { this.definitionActive = !!e.target.checked; }} />active</label>
             <button class="btn btn-primary" ?disabled=${this.saving} @click=${this._createDefinition}>Create</button>
           </div>
+          <div class="row" style="margin-top:8px;">
+            <input class="input field-wide" type="text" placeholder="description" .value=${this.definitionDescription} @input=${(e) => { this.definitionDescription = e.target.value || ''; }} />
+          </div>
+          <div class="row" style="margin-top:8px;">
+            <label class="row muted">
+              <input
+                type="checkbox"
+                .checked=${this.includeInactiveDefinitions}
+                @change=${async (e) => {
+                  this.includeInactiveDefinitions = !!e.target.checked;
+                  await this._loadConfig();
+                }}
+              />
+              include inactive
+            </label>
+          </div>
           <div class="table-wrap" style="margin-top:10px;">
             <table>
               <thead>
-                <tr><th>Key</th><th>Description</th><th>Timeout</th><th>Max</th><th>Active</th><th>Actions</th></tr>
+                <tr><th>Key</th><th>Timeout</th><th>Max</th><th>Active</th><th>Actions</th></tr>
               </thead>
               <tbody>
                 ${this.definitions.map((definition) => html`
@@ -822,15 +865,6 @@ export class AdminJobs extends LitElement {
                         .value=${this._getDefinitionEdit(definition, 'key')}
                         ?disabled=${this.saving}
                         @input=${(e) => this._setDefinitionEdit(definition.id, 'key', e.target.value || '')}
-                      />
-                    </td>
-                    <td>
-                      <input
-                        class="input row-description-input"
-                        type="text"
-                        .value=${this._getDefinitionEdit(definition, 'description')}
-                        ?disabled=${this.saving}
-                        @input=${(e) => this._setDefinitionEdit(definition.id, 'description', e.target.value || '')}
                       />
                     </td>
                     <td>
@@ -864,10 +898,30 @@ export class AdminJobs extends LitElement {
                       >
                         Save
                       </button>
+                      <button
+                        class="btn btn-danger btn-sm"
+                        style="margin-left:6px;"
+                        ?disabled=${this.saving}
+                        @click=${() => this._deleteDefinition(definition)}
+                      >
+                        Delete
+                      </button>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td colspan="5">
+                      <div class="muted" style="margin-bottom:6px;">description</div>
+                      <input
+                        class="input field-wide"
+                        type="text"
+                        .value=${this._getDefinitionEdit(definition, 'description')}
+                        ?disabled=${this.saving}
+                        @input=${(e) => this._setDefinitionEdit(definition.id, 'description', e.target.value || '')}
+                      />
                     </td>
                   </tr>
                 `)}
-                ${!this.definitions.length ? html`<tr><td colspan="6" class="muted">No definitions found.</td></tr>` : html``}
+                ${!this.definitions.length ? html`<tr><td colspan="5" class="muted">No definitions found.</td></tr>` : html``}
               </tbody>
             </table>
           </div>
@@ -899,6 +953,19 @@ export class AdminJobs extends LitElement {
             <textarea class="textarea field-wide mono" placeholder="payload_template JSON" .value=${this.triggerPayloadTemplate} @input=${(e) => { this.triggerPayloadTemplate = e.target.value || ''; }}></textarea>
           </div>
           <div class="table-wrap" style="margin-top:10px;">
+            <div class="row" style="margin-bottom:8px;">
+              <label class="row muted">
+                <input
+                  type="checkbox"
+                  .checked=${this.includeDisabledTriggers}
+                  @change=${async (e) => {
+                    this.includeDisabledTriggers = !!e.target.checked;
+                    await this._loadConfig();
+                  }}
+                />
+                include disabled
+              </label>
+            </div>
             <table>
               <thead>
                 <tr><th>Enabled</th><th>Label</th><th>Type</th><th>Target</th><th>Definition</th><th>Actions</th></tr>
@@ -924,7 +991,6 @@ export class AdminJobs extends LitElement {
           <h3 class="section-title">Global Workflows</h3>
           <div class="row">
             <input class="input field" type="text" placeholder="workflow key (e.g. daily)" .value=${this.workflowKey} @input=${(e) => { this.workflowKey = e.target.value || ''; }} />
-            <input class="input field" type="text" placeholder="description" .value=${this.workflowDescription} @input=${(e) => { this.workflowDescription = e.target.value || ''; }} />
             <input class="input field" type="number" min="1" max="64" placeholder="max parallel steps" .value=${this.workflowMaxParallelSteps} @input=${(e) => { this.workflowMaxParallelSteps = e.target.value || ''; }} />
             <select class="select field" .value=${this.workflowFailurePolicy} @change=${(e) => { this.workflowFailurePolicy = e.target.value || 'fail_fast'; }}>
               <option value="fail_fast">fail_fast</option>
@@ -932,6 +998,9 @@ export class AdminJobs extends LitElement {
             </select>
             <label class="row muted"><input type="checkbox" .checked=${this.workflowActive} @change=${(e) => { this.workflowActive = !!e.target.checked; }} />active</label>
             <button class="btn btn-primary" ?disabled=${this.saving} @click=${this._createWorkflow}>Create</button>
+          </div>
+          <div class="row" style="margin-top:8px;">
+            <input class="input field-wide" type="text" placeholder="description" .value=${this.workflowDescription} @input=${(e) => { this.workflowDescription = e.target.value || ''; }} />
           </div>
           <div class="row" style="margin-top:8px;">
             <textarea class="textarea field-wide mono" placeholder="steps JSON array" .value=${this.workflowSteps} @input=${(e) => { this.workflowSteps = e.target.value || ''; }}></textarea>
@@ -952,7 +1021,7 @@ export class AdminJobs extends LitElement {
           <div class="table-wrap" style="margin-top:10px;">
             <table>
               <thead>
-                <tr><th>Key</th><th>Description</th><th>Parallel</th><th>Policy</th><th>Steps</th><th>Active</th><th>Actions</th></tr>
+                <tr><th>Key</th><th>Description</th><th>Parallel</th><th>Policy</th><th>Active</th><th>Actions</th></tr>
               </thead>
               <tbody>
                 ${this.workflows.map((workflow) => html`
@@ -997,14 +1066,6 @@ export class AdminJobs extends LitElement {
                         <option value="continue">continue</option>
                       </select>
                     </td>
-                    <td style="min-width:340px;">
-                      <textarea
-                        class="textarea mono"
-                        .value=${this._getWorkflowEdit(workflow, 'steps')}
-                        ?disabled=${this.saving}
-                        @input=${(e) => this._setWorkflowEdit(workflow.id, 'steps', e.target.value || '[]')}
-                      ></textarea>
-                    </td>
                     <td>
                       <input
                         type="checkbox"
@@ -1026,8 +1087,20 @@ export class AdminJobs extends LitElement {
                       </div>
                     </td>
                   </tr>
+                  <tr>
+                    <td colspan="6">
+                      <div class="muted" style="margin-bottom:6px;">steps</div>
+                      <textarea
+                        class="textarea mono"
+                        style="min-height:110px;"
+                        .value=${this._getWorkflowEdit(workflow, 'steps')}
+                        ?disabled=${this.saving}
+                        @input=${(e) => this._setWorkflowEdit(workflow.id, 'steps', e.target.value || '[]')}
+                      ></textarea>
+                    </td>
+                  </tr>
                 `)}
-                ${!this.workflows.length ? html`<tr><td colspan="7" class="muted">No workflows found.</td></tr>` : html``}
+                ${!this.workflows.length ? html`<tr><td colspan="6" class="muted">No workflows found.</td></tr>` : html``}
               </tbody>
             </table>
           </div>

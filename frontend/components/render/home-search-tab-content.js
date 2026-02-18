@@ -141,7 +141,7 @@ export function renderHomeTabContent(host, { navCards, formatCurateDate }) {
   const ctaCards = [
     {
       key: 'search',
-      label: 'Search',
+      label: 'Explore',
       subtitle: 'Find photos fast with filters and natural-language queries.',
       iconKey: 'search',
       accentClass: 'home-cta-search',
@@ -357,7 +357,7 @@ export function renderSearchTabContent(host, { formatCurateDate }) {
       slot="search"
       .tenant=${host.tenant}
       .canCurate=${canCurate}
-      .searchSubTab=${host.activeSearchSubTab || 'landing'}
+      .searchSubTab=${host.activeSearchSubTab || 'advanced'}
       .initialExploreSelection=${host.pendingSearchExploreSelection}
       .initialVectorstoreQuery=${host.pendingVectorstoreQuery || ''}
       .initialVectorstoreQueryToken=${host.pendingVectorstoreQueryToken || 0}
@@ -379,7 +379,7 @@ export function renderSearchTabContent(host, { formatCurateDate }) {
       .formatCurateDate=${formatCurateDate}
       @sort-changed=${host._handleSearchSortChanged}
       @search-subtab-changed=${(event) => {
-        host.activeSearchSubTab = event?.detail?.subtab || 'landing';
+        host.activeSearchSubTab = event?.detail?.subtab || 'advanced';
       }}
       @explore-selection-applied=${() => {
         host.pendingSearchExploreSelection = null;

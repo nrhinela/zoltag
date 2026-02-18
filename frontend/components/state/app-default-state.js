@@ -84,13 +84,15 @@ export function initializeAppDefaultState(host) {
   host.searchTotal = 0;
   host.searchPinnedImageId = null;
   host.searchSimilarityAssetUuid = null;
-  host.activeSearchSubTab = host.activeSearchSubTab || 'landing';
+  host.activeSearchSubTab = host.activeSearchSubTab || 'advanced';
   host.pendingSearchExploreSelection = null;
   host.pendingVectorstoreQuery = null;
   host.pendingVectorstoreQueryToken = 0;
   host.pendingListSelectionId = null;
   host.pendingListSelectionToken = host.pendingListSelectionToken || 0;
   host.currentUser = null;
+  host.tenantAccessBlocked = false;
+  host.tenantAccessBlockedMessage = '';
   host.providerAdminTenant = null;
   host.providerAdminSystemSettings = null;
   host.providerAdminLoading = false;

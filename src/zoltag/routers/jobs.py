@@ -421,6 +421,54 @@ async def update_job_definition(
     return _serialize_definition(row)
 
 
+@router.delete("/definitions/{definition_id}")
+async def delete_job_definition(
+    definition_id: str,
+    _super_admin: UserProfile = Depends(require_super_admin),
+    db: Session = Depends(get_db),
+):
+    """Delete a job definition (super-admin)."""
+    parsed_definition_id = _parse_uuid_or_400(definition_id)
+    row = db.query(JobDefinition).filter(JobDefinition.id == parsed_definition_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Job definition not found")
+
+    trigger_ref = db.query(JobTrigger.id).filter(JobTrigger.definition_id == parsed_definition_id).first()
+    if trigger_ref:
+        raise HTTPException(status_code=409, detail="Cannot delete definition with existing triggers")
+
+    queued_or_running_ref = db.query(Job.id).filter(
+        Job.definition_id == parsed_definition_id,
+        Job.status.in_(("queued", "running")),
+    ).first()
+    if queued_or_running_ref:
+        raise HTTPException(status_code=409, detail="Cannot delete definition with queued/running jobs")
+
+    workflow_step_ref = db.query(WorkflowStepRun.id).filter(
+        WorkflowStepRun.definition_id == parsed_definition_id,
+    ).first()
+    if workflow_step_ref:
+        raise HTTPException(status_code=409, detail="Cannot delete definition with historical workflow step runs")
+
+    workflow_refs = db.query(WorkflowDefinition.id, WorkflowDefinition.key, WorkflowDefinition.steps).all()
+    for workflow_id, workflow_key, workflow_steps in workflow_refs:
+        for step in list(workflow_steps or []):
+            if str(step.get("definition_key") or "").strip() == str(row.key or "").strip():
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Cannot delete definition referenced by workflow '{workflow_key}' ({workflow_id})",
+                )
+
+    deleted_definition_id = str(row.id)
+    db.delete(row)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Cannot delete definition referenced by existing records")
+    return {"deleted": True, "definition_id": deleted_definition_id}
+
+
 @router.post("")
 async def enqueue_job(
     body: dict = Body(default_factory=dict),

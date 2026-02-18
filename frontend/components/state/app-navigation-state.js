@@ -48,7 +48,7 @@ export class AppNavigationStateController extends BaseStateController {
       }
     } else if (tab === 'search') {
       const subTab = String(input.subTab || '').trim().toLowerCase();
-      snapshot.subTab = SEARCH_SUB_TABS.has(subTab) ? subTab : 'landing';
+      snapshot.subTab = SEARCH_SUB_TABS.has(subTab) ? subTab : 'advanced';
     } else if (tab === 'curate') {
       const subTab = String(input.subTab || '').trim().toLowerCase();
       snapshot.subTab = CURATE_SUB_TABS.has(subTab) ? subTab : 'main';
@@ -110,7 +110,7 @@ export class AppNavigationStateController extends BaseStateController {
         this.host.activeAdminSubTab = normalized.adminSubTab || 'tagging';
       }
     } else if (normalized.tab === 'search') {
-      this.host.activeSearchSubTab = normalized.subTab || 'landing';
+      this.host.activeSearchSubTab = normalized.subTab || 'advanced';
     } else if (normalized.tab === 'curate') {
       this.host.curateSubTab = normalized.subTab || 'main';
     } else if (normalized.tab === 'home') {

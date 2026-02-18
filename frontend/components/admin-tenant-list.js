@@ -1,5 +1,6 @@
 import { LitElement, html, css } from 'lit';
 import { tailwind } from './tailwind-lit.js';
+import { adminTypography } from './shared/admin-typography.js';
 import './admin-form-group.js';
 import { createTenant } from '../services/api.js';
 
@@ -20,20 +21,50 @@ export class AdminTenantList extends LitElement {
 
   static styles = [
     tailwind,
+    adminTypography,
     css`
       :host {
         display: block;
       }
 
-      h2 {
+      .card {
+        background: white;
+        border-radius: 8px;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
         margin-bottom: 20px;
-        color: #333;
+      }
+
+      .card-header {
+        padding: 20px;
+        border-bottom: 1px solid #e5e7eb;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 16px;
+      }
+
+      .card-title {
+        margin: 0;
+        font-size: 18px;
+        font-weight: 600;
+        color: #1f2937;
+      }
+
+      .card-subtitle {
+        margin-top: 6px;
+        margin-bottom: 0;
+        font-size: 14px;
+        color: #6b7280;
+      }
+
+      .card-content {
+        padding: 20px;
       }
 
       .btn {
-        padding: 10px 20px;
+        padding: 8px 16px;
         border: none;
-        border-radius: 4px;
+        border-radius: 6px;
         cursor: pointer;
         font-size: 14px;
         font-weight: 500;
@@ -41,12 +72,12 @@ export class AdminTenantList extends LitElement {
       }
 
       .btn-primary {
-        background: #007bff;
+        background: #2563eb;
         color: white;
       }
 
       .btn-primary:hover {
-        background: #0056b3;
+        background: #1d4ed8;
       }
 
       .btn-primary:disabled {
@@ -55,63 +86,58 @@ export class AdminTenantList extends LitElement {
       }
 
       .btn-secondary {
-        background: #6c757d;
-        color: white;
+        background: #e5e7eb;
+        color: #374151;
       }
 
       .btn-secondary:hover {
-        background: #545b62;
+        background: #d1d5db;
       }
 
       .btn-success {
-        background: #28a745;
+        background: #16a34a;
         color: white;
       }
 
       .btn-success:hover {
-        background: #218838;
+        background: #15803d;
       }
 
-      .error {
-        background: #f8d7da;
-        color: #721c24;
-        padding: 12px;
-        border-radius: 4px;
+      .notice {
+        padding: 12px 16px;
+        border-radius: 6px;
         margin-bottom: 20px;
-        display: none;
       }
 
-      .error.show {
-        display: block;
+      .notice-error {
+        background: #fee2e2;
+        color: #dc2626;
+        border-left: 4px solid #dc2626;
       }
 
-      .success {
-        background: #d4edda;
-        color: #155724;
-        padding: 12px;
-        border-radius: 4px;
-        margin-bottom: 20px;
-        display: none;
-      }
-
-      .success.show {
-        display: block;
+      .notice-success {
+        background: #d1fae5;
+        color: #065f46;
+        border-left: 4px solid #10b981;
       }
 
       .toolbar {
-        margin-bottom: 20px;
         display: flex;
-        justify-content: space-between;
-        align-items: flex-start;
-        gap: 20px;
+        justify-content: flex-end;
       }
 
       .new-tenant-form {
-        background: white;
+        border: 1px solid #e5e7eb;
         padding: 20px;
         border-radius: 8px;
-        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
         margin-bottom: 20px;
+      }
+
+      .new-tenant-title {
+        margin: 0 0 16px;
+        color: #1f2937;
+        font-size: 16px;
+        font-weight: 600;
       }
 
       .form-row {
@@ -132,58 +158,101 @@ export class AdminTenantList extends LitElement {
         margin-top: 4px;
       }
 
-      .tenants-container {
-        background: white;
-        padding: 30px;
+      .tenants-grid {
+        border: 1px solid #e5e7eb;
         border-radius: 8px;
-        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        overflow: hidden;
+        min-width: 1120px;
       }
 
-      h3 {
-        margin-top: 0;
-        margin-bottom: 20px;
-        color: #333;
+      .tenants-grid-row {
+        display: grid;
+        grid-template-columns:
+          minmax(120px, 1fr)
+          minmax(220px, 1.6fr)
+          minmax(180px, 1.2fr)
+          110px
+          120px
+          150px
+          130px
+          100px;
+        gap: 12px;
+        align-items: center;
+        padding: 12px 16px;
+        border-bottom: 1px solid #e5e7eb;
       }
 
-      table {
-        width: 100%;
-        border-collapse: collapse;
-        margin-top: 20px;
+      .tenants-grid-row:last-child {
+        border-bottom: none;
       }
 
-      th,
-      td {
-        padding: 12px;
-        text-align: left;
-        border-bottom: 1px solid #ddd;
+      .tenants-grid-row:hover {
+        background: #f9fafb;
       }
 
-      th {
-        background: #f8f9fa;
-        font-weight: 600;
-        color: #495057;
+      .tenants-grid-header {
+        background: #f9fafb;
+        font-weight: 700;
+        font-size: 12px;
+        color: #374151;
+        letter-spacing: 0.02em;
+        text-transform: uppercase;
       }
 
-      tr:hover {
-        background: #f8f9fa;
+      .tenants-grid-header:hover {
+        background: #f9fafb;
+      }
+
+      .tenants-grid-cell {
+        min-width: 0;
+      }
+
+      .tenant-name {
+        font-weight: 500;
+        color: #1f2937;
+      }
+
+      .created-date {
+        color: #6b7280;
+        font-size: 14px;
       }
 
       .badge {
         display: inline-block;
-        padding: 4px 8px;
-        border-radius: 4px;
+        padding: 4px 12px;
+        border-radius: 12px;
         font-size: 12px;
         font-weight: 500;
       }
 
-      .badge-success {
-        background: #d4edda;
-        color: #155724;
+      .badge-active {
+        background: #d1fae5;
+        color: #065f46;
       }
 
-      .badge-danger {
-        background: #f8d7da;
-        color: #721c24;
+      .badge-inactive {
+        background: #fee2e2;
+        color: #991b1b;
+      }
+
+      .badge-storage {
+        background: #fee2e2;
+        color: #991b1b;
+      }
+
+      .badge-storage-dedicated {
+        background: #dbeafe;
+        color: #1e40af;
+      }
+
+      .badge-dropbox {
+        background: #fee2e2;
+        color: #991b1b;
+      }
+
+      .badge-dropbox-configured {
+        background: #d1fae5;
+        color: #065f46;
       }
 
       .action-buttons {
@@ -199,7 +268,11 @@ export class AdminTenantList extends LitElement {
       .no-tenants {
         text-align: center;
         padding: 40px;
-        color: #999;
+        color: #6b7280;
+      }
+
+      .mono {
+        overflow-wrap: anywhere;
       }
     `
   ];
@@ -307,129 +380,122 @@ export class AdminTenantList extends LitElement {
 
   render() {
     return html`
-      <div>
-        <h2>Tenant Management</h2>
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <h2 class="card-title">Tenant Management</h2>
+            <p class="card-subtitle">${this.tenants.length} tenant${this.tenants.length === 1 ? '' : 's'}</p>
+          </div>
+          ${!this.showNewForm
+            ? html`<div class="toolbar">
+                <button class="btn btn-primary" @click="${this.handleShowNewForm}">
+                  + New Tenant
+                </button>
+              </div>`
+            : html``}
+        </div>
 
-        <div class="error ${this.errorMessage ? 'show' : ''}">${this.errorMessage}</div>
-        <div class="success ${this.successMessage ? 'show' : ''}">${this.successMessage}</div>
+        <div class="card-content">
+          ${this.errorMessage ? html`<div class="notice notice-error">${this.errorMessage}</div>` : html``}
+          ${this.successMessage ? html`<div class="notice notice-success">${this.successMessage}</div>` : html``}
 
-        ${!this.showNewForm
-          ? html`<div class="toolbar">
-              <button class="btn btn-primary" @click="${this.handleShowNewForm}">
-                + New Tenant
-              </button>
-            </div>`
-          : html`<div class="new-tenant-form">
-              <h3 style="margin-top: 0;">Create New Tenant</h3>
-              <form @submit="${this.handleCreateTenant}">
-                <div class="form-row">
-                  <div>
-                    <admin-form-group
-                      id="new-tenant-id"
-                      label="Tenant Identifier"
-                      type="text"
-                      placeholder="identifier"
-                      .value="${this.newTenantId}"
-                      @input-changed="${this.handleTenantIdChange}"
-                      helper-text="Lowercase letters, numbers, and hyphens only"
-                      required
-                    ></admin-form-group>
+          ${this.showNewForm
+            ? html`<div class="new-tenant-form">
+                <h3 class="new-tenant-title">Create New Tenant</h3>
+                <form @submit="${this.handleCreateTenant}">
+                  <div class="form-row">
+                    <div>
+                      <admin-form-group
+                        id="new-tenant-id"
+                        label="Tenant Identifier"
+                        type="text"
+                        placeholder="identifier"
+                        .value="${this.newTenantId}"
+                        @input-changed="${this.handleTenantIdChange}"
+                        helper-text="Lowercase letters, numbers, and hyphens only"
+                        required
+                      ></admin-form-group>
+                    </div>
+                    <div>
+                      <admin-form-group
+                        id="new-tenant-name"
+                        label="Display Name"
+                        type="text"
+                        placeholder="Display Name"
+                        .value="${this.newTenantName}"
+                        @input-changed="${this.handleTenantNameChange}"
+                        required
+                      ></admin-form-group>
+                    </div>
                   </div>
-                  <div>
-                    <admin-form-group
-                      id="new-tenant-name"
-                      label="Display Name"
-                      type="text"
-                      placeholder="Display Name"
-                      .value="${this.newTenantName}"
-                      @input-changed="${this.handleTenantNameChange}"
-                      required
-                    ></admin-form-group>
+                  <div class="form-row">
+                    <button
+                      type="submit"
+                      class="btn btn-success"
+                      ?disabled="${this.isCreating}"
+                    >
+                      ${this.isCreating ? 'Creating...' : 'Create'}
+                    </button>
+                    <button
+                      type="button"
+                      class="btn btn-secondary"
+                      @click="${this.handleHideNewForm}"
+                    >
+                      Cancel
+                    </button>
                   </div>
-                </div>
-                <div class="form-row">
-                  <button
-                    type="submit"
-                    class="btn btn-success"
-                    ?disabled="${this.isCreating}"
-                  >
-                    ${this.isCreating ? 'Creating...' : 'Create'}
-                  </button>
-                  <button
-                    type="button"
-                    class="btn btn-secondary"
-                    @click="${this.handleHideNewForm}"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </form>
-            </div>`}
-
-        <div class="tenants-container">
-          <h3>Existing Tenants</h3>
+                </form>
+              </div>`
+            : html``}
 
           ${this.tenants.length === 0
             ? html`<div class="no-tenants">No tenants found</div>`
-            : html`<table>
-                <thead>
-                  <tr>
-                    <th>Identifier</th>
-                    <th>UUID</th>
-                    <th>Name</th>
-                    <th>Status</th>
-                    <th>Storage</th>
-                    <th>Dropbox</th>
-                    <th>Created</th>
-                    <th>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${this.tenants.map(
-                    t =>
-                      html`<tr>
-                        <td><code>${t.identifier || t.id}</code></td>
-                        <td><code>${t.id}</code></td>
-                        <td>${t.name}</td>
-                        <td>
-                          <span
-                            class="badge ${t.active ? 'badge-success' : 'badge-danger'}"
-                          >
-                            ${t.active ? 'Active' : 'Inactive'}
-                          </span>
-                        </td>
-                        <td>
-                          <span
-                            class="badge ${t.thumbnail_bucket ? 'badge-success' : 'badge-danger'}"
-                            title="${t.thumbnail_bucket
-                              ? 'Dedicated buckets configured'
-                              : 'Using shared buckets'}"
-                          >
-                            ${t.thumbnail_bucket ? 'Dedicated' : 'Shared'}
-                          </span>
-                        </td>
-                        <td>
-                          <span
-                            class="badge ${t.dropbox_configured
-                              ? 'badge-success'
-                              : 'badge-danger'}"
-                          >
-                            ${t.dropbox_configured ? 'Configured' : 'Not configured'}
-                          </span>
-                        </td>
-                        <td>${new Date(t.created_at).toLocaleDateString()}</td>
-                        <td class="action-buttons">
-                          <button
-                            class="btn btn-primary btn-sm"
-                            @click="${() => this.handleEditTenant(t.id)}"
-                          >
-                            Edit
-                          </button>
-                        </td>
-                      </tr>`
-                  )}
-                </tbody>
-              </table>`}
+            : html`<div class="tenants-grid">
+                <div class="tenants-grid-row tenants-grid-header">
+                  <div class="tenants-grid-cell">Identifier</div>
+                  <div class="tenants-grid-cell">UUID</div>
+                  <div class="tenants-grid-cell">Name</div>
+                  <div class="tenants-grid-cell">Status</div>
+                  <div class="tenants-grid-cell">Storage</div>
+                  <div class="tenants-grid-cell">Dropbox</div>
+                  <div class="tenants-grid-cell">Created</div>
+                  <div class="tenants-grid-cell">Actions</div>
+                </div>
+                ${this.tenants.map((t) => html`
+                  <div class="tenants-grid-row">
+                    <div class="tenants-grid-cell"><span class="mono">${t.identifier || t.id}</span></div>
+                    <div class="tenants-grid-cell"><span class="mono">${t.id}</span></div>
+                    <div class="tenants-grid-cell tenant-name">${t.name}</div>
+                    <div class="tenants-grid-cell">
+                      <span class="badge ${t.active ? 'badge-active' : 'badge-inactive'}">
+                        ${t.active ? 'Active' : 'Inactive'}
+                      </span>
+                    </div>
+                    <div class="tenants-grid-cell">
+                      <span
+                        class="badge ${t.thumbnail_bucket ? 'badge-storage-dedicated' : 'badge-storage'}"
+                        title="${t.thumbnail_bucket ? 'Dedicated buckets configured' : 'Using shared buckets'}"
+                      >
+                        ${t.thumbnail_bucket ? 'Dedicated' : 'Shared'}
+                      </span>
+                    </div>
+                    <div class="tenants-grid-cell">
+                      <span class="badge ${t.dropbox_configured ? 'badge-dropbox-configured' : 'badge-dropbox'}">
+                        ${t.dropbox_configured ? 'Configured' : 'Not configured'}
+                      </span>
+                    </div>
+                    <div class="tenants-grid-cell created-date">${new Date(t.created_at).toLocaleDateString()}</div>
+                    <div class="tenants-grid-cell action-buttons">
+                      <button
+                        class="btn btn-primary btn-sm"
+                        @click="${() => this.handleEditTenant(t.id)}"
+                      >
+                        Edit
+                      </button>
+                    </div>
+                  </div>
+                `)}
+              </div>`}
         </div>
       </div>
     `;

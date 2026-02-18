@@ -1,5 +1,6 @@
 import { LitElement, html, css } from 'lit';
 import { tailwind } from './tailwind-lit.js';
+import { adminTypography } from './shared/admin-typography.js';
 import './app-header.js';
 import './admin-tenant-list.js';
 import './admin-tenant-editor.js';
@@ -23,6 +24,7 @@ class AdminApp extends LitElement {
 
   static styles = [
     tailwind,
+    adminTypography,
     css`
       :host {
         display: block;
