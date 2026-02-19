@@ -14,7 +14,8 @@ Last updated: 2026-02-19
 - [x] Progress/checklist tracker created
 - [x] Phase 1 complete (schema + People reference APIs)
 - [x] Phase 2 complete (jobs + matching backend)
-- [ ] Phase 3 in progress (Tag Audit integration)
+- [x] Phase 3 complete (Tag Audit integration)
+- [x] Phase 4 complete (People reference-photo UX)
 
 ## Commit log
 | Date (UTC) | Commit | Summary |
@@ -29,6 +30,7 @@ Last updated: 2026-02-19
 | 2026-02-19 | `a54237d` | Add scheduled job definition migration for face recompute commands |
 | 2026-02-19 | `1d83604` | Add tests for idempotent face suggestions and scoped recompute |
 | 2026-02-20 | `ee8077c` | Add Tag Audit Face Recognition model integration, empty states, tag-type normalization, and tests |
+| 2026-02-20 | `TBD` | Add People screen reference-photo upload/select/remove UX and API wiring |
 
 ## Phase checklist
 
@@ -69,11 +71,11 @@ Last updated: 2026-02-19
 - [ ] Add frontend tests/coverage for model selection and visibility
 
 ### Phase 4: People screen UX
-- [ ] Add “Reference Photos” section on People screen
-- [ ] Support upload reference flow
-- [ ] Support select-existing-asset reference flow
-- [ ] Show active reference count and latest refresh status
-- [ ] Add remove/deactivate reference action
+- [x] Add “Reference Photos” section on People screen
+- [x] Support upload reference flow
+- [x] Support select-existing-asset reference flow
+- [x] Show active reference count and latest refresh status
+- [x] Add remove/deactivate reference action
 
 ### Phase 5: Metrics + hardening
 - [ ] Add activity/audit events for reference changes and job completions

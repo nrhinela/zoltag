@@ -1457,6 +1457,68 @@ export async function deletePerson(tenantId, personId) {
 }
 
 /**
+ * List reference images for a person.
+ * @param {string} tenantId
+ * @param {number} personId
+ * @param {{includeInactive?: boolean}} options
+ * @returns {Promise<Array>}
+ */
+export async function getPersonReferences(tenantId, personId, options = {}) {
+    const params = new URLSearchParams();
+    if (options.includeInactive) {
+      params.append('include_inactive', 'true');
+    }
+    return fetchWithAuth(`/people/${personId}/references${params.toString() ? `?${params.toString()}` : ''}`, { tenantId });
+}
+
+/**
+ * Create a reference image for a person.
+ * @param {string} tenantId
+ * @param {number} personId
+ * @param {{source_type: 'upload'|'asset', source_asset_id?: string, storage_key?: string, is_active?: boolean, face_count?: number, quality_score?: number}} payload
+ * @returns {Promise<Object>}
+ */
+export async function createPersonReference(tenantId, personId, payload = {}) {
+    return fetchWithAuth(`/people/${personId}/references`, {
+        method: 'POST',
+        tenantId,
+        body: JSON.stringify(payload),
+    });
+}
+
+/**
+ * Delete a person reference image.
+ * @param {string} tenantId
+ * @param {number} personId
+ * @param {string} referenceId
+ * @returns {Promise<Object>}
+ */
+export async function deletePersonReference(tenantId, personId, referenceId) {
+    return fetchWithAuth(`/people/${personId}/references/${referenceId}`, {
+        method: 'DELETE',
+        tenantId,
+    });
+}
+
+/**
+ * Upload and ingest a single image file into the library.
+ * @param {string} tenantId
+ * @param {File} file
+ * @param {{dedupPolicy?: 'keep_both'|'skip_duplicate'}} options
+ * @returns {Promise<Object>}
+ */
+export async function uploadAndIngestImage(tenantId, file, options = {}) {
+    const dedupPolicy = String(options.dedupPolicy || 'keep_both').trim() || 'keep_both';
+    const formData = new FormData();
+    formData.append('file', file);
+    return fetchWithAuth(`/images/upload-and-ingest?dedup_policy=${encodeURIComponent(dedupPolicy)}`, {
+        method: 'POST',
+        tenantId,
+        body: formData,
+    });
+}
+
+/**
  * Get all people tags for an image
  * @param {string} tenantId - Tenant ID
  * @param {number} imageId - Image ID
