@@ -28,6 +28,7 @@ Last updated: 2026-02-19
 | 2026-02-19 | `6feee40` | Add face detection/recognition services, provider abstraction, and CLI jobs |
 | 2026-02-19 | `a54237d` | Add scheduled job definition migration for face recompute commands |
 | 2026-02-19 | `1d83604` | Add tests for idempotent face suggestions and scoped recompute |
+| 2026-02-20 | `ee8077c` | Add Tag Audit Face Recognition model integration, empty states, tag-type normalization, and tests |
 
 ## Phase checklist
 
