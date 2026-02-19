@@ -147,6 +147,7 @@ class ZoltagApp extends LitElement {
       currentUser: { type: Object },
       tenantAccessBlocked: { type: Boolean },
       tenantAccessBlockedMessage: { type: String },
+      tenantSelectionRequired: { type: Boolean },
       providerAdminTenant: { type: Object },
       providerAdminSystemSettings: { type: Object },
       providerAdminLoading: { type: Boolean },

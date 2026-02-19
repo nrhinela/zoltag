@@ -81,6 +81,9 @@ export class AppShellStateController extends BaseStateController {
       this.host.tenantAccessBlockedMessage = this.host.tenantAccessBlocked
         ? 'Your user has not been assigned permissions'
         : '';
+      this.host.tenantSelectionRequired = !this.host.tenantAccessBlocked
+        && !canonicalTenant
+        && memberships.length > 1;
 
       if (this.host.tenantAccessBlocked) {
         this.host.tenant = '';
@@ -109,6 +112,7 @@ export class AppShellStateController extends BaseStateController {
       this.host.currentUser = null;
       this.host.tenantAccessBlocked = false;
       this.host.tenantAccessBlockedMessage = '';
+      this.host.tenantSelectionRequired = false;
     }
   }
 
@@ -335,6 +339,7 @@ export class AppShellStateController extends BaseStateController {
     this._setStoredTenantSelection(nextTenant);
     this.host.tenantAccessBlocked = false;
     this.host.tenantAccessBlockedMessage = '';
+    this.host.tenantSelectionRequired = false;
 
     this.host.searchFilterPanel.setTenant(this.host.tenant);
     this.host.curateHomeFilterPanel.setTenant(this.host.tenant);

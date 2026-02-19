@@ -98,6 +98,7 @@ export function initializeAppDefaultState(host) {
   host.currentUser = null;
   host.tenantAccessBlocked = false;
   host.tenantAccessBlockedMessage = '';
+  host.tenantSelectionRequired = false;
   host.providerAdminTenant = null;
   host.providerAdminSystemSettings = null;
   host.providerAdminLoading = false;
