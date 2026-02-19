@@ -431,26 +431,6 @@ class ImageEditor extends LitElement {
       align-items: center;
       flex-wrap: wrap;
     }
-    .new-keyword-toggle-row {
-      display: flex;
-      justify-content: flex-start;
-      margin-bottom: 6px;
-    }
-    .new-keyword-toggle {
-      border-radius: 8px;
-      padding: 7px 10px;
-      border: 1px solid #d1d5db;
-      background: #ffffff;
-      color: #111827;
-      font-size: 11px;
-      font-weight: 600;
-      cursor: pointer;
-    }
-    .new-keyword-toggle.active {
-      border-color: #2563eb;
-      background: #eff6ff;
-      color: #1d4ed8;
-    }
     .new-keyword-panel {
       border: 1px solid #e5e7eb;
       border-radius: 10px;
@@ -2385,15 +2365,9 @@ class ImageEditor extends LitElement {
     return deduped;
   }
 
-  _toggleNewKeywordMode() {
-    const next = !this.newKeywordMode;
-    this.newKeywordMode = next;
+  _startNewKeywordMode() {
+    this.newKeywordMode = true;
     this.newKeywordError = '';
-    if (!next) {
-      this.newKeywordName = '';
-      this.newKeywordCategoryId = '';
-      return;
-    }
     const categories = this._getKeywordCategoriesSorted();
     if (!this.newKeywordCategoryId && categories.length) {
       this.newKeywordCategoryId = String(categories[0].id);
@@ -2492,6 +2466,12 @@ class ImageEditor extends LitElement {
 
   _handleTagSelectChange(event) {
     const value = event?.detail?.value ?? event?.target?.value ?? '';
+    if (value === '__new_tag__') {
+      this.tagInput = '';
+      this.tagCategory = '';
+      this._startNewKeywordMode();
+      return;
+    }
     if (!value) {
       this.tagInput = '';
       this.tagCategory = '';
@@ -2702,15 +2682,6 @@ class ImageEditor extends LitElement {
         ${this.canEditTags ? renderPropertySection({
           title: 'Add Tags',
           body: html`
-            <div class="new-keyword-toggle-row">
-              <button
-                type="button"
-                class="new-keyword-toggle ${this.newKeywordMode ? 'active' : ''}"
-                @click=${this._toggleNewKeywordMode}
-              >
-                New keyword
-              </button>
-            </div>
             ${this.newKeywordMode ? html`
               <div class="new-keyword-panel">
                 <div class="new-keyword-grid">
@@ -2782,6 +2753,7 @@ class ImageEditor extends LitElement {
                 .keywords=${flatKeywords}
                 .includeUntagged=${false}
                 .compact=${true}
+                .prependOptions=${[{ value: '__new_tag__', label: 'New Tag' }]}
                 @keyword-selected=${this._handleTagSelectChange}
                 @change=${this._handleTagSelectChange}
               ></keyword-dropdown>
