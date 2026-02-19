@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from zoltag.face_recognition.providers import FaceDetectionResult, FaceRecognitionProvider
 from zoltag.metadata import (
+    Asset,
     DetectedFace,
     ImageMetadata,
     MachineTag,
@@ -38,7 +39,7 @@ def recompute_face_detections(
     limit: Optional[int] = None,
     offset: int = 0,
     progress_callback: Optional[Callable[[dict], None]] = None,
-) -> dict[str, int]:
+) -> dict[str, Any]:
     """Detect faces for tenant images and refresh `detected_faces` rows."""
     tenant_value = parse_tenant_id(tenant_id) or tenant_id
 
@@ -46,6 +47,17 @@ def recompute_face_detections(
         tenant_column_filter_for_values(ImageMetadata, tenant_id),
         ImageMetadata.asset_id.is_not(None),
         _not_zero_rating(ImageMetadata.rating),
+    )
+    query = query.join(
+        Asset,
+        (Asset.id == ImageMetadata.asset_id)
+        & tenant_column_filter_for_values(Asset, tenant_id),
+    ).filter(
+        or_(
+            Asset.media_type.is_(None),
+            Asset.media_type == "",
+            Asset.media_type == "image",
+        )
     )
     if not replace:
         query = query.filter(
@@ -73,6 +85,7 @@ def recompute_face_detections(
     skipped_detect_error = 0
     fallback_used = 0
     detect_error_sample: str | None = None
+    attempted_sample: str | None = None
     detected_faces_total = 0
     batch_offset = 0
 
@@ -117,6 +130,14 @@ def recompute_face_detections(
                         f"media_type={image_debug.get('media_type')}"
                     )
                 continue
+            if attempted_sample is None:
+                attempted_sample = (
+                    f"image_id={getattr(image, 'id', None)} "
+                    f"filename={getattr(image, 'filename', None)} "
+                    f"thumbnail_key={image_debug.get('thumbnail_key')} "
+                    f"source_key={image_debug.get('source_key')} "
+                    f"media_type={image_debug.get('media_type')}"
+                )
 
             try:
                 detections = provider.detect_faces(image_bytes)
@@ -182,6 +203,7 @@ def recompute_face_detections(
                     "skipped_detect_error": int(skipped_detect_error),
                     "fallback_used": int(fallback_used),
                     "detect_error_sample": detect_error_sample,
+                    "attempted_sample": attempted_sample,
                     "detected_faces": int(detected_faces_total),
                     "batch_images": int(len(images)),
                     "elapsed_seconds": float(monotonic() - started_at),
@@ -200,6 +222,7 @@ def recompute_face_detections(
                 "skipped_detect_error": int(skipped_detect_error),
                 "fallback_used": int(fallback_used),
                 "detect_error_sample": detect_error_sample,
+                "attempted_sample": attempted_sample,
                 "detected_faces": int(detected_faces_total),
                 "elapsed_seconds": float(monotonic() - started_at),
             }
@@ -212,6 +235,7 @@ def recompute_face_detections(
         "skipped_detect_error": skipped_detect_error,
         "fallback_used": fallback_used,
         "detect_error_sample": detect_error_sample,
+        "attempted_sample": attempted_sample,
         "detected_faces": detected_faces_total,
     }
 

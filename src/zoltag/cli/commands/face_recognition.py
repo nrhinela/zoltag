@@ -157,7 +157,8 @@ class RecomputeFaceDetectionsCommand(CliCommand):
                         f"{int(payload.get('total_candidates') or 0)} candidates "
                         f"(batch={int(payload.get('batch_size') or self.batch_size)}, "
                         f"offset={int(payload.get('offset') or self.offset)}, "
-                        f"limit={payload.get('limit') if payload.get('limit') is not None else 'none'})"
+                        f"limit={payload.get('limit') if payload.get('limit') is not None else 'none'}, "
+                        "media=image-only)"
                     )
                     return
                 if stage == "batch":
@@ -200,6 +201,8 @@ class RecomputeFaceDetectionsCommand(CliCommand):
                 f"fallback-used={int(summary.get('fallback_used') or 0)}) · "
                 f"{summary['detected_faces']} faces"
             )
+            if summary.get("attempted_sample"):
+                click.echo(f"Sample candidate: {summary['attempted_sample']}")
             if summary.get("detect_error_sample"):
                 click.echo(f"Sample detect error: {summary['detect_error_sample']}")
         finally:
