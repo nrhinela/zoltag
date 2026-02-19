@@ -74,6 +74,10 @@ class Settings(BaseSettings):
     keyword_model_min_positive: int = 2
     # If true, generate embeddings during upload/ingest. If false, embeddings are generated later by batch jobs.
     upload_generate_embeddings: bool = True
+    # Minimum number of active reference photos required for person face-recognition suggestions.
+    face_recognition_min_references: int = 3
+    # Confidence threshold [0-1] for writing face-recognition suggestions.
+    face_recognition_suggest_threshold: float = 0.45
     
     # API
     api_host: str = "0.0.0.0"
@@ -126,6 +130,8 @@ class Settings(BaseSettings):
             "trained_tag_threshold": self.trained_tag_threshold,
             "keyword_model_min_positive": self.keyword_model_min_positive,
             "upload_generate_embeddings": self.upload_generate_embeddings,
+            "face_recognition_min_references": self.face_recognition_min_references,
+            "face_recognition_suggest_threshold": self.face_recognition_suggest_threshold,
             "deprecated_env_vars_present": present_deprecated,
         }
 
