@@ -1373,6 +1373,7 @@ class ImageEditor extends LitElement {
     tagSubTab: { type: String },
     tagInput: { type: String },
     tagCategory: { type: String },
+    tagSelectionValue: { type: String },
     loading: { type: Boolean },
     error: { type: String },
     fullImageUrl: { type: String },
@@ -1428,6 +1429,7 @@ class ImageEditor extends LitElement {
     this.tagSubTab = 'permatags';
     this.tagInput = '';
     this.tagCategory = '';
+    this.tagSelectionValue = '';
     this.loading = false;
     this.error = '';
     this.fullImageUrl = '';
@@ -2381,6 +2383,7 @@ class ImageEditor extends LitElement {
     this.newKeywordError = '';
     this.tagInput = '';
     this.tagCategory = '';
+    this.tagSelectionValue = '';
   }
 
   async _applyPermatag(keywordRaw, categoryRaw) {
@@ -2402,6 +2405,7 @@ class ImageEditor extends LitElement {
     this.details = { ...this.details, permatags: nextPermatags };
     this.tagInput = '';
     this.tagCategory = '';
+    this.tagSelectionValue = '';
     this._suppressPermatagRefresh = true;
     this.dispatchEvent(new CustomEvent('permatags-changed', {
       detail: { imageId: this.details.id, source: 'image-editor' },
@@ -2471,12 +2475,14 @@ class ImageEditor extends LitElement {
     if (value === '__new_tag__') {
       this.tagInput = '';
       this.tagCategory = '';
+      this.tagSelectionValue = '';
       this._startNewKeywordMode();
       return;
     }
     if (!value) {
       this.tagInput = '';
       this.tagCategory = '';
+      this.tagSelectionValue = '';
       return;
     }
     const [categoryPart, keywordPart] = value.split('::');
@@ -2484,6 +2490,7 @@ class ImageEditor extends LitElement {
     const category = decodeURIComponent(categoryPart || 'Uncategorized');
     this.tagInput = keyword;
     this.tagCategory = category;
+    this.tagSelectionValue = String(value);
   }
 
   async _handleRemoveTag(tag) {
@@ -2616,9 +2623,10 @@ class ImageEditor extends LitElement {
     const categories = Object.keys(this.keywordsByCategory || {}).sort((a, b) => a.localeCompare(b));
     const keywordMap = this._keywordIndex();
     const selectedCategory = this.tagCategory || (this.tagInput ? keywordMap[this.tagInput] : '') || 'Uncategorized';
-    const selectedValue = this.tagInput
+    const derivedSelectedValue = this.tagInput
       ? `${encodeURIComponent(selectedCategory)}::${encodeURIComponent(this.tagInput)}`
       : '';
+    const selectedValue = this.tagSelectionValue || derivedSelectedValue;
     const sourcePath = this._getSourcePath(this.details);
     const sourceHref = this._getSourceHref(this.details);
     const sourceProvider = this._formatSourceProvider(this.details?.source_provider);
