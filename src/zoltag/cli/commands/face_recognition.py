@@ -10,6 +10,7 @@ from google.cloud import storage
 from zoltag.asset_helpers import resolve_image_storage
 from zoltag.cli.base import CliCommand
 from zoltag.face_recognition import (
+    OpenCVFallbackFaceRecognitionProvider,
     get_default_face_provider,
     recompute_face_detections,
     recompute_face_recognition_tags,
@@ -103,6 +104,10 @@ class RecomputeFaceDetectionsCommand(CliCommand):
             self.tenant = self.load_tenant(self.tenant_id)
             provider = get_default_face_provider()
             click.echo(f"Using face provider: {provider.model_name} ({provider.model_version})")
+            fallback_provider = None
+            if str(provider.model_name or "").strip() == "face_recognition":
+                fallback_provider = OpenCVFallbackFaceRecognitionProvider()
+                click.echo(f"Fallback provider enabled: {fallback_provider.model_name} ({fallback_provider.model_version})")
             storage_client = storage.Client(project=settings.gcp_project_id)
             thumbnail_bucket = storage_client.bucket(self.tenant.get_thumbnail_bucket(settings))
 
@@ -143,7 +148,8 @@ class RecomputeFaceDetectionsCommand(CliCommand):
                         f"{processed} processed · "
                         f"{int(payload.get('skipped') or 0)} skipped "
                         f"(missing-bytes={int(payload.get('skipped_missing_bytes') or 0)}, "
-                        f"detect-error={int(payload.get('skipped_detect_error') or 0)}) · "
+                        f"detect-error={int(payload.get('skipped_detect_error') or 0)}, "
+                        f"fallback-used={int(payload.get('fallback_used') or 0)}) · "
                         f"{int(payload.get('detected_faces') or 0)} faces · "
                         f"{elapsed:.1f}s elapsed · "
                         f"{rate:.2f}/s"
@@ -153,6 +159,7 @@ class RecomputeFaceDetectionsCommand(CliCommand):
                 self.db,
                 tenant_id=self.tenant.id,
                 provider=provider,
+                fallback_provider=fallback_provider,
                 load_image_bytes=_load_image_bytes,
                 replace=self.replace,
                 batch_size=self.batch_size,
@@ -166,7 +173,8 @@ class RecomputeFaceDetectionsCommand(CliCommand):
                 f"{summary['processed']} processed · "
                 f"{summary['skipped']} skipped "
                 f"(missing-bytes={int(summary.get('skipped_missing_bytes') or 0)}, "
-                f"detect-error={int(summary.get('skipped_detect_error') or 0)}) · "
+                f"detect-error={int(summary.get('skipped_detect_error') or 0)}, "
+                f"fallback-used={int(summary.get('fallback_used') or 0)}) · "
                 f"{summary['detected_faces']} faces"
             )
             if summary.get("detect_error_sample"):

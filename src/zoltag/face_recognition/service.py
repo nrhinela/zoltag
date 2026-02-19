@@ -31,6 +31,7 @@ def recompute_face_detections(
     *,
     tenant_id: str,
     provider: FaceRecognitionProvider,
+    fallback_provider: Optional[FaceRecognitionProvider] = None,
     load_image_bytes: Callable[[ImageMetadata], Optional[bytes]],
     replace: bool = False,
     batch_size: int = 50,
@@ -70,6 +71,7 @@ def recompute_face_detections(
     attempted = 0
     skipped_missing_bytes = 0
     skipped_detect_error = 0
+    fallback_used = 0
     detect_error_sample: str | None = None
     detected_faces_total = 0
     batch_offset = 0
@@ -98,11 +100,23 @@ def recompute_face_detections(
             try:
                 detections = provider.detect_faces(image_bytes)
             except Exception as exc:
-                skipped += 1
-                skipped_detect_error += 1
-                if detect_error_sample is None:
-                    detect_error_sample = str(exc)
-                continue
+                # dlib occasionally rejects valid-looking arrays on some builds;
+                # retry on a secondary provider before skipping.
+                used_fallback = False
+                if fallback_provider is not None:
+                    try:
+                        detections = fallback_provider.detect_faces(image_bytes)
+                        used_fallback = True
+                    except Exception:
+                        detections = None
+                if detections is None:
+                    skipped += 1
+                    skipped_detect_error += 1
+                    if detect_error_sample is None:
+                        detect_error_sample = str(exc)
+                    continue
+                if used_fallback:
+                    fallback_used += 1
 
             db.query(DetectedFace).filter(
                 tenant_column_filter_for_values(DetectedFace, tenant_id),
@@ -138,6 +152,7 @@ def recompute_face_detections(
                     "skipped": int(skipped),
                     "skipped_missing_bytes": int(skipped_missing_bytes),
                     "skipped_detect_error": int(skipped_detect_error),
+                    "fallback_used": int(fallback_used),
                     "detect_error_sample": detect_error_sample,
                     "detected_faces": int(detected_faces_total),
                     "batch_images": int(len(images)),
@@ -155,6 +170,7 @@ def recompute_face_detections(
                 "skipped": int(skipped),
                 "skipped_missing_bytes": int(skipped_missing_bytes),
                 "skipped_detect_error": int(skipped_detect_error),
+                "fallback_used": int(fallback_used),
                 "detect_error_sample": detect_error_sample,
                 "detected_faces": int(detected_faces_total),
                 "elapsed_seconds": float(monotonic() - started_at),
@@ -166,6 +182,7 @@ def recompute_face_detections(
         "skipped": skipped,
         "skipped_missing_bytes": skipped_missing_bytes,
         "skipped_detect_error": skipped_detect_error,
+        "fallback_used": fallback_used,
         "detect_error_sample": detect_error_sample,
         "detected_faces": detected_faces_total,
     }
