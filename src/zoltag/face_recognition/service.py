@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 import json
 from time import monotonic
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from sqlalchemy import exists, or_
 from sqlalchemy.orm import Session
@@ -32,7 +32,7 @@ def recompute_face_detections(
     tenant_id: str,
     provider: FaceRecognitionProvider,
     fallback_provider: Optional[FaceRecognitionProvider] = None,
-    load_image_bytes: Callable[[ImageMetadata], Optional[bytes]],
+    load_image_bytes: Callable[[ImageMetadata], Any],
     replace: bool = False,
     batch_size: int = 50,
     limit: Optional[int] = None,
@@ -91,10 +91,31 @@ def recompute_face_detections(
 
         for image in images:
             attempted += 1
-            image_bytes = load_image_bytes(image)
+            image_payload = load_image_bytes(image)
+            image_debug: dict[str, Any] = {}
+            image_bytes: Optional[bytes] = None
+            if isinstance(image_payload, tuple):
+                if image_payload:
+                    image_bytes = image_payload[0]
+                if len(image_payload) > 1 and isinstance(image_payload[1], dict):
+                    image_debug = image_payload[1]
+            elif isinstance(image_payload, dict):
+                image_bytes = image_payload.get("bytes")
+                if isinstance(image_payload.get("debug"), dict):
+                    image_debug = image_payload["debug"]
+            else:
+                image_bytes = image_payload
             if not image_bytes:
                 skipped += 1
                 skipped_missing_bytes += 1
+                if detect_error_sample is None:
+                    detect_error_sample = (
+                        f"Missing bytes for image_id={getattr(image, 'id', None)} "
+                        f"filename={getattr(image, 'filename', None)} "
+                        f"thumbnail_key={image_debug.get('thumbnail_key')} "
+                        f"source_key={image_debug.get('source_key')} "
+                        f"media_type={image_debug.get('media_type')}"
+                    )
                 continue
 
             try:
@@ -113,7 +134,14 @@ def recompute_face_detections(
                     skipped += 1
                     skipped_detect_error += 1
                     if detect_error_sample is None:
-                        detect_error_sample = str(exc)
+                        detect_error_sample = (
+                            f"{exc} "
+                            f"[image_id={getattr(image, 'id', None)} "
+                            f"filename={getattr(image, 'filename', None)} "
+                            f"thumbnail_key={image_debug.get('thumbnail_key')} "
+                            f"source_key={image_debug.get('source_key')} "
+                            f"media_type={image_debug.get('media_type')}]"
+                        )
                     continue
                 if used_fallback:
                     fallback_used += 1

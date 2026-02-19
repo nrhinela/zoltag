@@ -111,7 +111,7 @@ class RecomputeFaceDetectionsCommand(CliCommand):
             storage_client = storage.Client(project=settings.gcp_project_id)
             thumbnail_bucket = storage_client.bucket(self.tenant.get_thumbnail_bucket(settings))
 
-            def _load_image_bytes(image: ImageMetadata) -> bytes | None:
+            def _load_image_bytes(image: ImageMetadata):
                 storage_info = resolve_image_storage(
                     image=image,
                     tenant=self.tenant,
@@ -119,12 +119,35 @@ class RecomputeFaceDetectionsCommand(CliCommand):
                     strict=False,
                 )
                 thumbnail_key = (storage_info.thumbnail_key or "").strip()
+                source_key = (storage_info.source_key or "").strip()
+                media_type = str(getattr(getattr(storage_info, "asset", None), "media_type", "") or "").strip() or None
                 if not thumbnail_key:
-                    return None
+                    return {
+                        "bytes": None,
+                        "debug": {
+                            "thumbnail_key": None,
+                            "source_key": source_key or None,
+                            "media_type": media_type,
+                        },
+                    }
                 blob = thumbnail_bucket.blob(thumbnail_key)
                 if not blob.exists():
-                    return None
-                return blob.download_as_bytes()
+                    return {
+                        "bytes": None,
+                        "debug": {
+                            "thumbnail_key": thumbnail_key,
+                            "source_key": source_key or None,
+                            "media_type": media_type,
+                        },
+                    }
+                return {
+                    "bytes": blob.download_as_bytes(),
+                    "debug": {
+                        "thumbnail_key": thumbnail_key,
+                        "source_key": source_key or None,
+                        "media_type": media_type,
+                    },
+                }
 
             def _on_progress(payload: dict):
                 stage = str((payload or {}).get("stage") or "").strip().lower()
