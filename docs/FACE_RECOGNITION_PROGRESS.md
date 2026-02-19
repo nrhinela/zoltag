@@ -12,12 +12,16 @@ Last updated: 2026-02-19
 ## Current status
 - [x] Design reviewed and locked decisions captured
 - [x] Progress/checklist tracker created
-- [ ] Phase 1 in progress (schema + People reference APIs)
+- [x] Phase 1 complete (schema + People reference APIs)
+- [ ] Phase 2 in progress (jobs + matching backend)
 
 ## Commit log
 | Date (UTC) | Commit | Summary |
 |---|---|---|
 | 2026-02-19 | `29b732f` | Create face recognition progress/checklist document |
+| 2026-02-19 | `5beb195` | Update progress log baseline entry |
+| 2026-02-19 | `4dd9a42` | Add person reference images schema + migration |
+| 2026-02-19 | `31f10f9` | Add tenant-scoped People reference CRUD endpoints and tests |
 
 ## Phase checklist
 
@@ -27,16 +31,16 @@ Last updated: 2026-02-19
 - [x] Finalize design doc baseline
 
 ### Phase 1: Schema + backend APIs
-- [ ] Add migration for `person_reference_images`
-- [ ] Add ORM model for `person_reference_images`
-- [ ] Add tenant-scoped indexes/constraints
-- [ ] Add People endpoints:
-  - [ ] `GET /api/v1/people/{person_id}/references`
-  - [ ] `POST /api/v1/people/{person_id}/references`
-  - [ ] `DELETE /api/v1/people/{person_id}/references/{reference_id}`
-- [ ] Add validation: allowed source types (`upload`, `asset`)
-- [ ] Add delete cascade behavior when person is deleted
-- [ ] Add tests for People reference CRUD and tenant isolation
+- [x] Add migration for `person_reference_images`
+- [x] Add ORM model for `person_reference_images`
+- [x] Add tenant-scoped indexes/constraints
+- [x] Add People endpoints:
+  - [x] `GET /api/v1/people/{person_id}/references`
+  - [x] `POST /api/v1/people/{person_id}/references`
+  - [x] `DELETE /api/v1/people/{person_id}/references/{reference_id}`
+- [x] Add validation: allowed source types (`upload`, `asset`)
+- [x] Add delete cascade behavior when person is deleted
+- [x] Add tests for People reference CRUD and tenant isolation
 
 ### Phase 2: Jobs + matching backend
 - [ ] Add scheduled job definition: `recompute-face-detections`
