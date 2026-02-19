@@ -121,6 +121,30 @@ class RecomputeFaceDetectionsCommand(CliCommand):
                     return None
                 return blob.download_as_bytes()
 
+            def _on_progress(payload: dict):
+                stage = str((payload or {}).get("stage") or "").strip().lower()
+                if stage == "start":
+                    click.echo(
+                        "Starting face detections: "
+                        f"{int(payload.get('total_candidates') or 0)} candidates "
+                        f"(batch={int(payload.get('batch_size') or self.batch_size)}, "
+                        f"offset={int(payload.get('offset') or self.offset)}, "
+                        f"limit={payload.get('limit') if payload.get('limit') is not None else 'none'})"
+                    )
+                    return
+                if stage == "batch":
+                    elapsed = float(payload.get("elapsed_seconds") or 0.0)
+                    processed = int(payload.get("processed") or 0)
+                    rate = (processed / elapsed) if elapsed > 0 else 0.0
+                    click.echo(
+                        "Progress: "
+                        f"{processed} processed · "
+                        f"{int(payload.get('skipped') or 0)} skipped · "
+                        f"{int(payload.get('detected_faces') or 0)} faces · "
+                        f"{elapsed:.1f}s elapsed · "
+                        f"{rate:.2f}/s"
+                    )
+
             summary = recompute_face_detections(
                 self.db,
                 tenant_id=self.tenant.id,
@@ -130,6 +154,7 @@ class RecomputeFaceDetectionsCommand(CliCommand):
                 batch_size=self.batch_size,
                 limit=self.limit,
                 offset=self.offset,
+                progress_callback=_on_progress,
             )
             click.echo(
                 "✓ Face detections refreshed: "

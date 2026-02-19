@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 import json
+from time import monotonic
 from typing import Callable, Optional
 
 from sqlalchemy import exists, or_
@@ -35,6 +36,7 @@ def recompute_face_detections(
     batch_size: int = 50,
     limit: Optional[int] = None,
     offset: int = 0,
+    progress_callback: Optional[Callable[[dict], None]] = None,
 ) -> dict[str, int]:
     """Detect faces for tenant images and refresh `detected_faces` rows."""
     tenant_value = parse_tenant_id(tenant_id) or tenant_id
@@ -49,6 +51,19 @@ def recompute_face_detections(
             or_(ImageMetadata.faces_detected.is_(False), ImageMetadata.faces_detected.is_(None))
         )
     query = query.order_by(ImageMetadata.id.desc()).offset(max(offset, 0))
+    total_candidates = query.count()
+    started_at = monotonic()
+    if progress_callback:
+        progress_callback(
+            {
+                "stage": "start",
+                "total_candidates": int(total_candidates or 0),
+                "batch_size": int(batch_size),
+                "offset": int(max(offset, 0)),
+                "limit": int(limit) if limit is not None else None,
+                "replace": bool(replace),
+            }
+        )
 
     processed = 0
     skipped = 0
@@ -101,8 +116,29 @@ def recompute_face_detections(
             detected_faces_total += len(detections)
 
         db.commit()
+        if progress_callback:
+            progress_callback(
+                {
+                    "stage": "batch",
+                    "processed": int(processed),
+                    "skipped": int(skipped),
+                    "detected_faces": int(detected_faces_total),
+                    "batch_images": int(len(images)),
+                    "elapsed_seconds": float(monotonic() - started_at),
+                }
+            )
         batch_offset += len(images)
 
+    if progress_callback:
+        progress_callback(
+            {
+                "stage": "done",
+                "processed": int(processed),
+                "skipped": int(skipped),
+                "detected_faces": int(detected_faces_total),
+                "elapsed_seconds": float(monotonic() - started_at),
+            }
+        )
     return {
         "processed": processed,
         "skipped": skipped,
