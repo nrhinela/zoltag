@@ -245,6 +245,20 @@ def _get_similarity_index(
     return built
 
 
+def _peek_cached_similarity_index(
+    tenant: Tenant,
+    media_type: Optional[str],
+    embedding_dim: int,
+) -> Optional[dict]:
+    key = (str(tenant.id), media_type or "", int(embedding_dim))
+    now = time.time()
+    with _similarity_cache_lock:
+        cached = _similarity_index_cache.get(key)
+        if cached and (now - float(cached.get("built_at", 0))) <= SIMILARITY_CACHE_TTL_SECONDS:
+            return cached
+    return None
+
+
 def _pgvector_cache_key(db: Session) -> str:
     bind = db.get_bind()
     return str(bind.engine.url)
@@ -1953,7 +1967,7 @@ async def list_images(
                     similarity_fetch_limit_start = max(similarity_fetch_limit_start, similarity_per_seed_limit)
                     similarity_fetch_limit_max = min(max(similarity_per_seed_limit * 12, 150), 700)
                     similarity_pgvector_scan_cap = min(max(similarity_per_seed_limit * 30, 300), 1000)
-                    similarity_max_expand_attempts = 2
+                    similarity_max_expand_attempts = 3
                     similarity_seed_budget_seconds = 0.35
                     seen_image_ids: set[int] = set()
 
@@ -2054,12 +2068,18 @@ async def list_images(
                                 for image_id, score in (raw_score_by_id or {}).items()
                             }
                         else:
-                            index = _get_similarity_index(
-                                db=db,
+                            # Avoid expensive cold index builds on interactive audit requests.
+                            # If a cache is already warm, use it; otherwise prefer fewer results
+                            # over slow response times.
+                            index = _peek_cached_similarity_index(
                                 tenant=tenant,
                                 media_type=similarity_media_type,
                                 embedding_dim=int(seed_vector.size),
                             )
+                            if index is None:
+                                ranked_ids = []
+                                score_by_image_id = {}
+                                continue
                             matrix = index["matrix"]
                             candidate_ids = index["image_ids"]
                             if matrix.size == 0 or candidate_ids.size == 0:

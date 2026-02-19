@@ -95,6 +95,16 @@ class TaggingAdmin extends LitElement {
       color: #1e3a8a;
       line-height: 1.5;
     }
+    .help-panel ul {
+      margin-top: 10px;
+      margin-left: 18px;
+      list-style: disc;
+      font-size: 13px;
+      color: #1e3a8a;
+      line-height: 1.5;
+      display: grid;
+      gap: 6px;
+    }
   `];
 
   static properties = {
@@ -649,30 +659,12 @@ class TaggingAdmin extends LitElement {
           </div>
           <details class="help-panel mb-6">
             <summary>How keywords and categories work</summary>
-            <p>
-              <strong>Keywords</strong> help with search, manual tagging, and machine learning (ML) model suggestions
-              (when a description is provided).
-            </p>
-            <p>
-              <strong>Important!</strong> When entering keywords, there is a Prompt field. These matter a lot. A clear,
-              specific Prompt for each keyword gives ML models better guidance and improves suggestion quality.
-            </p>
-            <p>
-              <strong>Keyword Categories</strong> group related keywords and control how those keywords are used across
-              Zoltag. Category order controls how categories appear within dropdowns in the various screens.
-            </p>
-            <p>
-              Keyword Categories have two optional attributes: <strong>People Category</strong> and
-              <strong>Is Attribution</strong>.
-            </p>
-            <p>
-              In <strong>People categories</strong>, keywords can be linked to a "Person" record. These are for manual
-              identity tagging and are not used for ML suggestions.
-            </p>
-            <p>
-              <strong>Attribution categories</strong> are for credits, source info, and other reference tags. For
-              instance, when downloading lists of photos we ensure this category is included in the ZIP file.
-            </p>
+            <ul>
+              <li>Keywords are one of the most important parts of getting the most out of Zoltag.</li>
+              <li>Create multiple sets of keywords by creating keyword categories.</li>
+              <li>You can link keywords to companies or people by using category attributes.</li>
+              <li>Keyword prompts help AI systems automatically suggest relevant tags to get started.</li>
+            </ul>
           </details>
 
           ${this.error ? html`<div class="text-sm text-red-600 mb-4">${this.error}</div>` : ''}

@@ -767,7 +767,13 @@ export class CurateAuditStateController extends BaseStateController {
     }
 
     this.startLoading();
+    const requestSeq = (this.host._curateAuditRequestSeq || 0) + 1;
+    this.host._curateAuditRequestSeq = requestSeq;
     const existingImages = append ? [...(this.host.curateAuditImages || [])] : null;
+    if (!append) {
+      // Prevent stale rows from rendering as "source groups" while a new similarity fetch is in-flight.
+      this.host.curateAuditImages = [];
+    }
     try {
       const filters = buildCurateAuditFilterObject(this.host, {
         loadAll: useLoadAll,
@@ -775,6 +781,9 @@ export class CurateAuditStateController extends BaseStateController {
       });
       curateAuditFilterPanel.updateFilters(filters);
       const result = await curateAuditFilterPanel.fetchImages();
+      if (requestSeq !== this.host._curateAuditRequestSeq) {
+        return;
+      }
 
       const images = Array.isArray(result) ? result : (result?.images || []);
       const total = Array.isArray(result)

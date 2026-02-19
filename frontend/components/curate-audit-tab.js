@@ -1122,6 +1122,14 @@ export class CurateAuditTab extends LitElement {
 
   _buildSimilarityGroups(images) {
     const safeImages = Array.isArray(images) ? images : [];
+    const hasSimilarityMetadata = safeImages.some((image) => (
+      Number.isFinite(Number(image?.similarity_group))
+      || image?.similarity_seed === true
+      || Number.isFinite(Number(image?.similarity_seed_image_id))
+    ));
+    if (!hasSimilarityMetadata) {
+      return null;
+    }
     const groups = [];
     const byGroup = new Map();
     safeImages.forEach((image, index) => {
@@ -1139,6 +1147,36 @@ export class CurateAuditTab extends LitElement {
 
   _renderSimilarityGroups(leftImages) {
     const groups = this._buildSimilarityGroups(leftImages);
+    if (groups === null) {
+      return renderSelectableImageGrid({
+        images: leftImages,
+        selection: this.dragSelection,
+        flashSelectionIds: this._auditFlashSelectionIds,
+        selectionHandlers: this._auditSelectionHandlers,
+        renderFunctions: {
+          renderCurateRatingWidget: this.renderCurateRatingWidget,
+          renderCurateRatingStatic: this.renderCurateRatingStatic,
+          renderCurateAiMLScore: this.renderCurateAiMLScore,
+          renderCuratePermatagSummary: this.renderCuratePermatagSummary,
+          formatCurateDate: this.formatCurateDate,
+        },
+        onImageClick: (event, image) => this._handleAuditImageClick(event, image, leftImages),
+        onDragStart: (event, image) => this._handleAuditDragStart(event, image, leftImages),
+        selectionEvents: {
+          pointerDown: (event, index, imageId, imageOrder) =>
+            this._handleAuditPointerDownWithOrder(event, index, imageId, imageOrder),
+          pointerMove: (event) => this._handleAuditPointerMove(event),
+          pointerEnter: (index, imageOrder) => this._handleAuditSelectHoverWithOrder(index, imageOrder),
+          order: this._auditLeftOrder,
+        },
+        options: {
+          enableReordering: false,
+          showPermatags: true,
+          showAiScore: true,
+          emptyMessage: this.keyword ? 'No images available.' : 'Choose a keyword to start.',
+        },
+      });
+    }
     if (!groups.length) {
       return renderSelectableImageGrid({
         images: [],
@@ -1262,19 +1300,28 @@ export class CurateAuditTab extends LitElement {
           <div class="bg-white rounded-lg shadow p-4 mb-4">
             <div class="flex flex-wrap items-center justify-center gap-4">
               <div>
-                <div class="curate-audit-toggle">
-                  <button
-                    class=${this.mode === 'missing' ? 'active' : ''}
-                    @click=${() => this._handleModeChange('missing')}
-                  >
-                    Find Missing Tags
-                  </button>
-                  <button
-                    class=${this.mode === 'existing' ? 'active' : ''}
-                    @click=${() => this._handleModeChange('existing')}
-                  >
-                    Verify Existing Tags
-                  </button>
+                <div class="flex flex-col items-center gap-1">
+                  <div class="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Mode</div>
+                  <div class="inline-flex flex-wrap items-center justify-center gap-2 rounded-xl border border-gray-300 bg-gray-50 p-2 shadow-sm">
+                    <button
+                      class=${this.mode === 'missing'
+                        ? 'px-4 py-2 rounded-lg border border-blue-600 bg-blue-600 text-white text-sm font-semibold shadow-sm'
+                        : 'px-4 py-2 rounded-lg border border-gray-300 bg-white text-gray-700 text-sm font-semibold hover:bg-gray-100'}
+                      aria-pressed=${this.mode === 'missing' ? 'true' : 'false'}
+                      @click=${() => this._handleModeChange('missing')}
+                    >
+                      Find Missing Tags
+                    </button>
+                    <button
+                      class=${this.mode === 'existing'
+                        ? 'px-4 py-2 rounded-lg border border-blue-600 bg-blue-600 text-white text-sm font-semibold shadow-sm'
+                        : 'px-4 py-2 rounded-lg border border-gray-300 bg-white text-gray-700 text-sm font-semibold hover:bg-gray-100'}
+                      aria-pressed=${this.mode === 'existing' ? 'true' : 'false'}
+                      @click=${() => this._handleModeChange('existing')}
+                    >
+                      Verify Existing Tags
+                    </button>
+                  </div>
                 </div>
               </div>
               ${this.mode === 'missing' ? html`
