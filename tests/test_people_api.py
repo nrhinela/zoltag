@@ -9,14 +9,22 @@ This module tests the people management operations:
 - GET /api/v1/people/{person_id}/stats (get_person_stats)
 """
 
-import pytest
 import uuid
+import asyncio
+import pytest
+from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from zoltag.tenant import Tenant, TenantContext
-from zoltag.metadata import Asset, Person, MachineTag, ImageMetadata
+from zoltag.metadata import Asset, Person, PersonReferenceImage, MachineTag, ImageMetadata
 from zoltag.models.config import Keyword, KeywordCategory
-from zoltag.routers.people import get_or_create_person_keyword
+from zoltag.routers.people import (
+    PersonReferenceCreateRequest,
+    create_person_reference,
+    delete_person_reference,
+    get_or_create_person_keyword,
+    list_person_references,
+)
 
 
 TEST_TENANT_IDENTIFIER = "test_tenant"
@@ -353,6 +361,184 @@ class TestDeletePerson:
 
         # Keyword row should remain; unlinking is an endpoint-level behavior.
         assert retrieved_keyword is not None
+
+
+class TestPersonReferenceImages:
+    """Tests for person reference image CRUD helpers."""
+
+    def test_create_upload_reference(self, test_db: Session, tenant: Tenant):
+        """Create an upload-backed person reference."""
+        person = Person(
+            tenant_id=tenant.id,
+            name="Ref Upload Person",
+        )
+        test_db.add(person)
+        test_db.commit()
+        test_db.refresh(person)
+
+        payload = PersonReferenceCreateRequest(
+            source_type="upload",
+            storage_key="tenants/test_tenant/people/ref-upload.jpg",
+        )
+        response = asyncio.run(
+            create_person_reference(
+                person_id=person.id,
+                request=payload,
+                tenant=tenant,
+                db=test_db,
+            )
+        )
+
+        assert response.person_id == person.id
+        assert response.source_type == "upload"
+        assert response.storage_key == "tenants/test_tenant/people/ref-upload.jpg"
+
+        saved = test_db.query(PersonReferenceImage).filter(
+            PersonReferenceImage.person_id == person.id,
+            PersonReferenceImage.tenant_id == tenant.id,
+        ).all()
+        assert len(saved) == 1
+
+    def test_create_asset_reference(self, test_db: Session, tenant: Tenant):
+        """Create an asset-backed person reference."""
+        person = Person(
+            tenant_id=tenant.id,
+            name="Ref Asset Person",
+        )
+        test_db.add(person)
+        test_db.flush()
+
+        asset = Asset(
+            tenant_id=tenant.id,
+            filename="person-ref.jpg",
+            source_provider="test",
+            source_key="/test/person-ref.jpg",
+            thumbnail_key="thumbnails/person-ref.jpg",
+        )
+        test_db.add(asset)
+        test_db.commit()
+        test_db.refresh(person)
+        test_db.refresh(asset)
+
+        payload = PersonReferenceCreateRequest(
+            source_type="asset",
+            source_asset_id=str(asset.id),
+        )
+        response = asyncio.run(
+            create_person_reference(
+                person_id=person.id,
+                request=payload,
+                tenant=tenant,
+                db=test_db,
+            )
+        )
+
+        assert response.person_id == person.id
+        assert response.source_type == "asset"
+        assert response.source_asset_id == str(asset.id)
+
+    def test_create_asset_reference_enforces_tenant_isolation(self, test_db: Session, tenant: Tenant):
+        """Reject references that point to an asset in a different tenant."""
+        person = Person(
+            tenant_id=tenant.id,
+            name="Ref Isolation Person",
+        )
+        test_db.add(person)
+        test_db.flush()
+
+        other_asset = Asset(
+            tenant_id=OTHER_TENANT_ID,
+            filename="other-tenant.jpg",
+            source_provider="test",
+            source_key="/other/tenant.jpg",
+            thumbnail_key="thumbnails/other-tenant.jpg",
+        )
+        test_db.add(other_asset)
+        test_db.commit()
+
+        payload = PersonReferenceCreateRequest(
+            source_type="asset",
+            source_asset_id=str(other_asset.id),
+        )
+
+        with pytest.raises(HTTPException) as exc:
+            asyncio.run(
+                create_person_reference(
+                    person_id=person.id,
+                    request=payload,
+                    tenant=tenant,
+                    db=test_db,
+                )
+            )
+
+        assert exc.value.status_code == 404
+        assert "Asset not found for tenant" in str(exc.value.detail)
+
+    def test_list_and_delete_references(self, test_db: Session, tenant: Tenant):
+        """List active references and delete one by id."""
+        person = Person(
+            tenant_id=tenant.id,
+            name="Ref List Person",
+        )
+        test_db.add(person)
+        test_db.flush()
+
+        active_ref = PersonReferenceImage(
+            tenant_id=tenant.id,
+            person_id=person.id,
+            source_type="upload",
+            storage_key="tenants/test_tenant/people/active.jpg",
+            is_active=True,
+        )
+        inactive_ref = PersonReferenceImage(
+            tenant_id=tenant.id,
+            person_id=person.id,
+            source_type="upload",
+            storage_key="tenants/test_tenant/people/inactive.jpg",
+            is_active=False,
+        )
+        test_db.add(active_ref)
+        test_db.add(inactive_ref)
+        test_db.commit()
+        test_db.refresh(active_ref)
+
+        active_only = asyncio.run(
+            list_person_references(
+                person_id=person.id,
+                include_inactive=False,
+                tenant=tenant,
+                db=test_db,
+            )
+        )
+        assert len(active_only) == 1
+        assert active_only[0].storage_key == "tenants/test_tenant/people/active.jpg"
+
+        all_refs = asyncio.run(
+            list_person_references(
+                person_id=person.id,
+                include_inactive=True,
+                tenant=tenant,
+                db=test_db,
+            )
+        )
+        assert len(all_refs) == 2
+
+        delete_result = asyncio.run(
+            delete_person_reference(
+                person_id=person.id,
+                reference_id=str(active_ref.id),
+                tenant=tenant,
+                db=test_db,
+            )
+        )
+        assert delete_result["status"] == "deleted"
+
+        remaining = test_db.query(PersonReferenceImage).filter(
+            PersonReferenceImage.person_id == person.id,
+            PersonReferenceImage.tenant_id == tenant.id,
+        ).all()
+        assert len(remaining) == 1
+        assert remaining[0].storage_key == "tenants/test_tenant/people/inactive.jpg"
 
 
 class TestPersonStatistics:

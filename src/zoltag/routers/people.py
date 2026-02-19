@@ -1,6 +1,7 @@
 """People management and tagging endpoints."""
 
-from typing import List, Optional
+from typing import List, Literal, Optional
+from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import distinct, func, case
 from sqlalchemy.orm import Session
@@ -8,7 +9,7 @@ from pydantic import BaseModel, Field
 
 from zoltag.dependencies import get_db, get_tenant
 from zoltag.tenant import Tenant
-from zoltag.metadata import Person, Permatag
+from zoltag.metadata import Asset, Person, PersonReferenceImage, Permatag
 from zoltag.models.config import Keyword, KeywordCategory
 from zoltag.tenant_scope import assign_tenant_scope, tenant_column_filter, tenant_column_filter_for_values
 
@@ -94,6 +95,59 @@ class PersonStatsResponse(BaseModel):
     manual_tags: int = 0
     detected_faces: int = 0
     last_tagged_at: Optional[str] = None
+
+
+class PersonReferenceResponse(BaseModel):
+    """Reference image metadata for a person."""
+
+    id: str
+    person_id: int
+    source_type: Literal["upload", "asset"]
+    source_asset_id: Optional[str] = None
+    storage_key: Optional[str] = None
+    is_active: bool = True
+    face_count: int = 0
+    quality_score: Optional[float] = None
+    created_by: Optional[str] = None
+    created_at: str = ""
+    updated_at: str = ""
+
+
+class PersonReferenceCreateRequest(BaseModel):
+    """Create a person reference image from an upload or existing asset."""
+
+    source_type: Literal["upload", "asset"]
+    source_asset_id: Optional[str] = None
+    storage_key: Optional[str] = Field(None, max_length=1024)
+    is_active: bool = True
+    face_count: int = Field(0, ge=0)
+    quality_score: Optional[float] = None
+
+
+def _serialize_reference(reference: PersonReferenceImage) -> PersonReferenceResponse:
+    return PersonReferenceResponse(
+        id=str(reference.id),
+        person_id=reference.person_id,
+        source_type=reference.source_type,
+        source_asset_id=str(reference.source_asset_id) if reference.source_asset_id else None,
+        storage_key=reference.storage_key,
+        is_active=bool(reference.is_active),
+        face_count=int(reference.face_count or 0),
+        quality_score=reference.quality_score,
+        created_by=str(reference.created_by) if reference.created_by else None,
+        created_at=reference.created_at.isoformat() if reference.created_at else "",
+        updated_at=reference.updated_at.isoformat() if reference.updated_at else "",
+    )
+
+
+def _get_person_for_tenant(db: Session, tenant: Tenant, person_id: int) -> Person:
+    person = db.query(Person).filter(
+        Person.id == person_id,
+        tenant_column_filter(Person, tenant),
+    ).first()
+    if not person:
+        raise HTTPException(status_code=404, detail="Person not found")
+    return person
 
 
 # ============================================================================
@@ -281,6 +335,108 @@ async def get_person(
     )
 
 
+@router.get("/{person_id}/references", response_model=List[PersonReferenceResponse])
+async def list_person_references(
+    person_id: int,
+    include_inactive: bool = Query(False),
+    tenant: Tenant = Depends(get_tenant),
+    db: Session = Depends(get_db),
+):
+    """List reference images for a person."""
+    _get_person_for_tenant(db, tenant, person_id)
+
+    query = db.query(PersonReferenceImage).filter(
+        tenant_column_filter(PersonReferenceImage, tenant),
+        PersonReferenceImage.person_id == person_id,
+    )
+    if not include_inactive:
+        query = query.filter(PersonReferenceImage.is_active.is_(True))
+    references = query.order_by(PersonReferenceImage.created_at.desc()).all()
+    return [_serialize_reference(reference) for reference in references]
+
+
+@router.post("/{person_id}/references", response_model=PersonReferenceResponse)
+async def create_person_reference(
+    person_id: int,
+    request: PersonReferenceCreateRequest,
+    tenant: Tenant = Depends(get_tenant),
+    db: Session = Depends(get_db),
+):
+    """Create a reference image for a person."""
+    _get_person_for_tenant(db, tenant, person_id)
+
+    source_type = (request.source_type or "").strip().lower()
+    source_asset_id: UUID | None = None
+    storage_key: str | None = None
+
+    if source_type == "asset":
+        if not request.source_asset_id:
+            raise HTTPException(status_code=400, detail="source_asset_id is required when source_type='asset'")
+        try:
+            source_asset_id = UUID(request.source_asset_id)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="source_asset_id must be a valid UUID")
+
+        asset = db.query(Asset).filter(
+            tenant_column_filter(Asset, tenant),
+            Asset.id == source_asset_id,
+        ).first()
+        if not asset:
+            raise HTTPException(status_code=404, detail="Asset not found for tenant")
+    elif source_type == "upload":
+        storage_key = (request.storage_key or "").strip()
+        if not storage_key:
+            raise HTTPException(status_code=400, detail="storage_key is required when source_type='upload'")
+    else:
+        raise HTTPException(status_code=400, detail="source_type must be 'upload' or 'asset'")
+
+    reference = assign_tenant_scope(
+        PersonReferenceImage(
+            person_id=person_id,
+            source_type=source_type,
+            source_asset_id=source_asset_id,
+            storage_key=storage_key,
+            is_active=bool(request.is_active),
+            face_count=int(request.face_count or 0),
+            quality_score=request.quality_score,
+        ),
+        tenant,
+    )
+
+    db.add(reference)
+    db.commit()
+    db.refresh(reference)
+    return _serialize_reference(reference)
+
+
+@router.delete("/{person_id}/references/{reference_id}")
+async def delete_person_reference(
+    person_id: int,
+    reference_id: str,
+    tenant: Tenant = Depends(get_tenant),
+    db: Session = Depends(get_db),
+):
+    """Delete a reference image for a person."""
+    _get_person_for_tenant(db, tenant, person_id)
+
+    try:
+        parsed_reference_id = UUID(reference_id)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="reference_id must be a valid UUID")
+
+    reference = db.query(PersonReferenceImage).filter(
+        tenant_column_filter(PersonReferenceImage, tenant),
+        PersonReferenceImage.person_id == person_id,
+        PersonReferenceImage.id == parsed_reference_id,
+    ).first()
+    if not reference:
+        raise HTTPException(status_code=404, detail="Reference not found")
+
+    db.delete(reference)
+    db.commit()
+    return {"status": "deleted", "person_id": person_id, "reference_id": reference_id}
+
+
 @router.put("/{person_id}", response_model=PersonResponse)
 async def update_person(
     person_id: int,
@@ -353,6 +509,12 @@ async def delete_person(
     try:
         # Get the keyword for this person
         keyword = _get_person_keyword(db, tenant, person.id)
+
+        # Ensure references are removed even if DB-level cascade is unavailable.
+        db.query(PersonReferenceImage).filter(
+            tenant_column_filter(PersonReferenceImage, tenant),
+            PersonReferenceImage.person_id == person.id,
+        ).delete(synchronize_session=False)
 
         # Delete associated keyword (cascade will delete related tags)
         if keyword:
