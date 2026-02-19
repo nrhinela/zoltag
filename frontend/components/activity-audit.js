@@ -6,8 +6,6 @@ import { getAdminActivity, getTenantActivity } from '../services/api.js';
 const EVENT_OPTIONS = [
   { value: '', label: 'All events' },
   { value: 'auth.login', label: 'Logins' },
-  { value: 'search.images', label: 'Image search' },
-  { value: 'search.nl', label: 'Natural language search' },
 ];
 
 const WINDOW_OPTIONS = [
@@ -178,7 +176,7 @@ class ActivityAudit extends LitElement {
     this.events = [];
     this.summary = { total_events: 0, unique_actors: 0, event_type_counts: {}, daily_counts: [] };
     this.sinceHours = 168;
-    this.eventType = '';
+    this.eventType = 'auth.login';
     this.tenantFilter = '';
     this.limit = 200;
   }
@@ -277,13 +275,14 @@ class ActivityAudit extends LitElement {
             </select>
             <select
               class="select"
-              .value=${this.eventType}
               @change=${(e) => {
                 this.eventType = e.target.value || '';
                 this._load();
               }}
             >
-              ${EVENT_OPTIONS.map((option) => html`<option value=${option.value}>${option.label}</option>`)}
+              ${EVENT_OPTIONS.map((option) => html`
+                <option value=${option.value} ?selected=${this.eventType === option.value}>${option.label}</option>
+              `)}
             </select>
             ${this.scope === 'global' ? html`
               <input

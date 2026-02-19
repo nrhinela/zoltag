@@ -21,6 +21,7 @@ See: https://supabase.com/docs/guides/auth/social-login/auth-google
 import logging
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Request, status, Header
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from typing import Optional
 from jose import JWTError
@@ -165,7 +166,18 @@ async def register(
             "note": "Please sign in with your original authentication method"
         }
 
-    # Create new profile (is_active=False, requires approval)
+    has_pending_invitation = db.query(Invitation.id).filter(
+        func.lower(Invitation.email) == str(email).strip().lower(),
+        Invitation.accepted_at.is_(None),
+        Invitation.expires_at > datetime.utcnow(),
+    ).first() is not None
+    if not has_pending_invitation:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Invitation required before registration",
+        )
+
+    # Create new profile (inactive until invitation claim during authenticated login)
     try:
         profile = UserProfile(
             supabase_uid=supabase_uid,
@@ -238,6 +250,10 @@ async def get_current_user_info(
             if role_ref is not None:
                 role_key = str(role_ref.role_key or "").strip() or None
                 role_label = str(role_ref.label or "").strip() or None
+            if not role_key:
+                fallback_role = _legacy_role_from_key(getattr(membership, "role", None))
+                role_key = fallback_role
+                role_label = role_label or fallback_role.title()
             legacy_role = _legacy_role_from_key(role_key)
             permissions = sorted(get_effective_membership_permissions(db, membership))
             tenants.append(TenantMembershipResponse(

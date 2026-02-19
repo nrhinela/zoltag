@@ -11,7 +11,7 @@
  * Integrates Supabase Auth (identity) with Zoltag backend (authorization).
  */
 
-import { supabase, getAccessToken } from './supabase.js';
+import { supabase, getAccessToken, getSession } from './supabase.js';
 import { fetchWithAuth } from './api.js';
 import { invalidateQueries, queryRequest } from './request-cache.js';
 
@@ -123,6 +123,24 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function isInvitationRequiredRegistrationError(message) {
+  const normalized = String(message || '').trim().toLowerCase();
+  return normalized.includes('invitation required before registration');
+}
+
+function noAccountFoundMessage(email) {
+  const normalizedEmail = String(email || '').trim();
+  if (!normalizedEmail) return 'No account found for this email';
+  return `No account found for ${normalizedEmail}`;
+}
+
+function mapRegistrationErrorMessage(message, email = '') {
+  if (isInvitationRequiredRegistrationError(message)) {
+    return noAccountFoundMessage(email);
+  }
+  return String(message || '').trim() || 'Registration failed';
+}
+
 async function waitForRegisterCompletion(successKey, lockKey) {
   const startedAt = Date.now();
   while ((Date.now() - startedAt) < REGISTER_LOCK_WAIT_MS) {
@@ -220,7 +238,11 @@ export async function signUp(email, password, displayName = null) {
         return { ...data, needsEmailVerification: true };
       }
 
-      const didRegister = await ensureRegistration(displayName || '', { token, force: true });
+      const didRegister = await ensureRegistration(displayName || '', {
+        token,
+        force: true,
+        throwOnError: true,
+      });
       if (!didRegister) {
         throw new Error('Registration failed');
       }
@@ -230,7 +252,15 @@ export async function signUp(email, password, displayName = null) {
     return data;
   } catch (error) {
     console.error('❌ Signup error:', error);
-    throw new Error(`Signup failed: ${error.message}`);
+    const originalMessage = String(error?.message || '').trim() || 'Signup failed';
+    const mappedMessage = mapRegistrationErrorMessage(originalMessage, email);
+    if (mappedMessage !== originalMessage) {
+      throw new Error(mappedMessage);
+    }
+    if (originalMessage.toLowerCase().startsWith('signup failed:')) {
+      throw new Error(originalMessage);
+    }
+    throw new Error(`Signup failed: ${originalMessage}`);
   }
 }
 
@@ -261,7 +291,7 @@ export async function signIn(email, password) {
     if (data?.session?.access_token) {
       const didRegister = await ensureRegistration(
         data.user?.user_metadata?.display_name || '',
-        { token: data.session.access_token }
+        { token: data.session.access_token, throwOnError: true }
       );
       if (!didRegister) {
         console.warn('Sign in completed but registration ensure did not confirm success');
@@ -270,7 +300,15 @@ export async function signIn(email, password) {
 
     return data;
   } catch (error) {
-    throw new Error(`Sign in failed: ${error.message}`);
+    const originalMessage = String(error?.message || '').trim() || 'Sign in failed';
+    const mappedMessage = mapRegistrationErrorMessage(originalMessage, email);
+    if (mappedMessage !== originalMessage) {
+      throw new Error(mappedMessage);
+    }
+    if (originalMessage.toLowerCase().startsWith('sign in failed:')) {
+      throw new Error(originalMessage);
+    }
+    throw new Error(`Sign in failed: ${originalMessage}`);
   }
 }
 
@@ -278,7 +316,10 @@ export async function signIn(email, password) {
  * Ensure a user_profile exists for the current Supabase session.
  * Safe to call multiple times.
  */
-export async function ensureRegistration(displayName = '', { token = null, force = false } = {}) {
+export async function ensureRegistration(
+  displayName = '',
+  { token = null, force = false, throwOnError = false } = {},
+) {
   try {
     const accessToken = token || await getAccessToken();
     if (!accessToken) {
@@ -332,10 +373,6 @@ export async function ensureRegistration(displayName = '', { token = null, force
         }
         return result;
       })
-      .catch((error) => {
-        console.error('Registration ensure failed:', error.message);
-        return false;
-      })
       .finally(() => {
         releaseRegisterLock(lockKey, REGISTER_LOCK_OWNER);
         if (registerInFlightToken === accessToken) {
@@ -347,6 +384,9 @@ export async function ensureRegistration(displayName = '', { token = null, force
     return await registerInFlight;
   } catch (error) {
     console.error('Registration ensure failed:', error.message);
+    if (throwOnError) {
+      throw error;
+    }
     return false;
   }
 }
@@ -462,27 +502,67 @@ export async function isAuthenticated() {
 export async function isVerified() {
   try {
     const user = await getCurrentUser();
-    return user && user.user && user.user.is_active;
+    const verified = !!(user && user.user && user.user.is_active);
+    return {
+      verified,
+      reason: verified ? 'approved' : 'pending_approval',
+      message: verified ? '' : 'Your account is awaiting admin approval. Please check back soon!',
+    };
   } catch (error) {
     const message = String(error?.message || '');
+    const normalized = message.toLowerCase();
     const missingProfile = message.includes('User profile not found')
-      || message.toLowerCase().includes('complete registration');
+      || normalized.includes('complete registration');
 
     // Only attempt auto-registration when backend explicitly says profile is missing.
     if (!missingProfile) {
-      return false;
-    }
-
-    const didRegister = await ensureRegistration('', { force: true });
-    if (!didRegister) {
-      return false;
+      if (normalized.includes('pending admin approval')) {
+        return {
+          verified: false,
+          reason: 'pending_approval',
+          message: 'Your account is awaiting admin approval. Please check back soon!',
+        };
+      }
+      return {
+        verified: false,
+        reason: 'error',
+        message: message || 'Unable to verify account status.',
+      };
     }
 
     try {
+      const didRegister = await ensureRegistration('', { force: true, throwOnError: true });
+      if (!didRegister) {
+        return {
+          verified: false,
+          reason: 'error',
+          message: 'Unable to complete account registration.',
+        };
+      }
+
       const user = await getCurrentUser({ force: true });
-      return !!(user && user.user && user.user.is_active);
-    } catch {
-      return false;
+      const verified = !!(user && user.user && user.user.is_active);
+      return {
+        verified,
+        reason: verified ? 'approved' : 'pending_approval',
+        message: verified ? '' : 'Your account is awaiting admin approval. Please check back soon!',
+      };
+    } catch (registrationError) {
+      const registrationMessage = String(registrationError?.message || '');
+      if (isInvitationRequiredRegistrationError(registrationMessage)) {
+        const session = await getSession();
+        const email = String(session?.user?.email || '').trim();
+        return {
+          verified: false,
+          reason: 'no_account',
+          message: noAccountFoundMessage(email),
+        };
+      }
+      return {
+        verified: false,
+        reason: 'error',
+        message: registrationMessage || 'Unable to verify account status.',
+      };
     }
   }
 }

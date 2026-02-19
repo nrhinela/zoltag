@@ -4,6 +4,12 @@ import { acceptInvitation, ensureRegistration } from '../services/auth.js';
 
 const INVITATION_TOKEN_KEY = 'zoltag_invitation_token';
 
+function invitationMissingAccountMessage(email) {
+  const normalizedEmail = String(email || '').trim();
+  if (!normalizedEmail) return 'No account found for this email';
+  return `No account found for ${normalizedEmail}`;
+}
+
 /**
  * OAuth callback handler component
  *
@@ -125,6 +131,7 @@ export class AuthCallback extends LitElement {
   }
 
   async handleCallback() {
+    let attemptedEmail = '';
     try {
       console.log('🔄 Auth callback: Waiting for Supabase to process OAuth...');
 
@@ -140,6 +147,7 @@ export class AuthCallback extends LitElement {
 
       const session = await this.waitForSession();
       console.log('Session available:', !!session);
+      attemptedEmail = String(session?.user?.email || '').trim();
 
       if (!session) {
         throw new Error('No session after OAuth callback - login may have failed');
@@ -156,7 +164,7 @@ export class AuthCallback extends LitElement {
       this.message = 'Completing registration...';
       const didRegister = await ensureRegistration(
         session.user?.user_metadata?.name || '',
-        { token, force: true }
+        { token, force: true, throwOnError: true }
       );
       if (!didRegister) {
         throw new Error('Registration failed');
@@ -194,8 +202,12 @@ export class AuthCallback extends LitElement {
         window.location.href = '/app';
       }, 1500);
     } catch (error) {
-      console.error('❌ OAuth callback error:', error.message);
-      this.error = error.message;
+      const rawMessage = String(error?.message || '').trim();
+      const mappedMessage = rawMessage.toLowerCase().includes('invitation required before registration')
+        ? invitationMissingAccountMessage(attemptedEmail)
+        : rawMessage || 'Login failed';
+      console.error('❌ OAuth callback error:', mappedMessage);
+      this.error = mappedMessage;
       this.message = 'Login failed';
     }
   }

@@ -58,7 +58,7 @@ def _resolve_membership_role_fields(
     role_ref = getattr(membership, "tenant_role", None)
     role_key = str(getattr(role_ref, "role_key", "") or "").strip().lower()
     if not role_key:
-        role_key = "user"
+        role_key = _legacy_role_for_key(getattr(membership, "role", None))
     role_label = str(getattr(role_ref, "label", "") or "").strip() or role_key.title()
     tenant_role_id = str(getattr(role_ref, "id", "") or "").strip() or (
         str(membership.tenant_role_id) if membership.tenant_role_id else None

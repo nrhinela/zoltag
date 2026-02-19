@@ -188,6 +188,51 @@ export class SignupPage extends LitElement {
       color: #999;
       margin-top: 0.25rem;
     }
+
+    .password-accordion {
+      margin-top: 0.5rem;
+    }
+
+    .password-accordion summary {
+      list-style: none;
+      display: block;
+      width: 100%;
+      box-sizing: border-box;
+      cursor: pointer;
+      padding: 0.75rem;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      color: #333;
+      font-size: 1rem;
+      font-weight: 600;
+      text-align: center;
+      background: white;
+      user-select: none;
+      transition: all 0.2s;
+    }
+
+    .password-accordion summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .password-accordion summary:hover {
+      background: #f5f5f5;
+      border-color: #999;
+    }
+
+    .password-accordion[open] summary {
+      border-bottom-left-radius: 0;
+      border-bottom-right-radius: 0;
+    }
+
+    .password-accordion-content {
+      border: 1px solid #ddd;
+      border-top: none;
+      border-bottom-left-radius: 6px;
+      border-bottom-right-radius: 6px;
+      padding: 1rem 0.9rem 0.25rem 0.9rem;
+      background: #fff;
+    }
   `;
 
   constructor() {
@@ -302,65 +347,6 @@ export class SignupPage extends LitElement {
         ${this.error ? html`<div class="error">${this.error}</div>` : ''}
         ${this.success ? html`<div class="success">${this.success}</div>` : ''}
 
-        <form @submit=${this.handleSubmit}>
-          <div class="form-group">
-            <label for="displayName">Display Name (optional)</label>
-            <input
-              id="displayName"
-              type="text"
-              .value=${this.displayName}
-              @input=${(e) => (this.displayName = e.target.value)}
-              ?disabled=${this.loading}
-            />
-          </div>
-
-          <div class="form-group">
-            <label for="email">Email</label>
-            <input
-              id="email"
-              type="email"
-              .value=${this.email}
-              @input=${(e) => (this.email = e.target.value)}
-              required
-              ?disabled=${this.loading}
-              autocomplete="email"
-            />
-          </div>
-
-          <div class="form-group">
-            <label for="password">Password</label>
-            <input
-              id="password"
-              type="password"
-              .value=${this.password}
-              @input=${(e) => (this.password = e.target.value)}
-              required
-              ?disabled=${this.loading}
-              autocomplete="new-password"
-            />
-            <div class="password-hint">At least 8 characters</div>
-          </div>
-
-          <div class="form-group">
-            <label for="confirmPassword">Confirm Password</label>
-            <input
-              id="confirmPassword"
-              type="password"
-              .value=${this.confirmPassword}
-              @input=${(e) => (this.confirmPassword = e.target.value)}
-              required
-              ?disabled=${this.loading}
-              autocomplete="new-password"
-            />
-          </div>
-
-          <button type="submit" class="btn-primary" ?disabled=${this.loading}>
-            ${this.loading ? 'Creating account...' : 'Sign Up'}
-          </button>
-        </form>
-
-        <div class="divider">OR</div>
-
         <button
           class="btn-google"
           @click=${this.handleGoogleSignIn}
@@ -369,6 +355,70 @@ export class SignupPage extends LitElement {
         >
           <span>🔐</span>Continue with Google
         </button>
+
+        <div class="divider">OR</div>
+
+        <details class="password-accordion">
+          <summary>Create a user/password account</summary>
+          <div class="password-accordion-content">
+            <form @submit=${this.handleSubmit}>
+              <div class="form-group">
+                <label for="displayName">Display Name (optional)</label>
+                <input
+                  id="displayName"
+                  type="text"
+                  .value=${this.displayName}
+                  @input=${(e) => (this.displayName = e.target.value)}
+                  ?disabled=${this.loading}
+                />
+              </div>
+
+              <div class="form-group">
+                <label for="email">Email</label>
+                <input
+                  id="email"
+                  type="email"
+                  .value=${this.email}
+                  @input=${(e) => (this.email = e.target.value)}
+                  required
+                  ?disabled=${this.loading}
+                  autocomplete="email"
+                />
+              </div>
+
+              <div class="form-group">
+                <label for="password">Password</label>
+                <input
+                  id="password"
+                  type="password"
+                  .value=${this.password}
+                  @input=${(e) => (this.password = e.target.value)}
+                  required
+                  ?disabled=${this.loading}
+                  autocomplete="new-password"
+                />
+                <div class="password-hint">At least 8 characters</div>
+              </div>
+
+              <div class="form-group">
+                <label for="confirmPassword">Confirm Password</label>
+                <input
+                  id="confirmPassword"
+                  type="password"
+                  .value=${this.confirmPassword}
+                  @input=${(e) => (this.confirmPassword = e.target.value)}
+                  required
+                  ?disabled=${this.loading}
+                  autocomplete="new-password"
+                />
+              </div>
+
+              <button type="submit" class="btn-primary" ?disabled=${this.loading}>
+                ${this.loading ? 'Creating account...' : 'Sign Up'}
+              </button>
+            </form>
+          </div>
+        </details>
 
         <div class="login-link">
           Already have an account? <a href="/login">Sign in</a>

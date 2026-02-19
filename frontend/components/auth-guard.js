@@ -17,6 +17,8 @@ export class AuthGuard extends LitElement {
   static properties = {
     authenticated: { type: Boolean },
     verified: { type: Boolean },
+    verificationReason: { type: String },
+    verificationMessage: { type: String },
     loading: { type: Boolean },
   };
 
@@ -136,6 +138,8 @@ export class AuthGuard extends LitElement {
     super();
     this.authenticated = false;
     this.verified = false;
+    this.verificationReason = '';
+    this.verificationMessage = '';
     this.loading = true;
     this._verifyInFlight = null;
   }
@@ -145,9 +149,19 @@ export class AuthGuard extends LitElement {
       return this._verifyInFlight;
     }
     this._verifyInFlight = isVerified()
-      .then((verified) => {
-        this.verified = verified;
-        return verified;
+      .then((result) => {
+        if (result && typeof result === 'object') {
+          this.verified = !!result.verified;
+          this.verificationReason = String(result.reason || '');
+          this.verificationMessage = String(result.message || '');
+          return this.verified;
+        }
+        this.verified = !!result;
+        this.verificationReason = this.verified ? 'approved' : 'pending_approval';
+        this.verificationMessage = this.verified
+          ? ''
+          : 'Your account is awaiting admin approval. Please check back soon!';
+        return this.verified;
       })
       .finally(() => {
         this._verifyInFlight = null;
@@ -225,12 +239,18 @@ export class AuthGuard extends LitElement {
 
     // Not approved
     if (!this.verified) {
+      const isNoAccount = this.verificationReason === 'no_account';
+      const title = isNoAccount ? 'No Account Found' : 'Account Pending Approval';
+      const message = this.verificationMessage
+        || (isNoAccount
+          ? 'No account found for this email.'
+          : 'Your account is awaiting admin approval. Please check back soon!');
       return html`
         <div class="error-screen">
           <div class="error-message">
-            <h1>Account Pending Approval</h1>
-            <p>Your account is awaiting admin approval. Please check back soon!</p>
-            <a href="#" @click=${() => window.location.href = '/logout'}>Sign Out</a>
+            <h1>${title}</h1>
+            <p>${message}</p>
+            <a href="/">Back</a>
           </div>
         </div>
       `;
