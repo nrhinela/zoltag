@@ -357,8 +357,13 @@ class FaceDetector:
                 "Install with: pip install '.[ml]' (or pip install face-recognition)."
             ) from exc
         
-        # Load image
-        image = face_recognition.load_image_file(io.BytesIO(image_data))
+        # Normalize image into an 8-bit RGB/L array accepted by dlib.
+        pil_image = Image.open(io.BytesIO(image_data))
+        if pil_image.mode not in ("RGB", "L"):
+            pil_image = pil_image.convert("RGB")
+        image = np.asarray(pil_image)
+        if image.dtype != np.uint8:
+            image = np.clip(image, 0, 255).astype(np.uint8)
         
         # Detect faces
         face_locations = face_recognition.face_locations(image)

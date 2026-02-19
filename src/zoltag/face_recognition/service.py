@@ -89,7 +89,11 @@ def recompute_face_detections(
                 skipped += 1
                 continue
 
-            detections = provider.detect_faces(image_bytes)
+            try:
+                detections = provider.detect_faces(image_bytes)
+            except Exception:
+                skipped += 1
+                continue
 
             db.query(DetectedFace).filter(
                 tenant_column_filter_for_values(DetectedFace, tenant_id),
