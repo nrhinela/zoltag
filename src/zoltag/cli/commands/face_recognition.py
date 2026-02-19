@@ -18,6 +18,66 @@ from zoltag.metadata import Asset, ImageMetadata, PersonReferenceImage
 from zoltag.settings import settings
 
 
+@click.command(name='recompute-face-detections')
+@click.option('--tenant-id', required=True, help='Tenant ID for which to recompute detected faces')
+@click.option('--batch-size', default=25, type=int, help='Process images in batches')
+@click.option('--limit', default=None, type=int, help='Limit number of images to process')
+@click.option('--offset', default=0, type=int, help='Offset into image list')
+@click.option('--replace', is_flag=True, default=False, help='Replace existing detected_faces for processed images')
+def recompute_face_detections_command(
+    tenant_id: str,
+    batch_size: int,
+    limit: Optional[int],
+    offset: int,
+    replace: bool,
+):
+    """Recompute detected faces for tenant images."""
+    cmd = RecomputeFaceDetectionsCommand(
+        tenant_id=tenant_id,
+        batch_size=batch_size,
+        limit=limit,
+        offset=offset,
+        replace=replace,
+    )
+    cmd.run()
+
+
+@click.command(name='recompute-face-recognition-tags')
+@click.option('--tenant-id', required=True, help='Tenant ID for which to recompute face-recognition suggestions')
+@click.option('--batch-size', default=200, type=int, help='Process candidate images in batches')
+@click.option('--limit', default=None, type=int, help='Limit number of candidate images considered')
+@click.option('--offset', default=0, type=int, help='Offset into candidate image list')
+@click.option('--replace', is_flag=True, default=False, help='Replace existing face-recognition suggestions for scoped keywords')
+@click.option('--person-id', default=None, type=int, help='Scope recompute to one person ID')
+@click.option('--keyword-id', default=None, type=int, help='Scope recompute to one person keyword ID')
+@click.option('--min-references', default=None, type=int, help='Minimum active references required (defaults to app setting)')
+@click.option('--threshold', default=None, type=float, help='Suggestion threshold [0-1] (defaults to app setting)')
+def recompute_face_recognition_tags_command(
+    tenant_id: str,
+    batch_size: int,
+    limit: Optional[int],
+    offset: int,
+    replace: bool,
+    person_id: Optional[int],
+    keyword_id: Optional[int],
+    min_references: Optional[int],
+    threshold: Optional[float],
+):
+    """Recompute person tag suggestions using face-recognition similarity."""
+    cmd = RecomputeFaceRecognitionTagsCommand(
+        tenant_id=tenant_id,
+        batch_size=batch_size,
+        limit=limit,
+        offset=offset,
+        replace=replace,
+        person_id=person_id,
+        keyword_id=keyword_id,
+        min_references=max(1, int(min_references or settings.face_recognition_min_references)),
+        threshold=float(threshold if threshold is not None else settings.face_recognition_suggest_threshold),
+    )
+    cmd.run()
+
+
 class RecomputeFaceDetectionsCommand(CliCommand):
     """Batch face detection command."""
 

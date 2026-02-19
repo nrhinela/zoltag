@@ -7,6 +7,7 @@ from .commands import (
     embeddings,
     training,
     tagging,
+    face_recognition,
     sync,
     inspect,
     thumbnails,
@@ -28,6 +29,8 @@ cli.add_command(embeddings.build_embeddings_command, name='build-embeddings')
 cli.add_command(training.train_keyword_models_command, name='train-keyword-models')
 cli.add_command(training.recompute_trained_tags_command, name='recompute-trained-tags')
 cli.add_command(tagging.recompute_zeroshot_tags_command, name='recompute-zeroshot-tags')
+cli.add_command(face_recognition.recompute_face_detections_command, name='recompute-face-detections')
+cli.add_command(face_recognition.recompute_face_recognition_tags_command, name='recompute-face-recognition-tags')
 cli.add_command(sync.sync_dropbox_command, name='sync-dropbox')
 cli.add_command(inspect.list_images_command, name='list-images')
 cli.add_command(inspect.show_config_command, name='show-config')
