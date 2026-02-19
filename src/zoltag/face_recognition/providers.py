@@ -131,6 +131,7 @@ class OpenCVFallbackFaceRecognitionProvider:
 def get_default_face_provider() -> FaceRecognitionProvider:
     """Return dlib-backed provider when available, else OpenCV fallback."""
     try:
+        import face_recognition  # noqa: F401
         return DlibFaceRecognitionProvider()
     except Exception:
         return OpenCVFallbackFaceRecognitionProvider()
