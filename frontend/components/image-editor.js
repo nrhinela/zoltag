@@ -2711,18 +2711,6 @@ class ImageEditor extends LitElement {
                 New keyword
               </button>
             </div>
-            <div class="tag-form">
-              <keyword-dropdown
-                class="tag-dropdown"
-                .value=${selectedValue}
-                .keywords=${flatKeywords}
-                .includeUntagged=${false}
-                .compact=${true}
-                @keyword-selected=${this._handleTagSelectChange}
-                @change=${this._handleTagSelectChange}
-              ></keyword-dropdown>
-              <button class="tag-add" @click=${this._handleAddTag}>Add Tag</button>
-            </div>
             ${this.newKeywordMode ? html`
               <div class="new-keyword-panel">
                 <div class="new-keyword-grid">
@@ -2787,6 +2775,18 @@ class ImageEditor extends LitElement {
                 ` : html``}
               </div>
             ` : html``}
+            <div class="tag-form">
+              <keyword-dropdown
+                class="tag-dropdown"
+                .value=${selectedValue}
+                .keywords=${flatKeywords}
+                .includeUntagged=${false}
+                .compact=${true}
+                @keyword-selected=${this._handleTagSelectChange}
+                @change=${this._handleTagSelectChange}
+              ></keyword-dropdown>
+              <button class="tag-add" @click=${this._handleAddTag}>Add Tag</button>
+            </div>
           `,
         }) : html``}
 
