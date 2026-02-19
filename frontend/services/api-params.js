@@ -69,6 +69,32 @@ export function addMlTagParams(params, filters = {}) {
 }
 
 /**
+ * Build ML similarity mode parameters.
+ * @param {Object} filters - Filter object
+ * @param {URLSearchParams} params - URLSearchParams to append to
+ */
+export function addMlSimilarityParams(params, filters = {}) {
+  appendIf(
+    params,
+    'ml_similarity_seed_count',
+    filters.mlSimilaritySeedCount,
+    filters.mlSimilaritySeedCount !== undefined && filters.mlSimilaritySeedCount !== null && filters.mlSimilaritySeedCount !== ''
+  );
+  appendIf(
+    params,
+    'ml_similarity_similar_count',
+    filters.mlSimilaritySimilarCount,
+    filters.mlSimilaritySimilarCount !== undefined && filters.mlSimilaritySimilarCount !== null && filters.mlSimilaritySimilarCount !== ''
+  );
+  if (filters.mlSimilarityDedupe !== undefined && filters.mlSimilarityDedupe !== null && filters.mlSimilarityDedupe !== '') {
+    params.append('ml_similarity_dedupe', Boolean(filters.mlSimilarityDedupe) ? 'true' : 'false');
+  }
+  if (filters.mlSimilarityRandom !== undefined && filters.mlSimilarityRandom !== null && filters.mlSimilarityRandom !== '') {
+    params.append('ml_similarity_random', Boolean(filters.mlSimilarityRandom) ? 'true' : 'false');
+  }
+}
+
+/**
  * Build category filter parameters
  * @param {Object} filters - Filter object with keywords and operators
  * @param {URLSearchParams} params - URLSearchParams to append to

@@ -4,11 +4,22 @@ export function renderCurateAiMLScore(host, image) {
   const isCurateAuditMissingView = host.curateSubTab === 'tag-audit'
     && host.curateAuditMode === 'missing';
   const isAiMode = host.curateAuditMode === 'missing'
-    && host.curateAuditAiEnabled
-    && !!host.curateAuditAiModel
+    && !!(String(host.curateAuditAiModel || '').trim() || 'siglip')
     && host.curateAuditKeyword;
 
   if (!isAiMode || !isCurateAuditMissingView) return html``;
+  const aiModel = String(host.curateAuditAiModel || '').trim().toLowerCase();
+
+  if (aiModel === 'ml-similarity') {
+    const similarityScore = Number(image?.similarity_score);
+    if (!Number.isFinite(similarityScore)) return html``;
+    const label = image?.similarity_seed ? 'Similarity (seed)' : 'Similarity';
+    return html`
+      <div class="curate-thumb-ml-score">
+        ${label}: ${similarityScore.toFixed(2)}
+      </div>
+    `;
+  }
 
   const tags = Array.isArray(image?.tags) ? image.tags : [];
   const keyword = String(host.curateAuditKeyword || '').trim().toLowerCase();

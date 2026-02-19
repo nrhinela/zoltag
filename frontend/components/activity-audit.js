@@ -27,6 +27,7 @@ class ActivityAudit extends LitElement {
     eventType: { type: String, state: true },
     tenantFilter: { type: String, state: true },
     limit: { type: Number, state: true },
+    browserTimeZone: { type: String, state: true },
   };
 
   static styles = [
@@ -142,6 +143,14 @@ class ActivityAudit extends LitElement {
         border-bottom: 1px solid #e5e7eb;
       }
 
+      .tz-label {
+        text-transform: none;
+        letter-spacing: normal;
+        font-weight: 500;
+        color: #6b7280;
+        margin-left: 4px;
+      }
+
       td {
         padding: 10px 12px;
         border-bottom: 1px solid #f1f5f9;
@@ -179,6 +188,7 @@ class ActivityAudit extends LitElement {
     this.eventType = 'auth.login';
     this.tenantFilter = '';
     this.limit = 200;
+    this.browserTimeZone = this._resolveBrowserTimeZone();
   }
 
   updated(changedProperties) {
@@ -200,11 +210,61 @@ class ActivityAudit extends LitElement {
     return normalized || 'Unknown';
   }
 
+  _resolveBrowserTimeZone() {
+    try {
+      const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      return String(timezone || '').trim() || 'UTC';
+    } catch (_error) {
+      return 'UTC';
+    }
+  }
+
+  _parseEventDate(value) {
+    if (!value) return null;
+    if (value instanceof Date) {
+      return Number.isNaN(value.getTime()) ? null : value;
+    }
+    if (typeof value === 'number') {
+      const numericDate = new Date(value);
+      return Number.isNaN(numericDate.getTime()) ? null : numericDate;
+    }
+
+    const raw = String(value || '').trim();
+    if (!raw) return null;
+
+    // Activity timestamps are stored in UTC but may be emitted without timezone info.
+    // Treat timezone-naive strings as UTC by appending "Z".
+    const hasExplicitTimezone = /(?:[zZ]|[+\-]\d{2}:?\d{2})$/.test(raw);
+    const normalized = raw.includes('T') ? raw : raw.replace(' ', 'T');
+    const parseValue = hasExplicitTimezone ? normalized : `${normalized}Z`;
+    const parsed = new Date(parseValue);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+
   _formatEventTime(value) {
-    if (!value) return 'n/a';
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return 'n/a';
-    return date.toLocaleString();
+    const date = this._parseEventDate(value);
+    if (!date) return 'n/a';
+    try {
+      return new Intl.DateTimeFormat(undefined, {
+        timeZone: this.browserTimeZone || 'UTC',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+      }).format(date);
+    } catch (_error) {
+      return new Intl.DateTimeFormat(undefined, {
+        timeZone: 'UTC',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+      }).format(date);
+    }
   }
 
   async _load() {
@@ -310,7 +370,7 @@ class ActivityAudit extends LitElement {
             <table>
               <thead>
                 <tr>
-                  <th>Time</th>
+                  <th>Date <span class="tz-label">(${this.browserTimeZone || 'UTC'})</span></th>
                   ${this.scope === 'global' ? html`<th>Tenant</th>` : html``}
                   <th>Event</th>
                   <th>Actor</th>

@@ -37,9 +37,8 @@ export function buildCurateFilterObject(state, overrides = {}) {
 }
 
 export function buildCurateAuditFilterObject(state, overrides = {}) {
-  const useAiSort = state.curateAuditMode === 'missing'
-    && state.curateAuditAiEnabled
-    && !!state.curateAuditAiModel;
+  const aiModel = String(state.curateAuditAiModel || '').trim().toLowerCase() || 'siglip';
+  const useAiSort = state.curateAuditMode === 'missing';
 
   const filters = {
     sortOrder: overrides.sortOrder !== undefined ? overrides.sortOrder : state.curateAuditOrderDirection,
@@ -57,7 +56,13 @@ export function buildCurateAuditFilterObject(state, overrides = {}) {
 
   if (useAiSort) {
     filters.mlKeyword = state.curateAuditKeyword;
-    filters.mlTagType = state.curateAuditAiModel;
+    filters.mlTagType = aiModel;
+    if (aiModel === 'ml-similarity') {
+      filters.mlSimilaritySeedCount = state.curateAuditMlSimilaritySeedCount;
+      filters.mlSimilaritySimilarCount = state.curateAuditMlSimilaritySimilarCount;
+      filters.mlSimilarityDedupe = Boolean(state.curateAuditMlSimilarityDedupe);
+      filters.mlSimilarityRandom = Boolean(state.curateAuditMlSimilarityRandom);
+    }
   }
 
   const rating = overrides.rating !== undefined ? overrides.rating : state.curateAuditMinRating;

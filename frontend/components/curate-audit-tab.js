@@ -17,7 +17,9 @@ import {
   saveHotspotHistorySessionState,
   setDragImagePayload,
 } from './shared/hotspot-history.js';
-import './shared/widgets/filter-chips.js';
+import './shared/widgets/keyword-dropdown.js';
+
+const AUDIT_HELP_VISIBILITY_STORAGE_KEY = 'curate-audit:help-visible';
 
 /**
  * Curate Audit Tab Component
@@ -28,15 +30,15 @@ import './shared/widgets/filter-chips.js';
  *
  * Features:
  * - Mode toggle (existing vs missing)
- * - AI-powered suggestions (zero-shot and trained models)
+ * - AI-powered suggestions (zero-shot, trained, and similarity models)
  * - Image grid with rating and permatag overlays
  * - Multi-select via long-press and drag
  * - Hotspots for quick rating/tagging
  * - Pagination controls
  *
  * @fires audit-mode-changed - When audit mode changes (existing/missing)
- * @fires audit-ai-enabled-changed - When AI assistance is toggled
  * @fires audit-ai-model-changed - When AI model selection changes
+ * @fires audit-ai-ml-similarity-settings-changed - When ML similarity settings change
  * @fires pagination-changed - When pagination changes
  * @fires image-clicked - When image is clicked
  * @fires selection-changed - When drag selection changes
@@ -55,7 +57,11 @@ export class CurateAuditTab extends LitElement {
     keyword: { type: String },
     mode: { type: String }, // 'existing' or 'missing'
     aiEnabled: { type: Boolean },
-    aiModel: { type: String }, // 'siglip' or 'trained'
+    aiModel: { type: String }, // 'siglip', 'trained', or 'ml-similarity'
+    mlSimilaritySeedCount: { type: Number },
+    mlSimilaritySimilarCount: { type: Number },
+    mlSimilarityDedupe: { type: Boolean },
+    mlSimilarityRandom: { type: Boolean },
     images: { type: Array },
     thumbSize: { type: Number },
     keywordCategory: { type: String },
@@ -101,15 +107,20 @@ export class CurateAuditTab extends LitElement {
     auditResultsView: { type: String, state: true },
     _auditHotspotHistoryBatches: { type: Array, state: true },
     _auditHotspotHistoryVisibleBatches: { type: Number, state: true },
+    _showAiHelp: { type: Boolean, state: true },
   };
 
   constructor() {
     super();
     this.tenant = '';
     this.keyword = '';
-    this.mode = 'existing';
+    this.mode = 'missing';
     this.aiEnabled = false;
     this.aiModel = 'siglip';
+    this.mlSimilaritySeedCount = 5;
+    this.mlSimilaritySimilarCount = 10;
+    this.mlSimilarityDedupe = true;
+    this.mlSimilarityRandom = true;
     this.images = [];
     this.thumbSize = 120;
     this.keywordCategory = '';
@@ -158,6 +169,7 @@ export class CurateAuditTab extends LitElement {
     this.auditResultsView = 'results';
     this._auditHotspotHistoryBatches = [];
     this._auditHotspotHistoryVisibleBatches = 1;
+    this._showAiHelp = this._loadAiHelpVisibility();
 
     // Configure selection handlers
     this._auditSelectionHandlers = createSelectionHandlers(this, {
@@ -403,6 +415,63 @@ export class CurateAuditTab extends LitElement {
       bubbles: true,
       composed: true
     }));
+  }
+
+  _emitMlSimilaritySettings(settings = {}) {
+    this.dispatchEvent(new CustomEvent('audit-ai-ml-similarity-settings-changed', {
+      detail: {
+        seedCount: Number.isFinite(Number(settings.seedCount))
+          ? Math.max(1, Math.min(50, Number(settings.seedCount)))
+          : this.mlSimilaritySeedCount,
+        similarCount: Number.isFinite(Number(settings.similarCount))
+          ? Math.max(1, Math.min(50, Number(settings.similarCount)))
+          : this.mlSimilaritySimilarCount,
+        dedupe: settings.dedupe !== undefined
+          ? Boolean(settings.dedupe)
+          : Boolean(this.mlSimilarityDedupe),
+        random: settings.random !== undefined
+          ? Boolean(settings.random)
+          : Boolean(this.mlSimilarityRandom),
+      },
+      bubbles: true,
+      composed: true,
+    }));
+  }
+
+  _handleMlSimilaritySeedCountChange(event) {
+    this._emitMlSimilaritySettings({
+      seedCount: event?.target?.value,
+      similarCount: this.mlSimilaritySimilarCount,
+      dedupe: this.mlSimilarityDedupe,
+      random: this.mlSimilarityRandom,
+    });
+  }
+
+  _handleMlSimilaritySimilarCountChange(event) {
+    this._emitMlSimilaritySettings({
+      seedCount: this.mlSimilaritySeedCount,
+      similarCount: event?.target?.value,
+      dedupe: this.mlSimilarityDedupe,
+      random: this.mlSimilarityRandom,
+    });
+  }
+
+  _handleMlSimilarityDedupeChange(event) {
+    this._emitMlSimilaritySettings({
+      seedCount: this.mlSimilaritySeedCount,
+      similarCount: this.mlSimilaritySimilarCount,
+      dedupe: event?.target?.checked,
+      random: this.mlSimilarityRandom,
+    });
+  }
+
+  _handleMlSimilarityRandomChange(event) {
+    this._emitMlSimilaritySettings({
+      seedCount: this.mlSimilaritySeedCount,
+      similarCount: this.mlSimilaritySimilarCount,
+      dedupe: this.mlSimilarityDedupe,
+      random: event?.target?.checked,
+    });
   }
 
   // ========================================
@@ -737,6 +806,44 @@ export class CurateAuditTab extends LitElement {
     }));
   }
 
+  _handleAuditKeywordDropdownChange(event) {
+    const rawValue = String(event?.detail?.value ?? event?.target?.value ?? '').trim();
+    const filters = [];
+    if (rawValue && rawValue !== '__untagged__') {
+      const [encodedCategory, ...encodedKeywordParts] = rawValue.split('::');
+      const category = decodeURIComponent(encodedCategory || '');
+      const keyword = decodeURIComponent(encodedKeywordParts.join('::') || '');
+      if (category && keyword) {
+        filters.push({
+          type: 'keyword',
+          keywordsByCategory: {
+            [category]: [keyword],
+          },
+          operator: 'OR',
+          displayLabel: 'Keywords',
+          displayValue: keyword,
+        });
+      }
+    }
+    this.dispatchEvent(new CustomEvent('curate-audit-filters-changed', {
+      detail: { filters },
+      bubbles: true,
+      composed: true,
+    }));
+  }
+
+  _getAuditKeywordDropdownValue() {
+    if (!this.keyword) return '';
+    const matched = this._getOptionValueForKeyword(this.keyword);
+    if (matched?.value) {
+      return matched.value;
+    }
+    if (this.keywordCategory) {
+      return `${encodeURIComponent(this.keywordCategory)}::${encodeURIComponent(this.keyword)}`;
+    }
+    return '';
+  }
+
   _handleAuditDropboxInput(event) {
     const query = event.detail?.query ?? '';
     const limit = event.detail?.limit;
@@ -869,6 +976,251 @@ export class CurateAuditTab extends LitElement {
     return null;
   }
 
+  _getActiveAiModel() {
+    const raw = String(this.aiModel || '').trim().toLowerCase();
+    return raw || 'siglip';
+  }
+
+  _isMlSimilarityMode() {
+    return this.mode === 'missing'
+      && this._getActiveAiModel() === 'ml-similarity'
+      && !!this.keyword;
+  }
+
+  _getAiModeDocumentation() {
+    const mode = this._getActiveAiModel();
+    if (mode === 'siglip') {
+      return {
+        title: 'Zero-shot',
+        summary: 'Works right away based on keyword descriptions and is not influenced by your existing tagging.',
+        bestFor: 'early tagging, especially before you have many (or any) tags.',
+        points: [
+          'Uses keyword description signals instead of training examples.',
+          'Results are ranked by model confidence for the selected keyword.',
+          'Strong first-pass model when training data is still sparse.',
+        ],
+      };
+    }
+    if (mode === 'trained') {
+      return {
+        title: 'Trained',
+        summary: 'This model analyzes tags you have applied, and infers similar patterns.',
+        bestFor: 'ongoing curation after you have built up tagged examples.',
+        points: [
+          'Directly improves as you tag more images.',
+          'Results are ranked by trained model confidence.',
+          'Depends on the latest available trained model for this tenant.',
+        ],
+      };
+    }
+    if (mode === 'ml-similarity') {
+      return {
+        title: 'Similarity',
+        summary: 'Hybrid model that starts from tagged source images and finds similar images that are not yet tagged.',
+        bestFor: 'Best when many photos share the same scene but tags are inconsistent.',
+        points: [
+          'Sample Size: number of tagged source images to start with.',
+          'Candidates: How many similar items to retrieve for each source image.',
+          '[ ] dedupe avoids repeating the same candidate across source groups.',
+          '[ ] random uses random source selection instead of rating-based order.',
+          'Often produces surprisingly strong results on near-duplicate scene sets.',
+        ],
+      };
+    }
+    return null;
+  }
+
+  _renderAiModeDocumentationPanel() {
+    const modeInfo = this._getAiModeDocumentation();
+    if (!modeInfo) return html``;
+    const activeModel = this._getActiveAiModel();
+    const keywordAdminHref = '?tab=library&subTab=keywords&adminSubTab=tagging';
+    return html`
+      <div class="w-full rounded-md border border-gray-300 bg-gray-50 p-2">
+        <div class="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Help</div>
+        <div class="pt-2">
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div class="rounded border border-gray-200 bg-white p-3">
+              <div class="text-sm font-semibold text-gray-800">What is all this?</div>
+              <p class="mt-2 text-sm leading-relaxed text-gray-600">
+                Zoltag uses different machine learning models to suggest tags for your images. These models are good
+                at finding missing tags, but they also produce false positives, so the goal is not to fully automate
+                tagging. Instead, we surface strong candidates and make review fast so you can apply the right tags
+                quickly using hotspots.
+              </p>
+              <p class="mt-2 text-sm leading-relaxed text-gray-600">
+                Each model works differently: some rely on keyword descriptions, some learn from your existing tags,
+                and some use visual similarity. As you tag more images, results generally improve over time, so it is
+                worth checking back regularly.
+              </p>
+            </div>
+            <div class="rounded border border-gray-200 bg-white p-3">
+              <div class="inline-flex items-center px-2 py-1 rounded border text-sm font-semibold bg-blue-600 text-white border-blue-600">
+                ${modeInfo.title}
+              </div>
+              ${activeModel === 'siglip' ? html`
+                <p class="mt-1 text-sm text-gray-600">
+                  Works right away based on
+                  <a
+                    href=${keywordAdminHref}
+                    target="zoltag-keyword-admin"
+                    rel="noopener noreferrer"
+                    class="text-blue-600 underline hover:text-blue-700"
+                  >keyword descriptions</a>
+                  and is not influenced by your existing tagging.
+                </p>
+              ` : html`
+                <p class="mt-1 text-sm text-gray-600">${modeInfo.summary}</p>
+              `}
+              <p class="mt-2 text-sm text-gray-700"><span class="font-semibold">Best for:</span> ${modeInfo.bestFor}</p>
+              <ul class="mt-2 list-disc pl-4 space-y-1 text-sm text-gray-600">
+                ${modeInfo.points.map((point) => html`<li>${point}</li>`)}
+              </ul>
+            </div>
+          </div>
+          <div class="mt-3 flex justify-end">
+            <button
+              type="button"
+              class="px-2 py-1 rounded border border-gray-300 bg-white text-sm text-gray-700 hover:bg-gray-100"
+              @click=${() => this._hideAiHelp()}
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  _toggleAiHelpVisibility() {
+    this._showAiHelp = !this._showAiHelp;
+    this._persistAiHelpVisibility(this._showAiHelp);
+  }
+
+  _hideAiHelp() {
+    this._showAiHelp = false;
+    this._persistAiHelpVisibility(false);
+  }
+
+  _loadAiHelpVisibility() {
+    try {
+      const raw = localStorage.getItem(AUDIT_HELP_VISIBILITY_STORAGE_KEY);
+      if (raw === null) return true;
+      return raw === '1';
+    } catch (_error) {
+      return true;
+    }
+  }
+
+  _persistAiHelpVisibility(visible) {
+    try {
+      localStorage.setItem(AUDIT_HELP_VISIBILITY_STORAGE_KEY, visible ? '1' : '0');
+    } catch (_error) {
+      // ignore storage errors in private browsing or restricted environments
+    }
+  }
+
+  _buildSimilarityGroups(images) {
+    const safeImages = Array.isArray(images) ? images : [];
+    const groups = [];
+    const byGroup = new Map();
+    safeImages.forEach((image, index) => {
+      const rawGroup = Number(image?.similarity_group);
+      const groupId = Number.isFinite(rawGroup) ? rawGroup : index;
+      if (!byGroup.has(groupId)) {
+        const group = { groupId, images: [], startIndex: index };
+        byGroup.set(groupId, group);
+        groups.push(group);
+      }
+      byGroup.get(groupId).images.push(image);
+    });
+    return groups;
+  }
+
+  _renderSimilarityGroups(leftImages) {
+    const groups = this._buildSimilarityGroups(leftImages);
+    if (!groups.length) {
+      return renderSelectableImageGrid({
+        images: [],
+        selection: this.dragSelection,
+        flashSelectionIds: this._auditFlashSelectionIds,
+        selectionHandlers: this._auditSelectionHandlers,
+        renderFunctions: {
+          renderCurateRatingWidget: this.renderCurateRatingWidget,
+          renderCurateRatingStatic: this.renderCurateRatingStatic,
+          renderCurateAiMLScore: this.renderCurateAiMLScore,
+          renderCuratePermatagSummary: this.renderCuratePermatagSummary,
+          formatCurateDate: this.formatCurateDate,
+        },
+        onImageClick: (event, image) => this._handleAuditImageClick(event, image, leftImages),
+        onDragStart: (event, image) => this._handleAuditDragStart(event, image, leftImages),
+        selectionEvents: {
+          pointerDown: (event, index, imageId, imageOrder) =>
+            this._handleAuditPointerDownWithOrder(event, index, imageId, imageOrder),
+          pointerMove: (event) => this._handleAuditPointerMove(event),
+          pointerEnter: (index, imageOrder) => this._handleAuditSelectHoverWithOrder(index, imageOrder),
+          order: this._auditLeftOrder,
+        },
+        options: {
+          enableReordering: false,
+          showPermatags: true,
+          showAiScore: true,
+          emptyMessage: this.keyword ? 'No images available.' : 'Choose a keyword to start.',
+        },
+      });
+    }
+
+    return html`
+      <div class="curate-similarity-groups">
+        ${groups.map((group, groupIndex) => {
+          const explicitSeed = (group.images || []).find((image) => image?.similarity_seed)?.id;
+          const fallbackSeed = (group.images || [])[0]?.id;
+          const seedImageId = Number.isFinite(Number(explicitSeed))
+            ? Number(explicitSeed)
+            : (Number.isFinite(Number(fallbackSeed)) ? Number(fallbackSeed) : null);
+          const pinnedImageIds = seedImageId !== null ? new Set([seedImageId]) : null;
+
+          return html`
+            <div class="curate-similarity-group">
+              ${renderSelectableImageGrid({
+                images: group.images,
+                selection: this.dragSelection,
+                flashSelectionIds: this._auditFlashSelectionIds,
+                selectionHandlers: this._auditSelectionHandlers,
+                renderFunctions: {
+                  renderCurateRatingWidget: this.renderCurateRatingWidget,
+                  renderCurateRatingStatic: this.renderCurateRatingStatic,
+                  renderCurateAiMLScore: this.renderCurateAiMLScore,
+                  renderCuratePermatagSummary: this.renderCuratePermatagSummary,
+                  formatCurateDate: this.formatCurateDate,
+                },
+                onImageClick: (event, image) => this._handleAuditImageClick(event, image, leftImages),
+                onDragStart: (event, image) => this._handleAuditDragStart(event, image, leftImages),
+                selectionEvents: {
+                  pointerDown: (event, index, imageId) =>
+                    this._handleAuditPointerDownWithOrder(event, group.startIndex + index, imageId, this._auditLeftOrder),
+                  pointerMove: (event) => this._handleAuditPointerMove(event),
+                  pointerEnter: (index) =>
+                    this._handleAuditSelectHoverWithOrder(group.startIndex + index, this._auditLeftOrder),
+                  order: this._auditLeftOrder,
+                },
+                options: {
+                  enableReordering: false,
+                  showPermatags: true,
+                  showAiScore: true,
+                  pinnedImageIds,
+                  pinnedLabel: 'Source',
+                  emptyMessage: 'No images available.',
+                },
+              })}
+              ${groupIndex < groups.length - 1 ? html`<hr class="my-4 border-gray-200">` : html``}
+            </div>
+          `;
+        })}
+      </div>
+    `;
+  }
+
   // ========================================
   // Render
   // ========================================
@@ -884,83 +1236,137 @@ export class CurateAuditTab extends LitElement {
         ? `Possible matches for "${this.keyword}"`
         : `Images with "${this.keyword}"`)
       : 'Select a keyword';
-    const activeFilters = this._buildActiveFilters();
+    const selectedKeywordValue = this._getAuditKeywordDropdownValue();
+    const activeAiModel = this._getActiveAiModel();
 
     // Update left order for selection
     this._auditLeftOrder = leftImages.map(img => img.id);
 
     return html`
       <div>
-        <div class="curate-header-layout search-header-layout mb-4">
-          <div class="w-full">
-            <filter-chips
-              .tenant=${this.tenant}
-              .tagStatsBySource=${this.tagStatsBySource}
+        <div class="mb-4">
+          <div class="w-full max-w-xl mx-auto">
+            <keyword-dropdown
+              .value=${selectedKeywordValue}
+              .keywords=${this.keywords || []}
+              .tagStatsBySource=${this.tagStatsBySource || {}}
               .activeCurateTagSource=${this.activeCurateTagSource || 'permatags'}
-              .keywords=${this.keywords}
-              .activeFilters=${activeFilters}
-              .dropboxFolders=${this.dropboxFolders || []}
-              .availableFilterTypes=${['keyword', 'rating', 'media', 'folder', 'filename', 'text_search']}
-              .keywordMultiSelect=${false}
-              @filters-changed=${this._handleAuditChipFiltersChanged}
-              @folder-search=${this._handleAuditDropboxInput}
-            ></filter-chips>
+              .includeUntagged=${false}
+              @keyword-selected=${this._handleAuditKeywordDropdownChange}
+              @change=${this._handleAuditKeywordDropdownChange}
+            ></keyword-dropdown>
           </div>
         </div>
 
         ${this.keyword ? html`
-          <div class="text-center text-xl font-semibold text-gray-800 mb-3">
-            Auditing tag : ${this.keyword}
-          </div>
-        ` : html``}
-
-        ${this.keyword ? html`
           <div class="bg-white rounded-lg shadow p-4 mb-4">
-            <div class="flex flex-wrap items-center gap-4">
+            <div class="flex flex-wrap items-center justify-center gap-4">
               <div>
                 <div class="curate-audit-toggle">
-                  <button
-                    class=${this.mode === 'existing' ? 'active' : ''}
-                    @click=${() => this._handleModeChange('existing')}
-                  >
-                    Verify Existing Tags
-                  </button>
                   <button
                     class=${this.mode === 'missing' ? 'active' : ''}
                     @click=${() => this._handleModeChange('missing')}
                   >
                     Find Missing Tags
                   </button>
+                  <button
+                    class=${this.mode === 'existing' ? 'active' : ''}
+                    @click=${() => this._handleModeChange('existing')}
+                  >
+                    Verify Existing Tags
+                  </button>
                 </div>
               </div>
               ${this.mode === 'missing' ? html`
-                <div>
-                  <div class="curate-ai-toggle text-xs text-gray-600 flex items-center">
-                    <label class="inline-flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        class="h-4 w-4"
-                        .checked=${this.aiEnabled}
-                        @change=${this._handleAiEnabledChange}
-                      >
-                      <span>Find with AI</span>
-                    </label>
-                    ${this.aiEnabled ? html`
-                      <div class="flex items-center gap-2">
-                        ${[
-                          { key: 'siglip', label: 'Zero-shot' },
-                          { key: 'trained', label: 'Keyword model' },
-                        ].map((model) => html`
-                          <button
-                            class="px-2 py-1 rounded border text-xs ${this.aiModel === model.key ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-200'}"
-                            aria-pressed=${this.aiModel === model.key ? 'true' : 'false'}
-                            @click=${() => this._handleAiModelChange(model.key)}
-                          >
-                            ${model.label}
-                          </button>
-                        `)}
+                <div class="w-full">
+                  <div class="space-y-3">
+                    <fieldset class="relative w-full max-w-2xl mx-auto rounded-md border border-gray-300 bg-gray-50 p-2">
+                      <legend class="px-2 inline-flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+                        <span>Select a Model</span>
+                        <button
+                          type="button"
+                          class="inline-flex h-5 w-5 items-center justify-center rounded-full border border-gray-300 bg-white text-[10px] font-semibold text-gray-600 hover:bg-gray-100 normal-case"
+                          title=${this._showAiHelp ? 'Hide help' : 'Show help'}
+                          aria-label=${this._showAiHelp ? 'Hide help' : 'Show help'}
+                          @click=${this._toggleAiHelpVisibility}
+                        >
+                          ?
+                        </button>
+                      </legend>
+                      <div class="w-full text-xs text-gray-600">
+                        <div class="mx-auto flex w-fit flex-wrap items-center justify-center gap-2">
+                          ${[
+                            { key: 'siglip', label: 'Zero-shot' },
+                            { key: 'trained', label: 'Trained' },
+                            { key: 'ml-similarity', label: 'Similarity' },
+                          ].map((model) => html`
+                            <button
+                              class="px-2 py-1 rounded border text-xs ${activeAiModel === model.key ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-200'}"
+                              aria-pressed=${activeAiModel === model.key ? 'true' : 'false'}
+                              @click=${() => {
+                                if (!this.aiEnabled) {
+                                  this.dispatchEvent(new CustomEvent('audit-ai-enabled-changed', {
+                                    detail: { enabled: true },
+                                    bubbles: true,
+                                    composed: true,
+                                  }));
+                                }
+                                this._handleAiModelChange(model.key);
+                              }}
+                            >
+                              ${model.label}
+                            </button>
+                          `)}
+                        </div>
+                        ${activeAiModel === 'ml-similarity' ? html`
+                          <div class="w-full mt-2 flex flex-wrap items-center justify-center gap-3 text-xs text-gray-700">
+                            <label class="inline-flex items-center gap-1">
+                              <span>Sample Size</span>
+                              <input
+                                type="number"
+                                min="1"
+                                max="50"
+                                step="1"
+                                class="w-16 px-2 py-1 rounded border border-gray-300 text-gray-700 bg-white"
+                                .value=${String(this.mlSimilaritySeedCount ?? 5)}
+                                @change=${(event) => this._handleMlSimilaritySeedCountChange(event)}
+                              >
+                            </label>
+                            <label class="inline-flex items-center gap-1">
+                              <span>Candidates</span>
+                              <input
+                                type="number"
+                                min="1"
+                                max="50"
+                                step="1"
+                                class="w-16 px-2 py-1 rounded border border-gray-300 text-gray-700 bg-white"
+                                .value=${String(this.mlSimilaritySimilarCount ?? 10)}
+                                @change=${(event) => this._handleMlSimilaritySimilarCountChange(event)}
+                              >
+                            </label>
+                            <label class="inline-flex items-center gap-2">
+                              <input
+                                type="checkbox"
+                                class="h-4 w-4"
+                                .checked=${Boolean(this.mlSimilarityDedupe)}
+                                @change=${(event) => this._handleMlSimilarityDedupeChange(event)}
+                              >
+                              <span>dedupe</span>
+                            </label>
+                            <label class="inline-flex items-center gap-2">
+                              <input
+                                type="checkbox"
+                                class="h-4 w-4"
+                                .checked=${Boolean(this.mlSimilarityRandom)}
+                                @change=${(event) => this._handleMlSimilarityRandomChange(event)}
+                              >
+                              <span>random</span>
+                            </label>
+                          </div>
+                        ` : html``}
                       </div>
-                    ` : html``}
+                    </fieldset>
+                    ${this._showAiHelp ? this._renderAiModeDocumentationPanel() : html``}
                   </div>
                 </div>
               ` : html``}
@@ -997,34 +1403,36 @@ export class CurateAuditTab extends LitElement {
                       })}
                     </div>
                   ` : html``}
-                  ${renderSelectableImageGrid({
-                    images: leftImages,
-                    selection: this.dragSelection,
-                    flashSelectionIds: this._auditFlashSelectionIds,
-                    selectionHandlers: this._auditSelectionHandlers,
-                    renderFunctions: {
-                      renderCurateRatingWidget: this.renderCurateRatingWidget,
-                      renderCurateRatingStatic: this.renderCurateRatingStatic,
-                      renderCurateAiMLScore: this.renderCurateAiMLScore,
-                      renderCuratePermatagSummary: this.renderCuratePermatagSummary,
-                      formatCurateDate: this.formatCurateDate,
-                    },
-                    onImageClick: (event, image) => this._handleAuditImageClick(event, image, leftImages),
-                    onDragStart: (event, image) => this._handleAuditDragStart(event, image, leftImages),
-                    selectionEvents: {
-                      pointerDown: (event, index, imageId, imageOrder) =>
-                        this._handleAuditPointerDownWithOrder(event, index, imageId, imageOrder),
-                      pointerMove: (event) => this._handleAuditPointerMove(event),
-                      pointerEnter: (index, imageOrder) => this._handleAuditSelectHoverWithOrder(index, imageOrder),
-                      order: this._auditLeftOrder,
-                    },
-                    options: {
-                      enableReordering: false,
-                      showPermatags: true,
-                      showAiScore: true,
-                      emptyMessage: this.keyword ? 'No images available.' : 'Choose a keyword to start.',
-                    },
-                  })}
+                  ${this._isMlSimilarityMode()
+                    ? this._renderSimilarityGroups(leftImages)
+                    : renderSelectableImageGrid({
+                      images: leftImages,
+                      selection: this.dragSelection,
+                      flashSelectionIds: this._auditFlashSelectionIds,
+                      selectionHandlers: this._auditSelectionHandlers,
+                      renderFunctions: {
+                        renderCurateRatingWidget: this.renderCurateRatingWidget,
+                        renderCurateRatingStatic: this.renderCurateRatingStatic,
+                        renderCurateAiMLScore: this.renderCurateAiMLScore,
+                        renderCuratePermatagSummary: this.renderCuratePermatagSummary,
+                        formatCurateDate: this.formatCurateDate,
+                      },
+                      onImageClick: (event, image) => this._handleAuditImageClick(event, image, leftImages),
+                      onDragStart: (event, image) => this._handleAuditDragStart(event, image, leftImages),
+                      selectionEvents: {
+                        pointerDown: (event, index, imageId, imageOrder) =>
+                          this._handleAuditPointerDownWithOrder(event, index, imageId, imageOrder),
+                        pointerMove: (event) => this._handleAuditPointerMove(event),
+                        pointerEnter: (index, imageOrder) => this._handleAuditSelectHoverWithOrder(index, imageOrder),
+                        order: this._auditLeftOrder,
+                      },
+                      options: {
+                        enableReordering: false,
+                        showPermatags: true,
+                        showAiScore: true,
+                        emptyMessage: this.keyword ? 'No images available.' : 'Choose a keyword to start.',
+                      },
+                    })}
                   ${this.keyword && !this.loadAll ? html`
                     <div class="p-2">
                       ${renderResultsPagination({
@@ -1190,8 +1598,10 @@ export class CurateAuditTab extends LitElement {
             </div>
           </div>
         ` : html`
-          <div class="bg-white rounded-lg shadow p-6 text-sm text-gray-600">
-            This screen lets you scan your collection for all images tagged to a Keyword. You can verify existing images, and look for images that should have it. Select a keyword to proceed.
+          <div class="bg-white rounded-lg shadow p-6 text-sm text-gray-600 text-center">
+            <p class="max-w-3xl mx-auto">
+              This screen lets you scan your collection for all images tagged to a Keyword. You can verify existing images, and look for images that should have it. Select a keyword to proceed.
+            </p>
           </div>
         `}
       </div>

@@ -45,7 +45,7 @@ export function initializeAppDefaultState(host) {
   host.curateEditorImageSet = [];
   host.curateEditorImageIndex = -1;
   host.curateSubTab = 'main';
-  host.curateAuditMode = 'existing';
+  host.curateAuditMode = 'missing';
   host.curateAuditKeyword = '';
   host.curateAuditCategory = '';
   host.curateAuditImages = [];
@@ -61,8 +61,12 @@ export function initializeAppDefaultState(host) {
   host.curateAuditLoading = false;
   host.curateAuditLoadAll = false;
   host.curateAuditPageOffset = 0;
-  host.curateAuditAiEnabled = false;
-  host.curateAuditAiModel = '';
+  host.curateAuditAiEnabled = true;
+  host.curateAuditAiModel = 'siglip';
+  host.curateAuditMlSimilaritySeedCount = 5;
+  host.curateAuditMlSimilaritySimilarCount = 10;
+  host.curateAuditMlSimilarityDedupe = true;
+  host.curateAuditMlSimilarityRandom = true;
   host.curateAuditOrderBy = 'photo_creation';
   host.curateAuditOrderDirection = 'desc';
   host.curateAuditMediaType = 'all';

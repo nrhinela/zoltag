@@ -1086,6 +1086,7 @@ def _fetch_similar_ids_with_pgvector(
     limit: int,
     min_score: Optional[float],
     media_type: Optional[str],
+    candidate_scan_cap: Optional[int] = None,
 ) -> Optional[Tuple[List[int], Dict[int, float]]]:
     if not _is_pgvector_ready(db):
         return None
@@ -1104,6 +1105,10 @@ def _fetch_similar_ids_with_pgvector(
         # Phase 1: true KNN candidate fetch (index-friendly ORDER BY <=> on image_embeddings only).
         initial_candidate_limit = min(max(int(limit) * 4, 120), 800)
         max_candidate_limit = min(max(int(limit) * 20, 3000), 12000)
+        if candidate_scan_cap is not None:
+            safe_scan_cap = max(int(limit), max(50, int(candidate_scan_cap)))
+            max_candidate_limit = min(max_candidate_limit, safe_scan_cap)
+            initial_candidate_limit = min(initial_candidate_limit, max_candidate_limit)
         candidate_limit = initial_candidate_limit
         top_image_ids: List[int] = []
         score_by_image_id: Dict[int, float] = {}
@@ -1228,6 +1233,10 @@ async def list_images(
     order_by: Optional[str] = None,
     ml_keyword: Optional[str] = None,
     ml_tag_type: Optional[str] = None,
+    ml_similarity_seed_count: Optional[int] = None,
+    ml_similarity_similar_count: Optional[int] = None,
+    ml_similarity_dedupe: bool = True,
+    ml_similarity_random: bool = True,
     db: Session = Depends(get_db)
 ):
     """List images for tenant with optional faceted search by keywords."""
@@ -1256,6 +1265,12 @@ async def list_images(
         order_by_value = None
     if order_by_value == "ml_score" and not ml_keyword_id:
         order_by_value = None
+    similarity_seed_limit_value = int(ml_similarity_seed_count) if ml_similarity_seed_count is not None else 5
+    similarity_seed_limit_value = max(1, min(similarity_seed_limit_value, 50))
+    similarity_per_seed_limit_value = int(ml_similarity_similar_count) if ml_similarity_similar_count is not None else 10
+    similarity_per_seed_limit_value = max(1, min(similarity_per_seed_limit_value, 50))
+    similarity_dedupe_enabled = bool(ml_similarity_dedupe)
+    similarity_random_enabled = bool(ml_similarity_random)
     constrain_to_ml_matches = order_by_value == "ml_score" and ml_keyword_id is not None
     media_type_value = (media_type or "all").strip().lower()
     if media_type_value not in {"all", "image", "video"}:
@@ -1274,11 +1289,12 @@ async def list_images(
         except Exception as exc:  # noqa: BLE001 - keep query flow resilient.
             logger.warning("Text query embedding unavailable during candidate seeding; continuing lexical-only: %s", exc)
             text_query_vector = None
+    is_tenant_admin = is_tenant_admin_user(db, tenant, current_user)
     base_query, subqueries_list, exclude_subqueries_list, has_empty_filter = build_image_query_with_subqueries(
         db,
         tenant,
         current_user=current_user,
-        is_tenant_admin=is_tenant_admin_user(db, tenant, current_user),
+        is_tenant_admin=is_tenant_admin,
         list_id=list_id,
         list_exclude_id=list_exclude_id,
         rating=rating,
@@ -1397,7 +1413,13 @@ async def list_images(
         image_map = {img.id: img for img in image_rows}
         return [image_map[image_id] for image_id in ordered_ids if image_id in image_map]
 
+    def _normalize_similarity_score(raw_score: Optional[float]) -> float:
+        value = float(raw_score or 0.0)
+        return float(np.clip((value + 1.0) / 2.0, 0.0, 1.0))
+
     total = 0
+    image_entry_metadata: Optional[List[dict]] = None
+    similarity_groups: Optional[List[dict]] = None
 
     # Handle per-category filters if provided
     if order_by_value == "processed":
@@ -1845,46 +1867,294 @@ async def list_images(
             paginated_ids = sorted_ids[offset: offset + limit] if limit else sorted_ids[offset:]
             images = load_images_by_ordered_ids(paginated_ids)
         elif order_by_value == "ml_score" and ml_keyword_id:
-            def fetch_ml_score_page(require_match: bool):
-                ml_query, ml_scores_subquery = builder.apply_ml_score_ordering(
-                    query,
-                    ml_keyword_id,
-                    ml_tag_type,
-                    require_match=require_match,
-                )
-                if order_by_value == "processed":
-                    order_by_date_clause = func.coalesce(ImageMetadata.last_processed, ImageMetadata.created_at)
-                elif order_by_value == "created_at":
-                    order_by_date_clause = ImageMetadata.created_at
-                else:
-                    order_by_date_clause = func.coalesce(ImageMetadata.capture_timestamp, ImageMetadata.modified_time)
-                order_by_date_clause = order_by_date_clause.desc() if date_order == "desc" else order_by_date_clause.asc()
-                id_order_clause = ImageMetadata.id.desc() if date_order == "desc" else ImageMetadata.id.asc()
-                order_clauses = (
-                    ml_scores_subquery.c.ml_score.desc().nullslast(),
-                    order_by_date_clause,
-                    id_order_clause,
-                )
-                ml_query = ml_query.order_by(*order_clauses)
-                resolved_offset = resolve_anchor_offset(ml_query, offset)
-                if limit:
-                    rows = ml_query.limit(limit + 1).offset(resolved_offset).all()
-                    has_more = len(rows) > limit
-                    page_rows = rows[:limit] if has_more else rows
-                    estimated_total = resolved_offset + len(page_rows) + (1 if has_more else 0)
-                else:
-                    page_rows = ml_query.offset(resolved_offset).all()
-                    estimated_total = resolved_offset + len(page_rows)
-                return ml_query, page_rows, resolved_offset, estimated_total
+            is_ml_similarity_mode = str(ml_tag_type or "").strip().lower() == "ml-similarity"
 
-            query, images, resolved_offset, total = fetch_ml_score_page(require_match=True)
-            if not images and query.limit(1).first() is None:
-                # No ML-tag matches at all: fall back to filtered rows ordered by ML score (nulls last).
-                query = base_query
-                query = builder.apply_subqueries(query, subqueries_list, exclude_subqueries_list)
-                query = query.options(load_only(*LIST_IMAGES_LOAD_ONLY_COLUMNS))
-                query, images, resolved_offset, total = fetch_ml_score_page(require_match=False)
-            offset = resolved_offset
+            if is_ml_similarity_mode:
+                similarity_seed_limit = similarity_seed_limit_value
+                similarity_per_seed_limit = similarity_per_seed_limit_value
+                similarity_keyword = permatag_keyword or ml_keyword
+
+                seed_base_query, seed_subqueries, seed_exclude_subqueries, seed_has_empty_filter = build_image_query_with_subqueries(
+                    db,
+                    tenant,
+                    current_user=current_user,
+                    is_tenant_admin=is_tenant_admin,
+                    list_id=list_id,
+                    list_exclude_id=list_exclude_id,
+                    rating=rating,
+                    rating_operator=rating_operator,
+                    hide_zero_rating=True,
+                    reviewed=reviewed,
+                    media_type=None if media_type_value == "all" else media_type_value,
+                    dropbox_path_prefix=dropbox_path_prefix,
+                    filename_query=filename_query,
+                    permatag_keyword=similarity_keyword,
+                    permatag_category=permatag_category,
+                    permatag_signum=1,
+                    permatag_missing=False,
+                    permatag_positive_missing=False,
+                    ml_keyword=ml_keyword,
+                    ml_tag_type=ml_tag_type,
+                    apply_ml_tag_filter=False,
+                )
+                candidate_base_query, candidate_subqueries, candidate_exclude_subqueries, candidate_has_empty_filter = build_image_query_with_subqueries(
+                    db,
+                    tenant,
+                    current_user=current_user,
+                    is_tenant_admin=is_tenant_admin,
+                    list_id=list_id,
+                    list_exclude_id=list_exclude_id,
+                    rating=rating,
+                    rating_operator=rating_operator,
+                    hide_zero_rating=True,
+                    reviewed=reviewed,
+                    media_type=None if media_type_value == "all" else media_type_value,
+                    dropbox_path_prefix=dropbox_path_prefix,
+                    filename_query=filename_query,
+                    permatag_keyword=similarity_keyword,
+                    permatag_category=permatag_category,
+                    permatag_signum=None,
+                    permatag_missing=True,
+                    permatag_positive_missing=permatag_positive_missing,
+                    ml_keyword=ml_keyword,
+                    ml_tag_type=ml_tag_type,
+                    apply_ml_tag_filter=False,
+                )
+
+                if seed_has_empty_filter or candidate_has_empty_filter:
+                    images = []
+                    total = 0
+                    similarity_groups = []
+                else:
+                    seed_query = builder.apply_subqueries(seed_base_query, seed_subqueries, seed_exclude_subqueries)
+                    seed_query = seed_query.options(load_only(*LIST_IMAGES_LOAD_ONLY_COLUMNS))
+                    if similarity_random_enabled:
+                        seed_query = seed_query.order_by(func.random())
+                    else:
+                        seed_query = seed_query.order_by(
+                            ImageMetadata.rating.desc().nullslast(),
+                            func.coalesce(ImageMetadata.capture_timestamp, ImageMetadata.modified_time).desc(),
+                            ImageMetadata.id.desc(),
+                        )
+                    seed_images = seed_query.limit(similarity_seed_limit).all()
+
+                    candidate_query = builder.apply_subqueries(candidate_base_query, candidate_subqueries, candidate_exclude_subqueries)
+                    candidate_rows = candidate_query.with_entities(
+                        ImageMetadata.id.label("image_id"),
+                    ).all()
+                    candidate_id_set = {int(row.image_id) for row in candidate_rows}
+
+                    flattened_ids: List[int] = []
+                    flattened_meta: List[dict] = []
+                    similarity_groups = []
+                    similarity_media_type = None if media_type_value == "all" else media_type_value
+                    # Conservative safety limits: prefer fewer results over long-running expansion.
+                    similarity_fetch_limit_start = similarity_per_seed_limit + 15 + (10 if similarity_dedupe_enabled else 0)
+                    similarity_fetch_limit_start = max(similarity_fetch_limit_start, similarity_per_seed_limit)
+                    similarity_fetch_limit_max = min(max(similarity_per_seed_limit * 12, 150), 700)
+                    similarity_pgvector_scan_cap = min(max(similarity_per_seed_limit * 30, 300), 1000)
+                    similarity_max_expand_attempts = 2
+                    similarity_seed_budget_seconds = 0.35
+                    seen_image_ids: set[int] = set()
+
+                    for group_index, seed_image in enumerate(seed_images):
+                        seed_id = int(seed_image.id)
+                        similarity_groups.append({
+                            "group_index": group_index,
+                            "seed_image_id": seed_id,
+                        })
+                        flattened_ids.append(seed_id)
+                        flattened_meta.append({
+                            "similarity_group": group_index,
+                            "similarity_seed": True,
+                            "similarity_seed_image_id": seed_id,
+                            "similarity_score": 1.0,
+                        })
+                        if similarity_dedupe_enabled:
+                            seen_image_ids.add(seed_id)
+
+                        if seed_image.asset_id is None:
+                            continue
+                        seed_embedding = db.query(ImageEmbedding).filter(
+                            tenant_column_filter(ImageEmbedding, tenant),
+                            ImageEmbedding.asset_id == seed_image.asset_id,
+                            ImageEmbedding.embedding.is_not(None),
+                        ).first()
+                        if not seed_embedding or not seed_embedding.embedding:
+                            continue
+
+                        seed_vector = np.asarray(seed_embedding.embedding, dtype=np.float32)
+                        if seed_vector.ndim != 1 or seed_vector.size == 0:
+                            continue
+                        seed_norm = float(np.linalg.norm(seed_vector))
+                        if seed_norm <= 1e-12:
+                            continue
+                        source_unit_vector = seed_vector / seed_norm
+
+                        # With strict candidate filters, many nearest neighbors can be filtered out.
+                        # Expand fetch depth until we can fill y (or hit a max cap).
+                        pgvector_ranked = None
+                        pgvector_viable_count = 0
+                        pgvector_limit = int(similarity_fetch_limit_start)
+                        expand_attempts = 0
+                        seed_fetch_started = time.monotonic()
+                        while True:
+                            if expand_attempts >= similarity_max_expand_attempts:
+                                break
+                            if (time.monotonic() - seed_fetch_started) >= similarity_seed_budget_seconds:
+                                break
+                            expand_attempts += 1
+                            pgvector_attempt = _fetch_similar_ids_with_pgvector(
+                                db=db,
+                                tenant=tenant,
+                                source_image_id=seed_id,
+                                source_asset_id=seed_image.asset_id,
+                                source_vector=source_unit_vector,
+                                limit=pgvector_limit,
+                                min_score=None,
+                                media_type=similarity_media_type,
+                                candidate_scan_cap=similarity_pgvector_scan_cap,
+                            )
+                            if pgvector_attempt is None:
+                                pgvector_ranked = None
+                                break
+                            attempt_ids, _attempt_scores = pgvector_attempt
+                            viable_count = 0
+                            for attempt_id in attempt_ids:
+                                attempt_id_int = int(attempt_id)
+                                if attempt_id_int == seed_id:
+                                    continue
+                                if attempt_id_int not in candidate_id_set:
+                                    continue
+                                if similarity_dedupe_enabled and attempt_id_int in seen_image_ids:
+                                    continue
+                                viable_count += 1
+                                if viable_count >= similarity_per_seed_limit:
+                                    break
+                            pgvector_ranked = pgvector_attempt
+                            pgvector_viable_count = viable_count
+                            if viable_count >= similarity_per_seed_limit:
+                                break
+                            if pgvector_limit >= similarity_fetch_limit_max:
+                                break
+                            if len(attempt_ids) < pgvector_limit:
+                                # No deeper pool available from pgvector for this seed.
+                                break
+                            pgvector_limit = min(pgvector_limit * 2, similarity_fetch_limit_max)
+
+                        if pgvector_ranked is not None and pgvector_viable_count <= 0:
+                            # pgvector path can occasionally return no viable in-tenant rows
+                            # after post-filters; fall back to tenant-local in-memory ranking.
+                            pgvector_ranked = None
+
+                        if pgvector_ranked is not None:
+                            ranked_ids, raw_score_by_id = pgvector_ranked
+                            score_by_image_id = {
+                                int(image_id): _normalize_similarity_score(score)
+                                for image_id, score in (raw_score_by_id or {}).items()
+                            }
+                        else:
+                            index = _get_similarity_index(
+                                db=db,
+                                tenant=tenant,
+                                media_type=similarity_media_type,
+                                embedding_dim=int(seed_vector.size),
+                            )
+                            matrix = index["matrix"]
+                            candidate_ids = index["image_ids"]
+                            if matrix.size == 0 or candidate_ids.size == 0:
+                                ranked_ids = []
+                                score_by_image_id = {}
+                            else:
+                                raw_scores = np.dot(matrix, source_unit_vector)
+                                keep_mask = candidate_ids != seed_id
+                                filtered_ids = candidate_ids[keep_mask]
+                                filtered_scores = raw_scores[keep_mask]
+                                if filtered_ids.size == 0:
+                                    ranked_ids = []
+                                    score_by_image_id = {}
+                                else:
+                                    ranked_indices = np.argsort(filtered_scores)[::-1]
+                                    ranked_ids = [int(filtered_ids[int(idx)]) for idx in ranked_indices]
+                                    score_by_image_id = {
+                                        int(filtered_ids[int(idx)]): _normalize_similarity_score(filtered_scores[int(idx)])
+                                        for idx in ranked_indices
+                                    }
+
+                        selected_similars = []
+                        for similar_id in ranked_ids:
+                            similar_id_int = int(similar_id)
+                            if similar_id_int == seed_id:
+                                continue
+                            if similar_id_int not in candidate_id_set:
+                                continue
+                            if similarity_dedupe_enabled and similar_id_int in seen_image_ids:
+                                continue
+                            selected_similars.append(similar_id_int)
+                            flattened_ids.append(similar_id_int)
+                            flattened_meta.append({
+                                "similarity_group": group_index,
+                                "similarity_seed": False,
+                                "similarity_seed_image_id": seed_id,
+                                "similarity_score": float(score_by_image_id.get(similar_id_int, 0.0)),
+                            })
+                            if similarity_dedupe_enabled:
+                                seen_image_ids.add(similar_id_int)
+                            if len(selected_similars) >= similarity_per_seed_limit:
+                                break
+
+                    total = len(flattened_ids)
+                    if anchor_id is not None and limit is not None:
+                        offset = resolve_anchor_offset_for_sorted_ids(flattened_ids, offset)
+                    if limit:
+                        paginated_ids = flattened_ids[offset:offset + limit]
+                        paginated_meta = flattened_meta[offset:offset + limit]
+                    else:
+                        paginated_ids = flattened_ids[offset:]
+                        paginated_meta = flattened_meta[offset:]
+                    images = load_images_by_ordered_ids(paginated_ids)
+                    image_entry_metadata = paginated_meta[:len(images)]
+            else:
+                def fetch_ml_score_page(require_match: bool):
+                    ml_query, ml_scores_subquery = builder.apply_ml_score_ordering(
+                        query,
+                        ml_keyword_id,
+                        ml_tag_type,
+                        require_match=require_match,
+                    )
+                    if order_by_value == "processed":
+                        order_by_date_clause = func.coalesce(ImageMetadata.last_processed, ImageMetadata.created_at)
+                    elif order_by_value == "created_at":
+                        order_by_date_clause = ImageMetadata.created_at
+                    else:
+                        order_by_date_clause = func.coalesce(ImageMetadata.capture_timestamp, ImageMetadata.modified_time)
+                    order_by_date_clause = order_by_date_clause.desc() if date_order == "desc" else order_by_date_clause.asc()
+                    id_order_clause = ImageMetadata.id.desc() if date_order == "desc" else ImageMetadata.id.asc()
+                    order_clauses = (
+                        ml_scores_subquery.c.ml_score.desc().nullslast(),
+                        order_by_date_clause,
+                        id_order_clause,
+                    )
+                    ml_query = ml_query.order_by(*order_clauses)
+                    resolved_offset = resolve_anchor_offset(ml_query, offset)
+                    if limit:
+                        rows = ml_query.limit(limit + 1).offset(resolved_offset).all()
+                        has_more = len(rows) > limit
+                        page_rows = rows[:limit] if has_more else rows
+                        estimated_total = resolved_offset + len(page_rows) + (1 if has_more else 0)
+                    else:
+                        page_rows = ml_query.offset(resolved_offset).all()
+                        estimated_total = resolved_offset + len(page_rows)
+                    return ml_query, page_rows, resolved_offset, estimated_total
+
+                query, images, resolved_offset, total = fetch_ml_score_page(require_match=True)
+                if not images and query.limit(1).first() is None:
+                    # No ML-tag matches at all: fall back to filtered rows ordered by ML score (nulls last).
+                    query = base_query
+                    query = builder.apply_subqueries(query, subqueries_list, exclude_subqueries_list)
+                    query = query.options(load_only(*LIST_IMAGES_LOAD_ONLY_COLUMNS))
+                    query, images, resolved_offset, total = fetch_ml_score_page(require_match=False)
+                offset = resolved_offset
         else:
             total = builder.get_total_count(query)
             order_by_clauses = builder.build_order_clauses()
@@ -1895,8 +2165,13 @@ async def list_images(
     image_ids = [img.id for img in images]
     asset_id_to_image_id = {img.asset_id: img.id for img in images if img.asset_id is not None}
     asset_ids = list(asset_id_to_image_id.keys())
-    # Use ml_tag_type if provided (for AI filtering), otherwise use active_tag_type
-    tag_type_filter = ml_tag_type if ml_tag_type else get_tenant_setting(db, tenant.id, 'active_machine_tag_type', default='siglip')
+    # Use ml_tag_type if provided (for AI filtering), otherwise use active_tag_type.
+    # ml-similarity is audit-only and not an actual machine tag type.
+    normalized_ml_tag_type = str(ml_tag_type or "").strip().lower()
+    if ml_tag_type and normalized_ml_tag_type != "ml-similarity":
+        tag_type_filter = ml_tag_type
+    else:
+        tag_type_filter = get_tenant_setting(db, tenant.id, 'active_machine_tag_type', default='siglip')
     tags = db.query(MachineTag).filter(
         MachineTag.asset_id.in_(asset_ids),
         tenant_column_filter(MachineTag, tenant),
@@ -1968,7 +2243,7 @@ async def list_images(
 
     assets_by_id = load_assets_for_images(db, images)
     images_list = []
-    for img in images:
+    for idx, img in enumerate(images):
         storage_info = _resolve_storage_or_409(
             image=img,
             tenant=tenant,
@@ -1978,7 +2253,7 @@ async def list_images(
         machine_tags = sorted(tags_by_image.get(img.id, []), key=lambda x: x['confidence'], reverse=True)
         image_permatags = permatags_by_image.get(img.id, [])
         calculated_tags = calculate_tags(machine_tags, image_permatags)
-        images_list.append({
+        image_payload = {
             "id": img.id,
             "asset_id": storage_info.asset_id,
             "variant_count": int(variant_count_by_asset.get(img.asset_id, 0)),
@@ -2017,7 +2292,14 @@ async def list_images(
             "tags": machine_tags,
             "permatags": image_permatags,
             "calculated_tags": calculated_tags
-        })
+        }
+        if image_entry_metadata and idx < len(image_entry_metadata):
+            entry_meta = image_entry_metadata[idx] or {}
+            image_payload["similarity_group"] = entry_meta.get("similarity_group")
+            image_payload["similarity_seed"] = bool(entry_meta.get("similarity_seed"))
+            image_payload["similarity_seed_image_id"] = entry_meta.get("similarity_seed_image_id")
+            image_payload["similarity_score"] = float(entry_meta.get("similarity_score", 0.0))
+        images_list.append(image_payload)
     result = {
         "tenant_id": tenant.id,
         "images": images_list,
@@ -2028,6 +2310,8 @@ async def list_images(
         "hybrid_vector_weight": vector_weight_value if text_query_value else None,
         "hybrid_lexical_weight": lexical_weight_value if text_query_value else None,
     }
+    if similarity_groups is not None:
+        result["similarity_groups"] = similarity_groups
     _log_images_search_event(
         db=db,
         request=request,

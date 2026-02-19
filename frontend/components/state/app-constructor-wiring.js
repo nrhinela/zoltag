@@ -118,6 +118,15 @@ function wireFilterPanelListeners(host) {
   };
 
   const syncCurateAuditStateFromFilters = (filters = {}) => {
+    const parseBooleanFilter = (value, fallback) => {
+      if (value === undefined) return fallback;
+      if (typeof value === 'string') {
+        const normalized = value.trim().toLowerCase();
+        if (normalized === 'true' || normalized === '1') return true;
+        if (normalized === 'false' || normalized === '0' || normalized === '') return false;
+      }
+      return Boolean(value);
+    };
     const mediaType = String(filters.mediaType || 'all').toLowerCase();
     const nextMinRating = filters.ratingOperator === 'is_null'
       ? 'unrated'
@@ -138,6 +147,28 @@ function wireFilterPanelListeners(host) {
     }
     if (filters.permatagMissing !== undefined) {
       host.curateAuditMode = filters.permatagMissing ? 'missing' : 'existing';
+    }
+    if (filters.mlSimilaritySeedCount !== undefined && filters.mlSimilaritySeedCount !== null && filters.mlSimilaritySeedCount !== '') {
+      host.curateAuditMlSimilaritySeedCount = Number.isFinite(Number(filters.mlSimilaritySeedCount))
+        ? Math.max(1, Math.min(50, Number(filters.mlSimilaritySeedCount)))
+        : host.curateAuditMlSimilaritySeedCount;
+    }
+    if (filters.mlSimilaritySimilarCount !== undefined && filters.mlSimilaritySimilarCount !== null && filters.mlSimilaritySimilarCount !== '') {
+      host.curateAuditMlSimilaritySimilarCount = Number.isFinite(Number(filters.mlSimilaritySimilarCount))
+        ? Math.max(1, Math.min(50, Number(filters.mlSimilaritySimilarCount)))
+        : host.curateAuditMlSimilaritySimilarCount;
+    }
+    if (filters.mlSimilarityDedupe !== undefined) {
+      host.curateAuditMlSimilarityDedupe = parseBooleanFilter(
+        filters.mlSimilarityDedupe,
+        host.curateAuditMlSimilarityDedupe
+      );
+    }
+    if (filters.mlSimilarityRandom !== undefined) {
+      host.curateAuditMlSimilarityRandom = parseBooleanFilter(
+        filters.mlSimilarityRandom,
+        host.curateAuditMlSimilarityRandom
+      );
     }
     if (filters.limit !== undefined && filters.limit !== null && filters.limit !== '') {
       host.curateAuditLimit = Number.isFinite(Number(filters.limit)) ? Number(filters.limit) : host.curateAuditLimit;

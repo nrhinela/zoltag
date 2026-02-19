@@ -31,6 +31,7 @@ import {
   addRatingParams,
   addPermatagParams,
   addMlTagParams,
+  addMlSimilarityParams,
   addCategoryFilterParams,
   addOrderingParams,
   addMiscParams,
@@ -122,6 +123,7 @@ export class ImageFilterPanel {
     addRatingParams(params, this.filters);
     addPermatagParams(params, this.filters);
     addMlTagParams(params, this.filters);
+    addMlSimilarityParams(params, this.filters);
     addCategoryFilterParams(params, this.filters);
     addOrderingParams(params, this.filters);
     addMiscParams(params, this.filters);

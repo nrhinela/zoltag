@@ -83,6 +83,46 @@ export class CurateAuditStateController extends BaseStateController {
   }
 
   /**
+   * Handle ML similarity parameter changes.
+   * @param {Object} values - Similarity settings
+   * @param {number} values.seedCount - Number of seed images (x)
+   * @param {number} values.similarCount - Number of similar images per seed (y)
+   * @param {boolean} values.dedupe - Whether to dedupe similars across groups
+   * @param {boolean} values.random - Whether to randomize source seed selection
+   */
+  handleMlSimilaritySettingsChange(values = {}) {
+    const nextSeedCount = Number.isFinite(Number(values.seedCount))
+      ? Math.max(1, Math.min(50, Number(values.seedCount)))
+      : this.host.curateAuditMlSimilaritySeedCount;
+    const nextSimilarCount = Number.isFinite(Number(values.similarCount))
+      ? Math.max(1, Math.min(50, Number(values.similarCount)))
+      : this.host.curateAuditMlSimilaritySimilarCount;
+    const nextDedupe = values.dedupe !== undefined
+      ? Boolean(values.dedupe)
+      : Boolean(this.host.curateAuditMlSimilarityDedupe);
+    const nextRandom = values.random !== undefined
+      ? Boolean(values.random)
+      : Boolean(this.host.curateAuditMlSimilarityRandom);
+
+    this.host.curateAuditMlSimilaritySeedCount = nextSeedCount;
+    this.host.curateAuditMlSimilaritySimilarCount = nextSimilarCount;
+    this.host.curateAuditMlSimilarityDedupe = nextDedupe;
+    this.host.curateAuditMlSimilarityRandom = nextRandom;
+    this.host.curateAuditOffset = 0;
+    this.host.curateAuditTotal = null;
+    this.host.curateAuditLoadAll = false;
+    this.host.curateAuditPageOffset = 0;
+    if (
+      this.host.curateAuditKeyword
+      && this.host.curateAuditMode === 'missing'
+      && String(this.host.curateAuditAiModel || '').trim().toLowerCase() === 'ml-similarity'
+    ) {
+      this.host._fetchCurateAuditImages();
+    }
+    this.requestUpdate();
+  }
+
+  /**
    * Handle keyword selection change.
    * @param {string} keywordId - Selected keyword ID
    */
@@ -777,8 +817,12 @@ export class CurateAuditStateController extends BaseStateController {
       curateAuditMode: 'missing',
       curateAuditKeyword: null,
       curateAuditCategory: null,
-      curateAuditAiEnabled: false,
-      curateAuditAiModel: null,
+      curateAuditAiEnabled: true,
+      curateAuditAiModel: 'siglip',
+      curateAuditMlSimilaritySeedCount: 5,
+      curateAuditMlSimilaritySimilarCount: 10,
+      curateAuditMlSimilarityDedupe: true,
+      curateAuditMlSimilarityRandom: true,
       curateAuditMediaType: 'all',
       curateAuditHideDeleted: true,
       curateAuditMinRating: null,
@@ -807,6 +851,10 @@ export class CurateAuditStateController extends BaseStateController {
       curateAuditCategory: host.curateAuditCategory,
       curateAuditAiEnabled: host.curateAuditAiEnabled,
       curateAuditAiModel: host.curateAuditAiModel,
+      curateAuditMlSimilaritySeedCount: host.curateAuditMlSimilaritySeedCount,
+      curateAuditMlSimilaritySimilarCount: host.curateAuditMlSimilaritySimilarCount,
+      curateAuditMlSimilarityDedupe: host.curateAuditMlSimilarityDedupe,
+      curateAuditMlSimilarityRandom: host.curateAuditMlSimilarityRandom,
       curateAuditMediaType: host.curateAuditMediaType,
       curateAuditHideDeleted: host.curateAuditHideDeleted,
       curateAuditMinRating: host.curateAuditMinRating,
@@ -849,7 +897,7 @@ export class CurateAuditStateController extends BaseStateController {
    * Reset Curate Audit state when tenant changes.
    */
   resetForTenantChange() {
-    this.host.curateAuditMode = 'existing';
+    this.host.curateAuditMode = 'missing';
     this.host.curateAuditKeyword = '';
     this.host.curateAuditCategory = '';
     this.host.curateAuditImages = [];
@@ -864,8 +912,12 @@ export class CurateAuditStateController extends BaseStateController {
     this.host.curateAuditLoading = false;
     this.host.curateAuditLoadAll = false;
     this.host.curateAuditPageOffset = 0;
-    this.host.curateAuditAiEnabled = false;
-    this.host.curateAuditAiModel = '';
+    this.host.curateAuditAiEnabled = true;
+    this.host.curateAuditAiModel = 'siglip';
+    this.host.curateAuditMlSimilaritySeedCount = 5;
+    this.host.curateAuditMlSimilaritySimilarCount = 10;
+    this.host.curateAuditMlSimilarityDedupe = true;
+    this.host.curateAuditMlSimilarityRandom = true;
     this.host.curateAuditMediaType = 'all';
     this.host.curateAuditDropboxPathPrefix = '';
     this.host.curateAuditFilenameQuery = '';

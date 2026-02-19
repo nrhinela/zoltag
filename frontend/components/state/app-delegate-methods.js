@@ -202,6 +202,9 @@ export function bindAppDelegateMethods(host) {
   host._handleCurateAuditAiModelChange = (nextModel) =>
     host._curateAuditState.handleAiModelChange(nextModel);
 
+  host._handleCurateAuditMlSimilaritySettingsChange = (settings) =>
+    host._curateAuditState.handleMlSimilaritySettingsChange(settings);
+
   host._fetchCurateAuditImages = async (options = {}) =>
     host._curateAuditState.fetchCurateAuditImages(options);
 

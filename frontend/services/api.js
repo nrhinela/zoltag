@@ -4,6 +4,7 @@ import {
   addRatingParams,
   addPermatagParams,
   addMlTagParams,
+  addMlSimilarityParams,
   addCategoryFilterParams,
   addOrderingParams,
   addMiscParams,
@@ -105,6 +106,7 @@ export async function getImages(tenantId, filters = {}) {
   addOrderingParams(params, filters);
   addPermatagParams(params, filters);
   addMlTagParams(params, filters);
+  addMlSimilarityParams(params, filters);
   addMediaTypeParams(params, filters);
 
   const url = `/images?${params.toString()}`;

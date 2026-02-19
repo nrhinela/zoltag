@@ -214,6 +214,10 @@ export function renderCurateTabContent(host, { formatCurateDate }) {
             .mode=${host.curateAuditMode}
             .aiEnabled=${host.curateAuditAiEnabled}
             .aiModel=${host.curateAuditAiModel}
+            .mlSimilaritySeedCount=${host.curateAuditMlSimilaritySeedCount}
+            .mlSimilaritySimilarCount=${host.curateAuditMlSimilaritySimilarCount}
+            .mlSimilarityDedupe=${host.curateAuditMlSimilarityDedupe}
+            .mlSimilarityRandom=${host.curateAuditMlSimilarityRandom}
             .images=${host.curateAuditImages}
             .thumbSize=${host.curateThumbSize}
             .minRating=${host.curateAuditMinRating}
@@ -244,6 +248,7 @@ export function renderCurateTabContent(host, { formatCurateDate }) {
             @audit-mode-changed=${(e) => host._handleCurateAuditModeChange(e.detail.mode)}
             @audit-ai-enabled-changed=${(e) => host._handleCurateAuditAiEnabledChange({ target: { checked: e.detail.enabled } })}
             @audit-ai-model-changed=${(e) => host._handleCurateAuditAiModelChange(e.detail.model)}
+            @audit-ai-ml-similarity-settings-changed=${(e) => host._handleCurateAuditMlSimilaritySettingsChange(e.detail)}
             @pagination-changed=${(e) => {
               host.curateAuditPageOffset = e.detail.offset;
               host.curateAuditLimit = e.detail.limit;

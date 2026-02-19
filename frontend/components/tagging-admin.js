@@ -650,12 +650,28 @@ class TaggingAdmin extends LitElement {
           <details class="help-panel mb-6">
             <summary>How keywords and categories work</summary>
             <p>
-              Categories group related keywords and define how tagging behaves across the app. Keywords are used
-              for search, manual tagging, and zero-shot ML tagging when a prompt is present. Prompts describe the
-              visual concept for ML scoring. In People categories, keywords can be linked to a person record and
-              are excluded from ML tagging, since they are meant for manual attribution and identity tagging.
-              Attribution categories are intended for credits and sources. The order of categories affects display
-              order, and prompts in the same category are scored relative to one another.
+              <strong>Keywords</strong> help with search, manual tagging, and machine learning (ML) model suggestions
+              (when a description is provided).
+            </p>
+            <p>
+              <strong>Important!</strong> When entering keywords, there is a Prompt field. These matter a lot. A clear,
+              specific Prompt for each keyword gives ML models better guidance and improves suggestion quality.
+            </p>
+            <p>
+              <strong>Keyword Categories</strong> group related keywords and control how those keywords are used across
+              Zoltag. Category order controls how categories appear within dropdowns in the various screens.
+            </p>
+            <p>
+              Keyword Categories have two optional attributes: <strong>People Category</strong> and
+              <strong>Is Attribution</strong>.
+            </p>
+            <p>
+              In <strong>People categories</strong>, keywords can be linked to a "Person" record. These are for manual
+              identity tagging and are not used for ML suggestions.
+            </p>
+            <p>
+              <strong>Attribution categories</strong> are for credits, source info, and other reference tags. For
+              instance, when downloading lists of photos we ensure this category is included in the ZIP file.
             </p>
           </details>
 
