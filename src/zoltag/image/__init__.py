@@ -371,8 +371,16 @@ class FaceDetector:
             image = np.ascontiguousarray(np.asarray(pil_image), dtype=np.uint8)
         
         # Detect faces
-        face_locations = face_recognition.face_locations(image)
-        face_encodings = face_recognition.face_encodings(image, face_locations)
+        try:
+            face_locations = face_recognition.face_locations(image)
+            face_encodings = face_recognition.face_encodings(image, face_locations)
+        except Exception as exc:
+            raise RuntimeError(
+                "Face detection failed "
+                f"(shape={getattr(image, 'shape', None)}, "
+                f"dtype={getattr(image, 'dtype', None)}, "
+                f"contiguous={bool(getattr(image, 'flags', {}).c_contiguous if hasattr(getattr(image, 'flags', None), 'c_contiguous') else False)}): {exc}"
+            ) from exc
         
         results = []
         for location, encoding in zip(face_locations, face_encodings):
