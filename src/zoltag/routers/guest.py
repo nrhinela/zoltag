@@ -17,6 +17,7 @@ from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
+from zoltag.asset_helpers import bulk_preload_thumbnail_urls, load_assets_for_images
 from zoltag.auth.models import UserProfile
 from zoltag.auth.jwt import verify_supabase_jwt
 from zoltag.dependencies import get_db, get_secret
@@ -320,6 +321,9 @@ async def get_guest_list(
         .all()
     )
     image_by_asset_id = {str(row.asset_id): row for row in image_rows if row.asset_id is not None}
+    tenant = _build_tenant_runtime(db, guest.tenant_id)
+    assets_by_id = load_assets_for_images(db, image_rows)
+    preloaded_thumbnail_urls = bulk_preload_thumbnail_urls(image_rows, tenant, assets_by_id)
     rating_counts_by_asset = {}
     comment_counts_by_asset = {}
     if asset_ids and share_ids:
@@ -366,8 +370,8 @@ async def get_guest_list(
                 "date_taken": image_by_asset_id.get(str(item.asset_id)).capture_timestamp.isoformat()
                 if image_by_asset_id.get(str(item.asset_id)) and image_by_asset_id.get(str(item.asset_id)).capture_timestamp
                 else None,
-                "thumbnail_url": f"/api/v1/images/{image_by_asset_id.get(str(item.asset_id)).id}/thumbnail"
-                if image_by_asset_id.get(str(item.asset_id))
+                "thumbnail_url": preloaded_thumbnail_urls.get(image_by_asset_id.get(str(item.asset_id)).id)
+                if image_by_asset_id.get(str(item.asset_id)) and image_by_asset_id.get(str(item.asset_id)).id is not None
                 else None,
                 "rating_counts": rating_counts_by_asset.get(str(item.asset_id), {"0": 0, "1": 0, "2": 0, "3": 0}),
                 "comment_count": comment_counts_by_asset.get(str(item.asset_id), 0),

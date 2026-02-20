@@ -12,6 +12,7 @@ def get_engine_kwargs() -> dict:
         "pool_pre_ping": settings.db_pool_pre_ping,
         "pool_recycle": settings.db_pool_recycle,
         "pool_timeout": settings.db_pool_timeout,
+        "pool_use_lifo": settings.db_pool_use_lifo,
     }
 
     # QueuePool sizing only applies to non-sqlite engines.
@@ -20,7 +21,13 @@ def get_engine_kwargs() -> dict:
         kwargs["max_overflow"] = settings.db_max_overflow
 
     if settings.database_url.startswith("postgresql"):
-        kwargs["connect_args"] = {"connect_timeout": settings.db_connect_timeout}
+        kwargs["connect_args"] = {
+            "connect_timeout": settings.db_connect_timeout,
+            "keepalives": settings.db_keepalives,
+            "keepalives_idle": settings.db_keepalives_idle,
+            "keepalives_interval": settings.db_keepalives_interval,
+            "keepalives_count": settings.db_keepalives_count,
+        }
 
     return kwargs
 

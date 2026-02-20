@@ -23,6 +23,31 @@ def _resend_available() -> bool:
     return True
 
 
+def _masked_api_key() -> str:
+    raw = str(settings.email_resend_api_key or "").strip()
+    if not raw:
+        return "(missing)"
+    if len(raw) <= 10:
+        return f"{raw[:2]}***"
+    return f"{raw[:6]}...{raw[-4:]}"
+
+
+def _extract_resend_message_id(response: object) -> str | None:
+    if isinstance(response, dict):
+        value = response.get("id")
+        return str(value).strip() if value else None
+    value = getattr(response, "id", None)
+    if value:
+        return str(value).strip()
+    if hasattr(response, "get"):
+        try:
+            maybe = response.get("id")
+            return str(maybe).strip() if maybe else None
+        except Exception:
+            return None
+    return None
+
+
 def send_guest_invite_email(
     to_email: str,
     invite_link: str,
@@ -111,10 +136,18 @@ If you didn't expect this invitation, you can safely ignore this email.
             "text": text_body,
         }
 
-        logger.info(f"Sending invite email to {to_email} via Resend")
+        logger.info(
+            "Sending invite email to %s via Resend (from=%s, key=%s)",
+            to_email,
+            settings.email_from_address,
+            _masked_api_key(),
+        )
         response = resend.Emails.send(params)
-
-        logger.info(f"✅ Email sent successfully to {to_email}, ID: {response.get('id')}")
+        message_id = _extract_resend_message_id(response)
+        if not message_id:
+            logger.error("Resend returned no message id for invite email to %s. Raw response=%r", to_email, response)
+            return False
+        logger.info("✅ Email accepted by Resend for %s, ID: %s", to_email, message_id)
         return True
 
     except Exception as e:
@@ -217,10 +250,18 @@ If you didn't request this link, you can safely ignore this email.
             "text": text_body,
         }
 
-        logger.info(f"Sending magic link email to {to_email} via Resend")
+        logger.info(
+            "Sending magic link email to %s via Resend (from=%s, key=%s)",
+            to_email,
+            settings.email_from_address,
+            _masked_api_key(),
+        )
         response = resend.Emails.send(params)
-
-        logger.info(f"✅ Magic link email sent successfully to {to_email}, ID: {response.get('id')}")
+        message_id = _extract_resend_message_id(response)
+        if not message_id:
+            logger.error("Resend returned no message id for magic link email to %s. Raw response=%r", to_email, response)
+            return False
+        logger.info("✅ Magic link email accepted by Resend for %s, ID: %s", to_email, message_id)
         return True
 
     except Exception as e:
@@ -319,10 +360,18 @@ If you didn't request this link, you can safely ignore this email.
             "text": text_body,
         }
 
-        logger.info(f"Sending access reminder email to {to_email} via Resend")
+        logger.info(
+            "Sending access reminder email to %s via Resend (from=%s, key=%s)",
+            to_email,
+            settings.email_from_address,
+            _masked_api_key(),
+        )
         response = resend.Emails.send(params)
-
-        logger.info(f"✅ Access reminder email sent successfully to {to_email}, ID: {response.get('id')}")
+        message_id = _extract_resend_message_id(response)
+        if not message_id:
+            logger.error("Resend returned no message id for access reminder email to %s. Raw response=%r", to_email, response)
+            return False
+        logger.info("✅ Access reminder email accepted by Resend for %s, ID: %s", to_email, message_id)
         return True
 
     except Exception as e:

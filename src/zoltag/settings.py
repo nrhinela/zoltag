@@ -35,6 +35,11 @@ class Settings(BaseSettings):
     db_pool_recycle: int = 1800
     db_pool_pre_ping: bool = True
     db_connect_timeout: int = 10
+    db_pool_use_lifo: bool = True
+    db_keepalives: int = 1
+    db_keepalives_idle: int = 30
+    db_keepalives_interval: int = 10
+    db_keepalives_count: int = 5
     
     # Google Cloud
     gcp_project_id: str = "photocat-483622"

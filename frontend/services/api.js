@@ -282,6 +282,10 @@ export async function getTenantsPublic({ force = false } = {}) {
     }, { staleTimeMs: TENANTS_CACHE_MS, force });
 }
 
+export async function getAdminDatabaseMonitor() {
+    return fetchWithAuth(`/admin/database/monitor`);
+}
+
 export async function setRating(tenantId, imageId, rating) {
     return fetchWithAuth(`/images/${imageId}/rating`, {
         method: 'PATCH',
