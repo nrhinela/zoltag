@@ -331,6 +331,16 @@ export function renderGlobalOverlays(host, { canCurate }) {
         <div class="curate-rating-modal-content" role="alertdialog" aria-modal="true">
           <div class="curate-rating-modal-title">Tenant Access Required</div>
           <div class="curate-rating-modal-subtitle">${host.tenantAccessBlockedMessage || 'Your user has not been assigned permissions'}</div>
+          <div style="display: flex; gap: 0.75rem; margin-top: 1.25rem; justify-content: center;">
+            <button
+              @click=${() => { window.location.href = '/'; }}
+              style="padding: 0.5rem 1.25rem; background: white; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px; font-weight: 500; cursor: pointer; color: #374151;"
+            >Cancel</button>
+            <button
+              @click=${() => host.dispatchEvent(new CustomEvent('request-logout', { bubbles: true, composed: true }))}
+              style="padding: 0.5rem 1.25rem; background: #f3f4f6; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px; font-weight: 500; cursor: pointer; color: #374151;"
+            >Sign Out</button>
+          </div>
         </div>
       </div>
     ` : html``}

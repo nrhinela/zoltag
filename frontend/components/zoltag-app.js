@@ -17,6 +17,7 @@ import './activity-audit.js';
 import './shared/widgets/filter-chips.js';
 import './shared/widgets/keyword-dropdown.js';
 
+import { supabase } from '../services/supabase.js';
 import { initializeAppCoreSetup } from './state/app-core-setup.js';
 import { initializeAppDefaultState } from './state/app-default-state.js';
 import { initializeAppConstructorWiring } from './state/app-constructor-wiring.js';
@@ -192,6 +193,11 @@ class ZoltagApp extends LitElement {
       bindAppDelegateMethods(this);
       initializeAppDefaultState(this);
       initializeAppConstructorWiring(this);
+
+      this.addEventListener('request-logout', async () => {
+        await supabase.auth.signOut();
+        window.location.href = '/login';
+      });
   }
 
   connectedCallback() {

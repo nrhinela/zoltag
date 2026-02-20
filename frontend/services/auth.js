@@ -392,6 +392,56 @@ export async function ensureRegistration(
 }
 
 /**
+ * Sign in with magic link (passwordless email OTP)
+ *
+ * Supabase sends a one-time link to the email address. The user clicks it
+ * and is redirected to /auth/callback where the session is established.
+ * No password or account creation step required.
+ *
+ * @param {string} email - User email address
+ * @returns {Promise<void>}
+ * @throws {Error} If the request fails
+ */
+export async function signInWithMagicLink(email) {
+  try {
+    const { error } = await supabase.auth.signInWithOtp({
+      email,
+      options: {
+        shouldCreateUser: false,
+        emailRedirectTo: `${window.location.origin}/auth/callback`,
+      },
+    });
+
+    if (error) {
+      throw new Error(error.message);
+    }
+  } catch (error) {
+    throw new Error(`Magic link failed: ${error.message}`);
+  }
+}
+
+/**
+ * Verify a 6-digit OTP code sent via magic link email
+ *
+ * @param {string} email - The email address the code was sent to
+ * @param {string} token - The 6-digit OTP code
+ * @returns {Promise<void>}
+ * @throws {Error} If verification fails
+ */
+export async function verifyOtpCode(email, token) {
+  try {
+    const { error } = await supabase.auth.verifyOtp({
+      email,
+      token,
+      type: 'email',
+    });
+    if (error) throw new Error(error.message);
+  } catch (error) {
+    throw new Error(`Code verification failed: ${error.message}`);
+  }
+}
+
+/**
  * Sign in with Google OAuth
  *
  * Flow:

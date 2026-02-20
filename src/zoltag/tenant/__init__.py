@@ -1,7 +1,22 @@
 """Tenant management and isolation."""
 
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from typing import Any, Optional
+from datetime import timedelta
+from typing import Any, Dict, List, Optional
+
+# In-process cache for signed thumbnail URLs: path -> (url, expiry_timestamp)
+_signed_url_cache: dict[str, tuple[str, float]] = {}
+_signed_url_cache_lock = threading.Lock()
+_SIGNED_URL_TTL = 3600       # 1 hour signature validity
+_SIGNED_URL_CACHE_TTL = 3300 # Evict from cache 5 min before expiry
+
+# Shared GCS client and credentials — initialized once, reused across requests
+_gcs_client = None
+_gcs_credentials = None
+_gcs_client_lock = threading.Lock()
 
 
 @dataclass
@@ -87,13 +102,122 @@ class Tenant:
         return f"{self.secret_scope}/{path_type}/{filename}"
 
     def get_thumbnail_url(self, settings, thumbnail_path: Optional[str]) -> Optional[str]:
-        """Build a public thumbnail URL using CDN when configured."""
+        """Build a thumbnail URL — signed for private buckets, or plain public URL."""
         if not thumbnail_path:
             return None
         base = (settings.thumbnail_cdn_base_url or "").strip()
         if base:
             return f"{base.rstrip('/')}/{thumbnail_path}"
+        if getattr(settings, "thumbnail_signed_urls", False):
+            return self._get_signed_thumbnail_url(settings, thumbnail_path)
         return f"https://storage.googleapis.com/{self.get_thumbnail_bucket(settings)}/{thumbnail_path}"
+
+    def _get_signed_thumbnail_url(self, settings, thumbnail_path: str) -> Optional[str]:
+        """Return a cached V4 signed URL for a private GCS thumbnail.
+
+        Uses generate_signed_url with service_account_email + access_token so that
+        the IAM signBlob API is used instead of a private key. The GCS client and
+        credentials are shared across requests; the token is only refreshed when
+        expired to avoid per-request IAM latency.
+        """
+        now = time.monotonic()
+        with _signed_url_cache_lock:
+            cached = _signed_url_cache.get(thumbnail_path)
+            if cached and cached[1] > now:
+                return cached[0]
+
+        try:
+            import google.auth
+            from google.auth.transport import requests as google_requests
+            from google.cloud import storage as gcs
+
+            global _gcs_client, _gcs_credentials
+
+            with _gcs_client_lock:
+                if _gcs_credentials is None:
+                    _gcs_credentials, _ = google.auth.default(
+                        scopes=["https://www.googleapis.com/auth/cloud-platform"]
+                    )
+                # Refresh only when token is missing or expired
+                if not _gcs_credentials.token or not _gcs_credentials.valid:
+                    _gcs_credentials.refresh(google_requests.Request())
+                if _gcs_client is None:
+                    _gcs_client = gcs.Client(
+                        project=settings.gcp_project_id,
+                        credentials=_gcs_credentials,
+                    )
+                credentials = _gcs_credentials
+                client = _gcs_client
+
+            service_account_email = getattr(settings, "signing_service_account", None) or \
+                "978982171858-compute@developer.gserviceaccount.com"
+
+            bucket_name = self.get_thumbnail_bucket(settings)
+            blob = client.bucket(bucket_name).blob(thumbnail_path)
+            url = blob.generate_signed_url(
+                version="v4",
+                expiration=timedelta(seconds=_SIGNED_URL_TTL),
+                method="GET",
+                service_account_email=service_account_email,
+                access_token=credentials.token,
+            )
+            with _signed_url_cache_lock:
+                _signed_url_cache[thumbnail_path] = (url, now + _SIGNED_URL_CACHE_TTL)
+            return url
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning("Thumbnail signing failed: %s", e)
+            return f"https://storage.googleapis.com/{self.get_thumbnail_bucket(settings)}/{thumbnail_path}"
+
+    def bulk_sign_thumbnail_urls(self, settings, thumbnail_paths: List[Optional[str]], max_workers: int = 20) -> Dict[str, Optional[str]]:
+        """Sign multiple thumbnail URLs in parallel. Returns a dict of path -> url.
+
+        Cache hits are resolved immediately without spawning threads. Only
+        cache misses are signed concurrently, up to max_workers at a time.
+        """
+        if not getattr(settings, "thumbnail_signed_urls", False):
+            bucket = self.get_thumbnail_bucket(settings)
+            base = (settings.thumbnail_cdn_base_url or "").strip()
+            result = {}
+            for path in thumbnail_paths:
+                if not path:
+                    result[path] = None
+                elif base:
+                    result[path] = f"{base.rstrip('/')}/{path}"
+                else:
+                    result[path] = f"https://storage.googleapis.com/{bucket}/{path}"
+            return result
+
+        now = time.monotonic()
+        result: Dict[str, Optional[str]] = {}
+        uncached: List[str] = []
+
+        # Resolve cache hits without any I/O
+        for path in thumbnail_paths:
+            if not path:
+                result[path] = None
+                continue
+            with _signed_url_cache_lock:
+                cached = _signed_url_cache.get(path)
+            if cached and cached[1] > now:
+                result[path] = cached[0]
+            else:
+                uncached.append(path)
+
+        if not uncached:
+            return result
+
+        # Sign cache misses in parallel
+        with ThreadPoolExecutor(max_workers=min(max_workers, len(uncached))) as executor:
+            futures = {executor.submit(self._get_signed_thumbnail_url, settings, path): path for path in uncached}
+            for future in as_completed(futures):
+                path = futures[future]
+                try:
+                    result[path] = future.result()
+                except Exception:
+                    result[path] = None
+
+        return result
 
     @staticmethod
     def _sanitize_storage_filename(filename: str, fallback: str = "file") -> str:

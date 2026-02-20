@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     thumbnail_bucket_name: Optional[str] = None
     person_reference_bucket_name: Optional[str] = None
     thumbnail_cdn_base_url: str = ""
+    thumbnail_signed_urls: bool = False  # Enable GCS signed URLs for private bucket access
     
     # Secret Manager
     secret_manager_prefix: str = "zoltag"

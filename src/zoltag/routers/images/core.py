@@ -19,7 +19,7 @@ from zoltag.activity import EVENT_SEARCH_IMAGES, extract_client_ip, record_activ
 from zoltag.auth.dependencies import get_current_user, require_tenant_permission_from_header
 from zoltag.auth.models import UserProfile
 from zoltag.list_visibility import is_tenant_admin_user
-from zoltag.asset_helpers import load_assets_for_images
+from zoltag.asset_helpers import load_assets_for_images, bulk_preload_thumbnail_urls
 from zoltag.tenant import Tenant
 from zoltag.metadata import (
     Asset,
@@ -2349,6 +2349,7 @@ async def list_images(
                 reviewed_at_by_image[image_id] = permatag.created_at
 
     assets_by_id = load_assets_for_images(db, images)
+    preloaded_urls = bulk_preload_thumbnail_urls(images, tenant, assets_by_id)
     images_list = []
     for idx, img in enumerate(images):
         storage_info = _resolve_storage_or_409(
@@ -2356,6 +2357,7 @@ async def list_images(
             tenant=tenant,
             db=db,
             assets_by_id=assets_by_id,
+            preloaded_urls=preloaded_urls,
         )
         machine_tags = sorted(tags_by_image.get(img.id, []), key=lambda x: x['confidence'], reverse=True)
         image_permatags = permatags_by_image.get(img.id, [])
@@ -2593,6 +2595,7 @@ async def list_duplicate_images(
             "signum": permatag.signum,
         })
 
+    preloaded_urls = bulk_preload_thumbnail_urls(ordered_images, tenant, assets_by_id)
     images_list = []
     for img in ordered_images:
         storage_info = _resolve_storage_or_409(
@@ -2600,6 +2603,7 @@ async def list_duplicate_images(
             tenant=tenant,
             db=db,
             assets_by_id=assets_by_id,
+            preloaded_urls=preloaded_urls,
         )
         dup_meta = duplicate_meta_by_image_id.get(img.id, {})
         image_permatags = permatags_by_image.get(img.id, [])
@@ -2781,6 +2785,7 @@ def get_similar_images(
             "signum": tag.signum,
         })
 
+    preloaded_urls = bulk_preload_thumbnail_urls(ordered_images, tenant, assets_by_id)
     images_list = []
     for image_row in ordered_images:
         try:
@@ -2789,6 +2794,7 @@ def get_similar_images(
                 tenant=tenant,
                 db=db,
                 assets_by_id=assets_by_id,
+                preloaded_urls=preloaded_urls,
             )
         except HTTPException:
             continue
