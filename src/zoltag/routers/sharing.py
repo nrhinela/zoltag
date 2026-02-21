@@ -6,6 +6,7 @@ import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -18,6 +19,7 @@ from zoltag.dependencies import get_db, get_tenant
 from zoltag.list_visibility import can_edit_list, is_tenant_admin_user
 from zoltag.models.config import PhotoList, PhotoListItem
 from zoltag.models.sharing import GuestIdentity, ListShare, MemberComment, MemberRating
+from zoltag.metadata import ImageMetadata
 from zoltag.settings import settings
 from zoltag.tenant import Tenant
 from zoltag.tenant_scope import tenant_column_filter
@@ -198,10 +200,8 @@ async def create_shares(
     logger.warning(f"🔍 settings.environment: {settings.environment}")
 
     app_url = settings.app_url
-    # Include list_id and tenant_id in redirect URL for guest app
-    redirect_to = f"{app_url}/guest"
 
-    logger.warning(f"🔍 FINAL redirect_to: {redirect_to}")
+    logger.warning(f"🔍 FINAL app_url: {app_url}")
 
     results = []
     invite_links = {}  # Store invite links by email
@@ -226,8 +226,25 @@ async def create_shares(
                 detail=f"Failed to create guest user {email_str}: {exc}",
             )
 
-        # Create our own simple invite link (no tenant_id needed - derived from email)
-        invite_link = f"{app_url}/guest"
+        # Build guest landing URL with context. Supabase redirects here after magic-link verification.
+        guest_redirect_to = f"{app_url}/guest?{urlencode({'tenant_id': str(tenant.id), 'list_id': str(list_id), 'email': email_str})}"
+        invite_link = guest_redirect_to
+
+        # Generate one-time magic link now so invite is a single email flow.
+        try:
+            from zoltag.supabase_admin import generate_magic_link
+            link_data = await generate_magic_link(email_str, guest_redirect_to)
+            action_link = (link_data or {}).get("action_link")
+            if action_link:
+                invite_link = str(action_link)
+                logger.warning(f"✅ Generated one-time invite magic link for {email_str}")
+            else:
+                logger.warning(f"⚠️ Missing action_link for {email_str}; falling back to guest landing URL")
+        except Exception as magic_exc:
+            logger.error(f"❌ Failed to generate invite magic link for {email_str}: {magic_exc}")
+            # Keep fallback behavior so shares can still be created.
+            invite_link = guest_redirect_to
+
         invite_links[email_str] = invite_link
 
         _upsert_guest_identity(db, email_str, guest_uid)
@@ -246,6 +263,7 @@ async def create_shares(
                 invite_link=invite_link,
                 list_name=list_name,
                 inviter_name=inviter_name,
+                tenant_name=tenant.name,
             )
             if email_sent:
                 logger.warning(f"✅ Email sent successfully to {email_str}")
@@ -585,3 +603,183 @@ async def hard_delete_shares_bulk(
         .delete(synchronize_session=False)
     )
     db.commit()
+
+
+@router.get("/shares/feedback-log")
+async def guest_feedback_log(
+    tenant: Tenant = Depends(get_tenant),
+    _current_user: UserProfile = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    limit: int = 200,
+):
+    """Tenant-wide guest feedback events (comments + ratings), newest first."""
+    safe_limit = max(1, min(int(limit or 200), 1000))
+    tenant_id = uuid.UUID(str(tenant.id))
+
+    comment_rows = (
+        db.query(
+            MemberComment.id.label("event_id"),
+            MemberComment.asset_id.label("asset_id"),
+            MemberComment.created_at.label("event_at"),
+            MemberComment.user_uid.label("user_uid"),
+            MemberComment.comment_text.label("comment_text"),
+            ImageMetadata.id.label("image_id"),
+            ImageMetadata.filename.label("filename"),
+            UserProfile.display_name.label("display_name"),
+            UserProfile.email.label("profile_email"),
+            ListShare.guest_email.label("share_guest_email"),
+        )
+        .outerjoin(
+            ImageMetadata,
+            and_(
+                ImageMetadata.asset_id == MemberComment.asset_id,
+                ImageMetadata.tenant_id == MemberComment.tenant_id,
+            ),
+        )
+        .outerjoin(UserProfile, UserProfile.supabase_uid == MemberComment.user_uid)
+        .outerjoin(ListShare, ListShare.id == MemberComment.share_id)
+        .filter(
+            tenant_column_filter(MemberComment, tenant),
+            MemberComment.source == "guest",
+        )
+        .order_by(MemberComment.created_at.desc())
+        .limit(safe_limit)
+        .all()
+    )
+
+    rating_rows = (
+        db.query(
+            MemberRating.id.label("event_id"),
+            MemberRating.asset_id.label("asset_id"),
+            MemberRating.updated_at.label("event_at"),
+            MemberRating.user_uid.label("user_uid"),
+            MemberRating.rating.label("rating"),
+            ImageMetadata.id.label("image_id"),
+            ImageMetadata.filename.label("filename"),
+            UserProfile.display_name.label("display_name"),
+            UserProfile.email.label("profile_email"),
+            ListShare.guest_email.label("share_guest_email"),
+        )
+        .outerjoin(
+            ImageMetadata,
+            and_(
+                ImageMetadata.asset_id == MemberRating.asset_id,
+                ImageMetadata.tenant_id == MemberRating.tenant_id,
+            ),
+        )
+        .outerjoin(UserProfile, UserProfile.supabase_uid == MemberRating.user_uid)
+        .outerjoin(ListShare, ListShare.id == MemberRating.share_id)
+        .filter(
+            tenant_column_filter(MemberRating, tenant),
+            MemberRating.source == "guest",
+        )
+        .order_by(MemberRating.updated_at.desc())
+        .limit(safe_limit)
+        .all()
+    )
+
+    events = []
+    for row in comment_rows:
+        author_email = str(row.share_guest_email or row.profile_email or "").strip() or None
+        author_name = str(row.display_name or "").strip() or (author_email.split("@")[0] if author_email else "Guest")
+        events.append({
+            "event_id": str(row.event_id),
+            "event_type": "commented",
+            "event_at": row.event_at.isoformat() if row.event_at else None,
+            "asset_id": str(row.asset_id),
+            "image_id": int(row.image_id) if row.image_id is not None else None,
+            "filename": row.filename,
+            "author_name": author_name,
+            "author_email": author_email,
+            "comment_text": row.comment_text,
+        })
+
+    for row in rating_rows:
+        author_email = str(row.share_guest_email or row.profile_email or "").strip() or None
+        author_name = str(row.display_name or "").strip() or (author_email.split("@")[0] if author_email else "Guest")
+        events.append({
+            "event_id": str(row.event_id),
+            "event_type": "rated",
+            "event_at": row.event_at.isoformat() if row.event_at else None,
+            "asset_id": str(row.asset_id),
+            "image_id": int(row.image_id) if row.image_id is not None else None,
+            "filename": row.filename,
+            "author_name": author_name,
+            "author_email": author_email,
+            "rating": int(row.rating) if row.rating is not None else None,
+        })
+
+    events.sort(key=lambda item: item.get("event_at") or "", reverse=True)
+    return {
+        "events": events[:safe_limit],
+        "count": len(events[:safe_limit]),
+        "tenant_id": str(tenant_id),
+    }
+
+
+@router.get("/shares/alerts")
+async def guest_rating_alerts(
+    tenant: Tenant = Depends(get_tenant),
+    _current_user: UserProfile = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    limit: int = 200,
+):
+    """Tenant-wide alerts for member 0-ratings that differ from official image rating."""
+    safe_limit = max(1, min(int(limit or 200), 1000))
+
+    rows = (
+        db.query(
+            MemberRating.id.label("event_id"),
+            MemberRating.asset_id.label("asset_id"),
+            MemberRating.updated_at.label("event_at"),
+            MemberRating.user_uid.label("user_uid"),
+            MemberRating.rating.label("member_rating"),
+            MemberRating.source.label("source"),
+            ImageMetadata.id.label("image_id"),
+            ImageMetadata.filename.label("filename"),
+            ImageMetadata.rating.label("official_rating"),
+            UserProfile.display_name.label("display_name"),
+            UserProfile.email.label("profile_email"),
+            ListShare.guest_email.label("share_guest_email"),
+        )
+        .outerjoin(
+            ImageMetadata,
+            and_(
+                ImageMetadata.asset_id == MemberRating.asset_id,
+                ImageMetadata.tenant_id == MemberRating.tenant_id,
+            ),
+        )
+        .outerjoin(UserProfile, UserProfile.supabase_uid == MemberRating.user_uid)
+        .outerjoin(ListShare, ListShare.id == MemberRating.share_id)
+        .filter(
+            tenant_column_filter(MemberRating, tenant),
+            MemberRating.rating == 0,
+            (ImageMetadata.rating.is_(None)) | (ImageMetadata.rating != 0),
+        )
+        .order_by(MemberRating.updated_at.desc())
+        .limit(safe_limit)
+        .all()
+    )
+
+    alerts = []
+    for row in rows:
+        author_email = str(row.share_guest_email or row.profile_email or "").strip() or None
+        author_name = str(row.display_name or "").strip() or (author_email.split("@")[0] if author_email else "User")
+        alerts.append({
+            "event_id": str(row.event_id),
+            "event_at": row.event_at.isoformat() if row.event_at else None,
+            "asset_id": str(row.asset_id),
+            "image_id": int(row.image_id) if row.image_id is not None else None,
+            "filename": row.filename,
+            "author_name": author_name,
+            "author_email": author_email,
+            "member_rating": int(row.member_rating) if row.member_rating is not None else None,
+            "official_rating": int(row.official_rating) if row.official_rating is not None else None,
+            "source": row.source,
+            "action": "rated 0",
+        })
+
+    return {
+        "alerts": alerts,
+        "count": len(alerts),
+    }

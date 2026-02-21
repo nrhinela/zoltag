@@ -14,6 +14,10 @@ export function initializeAppDefaultState(host) {
   host.mlTrainingStats = null;
   host.tagStatsBySource = {};
   host.homeLists = [];
+  host.homeFeedbackLog = [];
+  host.homeAlerts = [];
+  host.homeFeedbackOffset = 0;
+  host.homeFeedbackLimit = 50;
   host.curateLimit = 100;
   host.curateOrderBy = 'photo_creation';
   host.curateOrderDirection = 'desc';

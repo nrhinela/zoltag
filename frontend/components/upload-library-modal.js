@@ -110,15 +110,11 @@ class UploadLibraryModal extends LitElement {
             <span class="close" @click=${this._closeModal}>&times;</span>
           </div>
 
-          <p class="text-sm text-gray-600">
-            Phase 1 upload flow: one request per file with parallel workers.
-          </p>
-
           ${this.error ? html`<div class="error">${this.error}</div>` : html``}
 
           <div class="flex items-end gap-3 flex-wrap">
             <div>
-              <label class="block text-xs font-semibold text-gray-600 mb-1">Dedup policy</label>
+              <label class="block text-xs font-semibold text-gray-600 mb-1">Dedupe policy</label>
               <select
                 class="border rounded px-2 py-2 text-sm"
                 .value=${this.dedupPolicy}

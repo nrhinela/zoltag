@@ -73,7 +73,7 @@ class TenantProviderIntegration(Base):
     tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
     provider_type = Column(String(32), nullable=False)  # dropbox, gdrive, future providers
     label = Column(String(128), nullable=False)  # Human-facing name (e.g., "Main Dropbox")
-    is_active = Column(Boolean, nullable=False, default=True)
+    is_active = Column(Boolean, nullable=False, default=False)
     is_default_sync_source = Column(Boolean, nullable=False, default=False)
     secret_scope = Column(String(255), nullable=False)
     config_json = Column(JSONB, nullable=False, default=dict)

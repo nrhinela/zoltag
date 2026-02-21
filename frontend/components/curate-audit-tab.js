@@ -1,6 +1,7 @@
 import { LitElement, html } from 'lit';
 import { enqueueCommand } from '../services/command-queue.js';
 import { getDropboxFolders } from '../services/api.js';
+import { migrateLocalStorageKey } from '../services/app-storage.js';
 import { createSelectionHandlers } from './shared/selection-handlers.js';
 import { renderResultsPagination } from './shared/pagination-controls.js';
 import { renderSelectableImageGrid } from './shared/selectable-image-grid.js';
@@ -19,7 +20,8 @@ import {
 } from './shared/hotspot-history.js';
 import './shared/widgets/keyword-dropdown.js';
 
-const AUDIT_HELP_VISIBILITY_STORAGE_KEY = 'curate-audit:help-visible';
+const AUDIT_HELP_VISIBILITY_STORAGE_KEY = 'zoltan:app:curate-audit:help-visible';
+const LEGACY_AUDIT_HELP_VISIBILITY_STORAGE_KEYS = ['curate-audit:help-visible'];
 
 /**
  * Curate Audit Tab Component
@@ -171,6 +173,10 @@ export class CurateAuditTab extends LitElement {
     this.auditResultsView = 'results';
     this._auditHotspotHistoryBatches = [];
     this._auditHotspotHistoryVisibleBatches = 1;
+    migrateLocalStorageKey(
+      AUDIT_HELP_VISIBILITY_STORAGE_KEY,
+      LEGACY_AUDIT_HELP_VISIBILITY_STORAGE_KEYS,
+    );
     this._showAiHelp = this._loadAiHelpVisibility();
 
     // Configure selection handlers

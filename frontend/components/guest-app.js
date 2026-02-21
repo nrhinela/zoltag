@@ -51,47 +51,14 @@ export class GuestApp extends LitElement {
       height: 100%;
     }
 
-    .loading-screen {
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      height: 100vh;
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    }
-
-    .loading-card {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 12px;
-      padding: 32px 48px;
-      background: rgba(255, 255, 255, 0.12);
-      border: 1px solid rgba(255, 255, 255, 0.2);
-      border-radius: 16px;
-      backdrop-filter: blur(6px);
-      box-shadow: 0 12px 30px rgba(0, 0, 0, 0.18);
-    }
-
-    .loading-title {
-      font-size: 24px;
-      font-weight: 700;
-      color: white;
-    }
-
-    .spinner {
-      text-align: center;
-      color: white;
-    }
-
     .spinner-animation {
-      width: 50px;
-      height: 50px;
-      margin: 0 auto 1rem;
-      border: 4px solid rgba(255, 255, 255, 0.3);
-      border-top: 4px solid white;
-      border-radius: 50%;
+      width: 24px;
+      height: 24px;
+      border: 2px solid #d1d5db;
+      border-top-color: #2563eb;
+      border-radius: 9999px;
       animation: spin 1s linear infinite;
+      display: inline-block;
     }
 
     @keyframes spin {
@@ -101,66 +68,13 @@ export class GuestApp extends LitElement {
 
     .loading-text {
       font-size: 14px;
-      opacity: 0.9;
-    }
-
-    .error-screen {
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      height: 100vh;
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      color: white;
-    }
-
-    .error-card {
-      text-align: center;
-      max-width: 500px;
-      padding: 2rem;
-      background: rgba(255, 255, 255, 0.12);
-      border: 1px solid rgba(255, 255, 255, 0.2);
-      border-radius: 16px;
-      backdrop-filter: blur(6px);
-    }
-
-    .error-card h1 {
-      margin: 0 0 1rem 0;
-      font-size: 24px;
-      font-weight: 700;
-    }
-
-    .error-card p {
-      margin: 0 0 1.5rem 0;
-      font-size: 14px;
-      opacity: 0.9;
-      line-height: 1.5;
-    }
-
-    .error-card a,
-    .error-card button {
-      display: inline-block;
-      padding: 0.75rem 1.5rem;
-      background: white;
-      color: #667eea;
-      text-decoration: none;
-      border: none;
-      border-radius: 8px;
-      font-weight: 600;
-      font-size: 14px;
-      cursor: pointer;
-      transition: all 0.2s;
-    }
-
-    .error-card a:hover,
-    .error-card button:hover {
-      background: #f5f5f5;
-      transform: translateY(-1px);
+      color: #6b7280;
+      margin-left: 10px;
     }
 
     .guest-shell {
       min-height: 100vh;
-      background: radial-gradient(circle at top right, rgba(99, 102, 241, 0.1), transparent 45%), #f3f4f6;
+      background: #f3f4f6;
       color: #111827;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     }
@@ -187,6 +101,132 @@ export class GuestApp extends LitElement {
       align-items: center;
       gap: 10px;
       margin-left: auto;
+    }
+    .guest-auth-wrap {
+      max-width: 760px;
+      margin: 0 auto;
+    }
+    .guest-auth-panel {
+      background: #ffffff;
+      border: 1px solid #e5e7eb;
+      border-radius: 16px;
+      padding: 22px;
+      box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+    }
+    .guest-auth-title {
+      margin: 0;
+      font-size: 26px;
+      line-height: 1.2;
+      color: #111827;
+      font-weight: 700;
+    }
+    .guest-auth-subtitle {
+      margin: 10px 0 0;
+      font-size: 14px;
+      color: #6b7280;
+      line-height: 1.5;
+    }
+    .guest-mode-switch {
+      display: inline-flex;
+      border: 1px solid #d1d5db;
+      border-radius: 10px;
+      overflow: hidden;
+      background: #ffffff;
+    }
+    .guest-mode-btn {
+      border: none;
+      border-right: 1px solid #e5e7eb;
+      background: #ffffff;
+      color: #374151;
+      padding: 8px 12px;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .guest-mode-btn:last-child {
+      border-right: none;
+    }
+    .guest-mode-btn.active {
+      background: #eff6ff;
+      color: #1d4ed8;
+    }
+    .guest-auth-form {
+      margin-top: 16px;
+      display: grid;
+      gap: 10px;
+    }
+    .guest-auth-input {
+      width: 100%;
+      padding: 12px;
+      border: 1px solid #d1d5db;
+      border-radius: 10px;
+      font-size: 15px;
+      background: #ffffff;
+      color: #111827;
+      box-sizing: border-box;
+    }
+    .guest-auth-input:focus {
+      outline: none;
+      border-color: #2563eb;
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+    }
+    .guest-auth-input.code {
+      letter-spacing: 0.12em;
+    }
+    .guest-auth-submit {
+      width: 100%;
+      padding: 11px 14px;
+      background: #2563eb;
+      color: #ffffff;
+      border: 1px solid #2563eb;
+      border-radius: 10px;
+      font-weight: 700;
+      font-size: 15px;
+      cursor: pointer;
+    }
+    .guest-auth-submit.secondary {
+      background: #ffffff;
+      color: #374151;
+      border-color: #d1d5db;
+    }
+    .guest-auth-submit:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+    .guest-auth-message {
+      margin-top: 10px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      font-size: 14px;
+      line-height: 1.4;
+    }
+    .guest-auth-message.ok {
+      background: #ecfdf3;
+      border: 1px solid #86efac;
+      color: #166534;
+    }
+    .guest-auth-message.err {
+      background: #fef2f2;
+      border: 1px solid #fecaca;
+      color: #991b1b;
+    }
+    .guest-auth-divider {
+      margin: 12px 0 2px;
+      font-size: 12px;
+      color: #6b7280;
+      text-align: center;
+    }
+    .guest-auth-footer {
+      margin-top: 18px;
+      font-size: 12px;
+      color: #6b7280;
+      line-height: 1.5;
+    }
+    .guest-auth-actions {
+      margin-top: 16px;
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
     }
     .guest-brand-title {
       font-size: 28px;
@@ -227,7 +267,7 @@ export class GuestApp extends LitElement {
     .guest-list-grid {
       margin-top: 18px;
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      grid-template-columns: repeat(4, minmax(0, 1fr));
       gap: 14px;
     }
     .guest-list-card {
@@ -362,6 +402,24 @@ export class GuestApp extends LitElement {
       background: #f9fafb;
       border-color: #9ca3af;
     }
+
+    @media (max-width: 1200px) {
+      .guest-list-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 920px) {
+      .guest-list-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 640px) {
+      .guest-list-grid {
+        grid-template-columns: 1fr;
+      }
+    }
   `;
 
   constructor() {
@@ -402,6 +460,8 @@ export class GuestApp extends LitElement {
     if (emailParam) {
       this.authEmail = emailParam;
     }
+
+    this._setAuthErrorFromUrl();
 
     // Then try hash fragment (new method from invite links: #list_id,tenant_id)
     if (!listIdParam && window.location.hash) {
@@ -444,7 +504,9 @@ export class GuestApp extends LitElement {
         await this._validateGuestAccess(session);
       } else if (event === 'SIGNED_OUT') {
         this.isGuest = false;
-        this.error = 'Session expired. Please request a new access link.';
+        this.error = null;
+        this.authSuccess = false;
+        this.authMessage = this._expiredOrUsedLinkMessage();
       } else {
         this.isGuest = false;
         this.error = null;
@@ -580,7 +642,9 @@ export class GuestApp extends LitElement {
     this.availableLists = null;
     window.history.replaceState({}, '', `${window.location.pathname}${window.location.search}`);
     try {
-      if (this.authenticated && this.isGuest) {
+      await this._refreshGuestSessionState();
+      const canQueryLists = !this.listId && (this.isGuest || (Array.isArray(this.guestTenantIds) && this.guestTenantIds.length > 0));
+      if (canQueryLists) {
         await this._fetchAccessibleLists();
       }
     } finally {
@@ -590,24 +654,73 @@ export class GuestApp extends LitElement {
 
   _renderAccountModeSwitch() {
     return html`
-      <div style="display:flex; justify-content:center; margin-bottom:14px;">
-        <div style="display:inline-flex; border:1px solid rgba(255,255,255,0.35); border-radius:10px; overflow:hidden;">
+      <div class="guest-mode-switch" role="group" aria-label="Account mode">
           <button
             type="button"
-            style="background:#ffffff; color:#4f46e5; border:none; padding:8px 12px; font-size:13px; font-weight:700;"
+            class="guest-mode-btn active"
           >
             Guest Mode
           </button>
           <button
             type="button"
             @click=${this._goToApp}
-            style="background:rgba(255,255,255,0.12); color:#ffffff; border:none; padding:8px 12px; font-size:13px; font-weight:700;"
+            class="guest-mode-btn"
           >
             Go to App
           </button>
-        </div>
       </div>
     `;
+  }
+
+  _expiredOrUsedLinkMessage() {
+    return 'This sign-in link has expired or has already been used. Please request a new link below.';
+  }
+
+  _looksLikeExpiredOrInvalidAuthError(value) {
+    const msg = String(value || '').toLowerCase();
+    if (!msg) return false;
+    return msg.includes('expired')
+      || msg.includes('invalid')
+      || msg.includes('otp_expired')
+      || msg.includes('already')
+      || msg.includes('used')
+      || msg.includes('access_denied')
+      || msg.includes('token')
+      || msg.includes('revoked');
+  }
+
+  _setAuthErrorFromUrl() {
+    const searchParams = new URLSearchParams(window.location.search || '');
+    const hashRaw = String(window.location.hash || '').replace(/^#/, '');
+    const hashParams = new URLSearchParams(hashRaw.includes('=') ? hashRaw : '');
+    const values = [
+      searchParams.get('error'),
+      searchParams.get('error_description'),
+      searchParams.get('error_code'),
+      hashParams.get('error'),
+      hashParams.get('error_description'),
+      hashParams.get('error_code'),
+    ].filter(Boolean).map((v) => String(v).toLowerCase());
+    if (!values.length) {
+      return;
+    }
+
+    const combined = values.join(' ');
+    const looksExpiredOrUsed = this._looksLikeExpiredOrInvalidAuthError(combined);
+    this.authSuccess = false;
+    this.authMessage = looksExpiredOrUsed
+      ? this._expiredOrUsedLinkMessage()
+      : 'This sign-in link is invalid. Please request a new link below.';
+    this.error = null;
+
+    // Keep useful context params and clear auth error params from URL.
+    ['error', 'error_description', 'error_code', 'code', 'type'].forEach((key) => searchParams.delete(key));
+    const nextQuery = searchParams.toString();
+    window.history.replaceState(
+      {},
+      '',
+      `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ''}`,
+    );
   }
 
   async _handleGuestLogout() {
@@ -637,17 +750,41 @@ export class GuestApp extends LitElement {
     window.removeEventListener('focus', this._handleWindowFocus);
   }
 
+  async _refreshGuestSessionState() {
+    const session = await getSession();
+    this.authenticated = !!session;
+    this.currentUser = session?.user || null;
+
+    if (session) {
+      await this._validateGuestAccess(session);
+    } else {
+      this.isGuest = false;
+      this.guestTenantIds = [];
+      this.availableLists = null;
+    }
+  }
+
   async _handleWindowFocus() {
-    if (this.authenticated && this.isGuest && !this.listId) {
-      await this._fetchAccessibleLists();
+    try {
+      await this._refreshGuestSessionState();
+
+      if (this.authenticated && this.isGuest && !this.listId) {
+        await this._fetchAccessibleLists();
+      }
       this.requestUpdate();
+    } catch (err) {
+      console.warn('Failed to refresh guest session on focus:', err);
     }
   }
 
   async _handleRefreshCollections() {
     this.collectionsRefreshing = true;
     try {
-      await this._fetchAccessibleLists();
+      await this._refreshGuestSessionState();
+      const canQueryLists = !this.listId && (this.isGuest || (Array.isArray(this.guestTenantIds) && this.guestTenantIds.length > 0));
+      if (canQueryLists) {
+        await this._fetchAccessibleLists();
+      }
     } finally {
       this.collectionsRefreshing = false;
     }
@@ -747,7 +884,7 @@ export class GuestApp extends LitElement {
 
   _handleEmailInput(e) {
     this.authEmail = e.target.value;
-    if (this.authMessage) this.authMessage = '';
+    if (this.authMessage && !this.authSuccess) this.authMessage = '';
     if (this.verifyMessage) this.verifyMessage = '';
   }
 
@@ -785,63 +922,34 @@ export class GuestApp extends LitElement {
 
   _renderGuestAuthForm() {
     return html`
-      <form @submit=${this._handleRequestNewLink} style="margin-top: 20px;">
+      <form @submit=${this._handleRequestNewLink} class="guest-auth-form">
         <input
           type="email"
           placeholder="your.email@example.com"
           .value=${this.authEmail}
           @input=${this._handleEmailInput}
-          style="
-            width: 100%;
-            padding: 12px;
-            border: 2px solid rgba(255,255,255,0.3);
-            border-radius: 8px;
-            font-size: 16px;
-            margin-bottom: 12px;
-            background: rgba(255,255,255,0.1);
-            color: white;
-            box-sizing: border-box;
-          "
+          class="guest-auth-input"
           required
           ?disabled=${this.authLoading || this.verifyLoading}
         />
         <button
           type="submit"
           ?disabled=${this.authLoading || this.verifyLoading}
-          style="
-            width: 100%;
-            padding: 12px;
-            background: white;
-            color: #667eea;
-            border: none;
-            border-radius: 8px;
-            font-weight: 600;
-            font-size: 16px;
-            cursor: ${(this.authLoading || this.verifyLoading) ? 'not-allowed' : 'pointer'};
-            opacity: ${(this.authLoading || this.verifyLoading) ? '0.6' : '1'};
-          "
+          class="guest-auth-submit"
         >
           ${this.authLoading ? 'Sending...' : 'Send Magic Link'}
         </button>
       </form>
 
       ${this.authMessage ? html`
-        <p style="
-          margin: 16px 0 0;
-          padding: 12px;
-          background: ${this.authSuccess ? 'rgba(16, 185, 129, 0.22)' : 'rgba(239, 68, 68, 0.2)'};
-          border: 1px solid ${this.authSuccess ? 'rgba(16, 185, 129, 0.35)' : 'rgba(239, 68, 68, 0.3)'};
-          border-radius: 6px;
-          font-size: 14px;
-          color: ${this.authSuccess ? '#d1fae5' : '#fecaca'};
-        ">
+        <p class="guest-auth-message ${this.authSuccess ? 'ok' : 'err'}">
           ${this.authMessage}
         </p>
       ` : ''}
 
       ${this.authSuccess ? html`
-        <div style="margin-top: 16px; text-align: center; opacity: 0.8; font-size: 13px;">or</div>
-        <form @submit=${this._handleVerifyCode} style="margin-top: 12px;">
+        <div class="guest-auth-divider">or</div>
+        <form @submit=${this._handleVerifyCode} class="guest-auth-form">
           <input
             type="text"
             inputmode="numeric"
@@ -849,35 +957,13 @@ export class GuestApp extends LitElement {
             placeholder="Enter code from email"
             .value=${this.authCode}
             @input=${this._handleCodeInput}
-            style="
-              width: 100%;
-              padding: 12px;
-              border: 2px solid rgba(255,255,255,0.3);
-              border-radius: 8px;
-              font-size: 16px;
-              margin-bottom: 12px;
-              background: rgba(255,255,255,0.1);
-              color: white;
-              box-sizing: border-box;
-              letter-spacing: 0.12em;
-            "
+            class="guest-auth-input code"
             ?disabled=${this.authLoading || this.verifyLoading}
           />
           <button
             type="submit"
             ?disabled=${this.authLoading || this.verifyLoading}
-            style="
-              width: 100%;
-              padding: 12px;
-              background: rgba(255,255,255,0.15);
-              color: white;
-              border: 1px solid rgba(255,255,255,0.35);
-              border-radius: 8px;
-              font-weight: 600;
-              font-size: 16px;
-              cursor: ${(this.authLoading || this.verifyLoading) ? 'not-allowed' : 'pointer'};
-              opacity: ${(this.authLoading || this.verifyLoading) ? '0.6' : '1'};
-            "
+            class="guest-auth-submit secondary"
           >
             ${this.verifyLoading ? 'Verifying...' : 'Sign In With Code'}
           </button>
@@ -885,15 +971,7 @@ export class GuestApp extends LitElement {
       ` : ''}
 
       ${this.verifyMessage ? html`
-        <p style="
-          margin: 12px 0 0;
-          padding: 12px;
-          background: ${this.verifyMessage.toLowerCase().includes('verified') ? 'rgba(16, 185, 129, 0.22)' : 'rgba(239, 68, 68, 0.2)'};
-          border: 1px solid ${this.verifyMessage.toLowerCase().includes('verified') ? 'rgba(16, 185, 129, 0.35)' : 'rgba(239, 68, 68, 0.3)'};
-          border-radius: 6px;
-          font-size: 14px;
-          color: ${this.verifyMessage.toLowerCase().includes('verified') ? '#d1fae5' : '#fecaca'};
-        ">
+        <p class="guest-auth-message ${this.verifyMessage.toLowerCase().includes('verified') ? 'ok' : 'err'}">
           ${this.verifyMessage}
         </p>
       ` : ''}
@@ -901,17 +979,30 @@ export class GuestApp extends LitElement {
   }
 
   render() {
+    const unresolvedAuthError = this.authMessage
+      ? ''
+      : (this._looksLikeExpiredOrInvalidAuthError(this.error) ? this._expiredOrUsedLinkMessage() : '');
+
     // Still loading
     if (this.loading) {
       return html`
-        <div class="loading-screen">
-          <div class="loading-card">
-            <div class="loading-title">Zoltag Guest</div>
-            <div class="spinner">
-              <div class="spinner-animation"></div>
-              <div class="loading-text">Verifying access...</div>
+        <div class="guest-shell">
+          <header class="guest-topbar">
+            <div class="guest-topbar-inner">
+              <div>
+                <h1 class="guest-brand-title">Zoltag - Guest Access</h1>
+                <p class="guest-brand-subtitle">Checking your access</p>
+              </div>
             </div>
-          </div>
+          </header>
+          <main class="guest-content">
+            <section class="guest-auth-wrap">
+              <div class="guest-auth-panel">
+                <span class="spinner-animation" aria-hidden="true"></span>
+                <span class="loading-text">Verifying access...</span>
+              </div>
+            </section>
+          </main>
         </div>
       `;
     }
@@ -919,25 +1010,35 @@ export class GuestApp extends LitElement {
     // Not authenticated - show email input form
     if (!this.authenticated) {
       return html`
-        <div class="error-screen">
-          <div class="error-card" style="max-width: 400px;">
-            ${this._renderAccountModeSwitch()}
-            <h1>📸 Sign In to View Shared Photos</h1>
-
-            <p style="margin: 16px 0; opacity: 0.9;">
-              Enter your email to receive a sign-in link, or enter your code below.
-            </p>
-            ${this._renderGuestAuthForm()}
-
-            <p style="
-              margin-top: 24px;
-              font-size: 12px;
-              opacity: 0.7;
-              line-height: 1.5;
-            ">
-              This is a secure guest access link. If you didn't request access to shared photos, you can ignore this page.
-            </p>
-          </div>
+        <div class="guest-shell">
+          <header class="guest-topbar">
+            <div class="guest-topbar-inner">
+              <div>
+                <h1 class="guest-brand-title">Zoltag - Guest Access</h1>
+                <p class="guest-brand-subtitle">Sign in to view shared collections</p>
+              </div>
+              <div class="guest-topbar-actions">
+                ${this._renderAccountModeSwitch()}
+              </div>
+            </div>
+          </header>
+          <main class="guest-content">
+            <section class="guest-auth-wrap">
+              <div class="guest-auth-panel">
+                <h2 class="guest-auth-title">Sign In to View Shared Photos</h2>
+                <p class="guest-auth-subtitle">
+                  Enter your invited email to receive a secure sign-in link. If your previous link expired or was already used, request a new one below.
+                </p>
+                ${unresolvedAuthError ? html`
+                  <p class="guest-auth-message err">${unresolvedAuthError}</p>
+                ` : ''}
+                ${this._renderGuestAuthForm()}
+                <p class="guest-auth-footer">
+                  This is a secure guest access flow. If you did not request access, you can ignore this page.
+                </p>
+              </div>
+            </section>
+          </main>
         </div>
       `;
     }
@@ -945,21 +1046,63 @@ export class GuestApp extends LitElement {
     // Error state
     if (this.error) {
       return html`
-        <div class="error-screen">
-          <div class="error-card">
-            ${this._renderAccountModeSwitch()}
-            <h1>Access Error</h1>
-            <p>${this.error}</p>
-            <button @click=${this._handleRequestNewLink}>Request New Link</button>
-            <div style="margin-top: 10px;">
-              <button @click=${this._handleGuestLogout}>Sign Out</button>
+        <div class="guest-shell">
+          <header class="guest-topbar">
+            <div class="guest-topbar-inner">
+              <div>
+                <h1 class="guest-brand-title">Zoltag - Guest Access</h1>
+                <p class="guest-brand-subtitle">Access issue</p>
+              </div>
+              <div class="guest-topbar-actions">
+                ${this._renderAccountModeSwitch()}
+              </div>
             </div>
-          </div>
+          </header>
+          <main class="guest-content">
+            <section class="guest-auth-wrap">
+              <div class="guest-auth-panel">
+                <h2 class="guest-auth-title">Access Error</h2>
+                <p class="guest-auth-subtitle">${this.error}</p>
+                <div class="guest-auth-actions">
+                  <button class="guest-auth-submit" @click=${this._handleRequestNewLink}>Request New Link</button>
+                  <button class="guest-auth-submit secondary" @click=${this._handleGuestLogout}>Sign Out</button>
+                </div>
+              </div>
+            </section>
+          </main>
         </div>
       `;
     }
 
-    // List selection screen (no list_id provided)
+    if (this.authenticated && !this.isGuest) {
+      return html`
+        <div class="guest-shell">
+          <header class="guest-topbar">
+            <div class="guest-topbar-inner">
+              <div>
+                <h1 class="guest-brand-title">Zoltag - Guest Access</h1>
+                <p class="guest-brand-subtitle">Sign in with your invited guest account</p>
+              </div>
+              <div class="guest-topbar-actions">
+                ${this._renderAccountModeSwitch()}
+              </div>
+            </div>
+          </header>
+          <main class="guest-content">
+            <section class="guest-auth-wrap">
+              <div class="guest-auth-panel">
+                <h2 class="guest-auth-title">Sign In to View Shared Photos</h2>
+                <p class="guest-auth-subtitle">
+                  This guest link can only be used with the invited email account. If your link expired or was used already, request a new one.
+                </p>
+                ${this._renderGuestAuthForm()}
+              </div>
+            </section>
+          </main>
+        </div>
+      `;
+    }
+
     if (this.isGuest && !this.listId) {
       if (!this.availableLists || this.collectionsRefreshing) {
         return html`
@@ -967,7 +1110,7 @@ export class GuestApp extends LitElement {
             <header class="guest-topbar">
               <div class="guest-topbar-inner">
                 <div>
-                  <h1 class="guest-brand-title">Zoltag Guest</h1>
+                  <h1 class="guest-brand-title">Zoltag - Guest Access</h1>
                   <p class="guest-brand-subtitle">Select a shared collection to review</p>
                 </div>
               </div>
@@ -983,13 +1126,26 @@ export class GuestApp extends LitElement {
 
       if (this.availableLists.length === 0) {
         return html`
-          <div class="error-screen">
-            <div class="error-card">
-              ${this._renderAccountModeSwitch()}
-              <h1>No Shared Lists</h1>
-              <p>You don't have access to any shared photo lists yet.</p>
-              <button @click=${this._handleGuestLogout}>Sign Out</button>
-            </div>
+          <div class="guest-shell">
+            <header class="guest-topbar">
+              <div class="guest-topbar-inner">
+                <div>
+                  <h1 class="guest-brand-title">Zoltag - Guest Access</h1>
+                  <p class="guest-brand-subtitle">No shared collections found</p>
+                </div>
+                <div class="guest-topbar-actions">
+                  <button type="button" class="guest-refresh-btn" @click=${this._handleGuestLogout}>Sign Out</button>
+                </div>
+              </div>
+            </header>
+            <main class="guest-content">
+              <section class="guest-auth-wrap">
+                <div class="guest-auth-panel">
+                  <h2 class="guest-auth-title">No Shared Lists</h2>
+                  <p class="guest-auth-subtitle">You don't have access to any shared photo lists yet.</p>
+                </div>
+              </section>
+            </main>
           </div>
         `;
       }
@@ -999,7 +1155,7 @@ export class GuestApp extends LitElement {
           <header class="guest-topbar">
             <div class="guest-topbar-inner">
               <div>
-                <h1 class="guest-brand-title">Zoltag Guest</h1>
+                <h1 class="guest-brand-title">Zoltag - Guest Access</h1>
                 <p class="guest-brand-subtitle">Select a shared collection to review</p>
               </div>
               <div class="guest-topbar-actions">
@@ -1026,7 +1182,6 @@ export class GuestApp extends LitElement {
                           <div class="guest-user-email" title=${this._getUserEmail()}>${this._getUserEmail()}</div>
                         ` : ''}
                       </div>
-                      <button type="button" class="guest-user-action" @click=${() => this._goToApp()}>Go to App</button>
                       <button type="button" class="guest-user-action signout" @click=${() => this._handleGuestLogout()}>Sign Out</button>
                     </div>
                   ` : ''}
@@ -1076,39 +1231,40 @@ export class GuestApp extends LitElement {
           .userEmail=${this._getUserEmail()}
           .userDisplayName=${this._getUserDisplayName()}
           @guest-logout=${this._handleGuestLogout}
-          @guest-go-app=${this._goToApp}
           @guest-home=${this._handleGuestHome}
         ></guest-list-view>
       `;
     }
 
-    // Any non-guest or unresolved authenticated state should return to guest email flow.
-    if (this.authenticated && !this.isGuest) {
-      return html`
-        <div class="error-screen">
-          <div class="error-card" style="max-width: 400px;">
-            ${this._renderAccountModeSwitch()}
-            <h1>📸 Sign In to View Shared Photos</h1>
-            <p style="margin: 16px 0; opacity: 0.9;">
-              Enter your invited email to receive a sign-in link, or enter your code below.
-            </p>
-            ${this._renderGuestAuthForm()}
-          </div>
-        </div>
-      `;
-    }
-
     // Fallback (shouldn't reach here)
     return html`
-      <div class="error-screen">
-        <div class="error-card">
-          ${this._renderAccountModeSwitch()}
-          <h1>Invalid Access</h1>
-          <p>Unable to load the requested collection.</p>
-          <button @click=${this._handleRequestNewLink}>Request New Link</button>
+      <div class="guest-shell">
+        <header class="guest-topbar">
+          <div class="guest-topbar-inner">
+            <div>
+              <h1 class="guest-brand-title">Zoltag - Guest Access</h1>
+              <p class="guest-brand-subtitle">Access issue</p>
+            </div>
+            <div class="guest-topbar-actions">
+              ${this._renderAccountModeSwitch()}
+            </div>
+          </div>
+        </header>
+        <main class="guest-content">
+          <section class="guest-auth-wrap">
+            <div class="guest-auth-panel">
+              <h2 class="guest-auth-title">Invalid Access</h2>
+              <p class="guest-auth-subtitle">
+                This sign-in link has expired or has already been used. Please request a new link.
+              </p>
+              <div class="guest-auth-actions">
+                <button class="guest-auth-submit" @click=${this._handleRequestNewLink}>Request New Link</button>
+              </div>
+            </div>
+          </section>
+        </main>
         </div>
-      </div>
-    `;
+      `;
   }
 }
 

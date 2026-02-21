@@ -107,6 +107,7 @@ def _is_non_retryable_command_failure(stdout_tail: Optional[str], stderr_tail: O
         "dropbox app key not configured",
         "managed app credentials are not configured",
         "tenant not found in database",
+        "provider integration is inactive",
     )
     return any(marker in text for marker in markers)
 

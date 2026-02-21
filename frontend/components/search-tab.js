@@ -30,6 +30,7 @@ import {
   saveHotspotHistorySessionState,
   setDragImagePayload,
 } from './shared/hotspot-history.js';
+import { migrateLocalStorageKey } from '../services/app-storage.js';
 import './shared/widgets/filter-chips.js';
 import './shared/widgets/right-panel.js';
 import './shared/widgets/list-targets-panel.js';
@@ -39,6 +40,8 @@ import ImageFilterPanel from './shared/state/image-filter-panel.js';
 import FolderBrowserPanel from './folder-browser-panel.js';
 
 const VECTORSTORE_DEFAULT_LEXICAL_WEIGHT = 1.0;
+const SEARCH_RIGHT_PANEL_TOOL_STORAGE_KEY = 'zoltan:app:rightPanelTool:search';
+const LEGACY_SEARCH_RIGHT_PANEL_TOOL_STORAGE_KEYS = ['rightPanelTool:search'];
 
 /**
  * Search Tab Component
@@ -253,8 +256,12 @@ export class SearchTab extends LitElement {
       processTagDrop: (ids, target) => this._processSearchHotspotTagDrop(ids, target),
       removeImages: () => {},
     });
+    migrateLocalStorageKey(
+      SEARCH_RIGHT_PANEL_TOOL_STORAGE_KEY,
+      LEGACY_SEARCH_RIGHT_PANEL_TOOL_STORAGE_KEYS,
+    );
     try {
-      const storedTool = localStorage.getItem('rightPanelTool:search');
+      const storedTool = localStorage.getItem(SEARCH_RIGHT_PANEL_TOOL_STORAGE_KEY);
       this.rightPanelTool = this._resolveRightPanelTool(storedTool);
     } catch {
       this.rightPanelTool = this._resolveRightPanelTool(this.rightPanelTool);
@@ -281,6 +288,7 @@ export class SearchTab extends LitElement {
     this._searchDropboxFetchTimer = null;
     this._searchListDropRefreshTimer = null;
     this._searchDropboxQuery = '';
+    this._searchLoadingCount = 0;
     this.folderBrowserPanel = new FolderBrowserPanel('search');
 
     // Debounce tracking for list fetches
@@ -386,7 +394,7 @@ export class SearchTab extends LitElement {
 
   async _refreshSearch() {
     if (this.searchRefreshing) return;
-    this.searchRefreshing = true;
+    this._startSearchLoading();
     try {
       const tasks = [];
       if (this.searchSubTab === 'advanced' || (this.searchSubTab === 'results' && this.vectorstoreHasSearched)) {
@@ -402,8 +410,18 @@ export class SearchTab extends LitElement {
       tasks.push(this._fetchSearchLists({ force: true }));
       await Promise.allSettled(tasks);
     } finally {
-      this.searchRefreshing = false;
+      this._finishSearchLoading();
     }
+  }
+
+  _startSearchLoading() {
+    this._searchLoadingCount = (this._searchLoadingCount || 0) + 1;
+    this.searchRefreshing = true;
+  }
+
+  _finishSearchLoading() {
+    this._searchLoadingCount = Math.max(0, (this._searchLoadingCount || 1) - 1);
+    this.searchRefreshing = this._searchLoadingCount > 0;
   }
 
   // ========================================
@@ -526,7 +544,7 @@ export class SearchTab extends LitElement {
     }
     if (changedProps.has('rightPanelTool')) {
       try {
-        localStorage.setItem('rightPanelTool:search', this.rightPanelTool);
+        localStorage.setItem(SEARCH_RIGHT_PANEL_TOOL_STORAGE_KEY, this.rightPanelTool);
       } catch {
         // ignore storage errors
       }
@@ -1704,6 +1722,14 @@ export class SearchTab extends LitElement {
     const handleError = () => {
       this._finishInitialRefresh();
     };
+    const handleLoadingStart = (detail) => {
+      if (detail?.tabId !== 'search') return;
+      this._startSearchLoading();
+    };
+    const handleLoadingEnd = (detail) => {
+      if (detail?.tabId !== 'search') return;
+      this._finishSearchLoading();
+    };
     const handleFiltersChanged = (detail) => {
       if (!detail?.filters) return;
       const snapshot = this._cloneSearchFilters(detail.filters);
@@ -1714,9 +1740,18 @@ export class SearchTab extends LitElement {
       }
       this._syncChipFiltersFromFilterState(detail.filters);
     };
-    this._searchFilterPanelHandlers = { panel, handleLoaded, handleError, handleFiltersChanged };
+    this._searchFilterPanelHandlers = {
+      panel,
+      handleLoaded,
+      handleError,
+      handleLoadingStart,
+      handleLoadingEnd,
+      handleFiltersChanged,
+    };
     panel.on('images-loaded', handleLoaded);
     panel.on('error', handleError);
+    panel.on('loading-start', handleLoadingStart);
+    panel.on('loading-end', handleLoadingEnd);
     panel.on('filters-changed', handleFiltersChanged);
 
     const currentFilters = panel.getState?.() || panel.filters || {};
@@ -1793,6 +1828,8 @@ export class SearchTab extends LitElement {
     if (!panel || !this._searchFilterPanelHandlers) return;
     panel.off('images-loaded', this._searchFilterPanelHandlers.handleLoaded);
     panel.off('error', this._searchFilterPanelHandlers.handleError);
+    panel.off('loading-start', this._searchFilterPanelHandlers.handleLoadingStart);
+    panel.off('loading-end', this._searchFilterPanelHandlers.handleLoadingEnd);
     panel.off('filters-changed', this._searchFilterPanelHandlers.handleFiltersChanged);
     this._searchFilterPanelHandlers = null;
   }
@@ -1961,7 +1998,6 @@ export class SearchTab extends LitElement {
     if (!this._searchInitialLoadPending) return;
     this._searchInitialLoadPending = false;
     this._searchInitialLoadComplete = true;
-    this.searchRefreshing = false;
   }
 
   _refreshBrowseByFolderData({ force = false, orderBy, sortOrder } = {}) {
@@ -2930,12 +2966,6 @@ export class SearchTab extends LitElement {
           </div>
         `}
 
-        ${this.searchRefreshing ? html`
-          <div class="curate-loading-overlay" aria-label="Loading">
-            <span class="curate-spinner large"></span>
-          </div>
-        ` : html``}
-
         <!-- Search Home / Vectorstore Subtab -->
         ${(this.searchSubTab === 'advanced' || this.searchSubTab === 'results') ? html`
           <div>
@@ -3087,6 +3117,11 @@ export class SearchTab extends LitElement {
             <!-- Image Grid Layout -->
             <div class="curate-layout search-layout results-hotspot-layout" style="--curate-thumb-size: ${this.curateThumbSize}px; ${browseByFolderBlurStyle}">
               <div class="curate-pane" @dragover=${this._handleSearchAvailableDragOver} @drop=${this._handleSearchAvailableDrop}>
+                ${this.searchRefreshing ? html`
+                  <div class="curate-loading-overlay" aria-label="Loading">
+                    <span class="curate-spinner large"></span>
+                  </div>
+                ` : html``}
                 <div class="curate-pane-body">
                   ${this.searchResultsView === 'history' ? html`
                     ${this._renderSearchHistoryPane()}

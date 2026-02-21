@@ -152,6 +152,11 @@ const GUEST_LIST_VIEW_CSS = `
     margin: 0 auto;
     padding: 24px 20px 32px;
   }
+  .guest-back-row {
+    display: flex;
+    justify-content: flex-start;
+    margin-bottom: 12px;
+  }
   .guest-panel {
     background: #ffffff;
     border: 1px solid #e5e7eb;
@@ -166,6 +171,27 @@ const GUEST_LIST_VIEW_CSS = `
     text-transform: uppercase;
     letter-spacing: 0.06em;
     font-weight: 700;
+  }
+  .guest-feedback-note {
+    margin-bottom: 14px;
+    border: 1px solid #bfdbfe;
+    background: #eff6ff;
+    color: #1e3a8a;
+    border-radius: 12px;
+    padding: 12px 14px;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  .guest-feedback-note strong {
+    color: #1e40af;
+    font-weight: 700;
+  }
+  .guest-feedback-note ul {
+    margin: 8px 0 0;
+    padding-left: 18px;
+  }
+  .guest-feedback-note li + li {
+    margin-top: 4px;
   }
   .guest-grid {
     display: grid;
@@ -453,14 +479,6 @@ export class GuestListView extends LitElement {
     }));
   }
 
-  _handleGoToApp() {
-    this.userMenuOpen = false;
-    this.dispatchEvent(new CustomEvent('guest-go-app', {
-      bubbles: true,
-      composed: true,
-    }));
-  }
-
   _handleGoHome() {
     this.userMenuOpen = false;
     this.dispatchEvent(new CustomEvent('guest-home', {
@@ -716,7 +734,6 @@ export class GuestListView extends LitElement {
                   ${this.downloadBusy === 'originals' ? 'Requesting…' : 'Download Full Size'}
                 </button>
               ` : ''}
-              <button @click=${this._handleGoHome} class="guest-btn">Home</button>
               <div class="guest-user-menu">
                 <button
                   type="button"
@@ -737,7 +754,6 @@ export class GuestListView extends LitElement {
                         <div class="guest-user-email" title=${this.userEmail}>${this.userEmail}</div>
                       ` : ''}
                     </div>
-                    <button type="button" class="guest-user-action" @click=${() => this._handleGoToApp()}>Go to App</button>
                     <button type="button" class="guest-user-action signout" @click=${() => this._handleLogout()}>Sign Out</button>
                   </div>
                 ` : ''}
@@ -747,6 +763,9 @@ export class GuestListView extends LitElement {
         </header>
 
         <main class="guest-content">
+          <div class="guest-back-row">
+            <button @click=${this._handleGoHome} class="guest-btn">Back</button>
+          </div>
           ${this.images.length === 0 ? html`
             <div class="guest-panel">
               <div class="guest-empty">
@@ -761,6 +780,13 @@ export class GuestListView extends LitElement {
                   ${this.downloadStatus}
                 </div>
               ` : ''}
+              <div class="guest-feedback-note">
+                <strong>Thanks for reviewing this collection.</strong> You can rate and comment on any photo.
+                <ul>
+                  <li>A green check means you already provided feedback on that image.</li>
+                  <li>The trash rating means it is a photo we should not use. If you choose trash, please leave a comment too.</li>
+                </ul>
+              </div>
               <div class="guest-meta-row">${this.images.length} items</div>
               <div class="guest-grid">
                 ${this.images.map((image) => html`

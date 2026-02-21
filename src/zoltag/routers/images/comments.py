@@ -9,7 +9,7 @@ from zoltag.auth.models import UserProfile
 from zoltag.dependencies import get_db, get_tenant
 from zoltag.tenant import Tenant
 from zoltag.metadata import ImageMetadata
-from zoltag.models.sharing import ListShare, MemberComment
+from zoltag.models.sharing import ListShare, MemberComment, MemberRating
 from zoltag.tenant_scope import tenant_column_filter
 
 router = APIRouter()
@@ -50,9 +50,20 @@ async def list_image_comments(
         .order_by(MemberComment.created_at.desc())
         .all()
     )
+    ratings = (
+        db.query(MemberRating)
+        .filter(
+            tenant_column_filter(MemberRating, tenant),
+            MemberRating.asset_id == asset_id,
+        )
+        .order_by(MemberRating.updated_at.desc())
+        .all()
+    )
 
     user_ids = {comment.user_uid for comment in comments if comment.user_uid}
+    user_ids.update({rating.user_uid for rating in ratings if rating.user_uid})
     share_ids = {comment.share_id for comment in comments if comment.share_id is not None}
+    share_ids.update({rating.share_id for rating in ratings if rating.share_id is not None})
     profile_map = {}
     share_email_map = {}
     if user_ids:
@@ -82,28 +93,54 @@ async def list_image_comments(
             for share_id, guest_email in share_rows
         }
 
+    def _resolve_author(user_uid, share_id, source):
+        source_value = str(source or "user").lower()
+        profile = profile_map.get(user_uid, {})
+        author_email = (
+            profile.get("email")
+            or share_email_map.get(share_id)
+            or None
+        )
+        author_name = (
+            profile.get("display_name")
+            or profile.get("email")
+            or ("Guest" if source_value == "guest" else "User")
+        )
+        return author_name, author_email
+
+    comment_rows = []
+    for comment in comments:
+        source_value = str(comment.source or "user").lower()
+        author_name, author_email = _resolve_author(comment.user_uid, comment.share_id, source_value)
+        comment_rows.append({
+            "id": str(comment.id),
+            "asset_id": str(comment.asset_id),
+            "comment_text": comment.comment_text,
+            "author_name": author_name,
+            "author_email": author_email,
+            "can_delete": comment.user_uid == current_user.supabase_uid,
+            "source": source_value,
+            "created_at": comment.created_at.isoformat() if comment.created_at else None,
+        })
+
+    rating_rows = []
+    for rating in ratings:
+        source_value = str(rating.source or "user").lower()
+        author_name, author_email = _resolve_author(rating.user_uid, rating.share_id, source_value)
+        rating_rows.append({
+            "id": str(rating.id),
+            "asset_id": str(rating.asset_id),
+            "rating": int(rating.rating) if rating.rating is not None else None,
+            "author_name": author_name,
+            "author_email": author_email,
+            "source": source_value,
+            "created_at": rating.created_at.isoformat() if rating.created_at else None,
+            "updated_at": rating.updated_at.isoformat() if rating.updated_at else None,
+        })
+
     return {
-        "comments": [
-            {
-                "id": str(comment.id),
-                "asset_id": str(comment.asset_id),
-                "comment_text": comment.comment_text,
-                "author_name": (
-                    profile_map.get(comment.user_uid, {}).get("display_name")
-                    or profile_map.get(comment.user_uid, {}).get("email")
-                    or ("Guest" if str(comment.source or "").lower() == "guest" else "User")
-                ),
-                "author_email": (
-                    profile_map.get(comment.user_uid, {}).get("email")
-                    or share_email_map.get(comment.share_id)
-                    or None
-                ),
-                "can_delete": comment.user_uid == current_user.supabase_uid,
-                "source": str(comment.source or "user").lower(),
-                "created_at": comment.created_at.isoformat() if comment.created_at else None,
-            }
-            for comment in comments
-        ],
+        "comments": comment_rows,
+        "ratings": rating_rows,
     }
 
 

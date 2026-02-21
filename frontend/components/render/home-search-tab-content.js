@@ -3,6 +3,7 @@ import { renderCuratePermatagSummary } from './curate-image-fragments.js';
 import { renderCurateRatingWidget, renderCurateRatingStatic } from './curate-rating-widgets.js';
 import { formatStatNumber } from '../shared/formatting.js';
 import { getKeywordsByCategoryFromList } from '../shared/keyword-utils.js';
+import { renderResultsPagination } from '../shared/pagination-controls.js';
 
 function renderCtaIcon(iconKey) {
   if (iconKey === 'search') {
@@ -156,9 +157,25 @@ export function renderHomeTabContent(host, { navCards, formatCurateDate }) {
   };
   const homeLists = [...(host.homeLists || [])]
     .sort((a, b) => (a.title || '').localeCompare(b.title || ''));
-  const homeRecommendationsTab = ['lists', 'keywords', 'tagcloud'].includes(host.homeRecommendationsTab)
+  const hasAssets = totalImages > 0;
+  const hasDefinedKeywords = Array.isArray(host.keywords)
+    && host.keywords.some((kw) => String(kw?.keyword || '').trim().length > 0);
+  const homeRecommendationsTab = ['lists', 'keywords', 'tagcloud', 'feedback-log', 'alerts'].includes(host.homeRecommendationsTab)
     ? host.homeRecommendationsTab
     : 'lists';
+  const feedbackLog = Array.isArray(host.homeFeedbackLog) ? host.homeFeedbackLog : [];
+  const homeAlerts = Array.isArray(host.homeAlerts) ? host.homeAlerts : [];
+  const alertsTabCount = homeAlerts.length;
+  const feedbackLimit = Number.isFinite(Number(host.homeFeedbackLimit))
+    ? Math.max(1, Number(host.homeFeedbackLimit))
+    : 50;
+  const feedbackOffset = Number.isFinite(Number(host.homeFeedbackOffset))
+    ? Math.max(0, Number(host.homeFeedbackOffset))
+    : 0;
+  const feedbackTotal = feedbackLog.length;
+  const feedbackMaxOffset = Math.max(0, Math.floor((Math.max(0, feedbackTotal - 1)) / feedbackLimit) * feedbackLimit);
+  const safeFeedbackOffset = Math.min(feedbackOffset, feedbackMaxOffset);
+  const pagedFeedback = feedbackLog.slice(safeFeedbackOffset, safeFeedbackOffset + feedbackLimit);
   const ctaCards = [
     {
       key: 'search',
@@ -252,9 +269,115 @@ export function renderHomeTabContent(host, { navCards, formatCurateDate }) {
       },
     });
   };
+  const handleKeywordSetupNavigate = () => {
+    host._handleHomeNavigate({
+      detail: {
+        tab: 'library',
+        subTab: 'keywords',
+        adminSubTab: 'tagging',
+      },
+    });
+  };
+  const handleProviderSetupNavigate = () => {
+    host._handleHomeNavigate({
+      detail: {
+        tab: 'library',
+        subTab: 'providers',
+      },
+    });
+  };
+  const handleManualUploadNavigate = () => {
+    host._handleHomeNavigate({
+      detail: {
+        tab: 'library',
+        subTab: 'assets',
+      },
+    });
+  };
+  const handleImageOpen = (row) => {
+    const imageId = Number(row?.image_id);
+    if (!Number.isFinite(imageId) || imageId <= 0) return;
+    const image = {
+      id: imageId,
+      asset_id: row?.asset_id || null,
+      filename: row?.filename || `#${imageId}`,
+    };
+    host._handleCurateImageClick(null, image, [image]);
+  };
+  const formatEventDate = (value) => {
+    if (!value) return '—';
+    try {
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return String(value);
+      const weekday = date.toLocaleDateString(undefined, { weekday: 'short' });
+      const month = date.toLocaleDateString(undefined, { month: 'short' });
+      const day = date.toLocaleDateString(undefined, { day: 'numeric' });
+      const time = date
+        .toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', hour12: true })
+        .replace(/\s+/g, '')
+        .toLowerCase();
+      return `${weekday} ${month} ${day} ${time}`;
+    } catch (_error) {
+      return String(value);
+    }
+  };
+  const formatAuthor = (entry) => {
+    const email = String(entry?.author_email || '').trim();
+    if (email) return email;
+    return 'Guest';
+  };
+  const renderFeedbackActionToken = (entry, { alert = false } = {}) => {
+    const eventType = String(entry?.event_type || '').toLowerCase();
+    const rating = Number(entry?.rating);
+    if (eventType === 'commented') {
+      return html`
+        <span class="home-feedback-action-token">
+          <svg viewBox="0 0 16 16" aria-hidden="true" class="home-feedback-action-icon">
+            <path d="M3 3.5h10v6H8.2l-3.2 2.4V9.5H3z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"></path>
+          </svg>
+          <span>commented</span>
+        </span>
+      `;
+    }
+    if (Number.isFinite(rating) && rating <= 0) {
+      return html`
+        <span class="home-feedback-action-token ${alert ? 'home-feedback-action-token-alert' : ''}">
+          <svg viewBox="0 0 16 16" aria-hidden="true" class="home-feedback-action-icon">
+            <path d="M5 5h6l-.4 8H5.4zM4.2 5h7.6M6.3 3.8h3.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"></path>
+          </svg>
+          <span>rating</span>
+        </span>
+      `;
+    }
+    const safeRating = Number.isFinite(rating) ? Math.max(1, Math.min(3, rating)) : 1;
+    return html`
+      <span class="home-feedback-action-token ${alert ? 'home-feedback-action-token-alert' : ''}">
+        <span class="home-feedback-stars" aria-hidden="true">${'★'.repeat(safeRating)}</span>
+        <span>rating</span>
+      </span>
+    `;
+  };
+  const handleHomeRefresh = async () => {
+    if (host.homeLoading) return;
+    await Promise.allSettled([
+      host._appShellState.fetchHomeStats({ force: true }),
+      host.fetchHomeLists({ force: true }),
+      host.fetchKeywords(),
+    ]);
+  };
   return html`
     <div slot="home" class="home-tab-shell">
       <div class="container">
+        <div class="home-page-actions">
+          <button
+            type="button"
+            class="home-page-refresh-btn"
+            @click=${handleHomeRefresh}
+            ?disabled=${host.homeLoading}
+          >
+            ${host.homeLoading ? 'Refreshing…' : 'Refresh'}
+          </button>
+        </div>
         <div class="home-overview-layout">
           <div class="home-overview-left">
             <div class="home-cta-grid home-cta-grid-quad">
@@ -294,31 +417,51 @@ export function renderHomeTabContent(host, { navCards, formatCurateDate }) {
           </div>
           <div class="home-overview-right">
             <div class="home-recommendations-panel" aria-label="Recommendations panel">
-              <div class="admin-subtabs home-recommendations-tabs">
-                <button
-                  type="button"
-                  class="admin-subtab ${homeRecommendationsTab === 'lists' ? 'active' : ''}"
-                  @click=${() => { host.homeRecommendationsTab = 'lists'; }}
-                >
-                  Lists
-                </button>
-                <button
-                  type="button"
-                  class="admin-subtab ${homeRecommendationsTab === 'keywords' ? 'active' : ''}"
-                  @click=${() => { host.homeRecommendationsTab = 'keywords'; }}
-                >
-                  Keywords
-                </button>
-                <button
-                  type="button"
-                  class="admin-subtab ${homeRecommendationsTab === 'tagcloud' ? 'active' : ''}"
-                  @click=${() => { host.homeRecommendationsTab = 'tagcloud'; }}
-                >
-                  Tagcloud
-                </button>
-              </div>
-              <div class="home-recommendations-body">
-                ${homeRecommendationsTab === 'lists' ? html`
+              ${hasDefinedKeywords ? html`
+                <div class="admin-subtabs home-recommendations-tabs">
+                  <button
+                    type="button"
+                    class="admin-subtab ${homeRecommendationsTab === 'lists' ? 'active' : ''}"
+                    @click=${() => { host.homeRecommendationsTab = 'lists'; }}
+                  >
+                    Lists
+                  </button>
+                  <button
+                    type="button"
+                    class="admin-subtab ${homeRecommendationsTab === 'keywords' ? 'active' : ''}"
+                    @click=${() => { host.homeRecommendationsTab = 'keywords'; }}
+                  >
+                    Keywords
+                  </button>
+                  <button
+                    type="button"
+                    class="admin-subtab ${homeRecommendationsTab === 'feedback-log' ? 'active' : ''}"
+                    @click=${() => { host.homeRecommendationsTab = 'feedback-log'; }}
+                  >
+                    Feedback Log
+                  </button>
+                  <button
+                    type="button"
+                    class="admin-subtab ${homeRecommendationsTab === 'alerts' ? 'active' : ''}"
+                    @click=${() => { host.homeRecommendationsTab = 'alerts'; }}
+                  >
+                    <span>Alerts</span>
+                    ${alertsTabCount > 0 ? html`
+                      <span class="home-subtab-count ${homeRecommendationsTab === 'alerts' ? 'active' : ''}">
+                        ${formatStatNumber(alertsTabCount)}
+                      </span>
+                    ` : ''}
+                  </button>
+                  <button
+                    type="button"
+                    class="admin-subtab ${homeRecommendationsTab === 'tagcloud' ? 'active' : ''}"
+                    @click=${() => { host.homeRecommendationsTab = 'tagcloud'; }}
+                  >
+                    Tagcloud
+                  </button>
+                </div>
+                <div class="home-recommendations-body">
+                  ${homeRecommendationsTab === 'lists' ? html`
                   ${homeLists.length ? html`
                     <section class="home-tag-section">
                       <div class="home-tag-chip-wrap">
@@ -359,7 +502,7 @@ export function renderHomeTabContent(host, { navCards, formatCurateDate }) {
                   ` : html`
                     <div class="home-recommendations-empty">No tags available.</div>
                   `}
-                ` : html`
+                ` : homeRecommendationsTab === 'tagcloud' ? html`
                   ${exploreTagCategories.length ? html`
                     ${exploreTagCategories.map(([category, keywords]) => {
                       const tagCloudItems = toTagCloudItems(keywords);
@@ -385,8 +528,181 @@ export function renderHomeTabContent(host, { navCards, formatCurateDate }) {
                   ` : html`
                     <div class="home-recommendations-empty">No tags available.</div>
                   `}
-                `}
-              </div>
+                ` : homeRecommendationsTab === 'feedback-log' ? html`
+                  ${feedbackLog.length ? html`
+                    <section class="home-tag-section home-feedback-section">
+                      <div class="home-feedback-scroll">
+                        <div class="home-feedback-list">
+                          ${pagedFeedback.map((entry) => {
+                            const imageId = Number(entry?.image_id);
+                            const canOpen = Number.isFinite(imageId) && imageId > 0;
+                            const actionLine = `${formatAuthor(entry)}`;
+                            return html`
+                              <div
+                                class="home-feedback-item ${canOpen ? 'home-feedback-item--clickable' : ''}"
+                                role=${canOpen ? 'button' : 'group'}
+                                tabindex=${canOpen ? '0' : '-1'}
+                                @click=${() => { if (canOpen) handleImageOpen(entry); }}
+                                @keydown=${(event) => {
+                                  if (!canOpen) return;
+                                  if (event.key === 'Enter' || event.key === ' ') {
+                                    event.preventDefault();
+                                    handleImageOpen(entry);
+                                  }
+                                }}
+                              >
+                                <div
+                                  class="home-feedback-thumb-btn ${canOpen ? '' : 'is-disabled'}"
+                                  title=${canOpen ? 'Open image' : 'Image unavailable'}
+                                >
+                                  ${canOpen ? html`
+                                    <img
+                                      src=${`/api/v1/images/${imageId}/thumbnail`}
+                                      alt=${entry?.filename || 'Asset preview'}
+                                      class="home-feedback-thumb"
+                                      loading="lazy"
+                                    />
+                                  ` : html`<span class="home-feedback-thumb-na">N/A</span>`}
+                                </div>
+                                <div class="home-feedback-meta">
+                                  <div class="home-feedback-date">${formatEventDate(entry?.event_at)}</div>
+                                  <div class="home-feedback-action" title=${actionLine}>
+                                    <span class="home-feedback-email">${formatAuthor(entry)}</span>
+                                    ${renderFeedbackActionToken(entry)}
+                                  </div>
+                                </div>
+                              </div>
+                            `;
+                          })}
+                        </div>
+                      </div>
+                      <div class="home-feedback-pagination">
+                        ${renderResultsPagination({
+                          total: feedbackTotal,
+                          offset: safeFeedbackOffset,
+                          limit: feedbackLimit,
+                          count: pagedFeedback.length,
+                          onPrev: () => {
+                            host.homeFeedbackOffset = Math.max(0, safeFeedbackOffset - feedbackLimit);
+                          },
+                          onNext: () => {
+                            host.homeFeedbackOffset = Math.min(feedbackMaxOffset, safeFeedbackOffset + feedbackLimit);
+                          },
+                          onLimitChange: (event) => {
+                            const nextLimit = Number.parseInt(event?.target?.value, 10);
+                            if (!Number.isFinite(nextLimit) || nextLimit < 1) return;
+                            host.homeFeedbackLimit = nextLimit;
+                            host.homeFeedbackOffset = 0;
+                          },
+                          disabled: false,
+                          showPageSize: true,
+                        })}
+                      </div>
+                    </section>
+                  ` : html`
+                    <div class="home-recommendations-empty">No guest feedback activity yet.</div>
+                  `}
+                  ` : html`
+                  ${homeAlerts.length ? html`
+                    <section class="home-tag-section home-feedback-section">
+                      <div class="home-feedback-scroll">
+                        <div class="home-feedback-list">
+                          ${homeAlerts.map((entry) => {
+                            const imageId = Number(entry?.image_id);
+                            const canOpen = Number.isFinite(imageId) && imageId > 0;
+                            const official = entry?.official_rating === null || entry?.official_rating === undefined
+                              ? 'unrated'
+                              : String(entry.official_rating);
+                            const actionLine = `${formatAuthor(entry)} rating (official: ${official})`;
+                            return html`
+                              <div
+                                class="home-feedback-item ${canOpen ? 'home-feedback-item--clickable' : ''}"
+                                role=${canOpen ? 'button' : 'group'}
+                                tabindex=${canOpen ? '0' : '-1'}
+                                @click=${() => { if (canOpen) handleImageOpen(entry); }}
+                                @keydown=${(event) => {
+                                  if (!canOpen) return;
+                                  if (event.key === 'Enter' || event.key === ' ') {
+                                    event.preventDefault();
+                                    handleImageOpen(entry);
+                                  }
+                                }}
+                              >
+                                <div
+                                  class="home-feedback-thumb-btn ${canOpen ? '' : 'is-disabled'}"
+                                  title=${canOpen ? 'Open image' : 'Image unavailable'}
+                                >
+                                  ${canOpen ? html`
+                                    <img
+                                      src=${`/api/v1/images/${imageId}/thumbnail`}
+                                      alt=${entry?.filename || 'Asset preview'}
+                                      class="home-feedback-thumb"
+                                      loading="lazy"
+                                    />
+                                  ` : html`<span class="home-feedback-thumb-na">N/A</span>`}
+                                </div>
+                                <div class="home-feedback-meta">
+                                  <div class="home-feedback-date">${formatEventDate(entry?.event_at)}</div>
+                                  <div class="home-feedback-action home-feedback-action-alert" title=${actionLine}>
+                                    <span class="home-feedback-email">${formatAuthor(entry)}</span>
+                                    ${renderFeedbackActionToken({
+                                      ...entry,
+                                      event_type: 'rated',
+                                      rating: entry?.member_rating,
+                                    }, { alert: true })}
+                                    <span class="home-feedback-action-tail">(official: ${official})</span>
+                                  </div>
+                                </div>
+                              </div>
+                            `;
+                          })}
+                        </div>
+                      </div>
+                    </section>
+                  ` : html`
+                    <div class="home-recommendations-empty">No rating mismatch alerts.</div>
+                  `}
+                  `}
+                </div>
+              ` : html`
+                <div class="home-keyword-onboarding">
+                  <div class="home-keyword-onboarding-eyebrow">Getting Started</div>
+                  ${!hasAssets ? html`
+                    <h3 class="home-keyword-onboarding-title">Welcome!</h3>
+                    <p class="home-keyword-onboarding-text">
+                      Get started by uploading images.
+                      <button
+                        type="button"
+                        class="home-keyword-onboarding-link"
+                        @click=${handleProviderSetupNavigate}
+                      >
+                        Configure a provider
+                      </button>
+                      to do it automatically or
+                      <button
+                        type="button"
+                        class="home-keyword-onboarding-link"
+                        @click=${handleManualUploadNavigate}
+                      >
+                        upload manually
+                      </button>
+                      .
+                    </p>
+                  ` : html`
+                    <h3 class="home-keyword-onboarding-title">Add keywords to get started.</h3>
+                    <p class="home-keyword-onboarding-text">
+                      You do not have any keywords yet. Keywords power search, tagging, curation, and model suggestions.
+                    </p>
+                    <button
+                      type="button"
+                      class="home-keyword-onboarding-btn"
+                      @click=${handleKeywordSetupNavigate}
+                    >
+                      Setup your Keywords
+                    </button>
+                  `}
+                </div>
+              `}
             </div>
           </div>
         </div>

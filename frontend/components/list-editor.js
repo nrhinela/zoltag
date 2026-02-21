@@ -58,6 +58,30 @@ class ListEditor extends LitElement {
       height: 2.5rem;
       margin-bottom: 0.5rem;
     }
+    .loading-panel {
+      border: 1px solid #e5e7eb;
+      border-radius: 0.5rem;
+      background: white;
+      padding: 1rem;
+    }
+    .loading-header {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      color: #4b5563;
+      font-size: 0.875rem;
+      font-weight: 600;
+      margin-bottom: 0.75rem;
+    }
+    .loading-spinner {
+      width: 14px;
+      height: 14px;
+      border: 2px solid #d1d5db;
+      border-top-color: #2563eb;
+      border-radius: 9999px;
+      animation: spin 1s linear infinite;
+      display: inline-block;
+    }
     .list-items-grid {
       --curate-thumb-size: 160px;
     }
@@ -97,6 +121,7 @@ class ListEditor extends LitElement {
     downloadIncludeVariants: { type: Boolean },
     isLoadingItems: { type: Boolean },
     isLoadingLists: { type: Boolean },
+    openingListId: { type: String },
     listSortKey: { type: String },
     listSortDir: { type: String },
     listVisibilityScope: { type: String },
@@ -122,6 +147,7 @@ class ListEditor extends LitElement {
     this.downloadIncludeVariants = true;
     this.isLoadingItems = false;
     this.isLoadingLists = false;
+    this.openingListId = null;
     this.listSortKey = 'title';
     this.listSortDir = 'asc';
     this.listVisibilityScope = 'default';
@@ -307,9 +333,16 @@ class ListEditor extends LitElement {
   }
 
   async _selectList(list) {
+    if (!list?.id) return;
+    this.openingListId = String(list.id);
     this.selectedList = list;
+    this.listItems = [];
     this.isLoadingItems = true;
-    await this._fetchListItems(list.id);
+    try {
+      await this._fetchListItems(list.id);
+    } finally {
+      this.openingListId = null;
+    }
   }
 
   async _fetchListItems(listId) {
@@ -984,6 +1017,55 @@ class ListEditor extends LitElement {
     this.thumbSize = nextSize;
   }
 
+  _renderListSkeleton() {
+    return html`
+      <div class="mb-4 rounded-xl border border-gray-200 bg-white p-4">
+        <div class="mb-3 flex items-center gap-2 text-sm font-semibold text-gray-600">
+          <span class="inline-block h-4 w-4 rounded-full border-2 border-gray-300 border-t-blue-600 animate-spin" aria-hidden="true"></span>
+          <span>Loading lists…</span>
+        </div>
+        <div class="space-y-2 animate-pulse">
+          <div class="h-10 w-full rounded bg-gray-200"></div>
+          <div class="h-10 w-full rounded bg-gray-200"></div>
+          <div class="h-10 w-full rounded bg-gray-200"></div>
+          <div class="h-10 w-full rounded bg-gray-200"></div>
+          <div class="h-10 w-full rounded bg-gray-200"></div>
+        </div>
+      </div>
+    `;
+  }
+
+  _renderListItemsSkeleton() {
+    return html`
+      <div class="mb-6 rounded-xl border border-gray-200 bg-white p-4">
+        <div class="mb-3 flex items-center gap-2 text-sm font-semibold text-gray-600">
+          <span class="inline-block h-4 w-4 rounded-full border-2 border-gray-300 border-t-blue-600 animate-spin" aria-hidden="true"></span>
+          <span>Loading list items…</span>
+        </div>
+        <div class="mb-6 flex items-start justify-between gap-4 animate-pulse">
+          <div class="flex-1">
+            <div class="mb-2 h-7 w-1/3 rounded bg-gray-200"></div>
+            <div class="mb-2 h-4 w-1/2 rounded bg-gray-200"></div>
+            <div class="mb-4 flex gap-4">
+              <div class="h-4 w-32 rounded bg-gray-200"></div>
+              <div class="h-4 w-32 rounded bg-gray-200"></div>
+            </div>
+          </div>
+          <div class="flex gap-2">
+            <div class="h-8 w-20 rounded bg-gray-200"></div>
+            <div class="h-8 w-16 rounded bg-gray-200"></div>
+          </div>
+        </div>
+        <div class="grid grid-cols-2 gap-3 animate-pulse">
+          <div class="h-40 rounded bg-gray-200"></div>
+          <div class="h-40 rounded bg-gray-200"></div>
+          <div class="h-40 rounded bg-gray-200"></div>
+          <div class="h-40 rounded bg-gray-200"></div>
+        </div>
+      </div>
+    `;
+  }
+
   render() {
     // Check visibility on each render to detect when tab becomes active
     this._checkVisibility();
@@ -1056,20 +1138,7 @@ class ListEditor extends LitElement {
           <div class="mb-6">
             <button @click=${this._closeListView} class="text-sm text-blue-600 hover:underline mb-4">← Back to lists</button>
             ${this.isLoadingItems ? html`
-              <div class="flex justify-between items-start mb-6">
-                <div class="flex-1">
-                  <div class="skeleton skeleton-title w-1/3 mb-2"></div>
-                  <div class="skeleton skeleton-text w-1/2 mb-2"></div>
-                  <div class="flex gap-4 mb-4">
-                    <div class="skeleton skeleton-text w-32"></div>
-                    <div class="skeleton skeleton-text w-32"></div>
-                  </div>
-                </div>
-                <div class="flex gap-2">
-                  <div class="skeleton skeleton-text w-20"></div>
-                  <div class="skeleton skeleton-text w-16"></div>
-                </div>
-              </div>
+              ${this._renderListItemsSkeleton()}
             ` : html`
               <div class="flex justify-between items-start mb-6">
                 <div class="flex-1">
@@ -1082,7 +1151,7 @@ class ListEditor extends LitElement {
                       <span class="font-semibold">Created:</span> ${new Date(this.selectedList.created_at).toLocaleDateString()}
                     </div>
                     <div>
-                      <span class="font-semibold">Visibility:</span> ${this.selectedList.visibility === 'private' ? 'Private' : 'Shared'}
+                      <span class="font-semibold">Visibility:</span> ${this.selectedList.visibility === 'private' ? 'Private' : 'All'}
                     </div>
                   </div>
                   ${this.selectedList.notebox ? html`
@@ -1166,7 +1235,9 @@ class ListEditor extends LitElement {
               })()}
             `}
           </div>
-        ` : (this.lists.length === 0
+        ` : (this.isLoadingLists
+          ? this._renderListSkeleton()
+          : this.lists.length === 0
           ? html`<p class="text-base text-gray-600">No lists found.</p>`
           : html`
             <table class="min-w-full bg-white border border-gray-300">
@@ -1219,9 +1290,17 @@ class ListEditor extends LitElement {
                     <td class="py-2 px-4 text-sm text-gray-700">${new Date(list.created_at).toLocaleDateString()}</td>
                     <td class="py-2 px-4 text-sm text-gray-600">${list.created_by_name || '—'}</td>
                     <td class="py-2 px-4 text-sm text-gray-600">${list.notebox || '—'}</td>
-                    <td class="py-2 px-4 text-sm text-gray-700">${list.visibility === 'private' ? 'Private' : 'Shared'}</td>
+                    <td class="py-2 px-4 text-sm text-gray-700">${list.visibility === 'private' ? 'Private' : 'All'}</td>
                     <td class="py-2 px-4 text-left">
-                      <button @click=${() => this._selectList(list)} class="bg-slate-900 text-white px-3 py-1 rounded text-sm hover:bg-slate-800 mr-2">View</button>
+                      <button
+                        @click=${() => this._selectList(list)}
+                        ?disabled=${this.openingListId !== null}
+                        class="bg-slate-900 text-white px-3 py-1 rounded text-sm hover:bg-slate-800 mr-2 disabled:opacity-60 disabled:cursor-not-allowed inline-flex items-center gap-1"
+                      >
+                        ${this.openingListId === String(list.id)
+                          ? html`<span class="inline-block w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></span> Loading…`
+                          : 'View'}
+                      </button>
                     </td>
                   </tr>
                 `)}
@@ -1276,7 +1355,7 @@ class ListEditor extends LitElement {
                   id="edit-list-visibility"
                   class="w-full p-2 border border-gray-300 rounded text-sm"
                 >
-                  <option value="shared" ?selected=${String(this.selectedList.visibility || 'shared') === 'shared'}>Shared</option>
+                  <option value="shared" ?selected=${String(this.selectedList.visibility || 'shared') === 'shared'}>All</option>
                   <option value="private" ?selected=${String(this.selectedList.visibility || 'shared') === 'private'}>Private</option>
                 </select>
               </div>

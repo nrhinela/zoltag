@@ -196,8 +196,21 @@ export class ShareListModal extends LitElement {
         >
           <!-- Header -->
           <div class="border-b border-gray-200 p-6 flex-shrink-0">
-            <h3 class="text-xl font-bold text-gray-900">Share List: ${this.list.title}</h3>
-            <p class="text-sm text-gray-600 mt-1">Invite guests to view and review this collection</p>
+            <div class="flex items-start justify-between gap-4">
+              <div>
+                <h3 class="text-xl font-bold text-gray-900">Share List: ${this.list.title}</h3>
+                <p class="text-sm text-gray-600 mt-1">Invite guests to view and review this collection</p>
+              </div>
+              <button
+                type="button"
+                class="text-2xl leading-none text-gray-500 hover:text-gray-700"
+                @click=${this._handleClose}
+                aria-label="Close dialog"
+                title="Close"
+              >
+                &times;
+              </button>
+            </div>
           </div>
 
           <!-- Scrollable Content -->

@@ -68,6 +68,8 @@ export class ImageFilterPanel {
     this._listeners = {
       'filters-changed': [],
       'images-loaded': [],
+      'loading-start': [],
+      'loading-end': [],
       'error': [],
     };
   }
@@ -141,6 +143,7 @@ export class ImageFilterPanel {
       return;
     }
 
+    this._emit('loading-start', { tabId: this.tabId });
     try {
       // Pass the filter object directly to getImages, which will build the params
       const result = await getImages(this.tenant, this.filters);
@@ -164,6 +167,8 @@ export class ImageFilterPanel {
         message: `Failed to fetch images: ${error.message}`,
       });
       throw error;
+    } finally {
+      this._emit('loading-end', { tabId: this.tabId });
     }
   }
 

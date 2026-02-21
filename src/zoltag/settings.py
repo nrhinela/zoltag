@@ -80,7 +80,8 @@ class Settings(BaseSettings):
     # Minimum positive permatag examples required before training a keyword model.
     keyword_model_min_positive: int = 2
     # If true, generate embeddings during upload/ingest. If false, embeddings are generated later by batch jobs.
-    upload_generate_embeddings: bool = True
+    # Defaults to False: inline embedding loads the SigLIP model (~1 GB) and can OOM a 2 GiB Cloud Run instance.
+    upload_generate_embeddings: bool = False
     # Minimum number of active reference photos required for person face-recognition suggestions.
     face_recognition_min_references: int = 3
     # Confidence threshold [0-1] for writing face-recognition suggestions.

@@ -22,6 +22,12 @@ const KEYWORDS_CACHE_MS = 10000;
 const SYSTEM_SETTINGS_CACHE_MS = 5 * 60 * 1000;
 const INTEGRATION_STATUS_CACHE_MS = 10000;
 
+function shouldRedirectToLoginOnUnauthorized() {
+  if (typeof window === 'undefined') return false;
+  const path = String(window.location.pathname || '');
+  return !(path === '/guest' || path.startsWith('/guest/'));
+}
+
 /**
  * Fetch with authentication headers
  *
@@ -31,7 +37,7 @@ const INTEGRATION_STATUS_CACHE_MS = 10000;
  * - Content-Type: application/json
  *
  * Handles common errors:
- * - 401: Redirects to login
+ * - 401: Redirects to login for app routes (never auto-redirects on /guest)
  * - 403: Shows access denied error
  * - Other errors: Shows error message
  *
@@ -61,18 +67,38 @@ export async function fetchWithAuth(url, options = {}) {
     headers['X-Tenant-ID'] = options.tenantId;
   }
 
-  // Remove tenantId and responseType from options before passing to fetch
-  const { tenantId, responseType, ...fetchOptions } = options;
+  // Remove app-only options before passing to fetch
+  const {
+    tenantId,
+    responseType,
+    suppressUnauthorizedRedirect,
+    onUnauthorized,
+    ...fetchOptions
+  } = options;
 
   const response = await fetch(`${API_BASE_URL}${url}`, {
     ...fetchOptions,
     headers,
   });
 
-  // Handle 401 Unauthorized (redirect to login)
+  // Handle 401 Unauthorized
   if (response.status === 401) {
-    window.location.href = '/login';
-    throw new Error('Unauthorized');
+    if (typeof onUnauthorized === 'function') {
+      try {
+        onUnauthorized(response);
+      } catch (_error) {
+        // Ignore callback failures and preserve auth handling.
+      }
+    }
+
+    const shouldRedirect = !suppressUnauthorizedRedirect && shouldRedirectToLoginOnUnauthorized();
+    if (shouldRedirect) {
+      window.location.href = '/login';
+    }
+
+    const err = new Error('Unauthorized');
+    err.status = 401;
+    throw err;
   }
 
   // Handle 403 Forbidden (access denied)
@@ -631,6 +657,24 @@ export async function hardDeleteListShares(tenantId, shareIds = []) {
   });
 }
 
+export async function getGuestFeedbackLog(tenantId, { force = false, limit = 200 } = {}) {
+  const safeLimit = Number.isFinite(Number(limit)) ? Math.max(1, Math.min(1000, Number(limit))) : 200;
+  return queryRequest(
+    ['guestFeedbackLog', tenantId, safeLimit],
+    () => fetchWithAuth(`/lists/shares/feedback-log?limit=${safeLimit}`, { tenantId }),
+    { staleTimeMs: STATS_CACHE_MS, force }
+  );
+}
+
+export async function getGuestAlerts(tenantId, { force = false, limit = 200 } = {}) {
+  const safeLimit = Number.isFinite(Number(limit)) ? Math.max(1, Math.min(1000, Number(limit))) : 200;
+  return queryRequest(
+    ['guestAlerts', tenantId, safeLimit],
+    () => fetchWithAuth(`/lists/shares/alerts?limit=${safeLimit}`, { tenantId }),
+    { staleTimeMs: STATS_CACHE_MS, force }
+  );
+}
+
 // ============================================================================
 // Admin endpoints
 // ============================================================================
@@ -712,6 +756,28 @@ export async function getIntegrationStatus(tenantId) {
 }
 
 /**
+ * Live Dropbox folder browse/search for provider sync-folder configuration
+ * @param {string} tenantId - Tenant ID
+ * @param {{query?: string, path?: string, limit?: number, depth?: number, mode?: string}} options
+ * @returns {Promise<{folders: string[], has_more?: boolean}>}
+ */
+export async function getLiveDropboxFolders(tenantId, options = {}) {
+  const params = new URLSearchParams();
+  const query = String(options?.query || '').trim();
+  const path = String(options?.path || '').trim();
+  const limit = Number(options?.limit || 0);
+  const depth = Number(options?.depth || 0);
+  const mode = String(options?.mode || '').trim();
+  if (query) params.append('q', query);
+  if (path) params.append('path', path);
+  if (Number.isFinite(limit) && limit > 0) params.append('limit', String(limit));
+  if (Number.isFinite(depth) && depth > 0) params.append('depth', String(depth));
+  if (mode) params.append('mode', mode);
+  const suffix = params.toString() ? `?${params.toString()}` : '';
+  return fetchWithAuth(`/admin/integrations/dropbox/folders${suffix}`, { tenantId });
+}
+
+/**
  * Start provider OAuth connection for current tenant (tenant admin scope)
  * @param {string} tenantId - Tenant ID
  * @param {'dropbox'|'gdrive'} provider - Provider id
@@ -763,7 +829,7 @@ export async function disconnectIntegration(tenantId, provider) {
 /**
  * Update integration config for tenant-admin provider settings
  * @param {string} tenantId - Tenant ID
- * @param {{provider?: string, syncFolders?: string[], defaultSourceProvider?: string}} payload
+ * @param {{provider?: string, syncFolders?: string[], defaultSourceProvider?: string, isActive?: boolean}} payload
  * @returns {Promise<Object>} Updated config
  */
 export async function updateIntegrationConfig(tenantId, payload = {}) {
@@ -776,6 +842,9 @@ export async function updateIntegrationConfig(tenantId, payload = {}) {
   }
   if (payload.defaultSourceProvider !== undefined) {
     body.default_source_provider = payload.defaultSourceProvider;
+  }
+  if (payload.isActive !== undefined) {
+    body.is_active = !!payload.isActive;
   }
   const result = await fetchWithAuth('/admin/integrations/dropbox/config', {
     method: 'PATCH',

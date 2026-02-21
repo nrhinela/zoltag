@@ -1413,6 +1413,7 @@ class ImageEditor extends LitElement {
     marketingNoteSaving: { type: Boolean },
     marketingNoteError: { type: String },
     comments: { type: Array },
+    ratingEvents: { type: Array },
     commentsLoading: { type: Boolean },
     commentsError: { type: String },
     commentText: { type: String },
@@ -1489,6 +1490,7 @@ class ImageEditor extends LitElement {
     this.marketingNoteSaving = false;
     this.marketingNoteError = '';
     this.comments = [];
+    this.ratingEvents = [];
     this.commentsLoading = false;
     this.commentsError = '';
     this.commentText = '';
@@ -1505,6 +1507,7 @@ class ImageEditor extends LitElement {
     this._ratingBurstActive = false;
     this._ratingBurstTimer = null;
     this._suppressPermatagRefresh = false;
+    this._commentsLoadedForImageId = null;
     this._prevBodyOverflow = null;
     this._handlePermatagEvent = (event) => {
       if ((this.open || this.embedded) && event?.detail?.imageId === this.image?.id) {
@@ -1606,6 +1609,8 @@ class ImageEditor extends LitElement {
     try {
       this.details = await getImageDetails(this.tenant, this.image.id);
       this._fetchMarketingNote();
+      // Prefetch feedback so the Feedback tab badge is accurate before tab click.
+      void this._loadComments();
     } catch (error) {
       this.error = 'Failed to load image details.';
       console.error('ImageEditor: fetchDetails failed', error);
@@ -1685,14 +1690,15 @@ class ImageEditor extends LitElement {
   }
 
   _setTab(tab) {
-    this.activeTab = tab;
-    if (tab === 'image') {
+    const nextTab = tab === 'comments' ? 'feedback' : tab;
+    this.activeTab = nextTab;
+    if (nextTab === 'image') {
       this._loadFullImage();
-    } else if (tab === 'similar') {
+    } else if (nextTab === 'similar') {
       this._loadSimilarImages();
-    } else if (tab === 'variants') {
+    } else if (nextTab === 'variants') {
       this._loadAssetVariants();
-    } else if (tab === 'comments') {
+    } else if (nextTab === 'feedback') {
       this._loadComments();
     }
   }
@@ -1813,6 +1819,8 @@ class ImageEditor extends LitElement {
 
   _resetComments() {
     this.comments = [];
+    this.ratingEvents = [];
+    this._commentsLoadedForImageId = null;
     this.commentsLoading = false;
     this.commentsError = '';
     this.commentText = '';
@@ -1822,11 +1830,21 @@ class ImageEditor extends LitElement {
     this.commentSortDesc = true;
   }
 
-  get _sortedComments() {
-    const rows = Array.isArray(this.comments) ? [...this.comments] : [];
+  get _sortedFeedbackEvents() {
+    const commentRows = (Array.isArray(this.comments) ? this.comments : []).map((comment) => ({
+      ...comment,
+      event_type: 'commented',
+      event_ts: comment?.created_at || null,
+    }));
+    const ratingRows = (Array.isArray(this.ratingEvents) ? this.ratingEvents : []).map((rating) => ({
+      ...rating,
+      event_type: 'rated',
+      event_ts: rating?.updated_at || rating?.created_at || null,
+    }));
+    const rows = [...commentRows, ...ratingRows];
     rows.sort((a, b) => {
-      const aTs = new Date(a?.created_at || 0).getTime();
-      const bTs = new Date(b?.created_at || 0).getTime();
+      const aTs = new Date(a?.event_ts || 0).getTime();
+      const bTs = new Date(b?.event_ts || 0).getTime();
       if (this.commentSortDesc) return bTs - aTs;
       return aTs - bTs;
     });
@@ -1835,16 +1853,19 @@ class ImageEditor extends LitElement {
 
   async _loadComments(force = false) {
     if (!this.details?.id || !this.tenant) return;
-    if (!force && (this.commentsLoading || this.comments.length > 0)) return;
+    const imageId = this.details.id;
+    if (!force && (this.commentsLoading || this._commentsLoadedForImageId === imageId)) return;
     this.commentsLoading = true;
     this.commentsError = '';
-    const imageId = this.details.id;
     try {
       const payload = await getImageComments(this.tenant, imageId);
       if (this.details?.id !== imageId) return;
       this.comments = Array.isArray(payload?.comments) ? payload.comments : [];
+      this.ratingEvents = Array.isArray(payload?.ratings) ? payload.ratings : [];
+      this._commentsLoadedForImageId = imageId;
     } catch (error) {
       if (this.details?.id !== imageId) return;
+      this._commentsLoadedForImageId = null;
       this.commentsError = error?.message || 'Failed to load comments.';
       console.error('ImageEditor: failed to load comments', error);
     } finally {
@@ -3286,12 +3307,33 @@ class ImageEditor extends LitElement {
     `;
   }
 
-  _renderCommentsTab() {
-    const rows = this._sortedComments;
+  _renderFeedbackTab() {
+    const rows = this._sortedFeedbackEvents;
+    const renderRatingSummary = (ratingValue) => {
+      const rating = Number(ratingValue);
+      if (Number.isFinite(rating) && rating <= 0) {
+        return html`
+          <span class="inline-flex items-center gap-2 text-sm text-gray-800">
+            <span class="text-gray-600" aria-hidden="true">🗑</span>
+            <span>rated this a 0</span>
+          </span>
+        `;
+      }
+      if (Number.isFinite(rating) && rating > 0) {
+        const safeRating = Math.max(1, Math.min(3, rating));
+        return html`
+          <span class="inline-flex items-center gap-2 text-sm text-gray-800">
+            <span class="text-yellow-500" aria-hidden="true">${'★'.repeat(safeRating)}</span>
+            <span>rated this a ${safeRating}</span>
+          </span>
+        `;
+      }
+      return html`<span class="text-sm text-gray-700">rated this image</span>`;
+    };
     return html`
       <div class="space-y-3 text-sm text-gray-700">
         <div class="flex items-center justify-between gap-2">
-          <div class="text-xs font-semibold text-gray-600 uppercase">Comments</div>
+          <div class="text-xs font-semibold text-gray-600 uppercase">Feedback</div>
           <div class="flex items-center gap-2">
             <button
               class="nav-button"
@@ -3345,25 +3387,27 @@ class ImageEditor extends LitElement {
 
         ${rows.length > 0 ? html`
           <div class="space-y-2">
-            ${rows.map((comment) => html`
+            ${rows.map((entry) => html`
               <div class="border border-gray-200 rounded-lg p-3 bg-white">
                 <div class="flex items-start justify-between gap-2">
                   <div class="min-w-0">
                     <div class="text-xs font-semibold text-gray-700">
-                      ${(comment.author_name || comment.author_email || 'User')}
-                      ${comment.author_email ? html` (${comment.author_email})` : html``}
+                      ${(entry.author_name || entry.author_email || 'User')}
+                      ${entry.author_email ? html` (${entry.author_email})` : html``}
                     </div>
-                    <div class="text-sm text-gray-800 whitespace-pre-wrap break-words">${comment.comment_text}</div>
+                    ${entry.event_type === 'rated'
+                      ? renderRatingSummary(entry.rating)
+                      : html`<div class="text-sm text-gray-800 whitespace-pre-wrap break-words">${entry.comment_text}</div>`}
                   </div>
                   <div class="flex flex-col items-end gap-2">
-                    <div class="text-xs text-gray-500 whitespace-nowrap">${this._formatDateTime(comment.created_at)}</div>
-                    ${comment.can_delete ? html`
+                    <div class="text-xs text-gray-500 whitespace-nowrap">${this._formatDateTime(entry.event_ts || entry.created_at || entry.updated_at)}</div>
+                    ${entry.event_type === 'commented' && entry.can_delete ? html`
                       <button
                         class="nav-button text-red-600 border-red-200 hover:bg-red-50"
-                        @click=${() => this._handleDeleteComment(comment)}
-                        ?disabled=${this.commentDeletingId === String(comment.id)}
+                        @click=${() => this._handleDeleteComment(entry)}
+                        ?disabled=${this.commentDeletingId === String(entry.id)}
                       >
-                        ${this.commentDeletingId === String(comment.id) ? 'Deleting…' : 'Delete'}
+                        ${this.commentDeletingId === String(entry.id) ? 'Deleting…' : 'Delete'}
                       </button>
                     ` : html``}
                   </div>
@@ -3373,7 +3417,7 @@ class ImageEditor extends LitElement {
           </div>
         ` : html`
           <div class="text-sm text-gray-500">
-            ${this.commentsLoading ? 'Loading comments...' : 'No comments yet.'}
+            ${this.commentsLoading ? 'Loading feedback...' : 'No feedback yet.'}
           </div>
         `}
       </div>
@@ -3382,24 +3426,25 @@ class ImageEditor extends LitElement {
 
   _renderTopTabs() {
     const commentCount = Number(this.details?.comment_count || 0);
+    const feedbackCount = commentCount + (Array.isArray(this.ratingEvents) ? this.ratingEvents.length : 0);
     return html`
       <div class="editor-tab-strip">
         <button class="tab-button ${this.activeTab === 'edit' ? 'active' : ''}" @click=${() => this._setTab('edit')}>
           Edit
+        </button>
+        <button class="tab-button ${this.activeTab === 'feedback' ? 'active' : ''}" @click=${() => this._setTab('feedback')}>
+          Feedback
+          ${feedbackCount > 0 ? html`
+            <span class="ml-1 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-amber-100 text-amber-800 text-[10px] font-semibold">
+              ${feedbackCount}
+            </span>
+          ` : html``}
         </button>
         <button class="tab-button ${this.activeTab === 'metadata' ? 'active' : ''}" @click=${() => this._setTab('metadata')}>
           Metadata
         </button>
         <button class="tab-button ${this.activeTab === 'tags' ? 'active' : ''}" @click=${() => this._setTab('tags')}>
           Tags
-        </button>
-        <button class="tab-button ${this.activeTab === 'comments' ? 'active' : ''}" @click=${() => this._setTab('comments')}>
-          Comments
-          ${commentCount > 0 ? html`
-            <span class="ml-1 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-amber-100 text-amber-800 text-[10px] font-semibold">
-              ${commentCount}
-            </span>
-          ` : html``}
         </button>
         <button class="tab-button ${this.activeTab === 'similar' ? 'active' : ''}" @click=${() => this._setTab('similar')}>
           Similar
@@ -3845,8 +3890,8 @@ class ImageEditor extends LitElement {
       ? this._renderMetadataTab()
       : this.activeTab === 'tags'
         ? this._renderTagsReadOnly()
-        : this.activeTab === 'comments'
-          ? this._renderCommentsTab()
+        : this.activeTab === 'feedback'
+          ? this._renderFeedbackTab()
         : this._renderEditTab();
 
     if (this.activeTab === 'variants') {

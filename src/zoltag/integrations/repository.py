@@ -130,7 +130,7 @@ class TenantIntegrationRepository:
             tenant_id=str(tenant_row.id),
             provider_type=normalized,
             label=DEFAULT_PROVIDER_LABELS.get(normalized, normalized),
-            is_active=True,
+            is_active=False,
             is_default_sync_source=is_default_sync_source,
             secret_scope=scope,
             config_json=self._default_config(normalized, scope),
@@ -199,7 +199,7 @@ class TenantIntegrationRepository:
         return self._synthetic_record(tenant_row, "dropbox", is_default_sync_source=True)
 
     def get_primary_records_by_type(self, tenant_row: Tenant) -> dict[str, ProviderIntegrationRecord]:
-        records = self.list_provider_records(tenant_row, include_placeholders=True)
+        records = self.list_provider_records(tenant_row, include_inactive=True, include_placeholders=True)
         default_record = self.resolve_default_sync_provider(tenant_row, records=records)
 
         grouped: dict[str, list[ProviderIntegrationRecord]] = {provider: [] for provider in ALLOWED_PROVIDER_TYPES}
@@ -326,7 +326,7 @@ class TenantIntegrationRepository:
             tenant_id=tenant_row.id,
             provider_type=normalized,
             label=(str(label or "").strip() or DEFAULT_PROVIDER_LABELS.get(normalized, normalized)),
-            is_active=True,
+            is_active=False,
             is_default_sync_source=not default_exists,
             secret_scope=scope,
             config_json=self._default_config(normalized, scope),
@@ -443,7 +443,7 @@ class TenantIntegrationRepository:
         provider_type: str,
         *,
         label: str | None = None,
-        is_active: bool = True,
+        is_active: bool = False,
         is_default_sync_source: bool = False,
         secret_scope: str | None = None,
         config_json: dict[str, Any] | None = None,
@@ -582,7 +582,7 @@ class TenantIntegrationRepository:
         return created
 
     def build_runtime_context(self, tenant_row: Tenant) -> dict[str, Any]:
-        records = self.list_provider_records(tenant_row, include_placeholders=True)
+        records = self.list_provider_records(tenant_row, include_inactive=True, include_placeholders=True)
         default_record = self.resolve_default_sync_provider(tenant_row, records=records)
         primary = self.get_primary_records_by_type(tenant_row)
 
@@ -595,6 +595,7 @@ class TenantIntegrationRepository:
                 "provider_id": dropbox_record.id,
                 "label": dropbox_record.label,
                 "source": dropbox_record.source,
+                "is_active": bool(dropbox_record.is_active),
                 "secret_scope": dropbox_record.secret_scope,
                 "oauth_mode": str(dropbox_record.config_json.get("oauth_mode") or "").strip().lower(),
                 "sync_folders": normalize_sync_folders(dropbox_record.config_json.get("sync_folders")),
@@ -606,6 +607,7 @@ class TenantIntegrationRepository:
                 "provider_id": gdrive_record.id,
                 "label": gdrive_record.label,
                 "source": gdrive_record.source,
+                "is_active": bool(gdrive_record.is_active),
                 "secret_scope": gdrive_record.secret_scope,
                 "sync_folders": normalize_sync_folders(gdrive_record.config_json.get("sync_folders")),
                 "client_id": str(gdrive_record.config_json.get("client_id") or "").strip(),

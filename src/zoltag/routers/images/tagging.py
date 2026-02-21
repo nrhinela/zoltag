@@ -23,7 +23,7 @@ from zoltag.exif import (
     parse_exif_str,
 )
 from zoltag.tenant import Tenant
-from zoltag.metadata import Asset, ImageMetadata, MachineTag
+from zoltag.metadata import Asset, ImageMetadata, JobDefinition, MachineTag
 from zoltag.models.config import Keyword
 from zoltag.settings import settings
 from zoltag.image import ImageProcessor
@@ -150,6 +150,38 @@ async def upload_images(
         "failed": len([r for r in results if r["status"] == "error"]),
         "results": results
     }
+
+
+def _enqueue_build_embeddings(db: Session, tenant: Tenant) -> None:
+    """Queue a build-embeddings job for the tenant after upload. Silently skips if definition missing."""
+    import logging
+    from datetime import timezone
+    from sqlalchemy import text
+    logger = logging.getLogger(__name__)
+    try:
+        definition = db.query(JobDefinition).filter(
+            JobDefinition.key == "build-embeddings",
+            JobDefinition.is_active.is_(True),
+        ).first()
+        if not definition:
+            return
+        now = datetime.now(timezone.utc)
+        db.execute(text("""
+            INSERT INTO jobs (tenant_id, definition_id, source, status, priority, payload,
+                              scheduled_for, queued_at, max_attempts)
+            VALUES (:tenant_id, :definition_id, 'system', 'queued', 100, '{}',
+                    :now, :now, :max_attempts)
+        """), {
+            "tenant_id": str(tenant.id),
+            "definition_id": str(definition.id),
+            "now": now,
+            "max_attempts": int(definition.max_attempts or 2),
+        })
+        db.commit()
+        logger.info("Enqueued build-embeddings job for tenant %s", tenant.id)
+    except Exception as exc:
+        logger.warning("Failed to enqueue build-embeddings job: %s", exc)
+        db.rollback()
 
 
 @router.post("/images/upload-and-ingest", response_model=dict, operation_id="upload_and_ingest_image")
@@ -320,6 +352,9 @@ async def upload_and_ingest_image(
 
         db.commit()
         db.refresh(metadata)
+
+        # Enqueue background embedding generation for this tenant.
+        _enqueue_build_embeddings(db, tenant)
     except HTTPException:
         db.rollback()
         raise

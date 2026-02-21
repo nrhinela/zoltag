@@ -53,6 +53,7 @@ def send_guest_invite_email(
     invite_link: str,
     list_name: Optional[str] = None,
     inviter_name: Optional[str] = None,
+    tenant_name: Optional[str] = None,
 ) -> bool:
     """Send a guest invitation email via Resend.
 
@@ -61,6 +62,7 @@ def send_guest_invite_email(
         invite_link: The full invite link URL
         list_name: Name of the photo list being shared (optional)
         inviter_name: Name of person sending the invite (optional)
+        tenant_name: Tenant/org name for "on behalf of" text (optional)
 
     Returns:
         True if email sent successfully, False otherwise
@@ -72,54 +74,81 @@ def send_guest_invite_email(
     resend.api_key = settings.email_resend_api_key
 
     # Build email subject and body
-    subject = "You've been invited to view photos on Zoltag"
+    subject = "You're invited to view shared media"
     if list_name:
-        subject = f"Invitation to view '{list_name}' on Zoltag"
+        subject = f'Invitation to view "{list_name}"'
 
-    # HTML email body
+    list_phrase_html = (
+        f'the collection "<strong>{list_name}</strong>"'
+        if list_name
+        else "a shared collection"
+    )
+    list_phrase_text = f'the collection "{list_name}"' if list_name else "a shared collection"
+    tenant_phrase_html = f" on behalf of <strong>{tenant_name}</strong>" if tenant_name else ""
+    tenant_phrase_text = f" on behalf of {tenant_name}" if tenant_name else ""
+    invite_intro = (
+        f"<strong>{inviter_name}</strong> has invited you to view {list_phrase_html}{tenant_phrase_html}."
+        if inviter_name
+        else f"You've been invited to view {list_phrase_html}{tenant_phrase_html}."
+    )
+    invite_intro_text = (
+        f"{inviter_name} has invited you to view {list_phrase_text}{tenant_phrase_text}."
+        if inviter_name
+        else f"You've been invited to view {list_phrase_text}{tenant_phrase_text}."
+    )
+
+    # HTML email body (Option A: App Card)
     html_body = f"""
     <html>
-    <head>
-        <style>
-            body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }}
-            .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
-            .header {{ background: #4f46e5; color: white; padding: 20px; text-align: center; border-radius: 8px 8px 0 0; }}
-            .content {{ background: #f9fafb; padding: 30px; border-radius: 0 0 8px 8px; }}
-            .button {{ background: #4f46e5; color: white !important; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; margin: 20px 0; font-weight: bold; }}
-            .footer {{ color: #6b7280; font-size: 12px; margin-top: 20px; text-align: center; }}
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <div class="header">
-                <h1 style="margin: 0;">📸 Zoltag</h1>
-            </div>
-            <div class="content">
-                {"<p><strong>" + inviter_name + "</strong> has invited you to view " + (f"<strong>{list_name}</strong>" if list_name else "photos") + " on Zoltag.</p>" if inviter_name else f"<p>You've been invited to view {f'<strong>{list_name}</strong>' if list_name else 'photos'} on Zoltag.</p>"}
+    <body style="margin:0;padding:0;background:#f3f4f6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#111827;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f3f4f6;padding:28px 16px;">
+        <tr>
+          <td align="center">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:640px;">
+              <tr>
+                <td style="padding:0 0 12px 0;">
+                  <div style="margin-top:4px;font-size:14px;line-height:1.4;color:#6b7280;">Guest collection</div>
+                </td>
+              </tr>
+              <tr>
+                <td style="background:#ffffff;border:1px solid #e5e7eb;border-radius:16px;box-shadow:0 1px 3px rgba(15,23,42,0.08);padding:24px;">
+                  <div style="font-size:22px;font-weight:800;line-height:1.2;color:#111827;margin:0 0 12px 0;">Your'e Invited</div>
+                  <div style="font-size:15px;line-height:1.6;color:#374151;margin:0 0 14px 0;">{invite_intro}</div>
+                  <div style="font-size:15px;line-height:1.6;color:#374151;margin:0 0 20px 0;">
+                    This invitation includes your secure sign-in link. Use the button below to open the shared media.
+                  </div>
 
-                <p>Click the button below to accept the invitation and view the shared photos:</p>
+                  <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 20px 0;">
+                    <tr>
+                      <td style="border-radius:10px;background:#2563eb;">
+                        <a href="{invite_link}" style="display:inline-block;padding:12px 20px;font-size:15px;font-weight:700;color:#ffffff;text-decoration:none;border:1px solid #2563eb;border-radius:10px;">
+                          Sign In &amp; View Shared Media
+                        </a>
+                      </td>
+                    </tr>
+                  </table>
 
-                <a href="{invite_link}" class="button">View Shared Photos</a>
-
-                <p style="color: #6b7280; font-size: 14px;">
-                    Or copy and paste this link into your browser:<br>
-                    <code style="background: white; padding: 8px; display: inline-block; margin-top: 8px; border-radius: 4px; word-break: break-all;">{invite_link}</code>
-                </p>
-            </div>
-            <div class="footer">
-                <p>This invitation was sent to {to_email}</p>
-                <p>If you didn't expect this invitation, you can safely ignore this email.</p>
-            </div>
-        </div>
+                  <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:12px;padding:12px 14px;font-size:13px;line-height:1.5;color:#4b5563;">
+                    <div>This invitation was sent to <strong>{to_email}</strong>.</div>
+                    <div style="margin-top:6px;">This sign-in link is one-time and expires for security.</div>
+                    <div style="margin-top:6px;">If you didn't expect this invitation, you can safely ignore this email.</div>
+                  </div>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+      </table>
     </body>
     </html>
     """
 
     # Plain text fallback
     text_body = f"""
-You've been invited to view {"'" + list_name + "'" if list_name else "photos"} on Zoltag.
+{invite_intro_text}
 
-Click this link to accept the invitation:
+This invitation includes your secure sign-in link.
+Click this link to open the shared media:
 {invite_link}
 
 ---
@@ -204,11 +233,6 @@ async def send_guest_magic_link_email(
                 <p><strong>Click the button below to sign in:</strong></p>
 
                 <a href="{magic_link}" class="button">Sign In to Zoltag</a>
-
-                <p style="color: #6b7280; font-size: 14px;">
-                    Or copy and paste this link into your browser:<br>
-                    <code style="background: white; padding: 8px; display: inline-block; margin-top: 8px; border-radius: 4px; word-break: break-all;">{magic_link}</code>
-                </p>
 
                 {"<p style='margin-top: 30px;'><strong>Or enter this code on the sign-in page:</strong></p><div class='code-box'>" + otp_code + "</div>" if otp_code else ""}
 
@@ -318,11 +342,6 @@ async def send_guest_access_reminder_email(
                 <p><strong>Click the button below to continue:</strong></p>
 
                 <a href="{access_link}" class="button">View Shared Photos</a>
-
-                <p style="color: #6b7280; font-size: 14px;">
-                    Or copy and paste this link into your browser:<br>
-                    <code style="background: white; padding: 8px; display: inline-block; margin-top: 8px; border-radius: 4px; word-break: break-all;">{access_link}</code>
-                </p>
 
                 <p style="color: #6b7280; font-size: 14px; margin-top: 30px;">
                     After clicking the link, you'll be able to sign in securely with your email address.
