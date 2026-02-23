@@ -25,7 +25,20 @@ export class AppDataStateController extends BaseStateController {
       const flat = [];
       Object.entries(keywordsByCategory || {}).forEach(([category, list]) => {
         list.forEach((kw) => {
-          flat.push({ keyword: kw.keyword, category, count: kw.count || 0 });
+          flat.push({
+            keyword: kw.keyword,
+            category,
+            count: kw.count || 0,
+            prompt: kw.prompt || '',
+            person_id: kw.person_id ?? null,
+            tag_type: kw.tag_type || 'keyword',
+            category_tagged_count: Number.isFinite(Number(kw.category_tagged_count))
+              ? Number(kw.category_tagged_count)
+              : null,
+            category_missing_count: Number.isFinite(Number(kw.category_missing_count))
+              ? Number(kw.category_missing_count)
+              : null,
+          });
         });
       });
       this.host.keywords = flat.sort((a, b) => a.keyword.localeCompare(b.keyword));

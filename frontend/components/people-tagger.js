@@ -1,6 +1,7 @@
 import { LitElement, html, css } from 'lit';
 import { tailwind } from './tailwind-lit.js';
 import { getPeople, getImagePeopleTags, addImagePersonTag, removeImagePersonTag } from '../services/api.js';
+import { getStoredAppTenant } from '../services/app-storage.js';
 
 class PeopleTagger extends LitElement {
   static properties = {
@@ -255,12 +256,12 @@ class PeopleTagger extends LitElement {
   }
 
   async loadPeople() {
-    const tenantId = this.tenant || localStorage.getItem('tenantId') || 'default';
+    const tenantId = this.tenant || getStoredAppTenant() || 'default';
     this.people = await getPeople(tenantId, { limit: 500 });
   }
 
   async loadImagePeopleTags() {
-    const tenantId = this.tenant || localStorage.getItem('tenantId') || 'default';
+    const tenantId = this.tenant || getStoredAppTenant() || 'default';
     const data = await getImagePeopleTags(tenantId, this.imageId);
     this.peopleTags = data.people_tags || [];
   }
@@ -274,7 +275,7 @@ class PeopleTagger extends LitElement {
     this.loading = true;
     this.error = '';
     try {
-      const tenantId = this.tenant || localStorage.getItem('tenantId') || 'default';
+      const tenantId = this.tenant || getStoredAppTenant() || 'default';
       await addImagePersonTag(tenantId, this.imageId, {
         person_id: this.selectedPerson.id,
         confidence: this.confidence
@@ -296,7 +297,7 @@ class PeopleTagger extends LitElement {
     this.loading = true;
     this.error = '';
     try {
-      const tenantId = this.tenant || localStorage.getItem('tenantId') || 'default';
+      const tenantId = this.tenant || getStoredAppTenant() || 'default';
       await removeImagePersonTag(tenantId, this.imageId, personId);
       await this.loadImagePeopleTags();
     } catch (err) {

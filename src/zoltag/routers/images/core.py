@@ -7,7 +7,7 @@ import threading
 import time
 from typing import Dict, List, Optional, Tuple
 from uuid import UUID
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import func, distinct, and_, case, cast, Text, literal, or_, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, load_only
@@ -19,7 +19,7 @@ from zoltag.activity import EVENT_SEARCH_IMAGES, extract_client_ip, record_activ
 from zoltag.auth.dependencies import get_current_user, require_tenant_permission_from_header
 from zoltag.auth.models import UserProfile
 from zoltag.list_visibility import is_tenant_admin_user
-from zoltag.asset_helpers import load_assets_for_images
+from zoltag.asset_helpers import load_assets_for_images, bulk_preload_thumbnail_urls
 from zoltag.tenant import Tenant
 from zoltag.metadata import (
     Asset,
@@ -28,7 +28,14 @@ from zoltag.metadata import (
     ImageEmbedding,
     ImageMetadata,
     MachineTag,
+    PersonReferenceImage,
     Permatag,
+)
+from zoltag.models.sharing import MemberComment
+from zoltag.machine_tag_types import (
+    is_face_recognition_ml_tag_type,
+    is_similarity_ml_tag_type,
+    normalize_ml_tag_type,
 )
 from zoltag.models.config import Keyword, PhotoListItem
 from zoltag.tagging import calculate_tags, get_tagger
@@ -88,6 +95,70 @@ HYBRID_TEXT_PREFILTER_MAX = 4000
 HYBRID_TRIGRAM_THRESHOLD = 0.12
 TEXT_INDEX_SEMANTIC_BLEND = 0.35
 LEGACY_LEXICAL_SCORING_MAX_CANDIDATES = 250
+
+
+def _build_face_recognition_audit_empty_state(
+    *,
+    db: Session,
+    tenant: Tenant,
+    keyword_id: Optional[int],
+) -> Optional[dict]:
+    """Return a specific empty-state payload for face-recognition audit mode."""
+    if keyword_id is None:
+        return None
+
+    keyword_row = db.query(
+        Keyword.keyword,
+        Keyword.person_id,
+    ).filter(
+        tenant_column_filter(Keyword, tenant),
+        Keyword.id == keyword_id,
+    ).first()
+    if not keyword_row:
+        return None
+
+    keyword_value = str(keyword_row.keyword or "").strip()
+    min_references = max(1, int(getattr(settings, "face_recognition_min_references", 3) or 3))
+    if keyword_row.person_id is None:
+        return {
+            "code": "face_recognition_no_linked_person",
+            "title": "Face Recognition unavailable",
+            "message": "This keyword is not linked to a person record. Link a person in Keyword Admin to use Face Recognition.",
+            "keyword": keyword_value,
+            "min_references": min_references,
+        }
+
+    active_references = int(
+        db.query(func.count(PersonReferenceImage.id)).filter(
+            tenant_column_filter(PersonReferenceImage, tenant),
+            PersonReferenceImage.person_id == int(keyword_row.person_id),
+            PersonReferenceImage.is_active.is_(True),
+        ).scalar() or 0
+    )
+
+    if active_references < min_references:
+        return {
+            "code": "face_recognition_insufficient_references",
+            "title": "More reference photos required",
+            "message": (
+                f"Face Recognition needs at least {min_references} active reference photos for "
+                f"\"{keyword_value}\". Found {active_references}."
+            ),
+            "keyword": keyword_value,
+            "person_id": int(keyword_row.person_id),
+            "active_references": active_references,
+            "min_references": min_references,
+        }
+
+    return {
+        "code": "face_recognition_no_matches",
+        "title": "No high-confidence matches",
+        "message": "No high-confidence face matches were found for this keyword with the current filters.",
+        "keyword": keyword_value,
+        "person_id": int(keyword_row.person_id),
+        "active_references": active_references,
+        "min_references": min_references,
+    }
 
 
 def _log_images_search_event(
@@ -1241,6 +1312,8 @@ async def list_images(
     permatag_signum: Optional[int] = None,
     permatag_missing: bool = False,
     permatag_positive_missing: bool = False,
+    no_permatag_category: Optional[List[str]] = Query(default=None),
+    no_permatag_operator: str = "AND",
     category_filter_source: Optional[str] = None,
     category_filter_operator: Optional[str] = None,
     date_order: str = "desc",
@@ -1261,6 +1334,7 @@ async def list_images(
     )
 
     ml_keyword_id = None
+    normalized_ml_tag_type = normalize_ml_tag_type(ml_tag_type)
     if ml_keyword:
         normalized_keyword = ml_keyword.strip().lower()
         if normalized_keyword:
@@ -1286,6 +1360,11 @@ async def list_images(
     similarity_dedupe_enabled = bool(ml_similarity_dedupe)
     similarity_random_enabled = bool(ml_similarity_random)
     constrain_to_ml_matches = order_by_value == "ml_score" and ml_keyword_id is not None
+    is_face_recognition_audit_mode = (
+        constrain_to_ml_matches
+        and permatag_missing
+        and is_face_recognition_ml_tag_type(normalized_ml_tag_type)
+    )
     media_type_value = (media_type or "all").strip().lower()
     if media_type_value not in {"all", "image", "video"}:
         media_type_value = "all"
@@ -1323,8 +1402,10 @@ async def list_images(
         permatag_signum=permatag_signum,
         permatag_missing=permatag_missing,
         permatag_positive_missing=permatag_positive_missing,
+        no_permatag_categories=no_permatag_category,
+        no_permatag_operator=no_permatag_operator,
         ml_keyword=ml_keyword,
-        ml_tag_type=ml_tag_type,
+        ml_tag_type=normalized_ml_tag_type,
         apply_ml_tag_filter=not constrain_to_ml_matches,
     )
     # If any filter resulted in empty set, return empty response
@@ -1336,6 +1417,14 @@ async def list_images(
             "limit": limit,
             "offset": offset
         }
+        if is_face_recognition_audit_mode:
+            empty_state = _build_face_recognition_audit_empty_state(
+                db=db,
+                tenant=tenant,
+                keyword_id=ml_keyword_id,
+            )
+            if empty_state:
+                result["audit_empty_state"] = empty_state
         _log_images_search_event(
             db=db,
             request=request,
@@ -1881,7 +1970,7 @@ async def list_images(
             paginated_ids = sorted_ids[offset: offset + limit] if limit else sorted_ids[offset:]
             images = load_images_by_ordered_ids(paginated_ids)
         elif order_by_value == "ml_score" and ml_keyword_id:
-            is_ml_similarity_mode = str(ml_tag_type or "").strip().lower() == "ml-similarity"
+            is_ml_similarity_mode = is_similarity_ml_tag_type(normalized_ml_tag_type)
 
             if is_ml_similarity_mode:
                 similarity_seed_limit = similarity_seed_limit_value
@@ -1907,8 +1996,10 @@ async def list_images(
                     permatag_signum=1,
                     permatag_missing=False,
                     permatag_positive_missing=False,
+                    no_permatag_categories=no_permatag_category,
+                    no_permatag_operator=no_permatag_operator,
                     ml_keyword=ml_keyword,
-                    ml_tag_type=ml_tag_type,
+                    ml_tag_type=normalized_ml_tag_type,
                     apply_ml_tag_filter=False,
                 )
                 candidate_base_query, candidate_subqueries, candidate_exclude_subqueries, candidate_has_empty_filter = build_image_query_with_subqueries(
@@ -1930,8 +2021,10 @@ async def list_images(
                     permatag_signum=None,
                     permatag_missing=True,
                     permatag_positive_missing=permatag_positive_missing,
+                    no_permatag_categories=no_permatag_category,
+                    no_permatag_operator=no_permatag_operator,
                     ml_keyword=ml_keyword,
-                    ml_tag_type=ml_tag_type,
+                    ml_tag_type=normalized_ml_tag_type,
                     apply_ml_tag_filter=False,
                 )
 
@@ -2139,7 +2232,7 @@ async def list_images(
                     ml_query, ml_scores_subquery = builder.apply_ml_score_ordering(
                         query,
                         ml_keyword_id,
-                        ml_tag_type,
+                        normalized_ml_tag_type,
                         require_match=require_match,
                     )
                     if order_by_value == "processed":
@@ -2168,7 +2261,11 @@ async def list_images(
                     return ml_query, page_rows, resolved_offset, estimated_total
 
                 query, images, resolved_offset, total = fetch_ml_score_page(require_match=True)
-                if not images and query.limit(1).first() is None:
+                if (
+                    not images
+                    and query.limit(1).first() is None
+                    and not is_face_recognition_ml_tag_type(normalized_ml_tag_type)
+                ):
                     # No ML-tag matches at all: fall back to filtered rows ordered by ML score (nulls last).
                     query = base_query
                     query = builder.apply_subqueries(query, subqueries_list, exclude_subqueries_list)
@@ -2187,9 +2284,8 @@ async def list_images(
     asset_ids = list(asset_id_to_image_id.keys())
     # Use ml_tag_type if provided (for AI filtering), otherwise use active_tag_type.
     # ml-similarity is audit-only and not an actual machine tag type.
-    normalized_ml_tag_type = str(ml_tag_type or "").strip().lower()
-    if ml_tag_type and normalized_ml_tag_type != "ml-similarity":
-        tag_type_filter = ml_tag_type
+    if normalized_ml_tag_type and not is_similarity_ml_tag_type(normalized_ml_tag_type):
+        tag_type_filter = normalized_ml_tag_type
     else:
         tag_type_filter = get_tenant_setting(db, tenant.id, 'active_machine_tag_type', default='siglip')
     tags = db.query(MachineTag).filter(
@@ -2262,6 +2358,7 @@ async def list_images(
                 reviewed_at_by_image[image_id] = permatag.created_at
 
     assets_by_id = load_assets_for_images(db, images)
+    preloaded_urls = bulk_preload_thumbnail_urls(images, tenant, assets_by_id)
     images_list = []
     for idx, img in enumerate(images):
         storage_info = _resolve_storage_or_409(
@@ -2269,6 +2366,7 @@ async def list_images(
             tenant=tenant,
             db=db,
             assets_by_id=assets_by_id,
+            preloaded_urls=preloaded_urls,
         )
         machine_tags = sorted(tags_by_image.get(img.id, []), key=lambda x: x['confidence'], reverse=True)
         image_permatags = permatags_by_image.get(img.id, [])
@@ -2330,6 +2428,14 @@ async def list_images(
         "hybrid_vector_weight": vector_weight_value if text_query_value else None,
         "hybrid_lexical_weight": lexical_weight_value if text_query_value else None,
     }
+    if is_face_recognition_audit_mode and not images_list:
+        empty_state = _build_face_recognition_audit_empty_state(
+            db=db,
+            tenant=tenant,
+            keyword_id=ml_keyword_id,
+        )
+        if empty_state:
+            result["audit_empty_state"] = empty_state
     if similarity_groups is not None:
         result["similarity_groups"] = similarity_groups
     _log_images_search_event(
@@ -2498,6 +2604,7 @@ async def list_duplicate_images(
             "signum": permatag.signum,
         })
 
+    preloaded_urls = bulk_preload_thumbnail_urls(ordered_images, tenant, assets_by_id)
     images_list = []
     for img in ordered_images:
         storage_info = _resolve_storage_or_409(
@@ -2505,6 +2612,7 @@ async def list_duplicate_images(
             tenant=tenant,
             db=db,
             assets_by_id=assets_by_id,
+            preloaded_urls=preloaded_urls,
         )
         dup_meta = duplicate_meta_by_image_id.get(img.id, {})
         image_permatags = permatags_by_image.get(img.id, [])
@@ -2686,6 +2794,7 @@ def get_similar_images(
             "signum": tag.signum,
         })
 
+    preloaded_urls = bulk_preload_thumbnail_urls(ordered_images, tenant, assets_by_id)
     images_list = []
     for image_row in ordered_images:
         try:
@@ -2694,6 +2803,7 @@ def get_similar_images(
                 tenant=tenant,
                 db=db,
                 assets_by_id=assets_by_id,
+                preloaded_urls=preloaded_urls,
             )
         except HTTPException:
             continue
@@ -2810,6 +2920,12 @@ async def get_image(
         Permatag.asset_id == image.asset_id,
         tenant_column_filter(Permatag, tenant),
     ).scalar()
+    comment_count = int(
+        db.query(func.count(MemberComment.id)).filter(
+            MemberComment.asset_id == image.asset_id,
+            tenant_column_filter(MemberComment, tenant),
+        ).scalar() or 0
+    )
 
     storage_info = _resolve_storage_or_409(image=image, tenant=tenant, db=db)
     return {
@@ -2845,6 +2961,7 @@ async def get_image(
         "duration_ms": storage_info.asset.duration_ms if storage_info.asset else None,
         "rating": image.rating,
         "reviewed_at": reviewed_at.isoformat() if reviewed_at else None,
+        "comment_count": comment_count,
         "tags": machine_tags_list,
         "machine_tags_by_type": tags_by_type,
         "permatags": permatags_list,

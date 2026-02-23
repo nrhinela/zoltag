@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import mimetypes
 from dataclasses import dataclass
-from typing import Dict, Iterable, Optional
+from typing import Dict, Iterable, List, Optional
 
 from sqlalchemy.orm import Session
 
@@ -31,6 +31,9 @@ def _cache_bust_token(value: Optional[datetime]) -> Optional[str]:
 
 def _append_cache_bust(url: Optional[str], token: Optional[str]) -> Optional[str]:
     if not url or not token:
+        return url
+    # Signed URLs (GCS V4) already include an expiry — appending extra params breaks the signature
+    if "X-Goog-Signature" in url:
         return url
     separator = "&" if "?" in url else "?"
     return f"{url}{separator}v={token}"
@@ -61,6 +64,45 @@ def load_assets_for_images(db: Session, images: Iterable[ImageMetadata]) -> Dict
     return {str(asset.id): asset for asset in assets}
 
 
+def bulk_preload_thumbnail_urls(
+    images: List[ImageMetadata],
+    tenant: Tenant,
+    assets_by_id: Dict[str, "Asset"],
+) -> Dict[int, Optional[str]]:
+    """Pre-sign thumbnail URLs for a batch of images in parallel.
+
+    Returns a dict of image.id -> thumbnail_url. Pass the result to
+    resolve_image_storage via the preloaded_urls parameter to skip
+    per-image signing.
+    """
+    # Collect thumbnail keys per image
+    keys_by_image_id: Dict[int, Optional[str]] = {}
+    for image in images:
+        asset = assets_by_id.get(str(image.asset_id)) if image.asset_id is not None else None
+        legacy_thumbnail = getattr(image, "thumbnail_path", None)
+        thumbnail_key = (asset.thumbnail_key if asset else None) or legacy_thumbnail
+        keys_by_image_id[image.id] = thumbnail_key
+
+    unique_keys = [k for k in set(keys_by_image_id.values()) if k]
+    signed = tenant.bulk_sign_thumbnail_urls(settings, unique_keys)
+
+    result: Dict[int, Optional[str]] = {}
+    for image in images:
+        key = keys_by_image_id.get(image.id)
+        url = signed.get(key) if key else None
+        # Apply cache busting for non-signed URLs
+        if url and "X-Goog-Signature" not in url:
+            asset = assets_by_id.get(str(image.asset_id)) if image.asset_id is not None else None
+            token = (
+                _cache_bust_token(getattr(image, "last_processed", None))
+                or _cache_bust_token(getattr(asset, "updated_at", None) if asset else None)
+                or _cache_bust_token(getattr(image, "modified_time", None))
+            )
+            url = _append_cache_bust(url, token)
+        result[image.id] = url
+    return result
+
+
 def resolve_image_storage(
     *,
     image: ImageMetadata,
@@ -70,6 +112,7 @@ def resolve_image_storage(
     strict: Optional[bool] = None,
     require_thumbnail: bool = False,
     require_source: bool = False,
+    preloaded_thumbnail_url: Optional[str] = None,
 ) -> ResolvedImageStorage:
     """Resolve image storage fields with Asset-first fallback behavior."""
     strict_mode = settings.asset_strict_reads if strict is None else strict
@@ -106,13 +149,16 @@ def resolve_image_storage(
         if not (source_provider or "").strip() or not (source_key or "").strip():
             raise AssetReadinessError(f"Image {image.id} asset has no source provider/key.")
 
-    thumbnail_url = tenant.get_thumbnail_url(settings, thumbnail_key)
-    cache_token = (
-        _cache_bust_token(getattr(image, "last_processed", None))
-        or _cache_bust_token(getattr(asset, "updated_at", None) if asset is not None else None)
-        or _cache_bust_token(getattr(image, "modified_time", None))
-    )
-    thumbnail_url = _append_cache_bust(thumbnail_url, cache_token)
+    if preloaded_thumbnail_url is not None:
+        thumbnail_url = preloaded_thumbnail_url
+    else:
+        thumbnail_url = tenant.get_thumbnail_url(settings, thumbnail_key)
+        cache_token = (
+            _cache_bust_token(getattr(image, "last_processed", None))
+            or _cache_bust_token(getattr(asset, "updated_at", None) if asset is not None else None)
+            or _cache_bust_token(getattr(image, "modified_time", None))
+        )
+        thumbnail_url = _append_cache_bust(thumbnail_url, cache_token)
 
     return ResolvedImageStorage(
         asset=asset,

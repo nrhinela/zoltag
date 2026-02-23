@@ -1,0 +1,281 @@
+"""Face detection and recognition recompute commands."""
+
+from __future__ import annotations
+
+from typing import Optional
+
+import click
+from google.cloud import storage
+
+from zoltag.asset_helpers import resolve_image_storage
+from zoltag.cli.base import CliCommand
+from zoltag.face_recognition import (
+    OpenCVFallbackFaceRecognitionProvider,
+    get_default_face_provider,
+    recompute_face_detections,
+    recompute_face_recognition_tags,
+)
+from zoltag.metadata import ImageMetadata, PersonReferenceImage
+from zoltag.settings import settings
+
+
+@click.command(name='recompute-face-detections')
+@click.option('--tenant-id', required=True, help='Tenant ID for which to recompute detected faces')
+@click.option('--batch-size', default=25, type=int, help='Process images in batches')
+@click.option('--limit', default=None, type=int, help='Limit number of images to process')
+@click.option('--offset', default=0, type=int, help='Offset into image list')
+@click.option('--replace', is_flag=True, default=False, help='Replace existing detected_faces for processed images')
+def recompute_face_detections_command(
+    tenant_id: str,
+    batch_size: int,
+    limit: Optional[int],
+    offset: int,
+    replace: bool,
+):
+    """Recompute detected faces for tenant images."""
+    cmd = RecomputeFaceDetectionsCommand(
+        tenant_id=tenant_id,
+        batch_size=batch_size,
+        limit=limit,
+        offset=offset,
+        replace=replace,
+    )
+    cmd.run()
+
+
+@click.command(name='recompute-face-recognition-tags')
+@click.option('--tenant-id', required=True, help='Tenant ID for which to recompute face-recognition suggestions')
+@click.option('--batch-size', default=200, type=int, help='Process candidate images in batches')
+@click.option('--limit', default=None, type=int, help='Limit number of candidate images considered')
+@click.option('--offset', default=0, type=int, help='Offset into candidate image list')
+@click.option('--replace', is_flag=True, default=False, help='Replace existing face-recognition suggestions for scoped keywords')
+@click.option('--person-id', default=None, type=int, help='Scope recompute to one person ID')
+@click.option('--keyword-id', default=None, type=int, help='Scope recompute to one person keyword ID')
+@click.option('--min-references', default=None, type=int, help='Minimum active references required (defaults to app setting)')
+@click.option('--threshold', default=None, type=float, help='Suggestion threshold [0-1] (defaults to app setting)')
+def recompute_face_recognition_tags_command(
+    tenant_id: str,
+    batch_size: int,
+    limit: Optional[int],
+    offset: int,
+    replace: bool,
+    person_id: Optional[int],
+    keyword_id: Optional[int],
+    min_references: Optional[int],
+    threshold: Optional[float],
+):
+    """Recompute person tag suggestions using face-recognition similarity."""
+    cmd = RecomputeFaceRecognitionTagsCommand(
+        tenant_id=tenant_id,
+        batch_size=batch_size,
+        limit=limit,
+        offset=offset,
+        replace=replace,
+        person_id=person_id,
+        keyword_id=keyword_id,
+        min_references=max(1, int(min_references or settings.face_recognition_min_references)),
+        threshold=float(threshold if threshold is not None else settings.face_recognition_suggest_threshold),
+    )
+    cmd.run()
+
+
+class RecomputeFaceDetectionsCommand(CliCommand):
+    """Batch face detection command."""
+
+    def __init__(
+        self,
+        tenant_id: str,
+        batch_size: int,
+        limit: Optional[int],
+        offset: int,
+        replace: bool,
+    ) -> None:
+        super().__init__()
+        self.tenant_id = tenant_id
+        self.batch_size = batch_size
+        self.limit = limit
+        self.offset = offset
+        self.replace = replace
+
+    def run(self):
+        """Execute face detection refresh."""
+        self.setup_db()
+        try:
+            self.tenant = self.load_tenant(self.tenant_id)
+            provider = get_default_face_provider()
+            click.echo(f"Using face provider: {provider.model_name} ({provider.model_version})")
+            fallback_provider = None
+            if str(provider.model_name or "").strip() == "face_recognition":
+                fallback_provider = OpenCVFallbackFaceRecognitionProvider()
+                click.echo(f"Fallback provider enabled: {fallback_provider.model_name} ({fallback_provider.model_version})")
+            storage_client = storage.Client(project=settings.gcp_project_id)
+            thumbnail_bucket = storage_client.bucket(self.tenant.get_thumbnail_bucket(settings))
+
+            def _load_image_bytes(image: ImageMetadata):
+                storage_info = resolve_image_storage(
+                    image=image,
+                    tenant=self.tenant,
+                    db=self.db,
+                    strict=False,
+                )
+                thumbnail_key = (storage_info.thumbnail_key or "").strip()
+                source_key = (storage_info.source_key or "").strip()
+                media_type = str(getattr(getattr(storage_info, "asset", None), "media_type", "") or "").strip() or None
+                if not thumbnail_key:
+                    return {
+                        "bytes": None,
+                        "debug": {
+                            "thumbnail_key": None,
+                            "source_key": source_key or None,
+                            "media_type": media_type,
+                        },
+                    }
+                blob = thumbnail_bucket.blob(thumbnail_key)
+                if not blob.exists():
+                    return {
+                        "bytes": None,
+                        "debug": {
+                            "thumbnail_key": thumbnail_key,
+                            "source_key": source_key or None,
+                            "media_type": media_type,
+                        },
+                    }
+                return {
+                    "bytes": blob.download_as_bytes(),
+                    "debug": {
+                        "thumbnail_key": thumbnail_key,
+                        "source_key": source_key or None,
+                        "media_type": media_type,
+                    },
+                }
+
+            def _on_progress(payload: dict):
+                stage = str((payload or {}).get("stage") or "").strip().lower()
+                if stage == "start":
+                    click.echo(
+                        "Starting face detections: "
+                        f"{int(payload.get('total_candidates') or 0)} candidates "
+                        f"(batch={int(payload.get('batch_size') or self.batch_size)}, "
+                        f"offset={int(payload.get('offset') or self.offset)}, "
+                        f"limit={payload.get('limit') if payload.get('limit') is not None else 'none'}, "
+                        "media=image-only)"
+                    )
+                    return
+                if stage == "batch":
+                    elapsed = float(payload.get("elapsed_seconds") or 0.0)
+                    processed = int(payload.get("processed") or 0)
+                    attempted = int(payload.get("attempted") or 0)
+                    rate = (processed / elapsed) if elapsed > 0 else 0.0
+                    click.echo(
+                        "Progress: "
+                        f"{attempted} attempted · "
+                        f"{processed} processed · "
+                        f"{int(payload.get('skipped') or 0)} skipped "
+                        f"(missing-bytes={int(payload.get('skipped_missing_bytes') or 0)}, "
+                        f"detect-error={int(payload.get('skipped_detect_error') or 0)}, "
+                        f"fallback-used={int(payload.get('fallback_used') or 0)}) · "
+                        f"{int(payload.get('detected_faces') or 0)} faces · "
+                        f"{elapsed:.1f}s elapsed · "
+                        f"{rate:.2f}/s"
+                    )
+
+            summary = recompute_face_detections(
+                self.db,
+                tenant_id=self.tenant.id,
+                provider=provider,
+                fallback_provider=fallback_provider,
+                load_image_bytes=_load_image_bytes,
+                replace=self.replace,
+                batch_size=self.batch_size,
+                limit=self.limit,
+                offset=self.offset,
+                progress_callback=_on_progress,
+            )
+            click.echo(
+                "✓ Face detections refreshed: "
+                f"{int(summary.get('attempted') or 0)} attempted · "
+                f"{summary['processed']} processed · "
+                f"{summary['skipped']} skipped "
+                f"(missing-bytes={int(summary.get('skipped_missing_bytes') or 0)}, "
+                f"detect-error={int(summary.get('skipped_detect_error') or 0)}, "
+                f"fallback-used={int(summary.get('fallback_used') or 0)}) · "
+                f"{summary['detected_faces']} faces"
+            )
+            if summary.get("attempted_sample"):
+                click.echo(f"Sample candidate: {summary['attempted_sample']}")
+            if summary.get("detect_error_sample"):
+                click.echo(f"Sample detect error: {summary['detect_error_sample']}")
+        finally:
+            self.cleanup_db()
+
+
+class RecomputeFaceRecognitionTagsCommand(CliCommand):
+    """Batch face-recognition suggestion command."""
+
+    def __init__(
+        self,
+        tenant_id: str,
+        batch_size: int,
+        limit: Optional[int],
+        offset: int,
+        replace: bool,
+        person_id: Optional[int],
+        keyword_id: Optional[int],
+        min_references: int,
+        threshold: float,
+    ) -> None:
+        super().__init__()
+        self.tenant_id = tenant_id
+        self.batch_size = batch_size
+        self.limit = limit
+        self.offset = offset
+        self.replace = replace
+        self.person_id = person_id
+        self.keyword_id = keyword_id
+        self.min_references = min_references
+        self.threshold = threshold
+
+    def run(self):
+        """Execute face-recognition tag recompute."""
+        self.setup_db()
+        try:
+            self.tenant = self.load_tenant(self.tenant_id)
+            provider = get_default_face_provider()
+            click.echo(f"Using face provider: {provider.model_name} ({provider.model_version})")
+            storage_client = storage.Client(project=settings.gcp_project_id)
+            reference_bucket = storage_client.bucket(self.tenant.get_person_reference_bucket(settings))
+
+            def _load_reference_image_bytes(reference: PersonReferenceImage) -> bytes | None:
+                storage_key = (reference.storage_key or "").strip()
+                if not storage_key:
+                    return None
+
+                ref_blob = reference_bucket.blob(storage_key)
+                if ref_blob.exists():
+                    return ref_blob.download_as_bytes()
+                return None
+
+            summary = recompute_face_recognition_tags(
+                self.db,
+                tenant_id=self.tenant.id,
+                provider=provider,
+                load_reference_image_bytes=_load_reference_image_bytes,
+                min_references=self.min_references,
+                threshold=self.threshold,
+                replace=self.replace,
+                person_id=self.person_id,
+                keyword_id=self.keyword_id,
+                limit=self.limit,
+                offset=self.offset,
+                batch_size=self.batch_size,
+            )
+
+            click.echo(
+                "✓ Face-recognition tags refreshed: "
+                f"{summary['tags_written']} tags · "
+                f"{summary['images_considered']} images · "
+                f"{summary['keywords_considered']} keywords "
+                f"({summary['keywords_skipped']} skipped, min refs)"
+            )
+        finally:
+            self.cleanup_db()

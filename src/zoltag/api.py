@@ -33,6 +33,7 @@ from zoltag.routers import (
     admin_tenants,
     admin_keywords,
     admin_integrations,
+    admin_database,
     admin_roles,
     dropbox,
     gdrive,
@@ -40,6 +41,8 @@ from zoltag.routers import (
     config,
     nl_search,
     jobs,
+    sharing,
+    guest,
 )
 
 app = FastAPI(
@@ -143,6 +146,7 @@ app.include_router(admin_people.router)
 app.include_router(admin_tenants.router)
 app.include_router(admin_keywords.router)
 app.include_router(admin_integrations.router)
+app.include_router(admin_database.router)
 app.include_router(admin_roles.router)
 app.include_router(dropbox.router)
 app.include_router(gdrive.router)
@@ -150,6 +154,8 @@ app.include_router(sync.router)
 app.include_router(config.router)
 app.include_router(nl_search.router)
 app.include_router(jobs.router)
+app.include_router(sharing.router)
+app.include_router(guest.router)
 
 # Static file paths
 static_dir = Path(__file__).parent / "static"

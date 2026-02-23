@@ -112,6 +112,8 @@ export class CurateExploreTab extends LitElement {
     curateKeywordFilters: { type: Object },
     curateKeywordOperators: { type: Object },
     curateNoPositivePermatags: { type: Boolean },
+    curateNoPermatagCategories: { type: Array },
+    curateNoPermatagOperator: { type: String },
     minRating: { type: Object },
     mediaType: { type: String },
     dropboxPathPrefix: { type: String },
@@ -179,6 +181,8 @@ export class CurateExploreTab extends LitElement {
     this.curateKeywordFilters = {};
     this.curateKeywordOperators = {};
     this.curateNoPositivePermatags = false;
+    this.curateNoPermatagCategories = [];
+    this.curateNoPermatagOperator = 'AND';
     this.minRating = null;
     this.mediaType = 'all';
     this.dropboxPathPrefix = '';
@@ -979,14 +983,7 @@ export class CurateExploreTab extends LitElement {
     const filters = [];
 
     // Build keyword filter from modern curateKeywordFilters (multi-select support)
-    if (this.curateNoPositivePermatags) {
-      filters.push({
-        type: 'keyword',
-        untagged: true,
-        displayLabel: 'Keywords',
-        displayValue: 'Untagged',
-      });
-    } else if (this.curateKeywordFilters && Object.keys(this.curateKeywordFilters).length > 0) {
+    if (this.curateKeywordFilters && Object.keys(this.curateKeywordFilters).length > 0) {
       // Convert Map<category, Set<keyword>> to filter format
       const keywordsByCategory = {};
       Object.entries(this.curateKeywordFilters).forEach(([category, keywords]) => {
@@ -1009,6 +1006,29 @@ export class CurateExploreTab extends LitElement {
           displayValue: 'Multiple',
         });
       }
+    }
+
+    const noPermatagCategories = Array.isArray(this.curateNoPermatagCategories)
+      ? Array.from(new Set(this.curateNoPermatagCategories.map((value) => String(value || '').trim()).filter(Boolean)))
+      : [];
+    const noPermatagUntagged = Boolean(this.curateNoPositivePermatags);
+    const noPermatagOperator = String(this.curateNoPermatagOperator || 'AND').trim().toUpperCase() === 'OR'
+      ? 'OR'
+      : 'AND';
+    if (noPermatagCategories.length || noPermatagUntagged) {
+      const displayValues = [];
+      if (noPermatagUntagged) displayValues.push('Untagged');
+      displayValues.push(...noPermatagCategories.map((category) => `No ${category} tags`));
+      filters.push({
+        type: 'tag_coverage',
+        noPermatagCategories,
+        includeUntagged: noPermatagUntagged,
+        operator: noPermatagOperator,
+        displayLabel: 'Tag Coverage',
+        displayValue: displayValues.length <= 2
+          ? displayValues.join(', ')
+          : `${displayValues.length} rules`,
+      });
     }
 
     if (this.minRating !== null && this.minRating !== undefined && this.minRating !== '') {

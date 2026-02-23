@@ -17,6 +17,7 @@ import './activity-audit.js';
 import './shared/widgets/filter-chips.js';
 import './shared/widgets/keyword-dropdown.js';
 
+import { supabase } from '../services/supabase.js';
 import { initializeAppCoreSetup } from './state/app-core-setup.js';
 import { initializeAppDefaultState } from './state/app-default-state.js';
 import { initializeAppConstructorWiring } from './state/app-constructor-wiring.js';
@@ -42,6 +43,9 @@ import { propertyGridStyles } from './shared/widgets/property-grid.js';
 import { getTenants, getSystemSettings } from '../services/api.js';
 import './library-integrations-admin.js';
 import './library-jobs-admin.js';
+import './share-list-modal.js';
+import './admin-reviews-panel.js';
+import { getStoredAppTenant } from '../services/app-storage.js';
 
 class ZoltagApp extends LitElement {
   static styles = [tailwind, zoltagAppStyles, propertyGridStyles];
@@ -58,6 +62,10 @@ class ZoltagApp extends LitElement {
       homeRecommendationsTab: { type: String },
       keywords: { type: Array },
       homeLists: { type: Array },
+      homeFeedbackLog: { type: Array },
+      homeAlerts: { type: Array },
+      homeFeedbackOffset: { type: Number },
+      homeFeedbackLimit: { type: Number },
       queueState: { type: Object },
       queueNotice: { type: Object },
       imageStats: { type: Object },
@@ -123,6 +131,7 @@ class ZoltagApp extends LitElement {
       curateAuditHideDeleted: { type: Boolean },
       curateAuditMinRating: { type: [Number, String] },
       curateAuditNoPositivePermatags: { type: Boolean },
+      curateAuditEmptyState: { type: Object },
       curateAuditDropboxPathPrefix: { type: String },
       curateAuditFilenameQuery: { type: String },
       curateAuditTextQuery: { type: String },
@@ -131,6 +140,8 @@ class ZoltagApp extends LitElement {
       homeSubTab: { type: String },
       curateAdvancedOpen: { type: Boolean },
       curateNoPositivePermatags: { type: Boolean },
+      curateNoPermatagCategories: { type: Array },
+      curateNoPermatagOperator: { type: String },
       activeCurateTagSource: { type: String },
       curateCategoryCards: { type: Array },
       curateAuditTargets: { type: Array },
@@ -146,6 +157,7 @@ class ZoltagApp extends LitElement {
       currentUser: { type: Object },
       tenantAccessBlocked: { type: Boolean },
       tenantAccessBlockedMessage: { type: String },
+      tenantSelectionRequired: { type: Boolean },
       providerAdminTenant: { type: Object },
       providerAdminSystemSettings: { type: Object },
       providerAdminLoading: { type: Boolean },
@@ -164,7 +176,7 @@ class ZoltagApp extends LitElement {
       super();
       let storedTenant = '';
       try {
-          storedTenant = (localStorage.getItem('tenantId') || localStorage.getItem('currentTenant') || '').trim();
+          storedTenant = getStoredAppTenant();
       } catch (_error) {
           storedTenant = '';
       }
@@ -190,6 +202,11 @@ class ZoltagApp extends LitElement {
       bindAppDelegateMethods(this);
       initializeAppDefaultState(this);
       initializeAppConstructorWiring(this);
+
+      this.addEventListener('request-logout', async () => {
+        await supabase.auth.signOut();
+        window.location.href = '/login';
+      });
   }
 
   connectedCallback() {
@@ -334,7 +351,7 @@ class ZoltagApp extends LitElement {
   _syncTenantFromStorage() {
       let storedTenant = '';
       try {
-          storedTenant = (localStorage.getItem('tenantId') || localStorage.getItem('currentTenant') || '').trim();
+          storedTenant = getStoredAppTenant();
       } catch (_error) {
           storedTenant = '';
       }

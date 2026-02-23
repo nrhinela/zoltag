@@ -14,6 +14,10 @@ export function initializeAppDefaultState(host) {
   host.mlTrainingStats = null;
   host.tagStatsBySource = {};
   host.homeLists = [];
+  host.homeFeedbackLog = [];
+  host.homeAlerts = [];
+  host.homeFeedbackOffset = 0;
+  host.homeFeedbackLimit = 50;
   host.curateLimit = 100;
   host.curateOrderBy = 'photo_creation';
   host.curateOrderDirection = 'desc';
@@ -73,6 +77,7 @@ export function initializeAppDefaultState(host) {
   host.curateAuditHideDeleted = true;
   host.curateAuditMinRating = null;
   host.curateAuditNoPositivePermatags = false;
+  host.curateAuditEmptyState = null;
   host.curateAuditDropboxPathPrefix = '';
   host.curateAuditFilenameQuery = '';
   host.curateAuditTextQuery = '';
@@ -80,6 +85,8 @@ export function initializeAppDefaultState(host) {
   host.curateStatsLoading = false;
   host.curateAdvancedOpen = false;
   host.curateNoPositivePermatags = false;
+  host.curateNoPermatagCategories = [];
+  host.curateNoPermatagOperator = 'AND';
   host.activeCurateTagSource = 'permatags';
   host.curateCategoryCards = [];
   host.searchOrderBy = 'photo_creation';
@@ -97,6 +104,7 @@ export function initializeAppDefaultState(host) {
   host.currentUser = null;
   host.tenantAccessBlocked = false;
   host.tenantAccessBlockedMessage = '';
+  host.tenantSelectionRequired = false;
   host.providerAdminTenant = null;
   host.providerAdminSystemSettings = null;
   host.providerAdminLoading = false;

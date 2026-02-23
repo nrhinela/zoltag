@@ -58,6 +58,7 @@ export function renderResultsPagination({
         ` : html``}
         <span>${rangeLabel.toUpperCase()}</span>
         <button
+          type="button"
           class="curate-pane-action secondary"
           ?disabled=${disabled || !hasPrev}
           @click=${onPrev}
@@ -66,6 +67,7 @@ export function renderResultsPagination({
           &lt;
         </button>
         <button
+          type="button"
           class="curate-pane-action secondary"
           ?disabled=${disabled || !hasNext}
           @click=${onNext}

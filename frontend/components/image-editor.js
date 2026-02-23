@@ -3,11 +3,16 @@ import {
   getImageDetails,
   getSimilarImages,
   getKeywords,
+  getKeywordCategories,
+  createKeyword,
   addPermatag,
   getFullImage,
   getImagePlayback,
   getImagePlaybackStream,
   setRating,
+  getImageComments,
+  addImageComment,
+  deleteImageComment,
   refreshImageMetadata,
   propagateDropboxTags,
   listAssetVariants,
@@ -428,6 +433,92 @@ class ImageEditor extends LitElement {
       gap: 8px;
       align-items: center;
       flex-wrap: wrap;
+    }
+    .new-keyword-panel {
+      border: 1px solid #e5e7eb;
+      border-radius: 10px;
+      padding: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      background: #f8fafc;
+    }
+    .new-keyword-grid {
+      display: grid;
+      grid-template-columns: minmax(130px, 0.9fr) minmax(170px, 1.1fr);
+      gap: 8px;
+    }
+    .new-keyword-input,
+    .new-keyword-select {
+      border: 1px solid #d1d5db;
+      border-radius: 8px;
+      padding: 7px 8px;
+      font-size: 11px;
+      color: #111827;
+      background: #ffffff;
+      min-width: 0;
+    }
+    .new-keyword-actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .new-keyword-save {
+      border-radius: 8px;
+      padding: 7px 11px;
+      background: #2563eb;
+      color: #ffffff;
+      font-size: 11px;
+      font-weight: 600;
+      border: 1px solid #2563eb;
+    }
+    .new-keyword-cancel {
+      border-radius: 8px;
+      padding: 7px 11px;
+      background: #ffffff;
+      color: #374151;
+      font-size: 11px;
+      font-weight: 600;
+      border: 1px solid #d1d5db;
+    }
+    .new-keyword-error {
+      color: #b91c1c;
+      font-size: 11px;
+    }
+    .new-keyword-similar {
+      border-top: 1px solid #e2e8f0;
+      padding-top: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .new-keyword-similar-title {
+      color: #475569;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+    }
+    .new-keyword-similar-list {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      max-height: 120px;
+      overflow: auto;
+    }
+    .new-keyword-similar-item {
+      border: 1px solid #dbeafe;
+      border-radius: 8px;
+      background: #ffffff;
+      color: #1e293b;
+      font-size: 11px;
+      padding: 6px 8px;
+      text-align: left;
+    }
+    .new-keyword-similar-item:hover {
+      background: #eff6ff;
+      border-color: #93c5fd;
     }
     .tag-grid-table {
       display: flex;
@@ -1240,6 +1331,9 @@ class ImageEditor extends LitElement {
       .tag-form {
         grid-template-columns: 1fr;
       }
+      .new-keyword-grid {
+        grid-template-columns: 1fr;
+      }
       .variants-table-header {
         display: none;
       }
@@ -1282,6 +1376,7 @@ class ImageEditor extends LitElement {
     tagSubTab: { type: String },
     tagInput: { type: String },
     tagCategory: { type: String },
+    tagSelectionValue: { type: String },
     loading: { type: Boolean },
     error: { type: String },
     fullImageUrl: { type: String },
@@ -1317,6 +1412,21 @@ class ImageEditor extends LitElement {
     marketingNote: { type: String },
     marketingNoteSaving: { type: Boolean },
     marketingNoteError: { type: String },
+    comments: { type: Array },
+    ratingEvents: { type: Array },
+    commentsLoading: { type: Boolean },
+    commentsError: { type: String },
+    commentText: { type: String },
+    commentSaving: { type: Boolean },
+    commentDeletingId: { type: String },
+    commentFormOpen: { type: Boolean },
+    commentSortDesc: { type: Boolean },
+    keywordCategories: { type: Array },
+    newKeywordMode: { type: Boolean },
+    newKeywordCategoryId: { type: [Number, String] },
+    newKeywordName: { type: String },
+    newKeywordSaving: { type: Boolean },
+    newKeywordError: { type: String },
   };
 
   constructor() {
@@ -1331,6 +1441,7 @@ class ImageEditor extends LitElement {
     this.tagSubTab = 'permatags';
     this.tagInput = '';
     this.tagCategory = '';
+    this.tagSelectionValue = '';
     this.loading = false;
     this.error = '';
     this.fullImageUrl = '';
@@ -1378,9 +1489,25 @@ class ImageEditor extends LitElement {
     this.marketingNote = '';
     this.marketingNoteSaving = false;
     this.marketingNoteError = '';
+    this.comments = [];
+    this.ratingEvents = [];
+    this.commentsLoading = false;
+    this.commentsError = '';
+    this.commentText = '';
+    this.commentSaving = false;
+    this.commentDeletingId = '';
+    this.commentFormOpen = false;
+    this.commentSortDesc = true;
+    this.keywordCategories = [];
+    this.newKeywordMode = false;
+    this.newKeywordCategoryId = '';
+    this.newKeywordName = '';
+    this.newKeywordSaving = false;
+    this.newKeywordError = '';
     this._ratingBurstActive = false;
     this._ratingBurstTimer = null;
     this._suppressPermatagRefresh = false;
+    this._commentsLoadedForImageId = null;
     this._prevBodyOverflow = null;
     this._handlePermatagEvent = (event) => {
       if ((this.open || this.embedded) && event?.detail?.imageId === this.image?.id) {
@@ -1452,6 +1579,8 @@ class ImageEditor extends LitElement {
       this._resetVideoPlayback();
       this._resetSimilarResults();
       this._resetVariantEditor();
+      this._resetComments();
+      this._cancelNewKeywordMode();
       this.fetchDetails();
       this.fetchKeywords();
     }
@@ -1480,6 +1609,8 @@ class ImageEditor extends LitElement {
     try {
       this.details = await getImageDetails(this.tenant, this.image.id);
       this._fetchMarketingNote();
+      // Prefetch feedback so the Feedback tab badge is accurate before tab click.
+      void this._loadComments();
     } catch (error) {
       this.error = 'Failed to load image details.';
       console.error('ImageEditor: fetchDetails failed', error);
@@ -1542,9 +1673,14 @@ class ImageEditor extends LitElement {
     if (!this.tenant) return;
     try {
       this.keywordsByCategory = await getKeywords(this.tenant, { source: 'permatags', includePeople: true });
+      this.keywordCategories = await getKeywordCategories(this.tenant);
+      if (this.newKeywordMode && !this.newKeywordCategoryId && Array.isArray(this.keywordCategories) && this.keywordCategories.length) {
+        this.newKeywordCategoryId = String(this.keywordCategories[0].id);
+      }
     } catch (error) {
       console.error('ImageEditor: fetchKeywords failed', error);
       this.keywordsByCategory = {};
+      this.keywordCategories = [];
     }
   }
 
@@ -1554,13 +1690,16 @@ class ImageEditor extends LitElement {
   }
 
   _setTab(tab) {
-    this.activeTab = tab;
-    if (tab === 'image') {
+    const nextTab = tab === 'comments' ? 'feedback' : tab;
+    this.activeTab = nextTab;
+    if (nextTab === 'image') {
       this._loadFullImage();
-    } else if (tab === 'similar') {
+    } else if (nextTab === 'similar') {
       this._loadSimilarImages();
-    } else if (tab === 'variants') {
+    } else if (nextTab === 'variants') {
       this._loadAssetVariants();
+    } else if (nextTab === 'feedback') {
+      this._loadComments();
     }
   }
 
@@ -1676,6 +1815,64 @@ class ImageEditor extends LitElement {
     this.variantInspectBusy = {};
     this.variantInspectData = {};
     this._variantUploadFile = null;
+  }
+
+  _resetComments() {
+    this.comments = [];
+    this.ratingEvents = [];
+    this._commentsLoadedForImageId = null;
+    this.commentsLoading = false;
+    this.commentsError = '';
+    this.commentText = '';
+    this.commentSaving = false;
+    this.commentDeletingId = '';
+    this.commentFormOpen = false;
+    this.commentSortDesc = true;
+  }
+
+  get _sortedFeedbackEvents() {
+    const commentRows = (Array.isArray(this.comments) ? this.comments : []).map((comment) => ({
+      ...comment,
+      event_type: 'commented',
+      event_ts: comment?.created_at || null,
+    }));
+    const ratingRows = (Array.isArray(this.ratingEvents) ? this.ratingEvents : []).map((rating) => ({
+      ...rating,
+      event_type: 'rated',
+      event_ts: rating?.updated_at || rating?.created_at || null,
+    }));
+    const rows = [...commentRows, ...ratingRows];
+    rows.sort((a, b) => {
+      const aTs = new Date(a?.event_ts || 0).getTime();
+      const bTs = new Date(b?.event_ts || 0).getTime();
+      if (this.commentSortDesc) return bTs - aTs;
+      return aTs - bTs;
+    });
+    return rows;
+  }
+
+  async _loadComments(force = false) {
+    if (!this.details?.id || !this.tenant) return;
+    const imageId = this.details.id;
+    if (!force && (this.commentsLoading || this._commentsLoadedForImageId === imageId)) return;
+    this.commentsLoading = true;
+    this.commentsError = '';
+    try {
+      const payload = await getImageComments(this.tenant, imageId);
+      if (this.details?.id !== imageId) return;
+      this.comments = Array.isArray(payload?.comments) ? payload.comments : [];
+      this.ratingEvents = Array.isArray(payload?.ratings) ? payload.ratings : [];
+      this._commentsLoadedForImageId = imageId;
+    } catch (error) {
+      if (this.details?.id !== imageId) return;
+      this._commentsLoadedForImageId = null;
+      this.commentsError = error?.message || 'Failed to load comments.';
+      console.error('ImageEditor: failed to load comments', error);
+    } finally {
+      if (this.details?.id === imageId) {
+        this.commentsLoading = false;
+      }
+    }
   }
 
   async _loadAssetVariants(force = false) {
@@ -1912,6 +2109,62 @@ class ImageEditor extends LitElement {
       console.error('ImageEditor: rating update failed', error);
     } finally {
       this.ratingSaving = false;
+    }
+  }
+
+  async _handleSaveComment() {
+    if (!this.details?.id || !this.tenant || this.commentSaving) return;
+    const commentText = String(this.commentText || '').trim();
+    if (!commentText) return;
+    this.commentSaving = true;
+    this.commentsError = '';
+    const imageId = this.details.id;
+    try {
+      const newComment = await addImageComment(this.tenant, imageId, commentText);
+      if (this.details?.id !== imageId) return;
+      this.comments = [newComment, ...(Array.isArray(this.comments) ? this.comments : [])];
+      this.details = {
+        ...this.details,
+        comment_count: Number(this.details?.comment_count || 0) + 1,
+      };
+      this.commentText = '';
+      this.commentFormOpen = false;
+    } catch (error) {
+      if (this.details?.id !== imageId) return;
+      this.commentsError = error?.message || 'Failed to save comment.';
+      console.error('ImageEditor: failed to save comment', error);
+    } finally {
+      if (this.details?.id === imageId) {
+        this.commentSaving = false;
+      }
+    }
+  }
+
+  async _handleDeleteComment(comment) {
+    if (!this.details?.id || !this.tenant || !comment?.id || !comment?.can_delete) return;
+    const commentId = String(comment.id);
+    if (this.commentDeletingId) return;
+    const confirmed = window.confirm('Delete this comment?');
+    if (!confirmed) return;
+    const imageId = this.details.id;
+    this.commentDeletingId = commentId;
+    this.commentsError = '';
+    try {
+      await deleteImageComment(this.tenant, imageId, commentId);
+      if (this.details?.id !== imageId) return;
+      this.comments = (Array.isArray(this.comments) ? this.comments : []).filter((row) => String(row?.id || '') !== commentId);
+      this.details = {
+        ...this.details,
+        comment_count: Math.max(0, Number(this.details?.comment_count || 0) - 1),
+      };
+    } catch (error) {
+      if (this.details?.id !== imageId) return;
+      this.commentsError = error?.message || 'Failed to delete comment.';
+      console.error('ImageEditor: failed to delete comment', error);
+    } finally {
+      if (this.details?.id === imageId) {
+        this.commentDeletingId = '';
+      }
     }
   }
 
@@ -2208,39 +2461,191 @@ class ImageEditor extends LitElement {
     return map;
   }
 
+  _getKeywordCategoriesSorted() {
+    const categories = Array.isArray(this.keywordCategories) ? [...this.keywordCategories] : [];
+    return categories.sort((a, b) => {
+      const aOrder = Number(a?.sort_order ?? 0);
+      const bOrder = Number(b?.sort_order ?? 0);
+      if (aOrder !== bOrder) return aOrder - bOrder;
+      return String(a?.name || '').localeCompare(String(b?.name || ''));
+    });
+  }
+
+  _normalizeKeywordValue(value) {
+    return String(value || '').trim().toLowerCase();
+  }
+
+  _getSimilarKeywordSuggestions(queryRaw) {
+    const query = this._normalizeKeywordValue(queryRaw);
+    if (!query || query.length < 2) return [];
+    const matches = [];
+    Object.entries(this.keywordsByCategory || {}).forEach(([category, keywords]) => {
+      (keywords || []).forEach((entry) => {
+        const keyword = String(entry?.keyword || '').trim();
+        if (!keyword) return;
+        const normalizedKeyword = this._normalizeKeywordValue(keyword);
+        if (!normalizedKeyword.includes(query)) return;
+        matches.push({ keyword, category });
+      });
+    });
+    matches.sort((a, b) => {
+      const aKeyword = this._normalizeKeywordValue(a.keyword);
+      const bKeyword = this._normalizeKeywordValue(b.keyword);
+      const aStarts = aKeyword.startsWith(query) ? 0 : 1;
+      const bStarts = bKeyword.startsWith(query) ? 0 : 1;
+      if (aStarts !== bStarts) return aStarts - bStarts;
+      if (aKeyword !== bKeyword) return aKeyword.localeCompare(bKeyword);
+      return String(a.category || '').localeCompare(String(b.category || ''));
+    });
+    const deduped = [];
+    const seen = new Set();
+    for (const row of matches) {
+      const key = `${row.category}::${this._normalizeKeywordValue(row.keyword)}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      deduped.push(row);
+      if (deduped.length >= 8) break;
+    }
+    return deduped;
+  }
+
+  _startNewKeywordMode() {
+    this.newKeywordMode = true;
+    this.newKeywordError = '';
+    const categories = this._getKeywordCategoriesSorted();
+    if (!this.newKeywordCategoryId && categories.length) {
+      this.newKeywordCategoryId = String(categories[0].id);
+    }
+  }
+
+  _cancelNewKeywordMode() {
+    this.newKeywordMode = false;
+    this.newKeywordName = '';
+    this.newKeywordCategoryId = '';
+    this.newKeywordError = '';
+    this.tagInput = '';
+    this.tagCategory = '';
+    this.tagSelectionValue = '';
+  }
+
+  async _applyPermatag(keywordRaw, categoryRaw) {
+    if (!this.details) return;
+    const keyword = String(keywordRaw || '').trim();
+    if (!keyword) return;
+    const keywordMap = this._keywordIndex();
+    const category = String(categoryRaw || '').trim() || keywordMap[keyword] || 'Uncategorized';
+    await addPermatag(this.tenant, this.details.id, keyword, category, 1);
+    const existing = Array.isArray(this.details.permatags) ? this.details.permatags : [];
+    const alreadyTagged = existing.some((entry) => (
+      entry.signum === 1
+      && String(entry.keyword || '') === keyword
+      && String(entry.category || 'Uncategorized') === String(category || 'Uncategorized')
+    ));
+    const nextPermatags = alreadyTagged
+      ? existing
+      : [...existing, { keyword, category, signum: 1 }];
+    this.details = { ...this.details, permatags: nextPermatags };
+    this.tagInput = '';
+    this.tagCategory = '';
+    this.tagSelectionValue = '';
+    this._suppressPermatagRefresh = true;
+    this.dispatchEvent(new CustomEvent('permatags-changed', {
+      detail: { imageId: this.details.id, source: 'image-editor' },
+      bubbles: true,
+      composed: true,
+    }));
+  }
+
   async _handleAddTag() {
     if (!this.details) return;
     const keyword = this.tagInput.trim();
     if (!keyword) return;
-    const keywordMap = this._keywordIndex();
-    const category = this.tagCategory || keywordMap[keyword] || 'Uncategorized';
     try {
-      await addPermatag(this.tenant, this.details.id, keyword, category, 1);
-      const existing = Array.isArray(this.details.permatags) ? this.details.permatags : [];
-      const nextPermatags = [
-        ...existing,
-        { keyword, category, signum: 1 },
-      ];
-      this.details = { ...this.details, permatags: nextPermatags };
-      this.tagInput = '';
-      this.tagCategory = '';
-      this._suppressPermatagRefresh = true;
-      this.dispatchEvent(new CustomEvent('permatags-changed', {
-        detail: { imageId: this.details.id, source: 'image-editor' },
-        bubbles: true,
-        composed: true,
-      }));
+      await this._applyPermatag(keyword, this.tagCategory);
     } catch (error) {
       this.error = 'Failed to add tag.';
       console.error('ImageEditor: add tag failed', error);
     }
   }
 
+  async _handleSelectExistingSimilarKeyword(suggestion) {
+    if (!suggestion?.keyword) return;
+    try {
+      await this._applyPermatag(suggestion.keyword, suggestion.category);
+      this._cancelNewKeywordMode();
+    } catch (error) {
+      this.newKeywordError = 'Failed to apply selected keyword.';
+      console.error('ImageEditor: apply existing similar keyword failed', error);
+    }
+  }
+
+  async _handleSaveNewKeyword() {
+    if (this.newKeywordSaving) {
+      console.warn('ImageEditor: save tag ignored because save is already in progress');
+      return;
+    }
+    if (!this.details) {
+      this.newKeywordError = 'Image details are still loading. Please try again.';
+      console.warn('ImageEditor: save tag aborted - missing image details');
+      return;
+    }
+    if (!this.tenant) {
+      this.newKeywordError = 'No tenant selected.';
+      console.warn('ImageEditor: save tag aborted - missing tenant');
+      return;
+    }
+    const keyword = String(this.newKeywordName || '').trim();
+    const categoryId = String(this.newKeywordCategoryId || '').trim();
+    if (!categoryId) {
+      this.newKeywordError = 'Select a category.';
+      console.warn('ImageEditor: save tag aborted - missing category selection');
+      return;
+    }
+    if (!keyword) {
+      this.newKeywordError = 'Enter a keyword name.';
+      console.warn('ImageEditor: save tag aborted - missing keyword name');
+      return;
+    }
+    const categories = this._getKeywordCategoriesSorted();
+    if (!categories.length) {
+      this.newKeywordError = 'No categories are available for this tenant.';
+      console.warn('ImageEditor: save tag aborted - no keyword categories loaded');
+      return;
+    }
+    const selectedCategory = categories.find((cat) => String(cat?.id) === categoryId);
+    if (!selectedCategory) {
+      this.newKeywordError = 'Selected category no longer exists.';
+      console.warn('ImageEditor: save tag aborted - selected category not found', { categoryId });
+      return;
+    }
+    this.newKeywordSaving = true;
+    this.newKeywordError = '';
+    try {
+      await createKeyword(this.tenant, Number(categoryId), { keyword });
+      await this.fetchKeywords();
+      await this._applyPermatag(keyword, selectedCategory.name || 'Uncategorized');
+      this._cancelNewKeywordMode();
+    } catch (error) {
+      this.newKeywordError = error?.message || 'Failed to create keyword.';
+      console.error('ImageEditor: create keyword failed', error);
+    } finally {
+      this.newKeywordSaving = false;
+    }
+  }
+
   _handleTagSelectChange(event) {
     const value = event?.detail?.value ?? event?.target?.value ?? '';
+    if (value === '__new_tag__') {
+      this.tagInput = '';
+      this.tagCategory = '';
+      this.tagSelectionValue = '';
+      this._startNewKeywordMode();
+      return;
+    }
     if (!value) {
       this.tagInput = '';
       this.tagCategory = '';
+      this.tagSelectionValue = '';
       return;
     }
     const [categoryPart, keywordPart] = value.split('::');
@@ -2248,6 +2653,7 @@ class ImageEditor extends LitElement {
     const category = decodeURIComponent(categoryPart || 'Uncategorized');
     this.tagInput = keyword;
     this.tagCategory = category;
+    this.tagSelectionValue = String(value);
   }
 
   async _handleRemoveTag(tag) {
@@ -2380,9 +2786,10 @@ class ImageEditor extends LitElement {
     const categories = Object.keys(this.keywordsByCategory || {}).sort((a, b) => a.localeCompare(b));
     const keywordMap = this._keywordIndex();
     const selectedCategory = this.tagCategory || (this.tagInput ? keywordMap[this.tagInput] : '') || 'Uncategorized';
-    const selectedValue = this.tagInput
+    const derivedSelectedValue = this.tagInput
       ? `${encodeURIComponent(selectedCategory)}::${encodeURIComponent(this.tagInput)}`
       : '';
+    const selectedValue = this.tagSelectionValue || derivedSelectedValue;
     const sourcePath = this._getSourcePath(this.details);
     const sourceHref = this._getSourceHref(this.details);
     const sourceProvider = this._formatSourceProvider(this.details?.source_provider);
@@ -2395,6 +2802,8 @@ class ImageEditor extends LitElement {
           count: entry.count || 0,
         }))
     ));
+    const sortedKeywordCategories = this._getKeywordCategoriesSorted();
+    const similarKeywordSuggestions = this._getSimilarKeywordSuggestions(this.newKeywordName);
     return html`
       <div class="prop-panel">
         ${renderPropertySection({
@@ -2446,18 +2855,85 @@ class ImageEditor extends LitElement {
         ${this.canEditTags ? renderPropertySection({
           title: 'Add Tags',
           body: html`
-            <div class="tag-form">
-              <keyword-dropdown
-                class="tag-dropdown"
-                .value=${selectedValue}
-                .keywords=${flatKeywords}
-                .includeUntagged=${false}
-                .compact=${true}
-                @keyword-selected=${this._handleTagSelectChange}
-                @change=${this._handleTagSelectChange}
-              ></keyword-dropdown>
-              <button class="tag-add" @click=${this._handleAddTag}>Add Tag</button>
-            </div>
+            ${!this.newKeywordMode ? html`
+              <div class="tag-form">
+                <keyword-dropdown
+                  class="tag-dropdown"
+                  .value=${selectedValue}
+                  .keywords=${flatKeywords}
+                  .includeUntagged=${false}
+                  .compact=${true}
+                  .prependOptions=${[{ value: '__new_tag__', label: 'New Tag' }]}
+                  @keyword-selected=${this._handleTagSelectChange}
+                  @change=${this._handleTagSelectChange}
+                ></keyword-dropdown>
+                <button class="tag-add" @click=${this._handleAddTag}>Add Tag</button>
+              </div>
+            ` : html``}
+            ${this.newKeywordMode ? html`
+              <div class="new-keyword-panel">
+                <div class="new-keyword-grid">
+                  <select
+                    class="new-keyword-select"
+                    .value=${String(this.newKeywordCategoryId || '')}
+                    @change=${(event) => {
+                      this.newKeywordCategoryId = String(event?.target?.value || '');
+                      this.newKeywordError = '';
+                    }}
+                  >
+                    <option value="">Select category</option>
+                    ${sortedKeywordCategories.map((cat) => html`
+                      <option value=${String(cat.id)}>${cat.name}</option>
+                    `)}
+                  </select>
+                  <input
+                    type="text"
+                    class="new-keyword-input"
+                    placeholder="Keyword name"
+                    .value=${this.newKeywordName}
+                    @input=${(event) => {
+                      this.newKeywordName = String(event?.target?.value || '');
+                      this.newKeywordError = '';
+                    }}
+                  />
+                </div>
+                <div class="new-keyword-actions">
+                  <button
+                    type="button"
+                    class="new-keyword-save"
+                    ?disabled=${this.newKeywordSaving}
+                    @click=${() => this._handleSaveNewKeyword()}
+                  >
+                    ${this.newKeywordSaving ? 'Saving...' : 'Save Tag'}
+                  </button>
+                  <button
+                    type="button"
+                    class="new-keyword-cancel"
+                    ?disabled=${this.newKeywordSaving}
+                    @click=${() => this._cancelNewKeywordMode()}
+                  >
+                    Cancel
+                  </button>
+                </div>
+                ${this.newKeywordError ? html`<div class="new-keyword-error">${this.newKeywordError}</div>` : html``}
+                ${similarKeywordSuggestions.length ? html`
+                  <div class="new-keyword-similar">
+                    <div class="new-keyword-similar-title">Similar keywords (click to use existing)</div>
+                    <div class="new-keyword-similar-list">
+                      ${similarKeywordSuggestions.map((suggestion) => html`
+                        <button
+                          type="button"
+                          class="new-keyword-similar-item"
+                          @click=${() => this._handleSelectExistingSimilarKeyword(suggestion)}
+                        >
+                          ${suggestion.keyword} · ${suggestion.category || 'Uncategorized'}
+                        </button>
+                      `)}
+                    </div>
+                  </div>
+                ` : html``}
+              </div>
+            ` : html``}
           `,
         }) : html``}
 
@@ -2831,11 +3307,138 @@ class ImageEditor extends LitElement {
     `;
   }
 
+  _renderFeedbackTab() {
+    const rows = this._sortedFeedbackEvents;
+    const renderRatingSummary = (ratingValue) => {
+      const rating = Number(ratingValue);
+      if (Number.isFinite(rating) && rating <= 0) {
+        return html`
+          <span class="inline-flex items-center gap-2 text-sm text-gray-800">
+            <span class="text-gray-600" aria-hidden="true">🗑</span>
+            <span>rated this a 0</span>
+          </span>
+        `;
+      }
+      if (Number.isFinite(rating) && rating > 0) {
+        const safeRating = Math.max(1, Math.min(3, rating));
+        return html`
+          <span class="inline-flex items-center gap-2 text-sm text-gray-800">
+            <span class="text-yellow-500" aria-hidden="true">${'★'.repeat(safeRating)}</span>
+            <span>rated this a ${safeRating}</span>
+          </span>
+        `;
+      }
+      return html`<span class="text-sm text-gray-700">rated this image</span>`;
+    };
+    return html`
+      <div class="space-y-3 text-sm text-gray-700">
+        <div class="flex items-center justify-between gap-2">
+          <div class="text-xs font-semibold text-gray-600 uppercase">Feedback</div>
+          <div class="flex items-center gap-2">
+            <button
+              class="nav-button"
+              @click=${() => { this.commentSortDesc = !this.commentSortDesc; }}
+            >
+              ${this.commentSortDesc ? 'Newest first ↓' : 'Oldest first ↑'}
+            </button>
+            <button
+              class="nav-button"
+              @click=${() => this._loadComments(true)}
+              ?disabled=${this.commentsLoading}
+            >
+              ${this.commentsLoading ? 'Refreshing...' : 'Refresh'}
+            </button>
+          </div>
+        </div>
+
+        <div class="border border-gray-200 rounded-lg p-3 bg-gray-50">
+          <div class="flex items-center gap-2 mb-2">
+            <button
+              class="tag-add"
+              @click=${() => { this.commentFormOpen = !this.commentFormOpen; }}
+              ?disabled=${this.commentSaving}
+            >
+              ${this.commentFormOpen ? 'Hide New Comment' : 'New Comment'}
+            </button>
+          </div>
+          ${this.commentFormOpen ? html`
+            <div class="space-y-2">
+              <textarea
+                class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                rows="3"
+                placeholder="Add a comment about this image..."
+                .value=${this.commentText}
+                @input=${(e) => { this.commentText = e.target.value; }}
+              ></textarea>
+              <div class="flex items-center gap-2">
+                <button
+                  class="tag-add"
+                  @click=${() => this._handleSaveComment()}
+                  ?disabled=${this.commentSaving || !String(this.commentText || '').trim()}
+                >
+                  ${this.commentSaving ? 'Saving...' : 'Save Comment'}
+                </button>
+              </div>
+            </div>
+          ` : html``}
+        </div>
+
+        ${this.commentsError ? html`<div class="text-xs text-red-600">${this.commentsError}</div>` : html``}
+
+        ${rows.length > 0 ? html`
+          <div class="space-y-2">
+            ${rows.map((entry) => html`
+              <div class="border border-gray-200 rounded-lg p-3 bg-white">
+                <div class="flex items-start justify-between gap-2">
+                  <div class="min-w-0">
+                    <div class="text-xs font-semibold text-gray-700">
+                      ${(entry.author_name || entry.author_email || 'User')}
+                      ${entry.author_email ? html` (${entry.author_email})` : html``}
+                    </div>
+                    ${entry.event_type === 'rated'
+                      ? renderRatingSummary(entry.rating)
+                      : html`<div class="text-sm text-gray-800 whitespace-pre-wrap break-words">${entry.comment_text}</div>`}
+                  </div>
+                  <div class="flex flex-col items-end gap-2">
+                    <div class="text-xs text-gray-500 whitespace-nowrap">${this._formatDateTime(entry.event_ts || entry.created_at || entry.updated_at)}</div>
+                    ${entry.event_type === 'commented' && entry.can_delete ? html`
+                      <button
+                        class="nav-button text-red-600 border-red-200 hover:bg-red-50"
+                        @click=${() => this._handleDeleteComment(entry)}
+                        ?disabled=${this.commentDeletingId === String(entry.id)}
+                      >
+                        ${this.commentDeletingId === String(entry.id) ? 'Deleting…' : 'Delete'}
+                      </button>
+                    ` : html``}
+                  </div>
+                </div>
+              </div>
+            `)}
+          </div>
+        ` : html`
+          <div class="text-sm text-gray-500">
+            ${this.commentsLoading ? 'Loading feedback...' : 'No feedback yet.'}
+          </div>
+        `}
+      </div>
+    `;
+  }
+
   _renderTopTabs() {
+    const commentCount = Number(this.details?.comment_count || 0);
+    const feedbackCount = commentCount + (Array.isArray(this.ratingEvents) ? this.ratingEvents.length : 0);
     return html`
       <div class="editor-tab-strip">
         <button class="tab-button ${this.activeTab === 'edit' ? 'active' : ''}" @click=${() => this._setTab('edit')}>
           Edit
+        </button>
+        <button class="tab-button ${this.activeTab === 'feedback' ? 'active' : ''}" @click=${() => this._setTab('feedback')}>
+          Feedback
+          ${feedbackCount > 0 ? html`
+            <span class="ml-1 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-amber-100 text-amber-800 text-[10px] font-semibold">
+              ${feedbackCount}
+            </span>
+          ` : html``}
         </button>
         <button class="tab-button ${this.activeTab === 'metadata' ? 'active' : ''}" @click=${() => this._setTab('metadata')}>
           Metadata
@@ -3287,6 +3890,8 @@ class ImageEditor extends LitElement {
       ? this._renderMetadataTab()
       : this.activeTab === 'tags'
         ? this._renderTagsReadOnly()
+        : this.activeTab === 'feedback'
+          ? this._renderFeedbackTab()
         : this._renderEditTab();
 
     if (this.activeTab === 'variants') {

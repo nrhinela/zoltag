@@ -79,12 +79,17 @@ class TrainKeywordModelsCommand(CliCommand):
         model_name = getattr(tagger, "model_name", settings.tagging_model)
         model_version = getattr(tagger, "model_version", model_name)
 
+        config_mgr = ConfigManager(self.db, self.tenant.id)
+        all_keywords = config_mgr.get_all_keywords()
+        keyword_to_category = {kw['keyword']: kw['category'] for kw in all_keywords}
+
         result = build_keyword_models(
             self.db,
             tenant_id=self.tenant.id,
             model_name=model_name,
             model_version=model_version,
             min_positive=self.min_positive or settings.keyword_model_min_positive,
+            keyword_to_category=keyword_to_category,
         )
         self.db.commit()
         click.echo(f"✓ Trained: {result['trained']} · Skipped: {result['skipped']}")

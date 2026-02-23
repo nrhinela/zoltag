@@ -35,6 +35,16 @@ class Settings(BaseSettings):
     db_pool_recycle: int = 1800
     db_pool_pre_ping: bool = True
     db_connect_timeout: int = 10
+    db_pool_use_lifo: bool = True
+    db_keepalives: int = 1
+    db_keepalives_idle: int = 30
+    db_keepalives_interval: int = 10
+    db_keepalives_count: int = 5
+    # Worker-only Postgres safety rails (milliseconds).
+    # Applied when WORKER_MODE=true to bound lock waits and long/stuck queries.
+    worker_db_statement_timeout_ms: int = 45000
+    worker_db_lock_timeout_ms: int = 3000
+    worker_db_idle_in_transaction_session_timeout_ms: int = 15000
     
     # Google Cloud
     gcp_project_id: str = "photocat-483622"
@@ -43,7 +53,9 @@ class Settings(BaseSettings):
     # Cloud Storage
     storage_bucket_name: str = "photocat-483622-images"
     thumbnail_bucket_name: Optional[str] = None
+    person_reference_bucket_name: Optional[str] = None
     thumbnail_cdn_base_url: str = ""
+    thumbnail_signed_urls: bool = False  # Enable GCS signed URLs for private bucket access
     
     # Secret Manager
     secret_manager_prefix: str = "zoltag"
@@ -73,7 +85,12 @@ class Settings(BaseSettings):
     # Minimum positive permatag examples required before training a keyword model.
     keyword_model_min_positive: int = 2
     # If true, generate embeddings during upload/ingest. If false, embeddings are generated later by batch jobs.
-    upload_generate_embeddings: bool = True
+    # Defaults to False: inline embedding loads the SigLIP model (~1 GB) and can OOM a 2 GiB Cloud Run instance.
+    upload_generate_embeddings: bool = False
+    # Minimum number of active reference photos required for person face-recognition suggestions.
+    face_recognition_min_references: int = 3
+    # Confidence threshold [0-1] for writing face-recognition suggestions.
+    face_recognition_suggest_threshold: float = 0.45
     
     # API
     api_host: str = "0.0.0.0"
@@ -94,10 +111,22 @@ class Settings(BaseSettings):
     gemini_model: str = "gemini-2.5-flash"
     gemini_api_mode: str = "generativelanguage"  # "generativelanguage" or "vertex"
 
+    # Email (Resend)
+    email_resend_api_key: Optional[str] = None
+    email_from_address: str = "Zoltag <info@zoltag.com>"
+
     @property
     def thumbnail_bucket(self) -> str:
         """Get thumbnail bucket name (defaults to main bucket)."""
         return self.thumbnail_bucket_name or self.storage_bucket_name
+
+    @property
+    def person_reference_bucket(self) -> str:
+        """Get dedicated bucket name for person-reference photos."""
+        if self.person_reference_bucket_name:
+            return self.person_reference_bucket_name
+        env = self.environment.lower()
+        return f"{self.gcp_project_id}-{env}-person-references"
 
     @property
     def is_production(self) -> bool:
@@ -126,6 +155,8 @@ class Settings(BaseSettings):
             "trained_tag_threshold": self.trained_tag_threshold,
             "keyword_model_min_positive": self.keyword_model_min_positive,
             "upload_generate_embeddings": self.upload_generate_embeddings,
+            "face_recognition_min_references": self.face_recognition_min_references,
+            "face_recognition_suggest_threshold": self.face_recognition_suggest_threshold,
             "deprecated_env_vars_present": present_deprecated,
         }
 

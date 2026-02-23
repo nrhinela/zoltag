@@ -157,15 +157,26 @@ async def get_thumbnail(
     if not storage_info.thumbnail_key:
         raise HTTPException(status_code=404, detail="Thumbnail not found")
 
+    import logging
+    logger = logging.getLogger(__name__)
+
     try:
+        bucket_name = tenant.get_thumbnail_bucket(settings)
+        logger.warning(f"🖼️  Fetching thumbnail for image {image_id}")
+        logger.warning(f"🖼️  Bucket: {bucket_name}")
+        logger.warning(f"🖼️  Key: {storage_info.thumbnail_key}")
+        logger.warning(f"🖼️  Environment: {settings.environment}")
+
         storage_client = storage.Client(project=settings.gcp_project_id)
-        bucket = storage_client.bucket(tenant.get_thumbnail_bucket(settings))
+        bucket = storage_client.bucket(bucket_name)
         blob = bucket.blob(storage_info.thumbnail_key)
 
         if not blob.exists():
+            logger.warning(f"🖼️  Blob does not exist in bucket {bucket_name}")
             raise HTTPException(status_code=404, detail="Thumbnail not found in storage")
 
         thumbnail_data = blob.download_as_bytes()
+        logger.warning(f"🖼️  Successfully fetched {len(thumbnail_data)} bytes")
 
         return StreamingResponse(
             iter([thumbnail_data]),
@@ -178,6 +189,9 @@ async def get_thumbnail(
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"🖼️  Error fetching thumbnail for image {image_id}: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error fetching thumbnail: {str(e)}")
 
 

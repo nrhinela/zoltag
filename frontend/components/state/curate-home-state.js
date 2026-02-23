@@ -217,6 +217,8 @@ export class CurateHomeStateController extends BaseStateController {
     let nextHideDeleted = true;
     let nextListId = '';
     let nextListExcludeId = '';
+    let nextNoPermatagCategories = [];
+    let nextNoPermatagOperator = 'AND';
     let nextCategoryFilterOperator = undefined;
 
     chips.forEach((chip) => {
@@ -271,16 +273,23 @@ export class CurateHomeStateController extends BaseStateController {
             nextListId = chip.value || '';
           }
           break;
+        case 'tag_coverage': {
+          const categories = Array.isArray(chip.noPermatagCategories)
+            ? chip.noPermatagCategories
+            : (chip.category ? [chip.category] : []);
+          nextNoPermatagCategories = Array.from(
+            new Set(categories.map((value) => String(value || '').trim()).filter(Boolean))
+          );
+          nextNoPositivePermatags = Boolean(chip.includeUntagged || chip.untagged || chip.value === '__untagged__');
+          nextNoPermatagOperator = String(chip.operator || 'AND').trim().toUpperCase() === 'OR'
+            ? 'OR'
+            : 'AND';
+          break;
+        }
         default:
           break;
       }
     });
-
-    if (nextNoPositivePermatags) {
-      Object.keys(nextKeywords).forEach((key) => delete nextKeywords[key]);
-      Object.keys(nextOperators).forEach((key) => delete nextOperators[key]);
-      nextCategoryFilterOperator = undefined;
-    }
 
     this.setHostProperties({
       curateKeywordFilters: nextKeywords,
@@ -294,6 +303,8 @@ export class CurateHomeStateController extends BaseStateController {
       curateTextQuery: nextTextQuery,
       curateListId: nextListId,
       curateListExcludeId: nextListExcludeId,
+      curateNoPermatagCategories: nextNoPermatagCategories,
+      curateNoPermatagOperator: nextNoPermatagOperator,
       curateCategoryFilterOperator: nextCategoryFilterOperator,
     });
 
@@ -469,6 +480,7 @@ export class CurateHomeStateController extends BaseStateController {
       curateDragStartIndex: null,
       curateDragEndIndex: null,
       curateNoPositivePermatags: false,
+      curateNoPermatagCategories: [],
       _curateLeftOrder: [],
       _curateRightOrder: [],
       _curateFlashSelectionIds: null,
@@ -495,6 +507,7 @@ export class CurateHomeStateController extends BaseStateController {
       curateTextQuery: host.curateTextQuery,
       curateListId: host.curateListId,
       curateListExcludeId: host.curateListExcludeId,
+      curateNoPermatagCategories: Array.isArray(host.curateNoPermatagCategories) ? [...host.curateNoPermatagCategories] : [],
       curateFilters: { ...(host.curateFilters || {}) },
       curateImages: Array.isArray(host.curateImages) ? [...host.curateImages] : [],
       curatePageOffset: host.curatePageOffset,
@@ -673,6 +686,7 @@ export class CurateHomeStateController extends BaseStateController {
     this.host.curateHideDeleted = true;
     this.host.curateMinRating = null;
     this.host.curateNoPositivePermatags = false;
+    this.host.curateNoPermatagCategories = [];
     this.host.curateKeywordFilters = {};
     this.host.curateKeywordOperators = {};
     this.host.curateDropboxPathPrefix = '';

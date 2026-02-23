@@ -8,6 +8,7 @@ import './admin-users.js';
 import './cli-commands.js';
 import './admin-jobs.js';
 import './activity-audit.js';
+import './admin-database-monitor.js';
 import { getTenants } from '../services/api.js';
 
 /**
@@ -16,7 +17,7 @@ import { getTenants } from '../services/api.js';
  */
 class AdminApp extends LitElement {
   static properties = {
-    activeTab: { type: String }, // 'tenants', 'users', 'jobs', 'audit', or 'cli'
+    activeTab: { type: String }, // 'tenants', 'users', 'jobs', 'audit', 'database', or 'cli'
     view: { type: String }, // 'list' or 'editor' (for tenants)
     currentTenantId: { type: String },
     tenants: { type: Array },
@@ -222,6 +223,12 @@ class AdminApp extends LitElement {
             <i class="fas fa-chart-column mr-2"></i>Audit
           </button>
           <button
+            class="tab-button ${this.activeTab === 'database' ? 'active' : ''}"
+            @click="${() => this.switchTab('database')}"
+          >
+            <i class="fas fa-database mr-2"></i>Database
+          </button>
+          <button
             class="tab-button ${this.activeTab === 'cli' ? 'active' : ''}"
             @click="${() => this.switchTab('cli')}"
           >
@@ -248,11 +255,13 @@ class AdminApp extends LitElement {
               ? html`<admin-jobs .tenants=${this.tenants}></admin-jobs>`
               : this.activeTab === 'audit'
                 ? html`<activity-audit scope="global"></activity-audit>`
-            : html`
-                <div class="panel">
-                  <cli-commands></cli-commands>
-                </div>
-              `}
+                : this.activeTab === 'database'
+                  ? html`<admin-database-monitor></admin-database-monitor>`
+                  : html`
+                      <div class="panel">
+                        <cli-commands></cli-commands>
+                      </div>
+                    `}
       </div>
     `;
   }

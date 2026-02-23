@@ -11,7 +11,7 @@ from zoltag.auth.models import UserProfile
 from zoltag.list_visibility import can_view_list, is_tenant_admin_user
 from zoltag.config.db_config import ConfigManager
 from zoltag.tenant import Tenant
-from zoltag.metadata import ImageMetadata, Permatag, KeywordModel, MachineTag
+from zoltag.metadata import Asset, ImageMetadata, Permatag, KeywordModel, MachineTag
 from zoltag.models.config import PhotoList, PhotoListItem, Keyword, KeywordCategory
 from zoltag.tenant_scope import tenant_column_filter
 
@@ -41,10 +41,19 @@ async def get_available_keywords(
     config_mgr = ConfigManager(db, tenant.id)
     all_keywords = config_mgr.get_all_keywords(include_people=include_people)
 
-    image_assets_query = db.query(ImageMetadata.asset_id).filter(
-        tenant_column_filter(ImageMetadata, tenant),
-        ImageMetadata.asset_id.is_not(None),
-    )
+    # Base on Asset so videos are included — ImageMetadata only covers images.
+    # Only join ImageMetadata when a rating filter actually requires it.
+    needs_image_metadata = rating is not None or hide_zero_rating
+
+    if needs_image_metadata:
+        image_assets_query = db.query(ImageMetadata.asset_id).filter(
+            tenant_column_filter(ImageMetadata, tenant),
+            ImageMetadata.asset_id.is_not(None),
+        )
+    else:
+        image_assets_query = db.query(Asset.id.label("asset_id")).filter(
+            tenant_column_filter(Asset, tenant),
+        )
 
     if list_id is not None:
         is_tenant_admin = is_tenant_admin_user(db, tenant, current_user)
@@ -58,7 +67,10 @@ async def get_available_keywords(
             PhotoListItem.list_id == list_id,
             PhotoListItem.asset_id.is_not(None),
         )
-        image_assets_query = image_assets_query.filter(ImageMetadata.asset_id.in_(list_assets_subq))
+        if needs_image_metadata:
+            image_assets_query = image_assets_query.filter(ImageMetadata.asset_id.in_(list_assets_subq))
+        else:
+            image_assets_query = image_assets_query.filter(Asset.id.in_(list_assets_subq))
 
     if rating is not None:
         if rating_operator == "gte":
@@ -76,12 +88,21 @@ async def get_available_keywords(
             tenant_column_filter(Permatag, tenant),
             Permatag.asset_id.is_not(None),
         )
-        if reviewed:
-            image_assets_query = image_assets_query.filter(ImageMetadata.asset_id.in_(reviewed_subq))
+        if needs_image_metadata:
+            if reviewed:
+                image_assets_query = image_assets_query.filter(ImageMetadata.asset_id.in_(reviewed_subq))
+            else:
+                image_assets_query = image_assets_query.filter(ImageMetadata.asset_id.notin_(reviewed_subq))
         else:
-            image_assets_query = image_assets_query.filter(ImageMetadata.asset_id.notin_(reviewed_subq))
+            if reviewed:
+                image_assets_query = image_assets_query.filter(Asset.id.in_(reviewed_subq))
+            else:
+                image_assets_query = image_assets_query.filter(Asset.id.notin_(reviewed_subq))
 
     image_assets_subq = image_assets_query.subquery()
+    total_assets_in_scope = int(
+        db.query(func.count(distinct(image_assets_subq.c.asset_id))).scalar() or 0
+    )
 
     source_mode = (source or "current").lower()
     active_tag_type = get_tenant_setting(db, tenant.id, 'active_machine_tag_type', default='siglip')
@@ -146,6 +167,28 @@ async def get_available_keywords(
             Keyword.keyword, KeywordCategory.name
         )
 
+    category_tagged_counts = None
+    if source_mode == "permatags":
+        category_tagged_rows = db.query(
+            KeywordCategory.name.label("category"),
+            func.count(distinct(Permatag.asset_id)).label("count")
+        ).join(
+            Keyword, Keyword.id == Permatag.keyword_id
+        ).join(
+            KeywordCategory, Keyword.category_id == KeywordCategory.id
+        ).join(
+            image_assets_subq, image_assets_subq.c.asset_id == Permatag.asset_id
+        ).filter(
+            tenant_column_filter(Permatag, tenant),
+            Permatag.signum == 1
+        ).group_by(
+            KeywordCategory.name
+        ).all()
+        category_tagged_counts = {
+            category: int(count or 0)
+            for category, count in category_tagged_rows
+        }
+
     counts_dict = {}
     if counts_query is not None:
         for keyword, category, count in counts_query.all():
@@ -158,9 +201,20 @@ async def get_available_keywords(
         keyword = kw['keyword']
         if cat not in by_category:
             by_category[cat] = []
+        category_tagged_count = category_tagged_counts.get(cat, 0) if category_tagged_counts is not None else None
+        category_missing_count = (
+            max(total_assets_in_scope - category_tagged_count, 0)
+            if category_tagged_count is not None
+            else None
+        )
         by_category[cat].append({
             'keyword': keyword,
-            'count': counts_dict.get(keyword, 0)
+            'count': counts_dict.get(keyword, 0),
+            'prompt': kw.get('prompt'),
+            'person_id': kw.get('person_id'),
+            'tag_type': kw.get('tag_type', 'keyword'),
+            'category_tagged_count': category_tagged_count,
+            'category_missing_count': category_missing_count,
         })
 
     return {

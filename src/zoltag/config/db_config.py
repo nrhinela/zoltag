@@ -121,7 +121,9 @@ class ConfigManager:
             result.append({
                 'keyword': keyword.keyword,
                 'category': category_path,
-                'prompt': keyword.prompt
+                'prompt': keyword.prompt,
+                'person_id': keyword.person_id,
+                'tag_type': getattr(keyword, 'tag_type', 'keyword'),
             })
 
         for subcat in sorted(category.subcategories, key=lambda c: c.sort_order):

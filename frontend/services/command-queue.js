@@ -9,7 +9,11 @@ import {
   bulkPermatags,
 } from './api.js';
 
-const STORAGE_KEY = 'zoltag_command_queue_v1';
+const STORAGE_KEY = 'zoltag:app:command-queue:v1';
+const LEGACY_STORAGE_KEYS = [
+  'zoltag_command_queue_v1',
+  'zoltan_command_queue_v1',
+];
 const CONCURRENCY = 3;
 const MAX_RETRIES = 2;
 
@@ -34,12 +38,24 @@ function saveState() {
 
 function loadState() {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    let raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) {
+      for (const legacyKey of LEGACY_STORAGE_KEYS) {
+        const legacyRaw = localStorage.getItem(legacyKey);
+        if (!legacyRaw) continue;
+        raw = legacyRaw;
+        localStorage.setItem(STORAGE_KEY, legacyRaw);
+        break;
+      }
+    }
     if (!raw) return;
     const parsed = JSON.parse(raw);
     queue = Array.isArray(parsed.queue) ? parsed.queue : [];
     failed = Array.isArray(parsed.failed) ? parsed.failed : [];
     completedCount = Number(parsed.completedCount || 0);
+    for (const legacyKey of LEGACY_STORAGE_KEYS) {
+      localStorage.removeItem(legacyKey);
+    }
   } catch (error) {
     console.error('Queue: failed to load state', error);
   }

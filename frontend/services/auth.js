@@ -19,8 +19,10 @@ const REGISTER_SUCCESS_CACHE_MS = 60 * 1000;
 const REGISTER_CROSS_TAB_LOCK_MS = 15 * 1000;
 const REGISTER_LOCK_WAIT_MS = 4000;
 const REGISTER_LOCK_POLL_MS = 120;
-const REGISTER_SUCCESS_STORAGE_PREFIX = 'zoltag:auth-register:success';
-const REGISTER_LOCK_STORAGE_PREFIX = 'zoltag:auth-register:lock';
+const REGISTER_SUCCESS_STORAGE_PREFIX = 'zoltag:app:auth-register:success';
+const REGISTER_LOCK_STORAGE_PREFIX = 'zoltag:app:auth-register:lock';
+const LEGACY_REGISTER_SUCCESS_STORAGE_PREFIX = 'zoltag:auth-register:success';
+const LEGACY_REGISTER_LOCK_STORAGE_PREFIX = 'zoltag:auth-register:lock';
 const REGISTER_LOCK_OWNER = `tab-${Math.random().toString(36).slice(2, 10)}-${Date.now()}`;
 
 let registerInFlight = null;
@@ -28,8 +30,22 @@ let registerInFlightToken = null;
 let lastRegisterSuccessToken = null;
 let lastRegisterSuccessAt = 0;
 
-function getStorageKey(prefix, subject) {
-  return `${prefix}:${subject || 'unknown'}`;
+function getStorageKeys(prefix, legacyPrefix, subject) {
+  const suffix = subject || 'unknown';
+  return {
+    primary: `${prefix}:${suffix}`,
+    legacy: legacyPrefix ? `${legacyPrefix}:${suffix}` : '',
+  };
+}
+
+function toStorageKeyPair(keyOrPair) {
+  if (typeof keyOrPair === 'string') {
+    return { primary: keyOrPair, legacy: '' };
+  }
+  return {
+    primary: String(keyOrPair?.primary || '').trim(),
+    legacy: String(keyOrPair?.legacy || '').trim(),
+  };
 }
 
 function decodeJwtSubject(token) {
@@ -48,29 +64,45 @@ function decodeJwtSubject(token) {
   }
 }
 
-function readStorageNumber(key) {
+function readStorageNumber(keyOrPair) {
   if (typeof window === 'undefined') return 0;
+  const { primary, legacy } = toStorageKeyPair(keyOrPair);
   try {
-    const value = Number(window.localStorage.getItem(key) || 0);
+    const primaryValue = Number(window.localStorage.getItem(primary) || 0);
+    if (Number.isFinite(primaryValue) && primaryValue > 0) {
+      if (legacy) window.localStorage.removeItem(legacy);
+      return primaryValue;
+    }
+    const legacyValue = legacy ? Number(window.localStorage.getItem(legacy) || 0) : 0;
+    if (Number.isFinite(legacyValue) && legacyValue > 0) {
+      window.localStorage.setItem(primary, String(legacyValue));
+      if (legacy) window.localStorage.removeItem(legacy);
+      return legacyValue;
+    }
+    const value = Number.isFinite(primaryValue) ? primaryValue : 0;
     return Number.isFinite(value) ? value : 0;
   } catch (_error) {
     return 0;
   }
 }
 
-function writeStorageNumber(key, value) {
+function writeStorageNumber(keyOrPair, value) {
   if (typeof window === 'undefined') return;
+  const { primary, legacy } = toStorageKeyPair(keyOrPair);
   try {
-    window.localStorage.setItem(key, String(value));
+    window.localStorage.setItem(primary, String(value));
+    if (legacy) {
+      window.localStorage.removeItem(legacy);
+    }
   } catch (_error) {
     // ignore storage access failures
   }
 }
 
-function readLockRecord(lockKey) {
+function readLockRecord(lockKeyOrPair) {
   if (typeof window === 'undefined') return null;
-  try {
-    const raw = window.localStorage.getItem(lockKey);
+  const { primary, legacy } = toStorageKeyPair(lockKeyOrPair);
+  const parseLockRecord = (raw) => {
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     const owner = String(parsed?.owner || '').trim();
@@ -79,14 +111,31 @@ function readLockRecord(lockKey) {
       return null;
     }
     return { owner, acquiredAt };
+  };
+  try {
+    const primaryRaw = window.localStorage.getItem(primary);
+    const primaryRecord = parseLockRecord(primaryRaw);
+    if (primaryRecord) {
+      if (legacy) window.localStorage.removeItem(legacy);
+      return primaryRecord;
+    }
+    const legacyRaw = legacy ? window.localStorage.getItem(legacy) : null;
+    const legacyRecord = parseLockRecord(legacyRaw);
+    if (legacyRecord) {
+      window.localStorage.setItem(primary, JSON.stringify(legacyRecord));
+      if (legacy) window.localStorage.removeItem(legacy);
+      return legacyRecord;
+    }
+    return null;
   } catch (_error) {
     return null;
   }
 }
 
-function tryAcquireRegisterLock(lockKey, owner) {
+function tryAcquireRegisterLock(lockKeyOrPair, owner) {
+  const { primary, legacy } = toStorageKeyPair(lockKeyOrPair);
   const now = Date.now();
-  const existing = readLockRecord(lockKey);
+  const existing = readLockRecord({ primary, legacy });
   const isStale = existing && (now - existing.acquiredAt) > REGISTER_CROSS_TAB_LOCK_MS;
   if (existing && existing.owner !== owner && !isStale) {
     return false;
@@ -95,11 +144,14 @@ function tryAcquireRegisterLock(lockKey, owner) {
     return true;
   }
   try {
-    window.localStorage.setItem(lockKey, JSON.stringify({
+    window.localStorage.setItem(primary, JSON.stringify({
       owner,
       acquiredAt: now,
     }));
-    const confirmed = readLockRecord(lockKey);
+    if (legacy) {
+      window.localStorage.removeItem(legacy);
+    }
+    const confirmed = readLockRecord({ primary, legacy });
     return confirmed?.owner === owner;
   } catch (_error) {
     // If storage is unavailable, fall back to single-tab in-memory dedupe.
@@ -107,12 +159,16 @@ function tryAcquireRegisterLock(lockKey, owner) {
   }
 }
 
-function releaseRegisterLock(lockKey, owner) {
+function releaseRegisterLock(lockKeyOrPair, owner) {
   if (typeof window === 'undefined') return;
+  const { primary, legacy } = toStorageKeyPair(lockKeyOrPair);
   try {
-    const current = readLockRecord(lockKey);
+    const current = readLockRecord({ primary, legacy });
     if (current?.owner === owner) {
-      window.localStorage.removeItem(lockKey);
+      window.localStorage.removeItem(primary);
+      if (legacy) {
+        window.localStorage.removeItem(legacy);
+      }
     }
   } catch (_error) {
     // ignore storage access failures
@@ -141,15 +197,15 @@ function mapRegistrationErrorMessage(message, email = '') {
   return String(message || '').trim() || 'Registration failed';
 }
 
-async function waitForRegisterCompletion(successKey, lockKey) {
+async function waitForRegisterCompletion(successKeyOrPair, lockKeyOrPair) {
   const startedAt = Date.now();
   while ((Date.now() - startedAt) < REGISTER_LOCK_WAIT_MS) {
-    const successAt = readStorageNumber(successKey);
+    const successAt = readStorageNumber(successKeyOrPair);
     if (successAt > 0 && (Date.now() - successAt) < REGISTER_SUCCESS_CACHE_MS) {
       return true;
     }
 
-    const lock = readLockRecord(lockKey);
+    const lock = readLockRecord(lockKeyOrPair);
     if (!lock) {
       return false;
     }
@@ -326,8 +382,16 @@ export async function ensureRegistration(
       return false;
     }
     const subject = decodeJwtSubject(accessToken) || 'unknown';
-    const successKey = getStorageKey(REGISTER_SUCCESS_STORAGE_PREFIX, subject);
-    const lockKey = getStorageKey(REGISTER_LOCK_STORAGE_PREFIX, subject);
+    const successKeys = getStorageKeys(
+      REGISTER_SUCCESS_STORAGE_PREFIX,
+      LEGACY_REGISTER_SUCCESS_STORAGE_PREFIX,
+      subject,
+    );
+    const lockKeys = getStorageKeys(
+      REGISTER_LOCK_STORAGE_PREFIX,
+      LEGACY_REGISTER_LOCK_STORAGE_PREFIX,
+      subject,
+    );
 
     const isRecentSuccessForToken = (
       !force
@@ -338,7 +402,7 @@ export async function ensureRegistration(
       return true;
     }
 
-    const sharedSuccessAt = readStorageNumber(successKey);
+    const sharedSuccessAt = readStorageNumber(successKeys);
     const isRecentSharedSuccess = sharedSuccessAt > 0
       && (Date.now() - sharedSuccessAt) < REGISTER_SUCCESS_CACHE_MS;
     if (isRecentSharedSuccess) {
@@ -351,15 +415,15 @@ export async function ensureRegistration(
       return await registerInFlight;
     }
 
-    let ownsCrossTabLock = tryAcquireRegisterLock(lockKey, REGISTER_LOCK_OWNER);
+    let ownsCrossTabLock = tryAcquireRegisterLock(lockKeys, REGISTER_LOCK_OWNER);
     if (!ownsCrossTabLock) {
-      const completedByOtherTab = await waitForRegisterCompletion(successKey, lockKey);
+      const completedByOtherTab = await waitForRegisterCompletion(successKeys, lockKeys);
       if (completedByOtherTab) {
         lastRegisterSuccessToken = accessToken;
         lastRegisterSuccessAt = Date.now();
         return true;
       }
-      ownsCrossTabLock = tryAcquireRegisterLock(lockKey, REGISTER_LOCK_OWNER);
+      ownsCrossTabLock = tryAcquireRegisterLock(lockKeys, REGISTER_LOCK_OWNER);
       if (!ownsCrossTabLock) {
         return false;
       }
@@ -369,12 +433,12 @@ export async function ensureRegistration(
     registerInFlight = postRegister(accessToken, displayName)
       .then((result) => {
         if (result) {
-          writeStorageNumber(successKey, Date.now());
+          writeStorageNumber(successKeys, Date.now());
         }
         return result;
       })
       .finally(() => {
-        releaseRegisterLock(lockKey, REGISTER_LOCK_OWNER);
+        releaseRegisterLock(lockKeys, REGISTER_LOCK_OWNER);
         if (registerInFlightToken === accessToken) {
           registerInFlight = null;
           registerInFlightToken = null;
@@ -388,6 +452,67 @@ export async function ensureRegistration(
       throw error;
     }
     return false;
+  }
+}
+
+/**
+ * Sign in with magic link (passwordless email OTP)
+ *
+ * Supabase sends a one-time link to the email address. The user clicks it
+ * and is redirected to /auth/callback where the session is established.
+ * No password or account creation step required.
+ *
+ * @param {string} email - User email address
+ * @returns {Promise<void>}
+ * @throws {Error} If the request fails
+ */
+export async function signInWithMagicLink(email) {
+  try {
+    const { error } = await supabase.auth.signInWithOtp({
+      email,
+      options: {
+        shouldCreateUser: false,
+        emailRedirectTo: `${window.location.origin}/auth/callback`,
+      },
+    });
+
+    if (error) {
+      throw new Error(error.message);
+    }
+  } catch (error) {
+    throw new Error(`Magic link failed: ${error.message}`);
+  }
+}
+
+/**
+ * Verify a 6-digit OTP code sent via magic link email
+ *
+ * @param {string} email - The email address the code was sent to
+ * @param {string} token - The 6-digit OTP code
+ * @returns {Promise<void>}
+ * @throws {Error} If verification fails
+ */
+export async function verifyOtpCode(email, token) {
+  try {
+    let { error } = await supabase.auth.verifyOtp({
+      email,
+      token,
+      type: 'magiclink',
+    });
+
+    // Backward-compatible fallback for projects configured with email OTP type.
+    if (error) {
+      const retry = await supabase.auth.verifyOtp({
+        email,
+        token,
+        type: 'email',
+      });
+      error = retry.error;
+    }
+
+    if (error) throw new Error(error.message);
+  } catch (error) {
+    throw new Error(`Code verification failed: ${error.message}`);
   }
 }
 

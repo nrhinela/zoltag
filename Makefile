@@ -148,7 +148,10 @@ dev-backend:
 		exit 1; \
 	fi
 	set -a && . ./.env && set +a && \
-	TOKENIZERS_PARALLELISM=false python3 -m uvicorn zoltag.api:app --reload --host 0.0.0.0 --port 8000
+	TOKENIZERS_PARALLELISM=false \
+	GRPC_VERBOSITY=ERROR \
+	GLOG_minloglevel=2 \
+	python3 -m uvicorn zoltag.api:app --reload --host 0.0.0.0 --port 8000
 
 dev-frontend:
 	@echo "Starting frontend development server..."
@@ -179,14 +182,20 @@ worker:
 	fi; \
 	set -a && . ./.env && set +a && \
 	if [ "$(WORKERS)" -eq 1 ]; then \
-		PYTHONPATH=src WORKER_MODE=true "$$PY_CMD" -m zoltag.worker; \
+		PYTHONPATH=src WORKER_MODE=true \
+		GRPC_VERBOSITY=ERROR \
+		GLOG_minloglevel=2 \
+		"$$PY_CMD" -m zoltag.worker; \
 	else \
 		echo "Launching $(WORKERS) worker processes..."; \
 		pids=""; \
 		trap 'echo "Stopping workers..."; for pid in $$pids; do kill $$pid 2>/dev/null || true; done; wait; exit 0' INT TERM; \
 		i=1; \
 		while [ $$i -le "$(WORKERS)" ]; do \
-			PYTHONPATH=src WORKER_MODE=true "$$PY_CMD" -m zoltag.worker & \
+			PYTHONPATH=src WORKER_MODE=true \
+			GRPC_VERBOSITY=ERROR \
+			GLOG_minloglevel=2 \
+			"$$PY_CMD" -m zoltag.worker & \
 			pid=$$!; \
 			pids="$$pids $$pid"; \
 			echo "  worker $$i pid=$$pid"; \

@@ -11,6 +11,7 @@ from .ml_training import router as ml_training_router
 from .tagging import router as tagging_router
 from .people_tagging import router as people_tagging_router
 from .rating import router as rating_router
+from .comments import router as comments_router
 from .file_serving import router as file_serving_router
 from .asset_variants import router as asset_variants_router
 from .dropbox_sync import router as dropbox_sync_router
@@ -35,6 +36,7 @@ router.include_router(ml_training_router)
 router.include_router(tagging_router)
 router.include_router(people_tagging_router)
 router.include_router(rating_router)
+router.include_router(comments_router)
 router.include_router(file_serving_router)
 router.include_router(asset_variants_router)
 router.include_router(notes_router)

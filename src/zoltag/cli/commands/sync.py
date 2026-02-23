@@ -7,7 +7,8 @@ from google.cloud import storage
 
 from zoltag.settings import settings
 from zoltag.dependencies import get_secret
-from zoltag.metadata import Asset
+from zoltag.integrations import TenantIntegrationRepository
+from zoltag.metadata import Asset, Tenant as TenantModel
 from zoltag.dropbox import DropboxClient
 from zoltag.dropbox_oauth import load_dropbox_oauth_credentials
 from zoltag.image import is_supported_media_file
@@ -78,6 +79,18 @@ class SyncDropboxCommand(CliCommand):
         """Sync images from Dropbox."""
         tenant_context = self.load_tenant(self.tenant_id)
         click.echo(f"Syncing from Dropbox for tenant: {tenant_context.name}")
+
+        tenant_row = self.db.query(TenantModel).filter(TenantModel.id == tenant_context.id).first()
+        if not tenant_row:
+            raise click.ClickException(f"Tenant {tenant_context.id} not found in database")
+
+        integration_repo = TenantIntegrationRepository(self.db)
+        dropbox_record = integration_repo.get_provider_record(tenant_row, "dropbox")
+        if not bool(getattr(dropbox_record, "is_active", False)):
+            raise click.ClickException(
+                "Provider integration is inactive: Dropbox sync is disabled. "
+                "Activate this provider in Admin -> Providers before running sync."
+            )
 
         # Get Dropbox credentials
         try:

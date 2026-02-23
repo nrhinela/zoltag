@@ -109,7 +109,10 @@ def _serialize_param(param: click.Parameter) -> dict[str, Any]:
 
 @lru_cache(maxsize=1)
 def _command_index() -> dict[str, click.Command]:
-    from zoltag.cli import cli as cli_group
+    from zoltag.cli import cli as cli_group, _register_commands_once
+
+    # Ensure lazy CLI commands are loaded before introspection lookup.
+    _register_commands_once()
 
     return dict(getattr(cli_group, "commands", {}) or {})
 

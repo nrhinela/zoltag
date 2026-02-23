@@ -1,0 +1,4 @@
+{
+  "python.defaultInterpreterPath": "/opt/homebrew/Caskroom/miniforge/base/envs/zoltag-face/bin/python",
+  "python.terminal.activateEnvironment": true
+}

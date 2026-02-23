@@ -23,7 +23,7 @@ from zoltag.tenant import Tenant
 from zoltag.models.config import PhotoList, PhotoListItem, Keyword, KeywordCategory
 from zoltag.metadata import AssetDerivative, ImageMetadata, MachineTag, Permatag
 from zoltag.tagging import calculate_tags
-from zoltag.models.requests import AddPhotoRequest
+from zoltag.models.requests import AddPhotoRequest, ReorderListItemsRequest
 from zoltag.settings import settings
 from zoltag.auth.dependencies import get_current_user
 from zoltag.auth.models import UserProfile
@@ -427,7 +427,7 @@ async def get_list_items(
     db: Session = Depends(get_db),
     current_user: UserProfile = Depends(get_current_user),
 ):
-    """Get all items in a list, ordered by added_at ascending."""
+    """Get all items in a list, ordered by sort_order ascending."""
     is_tenant_admin = is_tenant_admin_user(db, tenant, current_user)
     _get_accessible_list_or_404(
         db=db,
@@ -442,6 +442,7 @@ async def get_list_items(
                 PhotoListItem.id,
                 ImageMetadata.id.label("photo_id"),
                 PhotoListItem.asset_id,
+                PhotoListItem.sort_order,
                 PhotoListItem.added_at,
             )
             .join(PhotoList, PhotoListItem.list_id == PhotoList.id)
@@ -453,12 +454,18 @@ async def get_list_items(
                 ),
             )
             .filter(PhotoListItem.list_id == list_id, tenant_column_filter(PhotoList, tenant))
-            .order_by(PhotoListItem.added_at.asc())
+            .order_by(PhotoListItem.sort_order.asc(), PhotoListItem.added_at.asc(), PhotoListItem.id.asc())
             .all()
         )
         return [
-            {"id": item_id, "photo_id": photo_id, "asset_id": str(asset_id) if asset_id else None, "added_at": added_at}
-            for item_id, photo_id, asset_id, added_at in items
+            {
+                "id": item_id,
+                "photo_id": photo_id,
+                "asset_id": str(asset_id) if asset_id else None,
+                "sort_order": sort_order,
+                "added_at": added_at,
+            }
+            for item_id, photo_id, asset_id, sort_order, added_at in items
         ]
     items = (
         db.query(PhotoListItem, ImageMetadata)
@@ -472,7 +479,7 @@ async def get_list_items(
         .filter(
             PhotoListItem.list_id == list_id
         )
-        .order_by(PhotoListItem.added_at.asc())
+        .order_by(PhotoListItem.sort_order.asc(), PhotoListItem.added_at.asc(), PhotoListItem.id.asc())
         .all()
     )
     assets_by_id = load_assets_for_images(db, [img for _, img in items])
@@ -562,6 +569,7 @@ async def get_list_items(
             "id": item.id,
             "photo_id": img.id,
             "asset_id": str(item.asset_id) if item.asset_id else storage_info.asset_id,
+            "sort_order": item.sort_order,
             "added_at": item.added_at,
             "image": {
                 "id": img.id,
@@ -601,6 +609,60 @@ async def get_list_items(
             }
         })
     return response_items
+
+
+@router.patch("/{list_id:int}/items/reorder", response_model=dict)
+async def reorder_list_items(
+    list_id: int,
+    req: ReorderListItemsRequest,
+    tenant: Tenant = Depends(get_tenant),
+    db: Session = Depends(get_db),
+    current_user: UserProfile = Depends(get_current_user),
+):
+    """Reorder list items by item id for a single list."""
+    is_tenant_admin = is_tenant_admin_user(db, tenant, current_user)
+    list_row = _get_accessible_list_or_404(
+        db=db,
+        tenant=tenant,
+        list_id=list_id,
+        current_user=current_user,
+        is_tenant_admin=is_tenant_admin,
+    )
+    if not can_edit_list(list_row, user=current_user, is_tenant_admin=is_tenant_admin):
+        raise HTTPException(status_code=403, detail="Only list owner or admin can reorder this list")
+
+    requested_ids = [int(item_id) for item_id in (req.item_ids or []) if int(item_id) > 0]
+    if not requested_ids:
+        raise HTTPException(status_code=400, detail="item_ids is required")
+
+    existing_items = (
+        db.query(PhotoListItem.id)
+        .filter(PhotoListItem.list_id == list_id)
+        .order_by(PhotoListItem.sort_order.asc(), PhotoListItem.added_at.asc(), PhotoListItem.id.asc())
+        .all()
+    )
+    existing_ids = [int(row[0]) for row in existing_items]
+    if not existing_ids:
+        return {"list_id": list_id, "updated": 0, "item_ids": []}
+
+    existing_set = set(existing_ids)
+    ordered = []
+    seen = set()
+    for item_id in requested_ids:
+        if item_id in existing_set and item_id not in seen:
+            ordered.append(item_id)
+            seen.add(item_id)
+    for item_id in existing_ids:
+        if item_id not in seen:
+            ordered.append(item_id)
+
+    for idx, item_id in enumerate(ordered, start=1):
+        db.query(PhotoListItem).filter(
+            PhotoListItem.id == item_id,
+            PhotoListItem.list_id == list_id,
+        ).update({"sort_order": idx}, synchronize_session=False)
+    db.commit()
+    return {"list_id": list_id, "updated": len(ordered), "item_ids": ordered}
 
 
 @router.post("/{list_id:int}/add-photo", response_model=dict)
@@ -649,7 +711,13 @@ async def add_photo_to_specific_list(
             "added_at": existing_item.added_at,
         }
 
-    item = PhotoListItem(list_id=list_id, asset_id=asset_id)
+    max_sort_order = (
+        db.query(func.max(PhotoListItem.sort_order))
+        .filter(PhotoListItem.list_id == list_id)
+        .scalar()
+    )
+    next_sort_order = int(max_sort_order or 0) + 1
+    item = PhotoListItem(list_id=list_id, asset_id=asset_id, sort_order=next_sort_order)
     db.add(item)
     db.commit()
     db.refresh(item)
@@ -713,7 +781,13 @@ async def add_photo_to_list(
             "asset_id": str(existing_item.asset_id) if existing_item.asset_id else None,
             "added_at": existing_item.added_at,
         }
-    item = PhotoListItem(list_id=recent.id, asset_id=asset_id)
+    max_sort_order = (
+        db.query(func.max(PhotoListItem.sort_order))
+        .filter(PhotoListItem.list_id == recent.id)
+        .scalar()
+    )
+    next_sort_order = int(max_sort_order or 0) + 1
+    item = PhotoListItem(list_id=recent.id, asset_id=asset_id, sort_order=next_sort_order)
     db.add(item)
     db.commit()
     db.refresh(item)

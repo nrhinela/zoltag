@@ -9,6 +9,11 @@
  */
 
 import { createClient } from '@supabase/supabase-js';
+import {
+  APP_AUTH_STORAGE_KEY,
+  GUEST_AUTH_STORAGE_KEY,
+  migrateLocalStorageKey,
+} from './app-storage.js';
 
 // Validate environment variables
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
@@ -18,22 +23,59 @@ if (!supabaseUrl || !supabaseAnonKey) {
   throw new Error('Missing Supabase environment variables (VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY)');
 }
 
+function createZoltagClient(storageKey, detectSessionInUrl) {
+  return createClient(supabaseUrl, supabaseAnonKey, {
+    auth: {
+      // Auto-refresh access tokens before expiry
+      autoRefreshToken: true,
+      // Persist session to localStorage
+      persistSession: true,
+      // Detect OAuth redirects in URL
+      detectSessionInUrl,
+      // Use localStorage for token persistence
+      storage: window.localStorage,
+      // Separate auth storage so /guest doesn't overwrite /app session.
+      storageKey,
+    },
+  });
+}
+
+function isGuestRoute() {
+  if (typeof window === 'undefined') return false;
+  return window.location.pathname.startsWith('/guest');
+}
+
+const guestRoute = isGuestRoute();
+if (guestRoute) {
+  migrateLocalStorageKey(GUEST_AUTH_STORAGE_KEY, ['zoltag-auth-guest']);
+} else {
+  migrateLocalStorageKey(APP_AUTH_STORAGE_KEY, ['zoltag-auth-app']);
+}
+const activeStorageKey = guestRoute ? GUEST_AUTH_STORAGE_KEY : APP_AUTH_STORAGE_KEY;
+const activeSupabaseClient = guestRoute
+  ? createZoltagClient(GUEST_AUTH_STORAGE_KEY, true)
+  : createZoltagClient(APP_AUTH_STORAGE_KEY, true);
+
 /**
- * Supabase client instance
- * Handles authentication and API calls to Supabase
+ * Active Supabase client for current route context.
+ * - /guest => guest storage key
+ * - all other routes => app storage key
  */
-export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-  auth: {
-    // Auto-refresh access tokens before expiry
-    autoRefreshToken: true,
-    // Persist session to localStorage
-    persistSession: true,
-    // Detect OAuth redirects in URL
-    detectSessionInUrl: true,
-    // Use localStorage for token persistence
-    storage: window.localStorage,
-  },
-});
+export const supabase = activeSupabaseClient;
+
+function readSessionFromStorage() {
+  try {
+    const raw = window.localStorage.getItem(activeStorageKey);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    // Supabase may persist either the session directly or under currentSession.
+    const candidate = parsed?.access_token ? parsed : parsed?.currentSession;
+    if (!candidate?.access_token) return null;
+    return candidate;
+  } catch (_err) {
+    return null;
+  }
+}
 
 /**
  * Get current user session from Supabase Auth
@@ -46,16 +88,36 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
  * @returns {Promise<Object|null>} Session object or null if not authenticated
  */
 export async function getSession() {
+  const timeoutMs = 1200;
+  let timeoutId = null;
   try {
-    const { data: { session }, error } = await supabase.auth.getSession();
+    const timeoutPromise = new Promise((resolve) => {
+      timeoutId = window.setTimeout(() => resolve({ timedOut: true }), timeoutMs);
+    });
+    const sessionPromise = (async () => {
+      const result = await supabase.auth.getSession();
+      return { timedOut: false, result };
+    })();
+
+    const raced = await Promise.race([sessionPromise, timeoutPromise]);
+
+    if (raced?.timedOut) {
+      return readSessionFromStorage();
+    }
+
+    const { data: { session }, error } = raced.result;
     if (error) {
       console.error('Error getting session:', error);
-      return null;
+      return readSessionFromStorage();
     }
-    return session;
+    return session || readSessionFromStorage();
   } catch (err) {
     console.error('Error getting session:', err);
-    return null;
+    return readSessionFromStorage();
+  } finally {
+    if (timeoutId !== null) {
+      window.clearTimeout(timeoutId);
+    }
   }
 }
 

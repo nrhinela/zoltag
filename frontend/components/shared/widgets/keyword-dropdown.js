@@ -27,6 +27,7 @@ class KeywordDropdown extends LitElement {
     includeUntagged: { type: Boolean },
     disabled: { type: Boolean },
     compact: { type: Boolean },
+    prependOptions: { type: Array },
     open: { type: Boolean, state: true },
     searchQuery: { type: String, state: true },
   };
@@ -42,6 +43,7 @@ class KeywordDropdown extends LitElement {
     this.includeUntagged = true;
     this.disabled = false;
     this.compact = false;
+    this.prependOptions = [];
     this.open = false;
     this.searchQuery = '';
     this._handleOutsideClick = this._handleOutsideClick.bind(this);
@@ -118,6 +120,11 @@ class KeywordDropdown extends LitElement {
     if (!this.value) {
       return this.placeholder;
     }
+    const prepend = Array.isArray(this.prependOptions) ? this.prependOptions : [];
+    const prependMatch = prepend.find((opt) => String(opt?.value || '') === String(this.value || ''));
+    if (prependMatch) {
+      return String(prependMatch.label || prependMatch.value || this.placeholder);
+    }
     if (this.value === '__untagged__') {
       const count = this.imageStats?.untagged_positive_count || 0;
       return `Untagged (${count})`;
@@ -173,12 +180,20 @@ class KeywordDropdown extends LitElement {
     return 'untagged'.includes(query);
   }
 
+  _getFilteredPrependOptions() {
+    const prepend = Array.isArray(this.prependOptions) ? this.prependOptions : [];
+    const query = this._normalize(this.searchQuery);
+    if (!query) return prepend;
+    return prepend.filter((opt) => this._normalize(opt?.label || opt?.value).includes(query));
+  }
+
   _renderMenu() {
     if (!this.open) return html``;
     const categories = this._getFilteredCategories();
+    const prependOptions = this._getFilteredPrependOptions();
     const untaggedCount = this.imageStats?.untagged_positive_count || 0;
     const showUntagged = this._showUntaggedInResults();
-    const hasResults = showUntagged || categories.length > 0;
+    const hasResults = prependOptions.length > 0 || showUntagged || categories.length > 0;
 
     return html`
       <div class="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-50 min-w-[300px] max-w-[400px] max-h-[400px] overflow-y-auto">
@@ -200,6 +215,14 @@ class KeywordDropdown extends LitElement {
             }}
           />
         </div>
+        ${prependOptions.map((opt, index) => html`
+          <div
+            class="px-4 py-2 cursor-pointer ${index === prependOptions.length - 1 ? 'border-b border-gray-100' : 'border-b border-gray-50'} hover:bg-gray-100 transition-colors font-semibold text-gray-800"
+            @click=${() => this._selectValue(String(opt?.value || ''))}
+          >
+            ${String(opt?.label || opt?.value || '').trim() || '--'}
+          </div>
+        `)}
         ${showUntagged ? html`
           <div
             class="px-4 py-2 cursor-pointer border-b border-gray-50 last:border-b-0 hover:bg-gray-100 transition-colors"

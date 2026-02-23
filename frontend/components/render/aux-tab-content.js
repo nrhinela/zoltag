@@ -10,6 +10,22 @@ import {
   userIsSuperAdmin,
 } from '../shared/tenant-permissions.js';
 
+function getTenantSelectionOptions(currentUser) {
+  const memberships = Array.isArray(currentUser?.tenants) ? currentUser.tenants : [];
+  const seen = new Set();
+  const options = [];
+  for (const membership of memberships) {
+    const tenantId = normalizeTenantRef(String(membership?.tenant_id || ''));
+    if (!tenantId || seen.has(tenantId)) continue;
+    seen.add(tenantId);
+    options.push({
+      id: tenantId,
+      label: String(membership?.tenant_name || membership?.tenant_identifier || tenantId).trim() || tenantId,
+    });
+  }
+  return options;
+}
+
 export function renderRatingModal(host) {
   if (!host._curateRatingModalActive) {
     return html``;
@@ -96,12 +112,19 @@ export function renderAuxTabContent(host, { formatCurateDate }) {
     'tenant.jobs.view',
     ['admin'],
   );
+  const canManageShares = allowByPermissionOrRole(
+    host.currentUser,
+    selectedTenant,
+    'list.edit.shared',
+    ['admin'],
+  );
   const unavailableLibraryTabs = [
     !canReadKeywords ? 'Keywords' : null,
     !canViewUsers ? 'Users' : null,
     !canViewAudit ? 'Audit' : null,
     !canManageProviders ? 'Providers' : null,
     !canManageJobs ? 'Jobs' : null,
+    !canManageShares ? 'Shares' : null,
   ].filter(Boolean);
   const libraryTabActive = host.activeTab === 'library';
   const defaultLibrarySubTab = 'assets';
@@ -111,7 +134,8 @@ export function renderAuxTabContent(host, { formatCurateDate }) {
     || (rawLibrarySubTab === 'users' && canViewUsers)
     || (rawLibrarySubTab === 'audit' && canViewAudit)
     || (rawLibrarySubTab === 'providers' && canManageProviders)
-    || (rawLibrarySubTab === 'jobs' && canManageJobs))
+    || (rawLibrarySubTab === 'jobs' && canManageJobs)
+    || (rawLibrarySubTab === 'shares' && canManageShares))
     ? rawLibrarySubTab
     : defaultLibrarySubTab;
 
@@ -165,6 +189,14 @@ export function renderAuxTabContent(host, { formatCurateDate }) {
               @click=${() => host.activeLibrarySubTab = 'jobs'}
             >
               Jobs
+            </button>
+            <button
+              class="admin-subtab ${librarySubTab === 'shares' ? 'active' : ''}"
+              ?disabled=${!canManageShares}
+              title=${canManageShares ? 'Manage guest shares' : 'Requires list.edit.shared permission'}
+              @click=${() => host.activeLibrarySubTab = 'shares'}
+            >
+              Shares
             </button>
           </div>
         </div>
@@ -251,6 +283,13 @@ export function renderAuxTabContent(host, { formatCurateDate }) {
             ></library-jobs-admin>
           </div>
         ` : html``}
+        ${librarySubTab === 'shares' ? html`
+          <div class="mt-2">
+            <admin-reviews-panel
+              .tenantId=${host.tenant}
+            ></admin-reviews-panel>
+          </div>
+        ` : html``}
       </div>
     ` : html``}
 
@@ -298,12 +337,62 @@ export function renderAuxTabContent(host, { formatCurateDate }) {
 }
 
 export function renderGlobalOverlays(host, { canCurate }) {
+  const tenantSelectionOptions = getTenantSelectionOptions(host.currentUser);
+  const hasTenantSelection = !!normalizeTenantRef(host.tenant);
+  const shouldShowTenantSelector = !host.tenantAccessBlocked
+    && !hasTenantSelection
+    && !!host.tenantSelectionRequired
+    && tenantSelectionOptions.length > 1;
+  const shouldShowTenantFallbackError = !host.tenantAccessBlocked
+    && !hasTenantSelection
+    && !shouldShowTenantSelector
+    && tenantSelectionOptions.length > 1;
+
   return html`
     ${host.tenantAccessBlocked ? html`
       <div class="curate-rating-modal-overlay" aria-live="assertive">
         <div class="curate-rating-modal-content" role="alertdialog" aria-modal="true">
           <div class="curate-rating-modal-title">Tenant Access Required</div>
           <div class="curate-rating-modal-subtitle">${host.tenantAccessBlockedMessage || 'Your user has not been assigned permissions'}</div>
+          <div style="display: flex; gap: 0.75rem; margin-top: 1.25rem; justify-content: center;">
+            <button
+              @click=${() => { window.location.href = '/'; }}
+              style="padding: 0.5rem 1.25rem; background: white; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px; font-weight: 500; cursor: pointer; color: #374151;"
+            >Cancel</button>
+            <button
+              @click=${() => host.dispatchEvent(new CustomEvent('request-logout', { bubbles: true, composed: true }))}
+              style="padding: 0.5rem 1.25rem; background: #f3f4f6; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px; font-weight: 500; cursor: pointer; color: #374151;"
+            >Sign Out</button>
+          </div>
+        </div>
+      </div>
+    ` : html``}
+    ${shouldShowTenantSelector ? html`
+      <div class="curate-rating-modal-overlay" aria-live="assertive">
+        <div class="curate-rating-modal-content" role="dialog" aria-modal="true" style="max-width: 560px;">
+          <div class="curate-rating-modal-title">Select a Tenant</div>
+          <div class="curate-rating-modal-subtitle">Choose a tenant to continue.</div>
+          <div class="mt-4 space-y-2 max-h-72 overflow-auto text-left">
+            ${tenantSelectionOptions.map((tenantOption) => html`
+              <button
+                type="button"
+                class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-800 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 text-left"
+                @click=${() => host._handleTenantChange({ detail: tenantOption.id })}
+              >
+                ${tenantOption.label}
+              </button>
+            `)}
+          </div>
+        </div>
+      </div>
+    ` : html``}
+    ${shouldShowTenantFallbackError ? html`
+      <div class="curate-rating-modal-overlay" aria-live="assertive">
+        <div class="curate-rating-modal-content" role="alertdialog" aria-modal="true">
+          <div class="curate-rating-modal-title">No Tenant Selected</div>
+          <div class="curate-rating-modal-subtitle">
+            No tenant is active. Open your profile menu and select a tenant, then reload.
+          </div>
         </div>
       </div>
     ` : html``}

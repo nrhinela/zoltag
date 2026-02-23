@@ -1,30 +1,6 @@
-import { LitElement, html, css } from 'lit';
-import { tailwind } from './tailwind-lit.js';
+import { LitElement, html } from 'lit';
 
 class ListEditModal extends LitElement {
-  static styles = [tailwind, css`
-    :host {
-      display: block;
-    }
-    .modal-overlay {
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      background-color: rgba(0, 0, 0, 0.5);
-      display: flex;
-      justify-content: center;
-      align-items: center;
-    }
-    .modal-content {
-      background-color: white;
-      padding: 20px;
-      border-radius: 8px;
-      width: 500px;
-    }
-  `];
-
   static properties = {
     list: { type: Object },
     active: { type: Boolean, reflect: true },
@@ -36,10 +12,16 @@ class ListEditModal extends LitElement {
     this.active = false;
   }
 
+  createRenderRoot() {
+    return this;
+  }
+
   _handleSave(e) {
     e.preventDefault();
-    const title = this.shadowRoot.getElementById('title').value.trim();
-    const description = this.shadowRoot.getElementById('description').value;
+    const titleInput = this.querySelector('#title');
+    const descriptionInput = this.querySelector('#description');
+    const title = String(titleInput?.value || '').trim();
+    const description = String(descriptionInput?.value || '');
     if (!title) {
       return;
     }
@@ -57,21 +39,41 @@ class ListEditModal extends LitElement {
     }
 
     return html`
-      <div class="modal-overlay" @click=${this._handleCancel}>
-        <div class="modal-content" @click=${(e) => e.stopPropagation()}>
-          <h3 class="text-xl font-bold mb-2">Edit List</h3>
-          <form>
+      <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @click=${this._handleCancel}>
+        <div class="w-full max-w-[500px] rounded-lg bg-white p-5 shadow-xl" @click=${(e) => e.stopPropagation()}>
+          <h3 class="mb-2 text-xl font-bold text-gray-900">Edit List</h3>
+          <form @submit=${this._handleSave}>
             <div class="mb-4">
-              <label for="title" class="block text-gray-700 font-bold mb-2">Title</label>
-              <input id="title" class="w-full p-2 border border-gray-300 rounded-lg" .value=${this.list.title || ''} required>
+              <label for="title" class="mb-2 block font-bold text-gray-700">Title</label>
+              <input
+                id="title"
+                class="w-full rounded-lg border border-gray-300 p-2"
+                .value=${this.list.title || ''}
+                required
+              >
             </div>
             <div class="mb-4">
-              <label for="description" class="block text-gray-700 font-bold mb-2">Notes</label>
-              <textarea id="description" class="w-full p-2 border border-gray-300 rounded-lg" .value=${this.list.notebox}></textarea>
+              <label for="description" class="mb-2 block font-bold text-gray-700">Notes</label>
+              <textarea
+                id="description"
+                class="w-full rounded-lg border border-gray-300 p-2"
+                .value=${this.list.notebox || ''}
+              ></textarea>
             </div>
             <div class="flex justify-end">
-              <button @click=${this._handleCancel} type="button" class="border border-gray-400 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-100 mr-2">Cancel</button>
-              <button @click=${this._handleSave} type="submit" class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700">Save</button>
+              <button
+                @click=${this._handleCancel}
+                type="button"
+                class="mr-2 rounded-lg border border-gray-400 px-4 py-2 text-gray-700 hover:bg-gray-100"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                class="rounded-lg bg-blue-600 px-4 py-2 text-white hover:bg-blue-700"
+              >
+                Save
+              </button>
             </div>
           </form>
         </div>

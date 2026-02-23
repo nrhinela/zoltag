@@ -1,6 +1,11 @@
 import { BaseStateController } from './base-state-controller.js';
 import { getCurrentUser } from '../../services/auth.js';
-import { getImageStats } from '../../services/api.js';
+import { getImageStats, getGuestFeedbackLog, getGuestAlerts } from '../../services/api.js';
+import {
+  clearStoredAppTenant,
+  getStoredAppTenant,
+  setStoredAppTenant,
+} from '../../services/app-storage.js';
 import { shouldAutoRefreshCurateStats } from '../shared/curate-stats.js';
 import {
   canCurateTenant,
@@ -31,33 +36,17 @@ export class AppShellStateController extends BaseStateController {
   }
 
   _getStoredTenantSelection() {
-    try {
-      return normalizeTenantValue(
-        localStorage.getItem('tenantId') || localStorage.getItem('currentTenant') || ''
-      );
-    } catch (_error) {
-      return '';
-    }
+    return normalizeTenantValue(getStoredAppTenant());
   }
 
   _setStoredTenantSelection(tenantId) {
     const normalized = normalizeTenantValue(tenantId);
     if (!normalized) return;
-    try {
-      localStorage.setItem('tenantId', normalized);
-      localStorage.setItem('currentTenant', normalized);
-    } catch (_error) {
-      // no-op; persistence failures should not block UI
-    }
+    setStoredAppTenant(normalized);
   }
 
   _clearStoredTenantSelection() {
-    try {
-      localStorage.removeItem('tenantId');
-      localStorage.removeItem('currentTenant');
-    } catch (_error) {
-      // no-op; persistence failures should not block UI
-    }
+    clearStoredAppTenant();
   }
 
   async loadCurrentUser() {
@@ -81,6 +70,9 @@ export class AppShellStateController extends BaseStateController {
       this.host.tenantAccessBlockedMessage = this.host.tenantAccessBlocked
         ? 'Your user has not been assigned permissions'
         : '';
+      this.host.tenantSelectionRequired = !this.host.tenantAccessBlocked
+        && !canonicalTenant
+        && memberships.length > 1;
 
       if (this.host.tenantAccessBlocked) {
         this.host.tenant = '';
@@ -109,6 +101,7 @@ export class AppShellStateController extends BaseStateController {
       this.host.currentUser = null;
       this.host.tenantAccessBlocked = false;
       this.host.tenantAccessBlockedMessage = '';
+      this.host.tenantSelectionRequired = false;
     }
   }
 
@@ -254,6 +247,8 @@ export class AppShellStateController extends BaseStateController {
     try {
       const results = await Promise.allSettled([
         getImageStats(tenantAtRequest, { force, includeRatings: false }),
+        getGuestFeedbackLog(tenantAtRequest, { force, limit: 200 }),
+        getGuestAlerts(tenantAtRequest, { force, limit: 200 }),
       ]);
 
       const isStale =
@@ -268,6 +263,26 @@ export class AppShellStateController extends BaseStateController {
       } else {
         console.error('Error fetching image stats:', imageResult.reason);
         this.host.imageStats = null;
+      }
+      const feedbackResult = results[1];
+      if (feedbackResult.status === 'fulfilled') {
+        this.host.homeFeedbackLog = Array.isArray(feedbackResult.value?.events)
+          ? feedbackResult.value.events
+          : [];
+        this.host.homeFeedbackOffset = 0;
+      } else {
+        console.error('Error fetching feedback log:', feedbackResult.reason);
+        this.host.homeFeedbackLog = [];
+        this.host.homeFeedbackOffset = 0;
+      }
+      const alertsResult = results[2];
+      if (alertsResult.status === 'fulfilled') {
+        this.host.homeAlerts = Array.isArray(alertsResult.value?.alerts)
+          ? alertsResult.value.alerts
+          : [];
+      } else {
+        console.error('Error fetching alerts:', alertsResult.reason);
+        this.host.homeAlerts = [];
       }
     } finally {
       this.host._homeLoadingCount = Math.max(0, (this.host._homeLoadingCount || 1) - 1);
@@ -335,6 +350,7 @@ export class AppShellStateController extends BaseStateController {
     this._setStoredTenantSelection(nextTenant);
     this.host.tenantAccessBlocked = false;
     this.host.tenantAccessBlockedMessage = '';
+    this.host.tenantSelectionRequired = false;
 
     this.host.searchFilterPanel.setTenant(this.host.tenant);
     this.host.curateHomeFilterPanel.setTenant(this.host.tenant);
@@ -357,6 +373,8 @@ export class AppShellStateController extends BaseStateController {
     this.host.mlTrainingStats = null;
     this.host.tagStatsBySource = {};
     this.host.homeLists = [];
+    this.host.homeFeedbackLog = [];
+    this.host.homeAlerts = [];
     this.host.homeRecommendationsTab = 'lists';
 
     // Tenant switch always returns to Home and forces a fresh data pull.

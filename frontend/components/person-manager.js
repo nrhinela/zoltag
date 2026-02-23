@@ -1,6 +1,19 @@
 import { LitElement, html, css } from 'lit';
 import { tailwind } from './tailwind-lit.js';
-import { getPeople, createPerson, updatePerson, deletePerson } from '../services/api.js';
+import {
+  getPeople,
+  createPerson,
+  updatePerson,
+  deletePerson,
+  getPersonReferences,
+  createPersonReference,
+  deletePersonReference,
+  getPersonReferenceContent,
+  getLists,
+  getListItems,
+  uploadPersonReference,
+} from '../services/api.js';
+import { getStoredAppTenant } from '../services/app-storage.js';
 
 class PersonManager extends LitElement {
   static properties = {
@@ -13,6 +26,16 @@ class PersonManager extends LitElement {
     error: { type: String },
     formData: { type: Object },
     searchQuery: { type: String },
+    references: { type: Array },
+    referencesLoading: { type: Boolean },
+    referencesError: { type: String },
+    referenceUploadFile: { type: Object },
+    referenceUploadBusy: { type: Boolean },
+    referenceListId: { type: String },
+    referenceLists: { type: Array },
+    referenceListsLoading: { type: Boolean },
+    referencePreviewUrls: { type: Object },
+    referenceActionBusyKey: { type: String },
   };
 
   static styles = [tailwind, css`
@@ -269,6 +292,147 @@ class PersonManager extends LitElement {
       font-size: 48px;
       margin-bottom: 12px;
     }
+    .references-section {
+      margin-top: 24px;
+      padding-top: 20px;
+      border-top: 1px solid #e5e7eb;
+    }
+    .references-title {
+      margin: 0 0 8px 0;
+      font-size: 16px;
+      font-weight: 700;
+      color: #111827;
+    }
+    .references-summary {
+      margin-bottom: 12px;
+      font-size: 13px;
+      color: #4b5563;
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+    .references-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 12px;
+    }
+    @media (min-width: 980px) {
+      .references-grid {
+        grid-template-columns: 1fr 1fr;
+      }
+    }
+    .reference-card {
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      background: #f9fafb;
+      padding: 12px;
+    }
+    .reference-card-title {
+      font-size: 13px;
+      font-weight: 700;
+      color: #111827;
+      margin-bottom: 8px;
+    }
+    .reference-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .reference-file-name {
+      font-size: 12px;
+      color: #4b5563;
+      overflow-wrap: anywhere;
+    }
+    .reference-list {
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      overflow: hidden;
+      margin-top: 10px;
+      background: #fff;
+      max-height: 260px;
+      overflow-y: auto;
+    }
+    .reference-list-item {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 12px;
+      border-bottom: 1px solid #e5e7eb;
+    }
+    .reference-preview {
+      width: 64px;
+      height: 64px;
+      border-radius: 8px;
+      object-fit: cover;
+      background: #e5e7eb;
+      flex-shrink: 0;
+      border: 1px solid #d1d5db;
+    }
+    .reference-list-item:last-child {
+      border-bottom: none;
+    }
+    .reference-meta {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      font-size: 12px;
+      color: #4b5563;
+    }
+    .reference-meta strong {
+      font-size: 13px;
+      color: #111827;
+      overflow-wrap: anywhere;
+    }
+    .asset-search-results {
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      margin-top: 10px;
+      overflow: hidden;
+      max-height: 260px;
+      overflow-y: auto;
+      background: #fff;
+    }
+    .asset-search-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      border-bottom: 1px solid #e5e7eb;
+      padding: 8px 10px;
+    }
+    .asset-search-item:last-child {
+      border-bottom: none;
+    }
+    .asset-search-left {
+      display: flex;
+      gap: 10px;
+      min-width: 0;
+      align-items: center;
+    }
+    .asset-search-thumb {
+      width: 42px;
+      height: 42px;
+      border-radius: 6px;
+      object-fit: cover;
+      background: #e5e7eb;
+      flex-shrink: 0;
+    }
+    .asset-search-text {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      font-size: 12px;
+      color: #4b5563;
+      gap: 1px;
+    }
+    .asset-search-text strong {
+      font-size: 13px;
+      color: #111827;
+      overflow-wrap: anywhere;
+    }
   `];
 
   constructor() {
@@ -281,12 +445,27 @@ class PersonManager extends LitElement {
     this.error = '';
     this.formData = { name: '', instagram_url: '' };
     this.searchQuery = '';
+    this.references = [];
+    this.referencesLoading = false;
+    this.referencesError = '';
+    this.referenceUploadFile = null;
+    this.referenceUploadBusy = false;
+    this.referenceListId = '';
+    this.referenceLists = [];
+    this.referenceListsLoading = false;
+    this.referencePreviewUrls = {};
+    this.referenceActionBusyKey = '';
   }
 
   async connectedCallback() {
     super.connectedCallback();
     console.log('[PersonManager] connectedCallback, tenant:', this.tenant);
     await this.loadData();
+  }
+
+  disconnectedCallback() {
+    this._revokeAllReferencePreviews();
+    super.disconnectedCallback();
   }
 
   updated(changedProperties) {
@@ -311,7 +490,7 @@ class PersonManager extends LitElement {
   }
 
   async loadPeople() {
-    const tenantId = this.tenant || localStorage.getItem('tenantId') || 'default';
+    const tenantId = this.tenant || getStoredAppTenant() || 'default';
     const data = await getPeople(tenantId, {
       limit: 500
     });
@@ -333,7 +512,7 @@ class PersonManager extends LitElement {
     this.loading = true;
     this.error = '';
     try {
-      const tenantId = this.tenant || localStorage.getItem('tenantId') || 'default';
+      const tenantId = this.tenant || getStoredAppTenant() || 'default';
       if (this.selectedPersonId) {
         await updatePerson(tenantId, this.selectedPersonId, payload);
       } else {
@@ -359,7 +538,7 @@ class PersonManager extends LitElement {
     this.loading = true;
     this.error = '';
     try {
-      const tenantId = this.tenant || localStorage.getItem('tenantId') || 'default';
+      const tenantId = this.tenant || getStoredAppTenant() || 'default';
       await deletePerson(tenantId, personId);
       this.formData = { name: '', instagram_url: '' };
       this.selectedPersonId = null;
@@ -393,21 +572,226 @@ class PersonManager extends LitElement {
     this.selectedPersonId = null;
     this.formData = { name: '', instagram_url: '' };
     this.error = '';
+    this.references = [];
+    this.referencesError = '';
+    this.referenceUploadFile = null;
+    this.referenceUploadBusy = false;
+    this.referenceListId = '';
+    this.referenceLists = [];
+    this.referenceListsLoading = false;
+    this._revokeAllReferencePreviews();
+    this.referenceActionBusyKey = '';
     this.view = 'editor';
   }
 
-  _openEditEditor(person) {
+  async _openEditEditor(person) {
     this.selectedPersonId = person.id;
     this.formData = {
       name: person.name || '',
       instagram_url: person.instagram_url || '',
     };
     this.error = '';
+    this.references = [];
+    this.referencesError = '';
+    this.referenceUploadFile = null;
+    this.referenceUploadBusy = false;
+    this.referenceListId = '';
+    this.referenceLists = [];
+    this.referenceListsLoading = false;
+    this._revokeAllReferencePreviews();
+    this.referenceActionBusyKey = '';
     this.view = 'editor';
+    await Promise.all([
+      this.loadReferences(),
+      this._loadReferenceLists(),
+    ]);
+  }
+
+  _getTenantId() {
+    return this.tenant || getStoredAppTenant() || 'default';
+  }
+
+  async loadReferences() {
+    if (!this.selectedPersonId) {
+      this._revokeAllReferencePreviews();
+      this.references = [];
+      return;
+    }
+    this.referencesLoading = true;
+    this.referencesError = '';
+    try {
+      const tenantId = this._getTenantId();
+      const refs = await getPersonReferences(tenantId, this.selectedPersonId);
+      this.references = Array.isArray(refs) ? refs : [];
+      await this._loadReferencePreviews();
+    } catch (err) {
+      this.referencesError = err?.message || 'Failed to load references';
+      this._revokeAllReferencePreviews();
+      this.references = [];
+    } finally {
+      this.referencesLoading = false;
+    }
+  }
+
+  _revokeAllReferencePreviews() {
+    Object.values(this.referencePreviewUrls || {}).forEach((url) => {
+      if (url) {
+        URL.revokeObjectURL(url);
+      }
+    });
+    this.referencePreviewUrls = {};
+  }
+
+  async _loadReferencePreviews() {
+    this._revokeAllReferencePreviews();
+    const refs = Array.isArray(this.references) ? this.references : [];
+    if (!refs.length || !this.selectedPersonId) return;
+    const tenantId = this._getTenantId();
+    const nextUrls = {};
+    await Promise.all(refs.map(async (reference) => {
+      const referenceId = String(reference?.id || '').trim();
+      if (!referenceId) return;
+      try {
+        const blob = await getPersonReferenceContent(tenantId, this.selectedPersonId, referenceId);
+        nextUrls[referenceId] = URL.createObjectURL(blob);
+      } catch (_err) {
+        nextUrls[referenceId] = '';
+      }
+    }));
+    this.referencePreviewUrls = nextUrls;
+  }
+
+  async _loadReferenceLists() {
+    if (!this.selectedPersonId) {
+      this.referenceLists = [];
+      this.referenceListId = '';
+      return;
+    }
+    this.referenceListsLoading = true;
+    this.referencesError = '';
+    try {
+      const tenantId = this._getTenantId();
+      const lists = await getLists(tenantId);
+      this.referenceLists = Array.isArray(lists) ? lists : [];
+      const selectedExists = this.referenceLists.some((entry) => String(entry?.id) === String(this.referenceListId));
+      if (!selectedExists) {
+        this.referenceListId = '';
+      }
+    } catch (err) {
+      this.referencesError = err?.message || 'Failed to load lists.';
+      this.referenceLists = [];
+      this.referenceListId = '';
+    } finally {
+      this.referenceListsLoading = false;
+    }
+  }
+
+  _handleReferenceFileInput(event) {
+    const file = event?.target?.files?.[0] || null;
+    this.referenceUploadFile = file;
+  }
+
+  async _uploadReferenceFile() {
+    if (this.readOnly || !this.selectedPersonId || !this.referenceUploadFile) return;
+    this.referenceUploadBusy = true;
+    this.referencesError = '';
+    try {
+      const tenantId = this._getTenantId();
+      await uploadPersonReference(tenantId, this.selectedPersonId, this.referenceUploadFile);
+      this.referenceUploadFile = null;
+      await this.loadReferences();
+    } catch (err) {
+      this.referencesError = err?.message || 'Failed to upload reference.';
+    } finally {
+      this.referenceUploadBusy = false;
+    }
+  }
+
+  async _addReferencesFromList() {
+    if (this.readOnly || !this.selectedPersonId || !this.referenceListId) return;
+    const busyKey = `list:${this.referenceListId}`;
+    this.referenceActionBusyKey = busyKey;
+    this.referencesError = '';
+    try {
+      const tenantId = this._getTenantId();
+      const listItems = await getListItems(tenantId, this.referenceListId, { idsOnly: true });
+      const assetIds = Array.from(
+        new Set(
+          (Array.isArray(listItems) ? listItems : [])
+            .map((item) => String(item?.asset_id || '').trim())
+            .filter(Boolean)
+        )
+      );
+      if (!assetIds.length) {
+        this.referencesError = 'Selected list has no assets to add.';
+        return;
+      }
+      const existingAssetIds = new Set(
+        (Array.isArray(this.references) ? this.references : [])
+          .map((ref) => String(ref?.source_asset_id || '').trim())
+          .filter(Boolean)
+      );
+      const candidates = assetIds.filter((assetId) => !existingAssetIds.has(assetId));
+      if (!candidates.length) {
+        this.referencesError = 'All assets in this list are already added as references.';
+        return;
+      }
+      await Promise.all(
+        candidates.map((assetId) => createPersonReference(tenantId, this.selectedPersonId, {
+          source_type: 'asset',
+          source_asset_id: assetId,
+          is_active: true,
+        }))
+      );
+      await this.loadReferences();
+    } catch (err) {
+      this.referencesError = err?.message || 'Failed to add references from list.';
+    } finally {
+      this.referenceActionBusyKey = '';
+    }
+  }
+
+  async _deleteReference(referenceId) {
+    if (this.readOnly || !this.selectedPersonId || !referenceId) return;
+    if (!confirm('Remove this reference photo?')) return;
+    const busyKey = `ref:${referenceId}`;
+    this.referenceActionBusyKey = busyKey;
+    this.referencesError = '';
+    try {
+      const tenantId = this._getTenantId();
+      await deletePersonReference(tenantId, this.selectedPersonId, referenceId);
+      await this.loadReferences();
+    } catch (err) {
+      this.referencesError = err?.message || 'Failed to remove reference.';
+    } finally {
+      this.referenceActionBusyKey = '';
+    }
+  }
+
+  _getReferenceSummary() {
+    const refs = Array.isArray(this.references) ? this.references : [];
+    const activeCount = refs.filter((ref) => ref?.is_active !== false).length;
+    const lastUpdated = refs
+      .map((ref) => new Date(ref?.updated_at || ref?.created_at || 0))
+      .filter((dt) => !Number.isNaN(dt.getTime()))
+      .sort((a, b) => b.getTime() - a.getTime())[0] || null;
+    return {
+      activeCount,
+      totalCount: refs.length,
+      lastUpdatedLabel: lastUpdated ? lastUpdated.toLocaleString() : '—',
+    };
+  }
+
+  _truncateReferenceKey(reference) {
+    const key = String(reference?.storage_key || reference?.source_asset_id || '').trim();
+    if (!key) return '—';
+    if (key.length <= 48) return key;
+    return `${key.slice(0, 20)}…${key.slice(-24)}`;
   }
 
   render() {
     const filteredPeople = this.getFilteredPeople();
+    const referenceSummary = this._getReferenceSummary();
     return html`
       <div class="container">
         <div class="header">
@@ -488,9 +872,9 @@ class PersonManager extends LitElement {
                 </div>
               </div>
             `}
-          ` : html`
-            <div class="editor-form">
-              <h2 class="editor-title">${this.selectedPersonId ? 'Edit Entry' : 'Create New Entry'}</h2>
+	          ` : html`
+	            <div class="editor-form">
+	              <h2 class="editor-title">${this.selectedPersonId ? 'Edit Entry' : 'Create New Entry'}</h2>
 
               <div class="form-group">
                 <label class="form-label">Name *</label>
@@ -515,7 +899,7 @@ class PersonManager extends LitElement {
                 <div class="form-hint">Optional. Include the full URL starting with https://</div>
               </div>
 
-              <div class="form-actions">
+	              <div class="form-actions">
                 <div>
                   ${!this.readOnly && this.selectedPersonId ? html`
                     <button class="btn-danger" @click="${() => this.deletePerson(this.selectedPersonId)}" ?disabled="${this.loading}">
@@ -530,10 +914,112 @@ class PersonManager extends LitElement {
                   <button class="btn-primary" @click="${() => this.savePerson()}" ?disabled="${this.loading}">
                     ${this.loading ? 'Saving...' : 'Save'}
                   </button>
+	                </div>
+	              </div>
+
+                <div class="references-section">
+                  <h3 class="references-title">Reference Photos</h3>
+                  ${this.selectedPersonId ? html`
+                    <div class="references-summary">
+                      <span><strong>Active:</strong> ${referenceSummary.activeCount}</span>
+                      <span><strong>Total:</strong> ${referenceSummary.totalCount}</span>
+                      <span><strong>Last updated:</strong> ${referenceSummary.lastUpdatedLabel}</span>
+                    </div>
+                    ${this.referencesError ? html`
+                      <div class="error-message">${this.referencesError}</div>
+                    ` : html``}
+                    <div class="references-grid">
+                      <div class="reference-card">
+                        <div class="reference-card-title">Upload New Photo</div>
+                        <div class="reference-row">
+                          <input
+                            type="file"
+                            accept="image/*"
+                            @change=${(e) => this._handleReferenceFileInput(e)}
+                            ?disabled=${this.referenceUploadBusy}
+                          />
+                          <button
+                            class="btn-small"
+                            @click=${() => this._uploadReferenceFile()}
+                            ?disabled=${this.referenceUploadBusy || !this.referenceUploadFile}
+                          >
+                            ${this.referenceUploadBusy ? 'Uploading…' : 'Upload and Add'}
+                          </button>
+                        </div>
+                        ${this.referenceUploadFile ? html`
+                          <div class="reference-file-name">Selected: ${this.referenceUploadFile.name}</div>
+                        ` : html``}
+                      </div>
+                      <div class="reference-card">
+                        <div class="reference-card-title">Add Assets from List</div>
+                        <div class="reference-row">
+                          <select
+                            class="form-input"
+                            style="flex: 1 1 220px;"
+                            .value=${this.referenceListId}
+                            @change=${(e) => { this.referenceListId = e.target.value || ''; }}
+                            ?disabled=${this.referenceListsLoading}
+                          >
+                            <option value="">Select a list...</option>
+                            ${this.referenceLists.map((list) => html`
+                              <option value=${String(list?.id || '')}>
+                                ${list?.title || `List ${list?.id}`} (${Number(list?.item_count || 0)})
+                              </option>
+                            `)}
+                          </select>
+                          <button
+                            class="btn-small"
+                            @click=${() => this._addReferencesFromList()}
+                            ?disabled=${this.referenceListsLoading || !this.referenceListId || this.referenceActionBusyKey === `list:${this.referenceListId}`}
+                          >
+                            ${this.referenceActionBusyKey === `list:${this.referenceListId}` ? 'Adding…' : 'Add from List'}
+                          </button>
+                        </div>
+                        <div class="form-hint">
+                          Select any list, then import all list asset IDs as references.
+                        </div>
+                      </div>
+                    </div>
+                    ${this.referencesLoading ? html`
+                      <div class="loading">Loading references…</div>
+                    ` : this.references.length === 0 ? html`
+                      <div class="form-hint">No reference photos yet.</div>
+                    ` : html`
+                      <div class="reference-list">
+                        ${this.references.map((reference) => {
+                          const busyKey = `ref:${reference.id}`;
+                          return html`
+                            <div class="reference-list-item">
+                              ${this.referencePreviewUrls?.[String(reference.id)] ? html`
+                                <img
+                                  class="reference-preview"
+                                  src=${this.referencePreviewUrls[String(reference.id)]}
+                                  alt="Reference preview"
+                                />
+                              ` : html`<div class="reference-preview"></div>`}
+                              <div class="reference-meta">
+                                <strong>${reference.source_type === 'asset' ? 'Asset reference' : 'Uploaded reference'}</strong>
+                                <span>${this._truncateReferenceKey(reference)}</span>
+                                <span>Updated: ${this._formatDate(reference.updated_at || reference.created_at)}</span>
+                              </div>
+                              <button
+                                class="btn-small"
+                                @click=${() => this._deleteReference(reference.id)}
+                                ?disabled=${this.referenceActionBusyKey === busyKey}
+                              >
+                                ${this.referenceActionBusyKey === busyKey ? 'Removing…' : 'Remove'}
+                              </button>
+                            </div>
+                          `;
+                        })}
+                      </div>
+                    `}
+                  ` : html`
+                    <div class="form-hint">Save this person first, then add reference photos.</div>
+                  `}
                 </div>
-              </div>
-            </div>
-          `}
+	            </div>
+	          `}
         </div>
       </div>
     `;

@@ -11,6 +11,7 @@ from zoltag.database import get_db
 from zoltag.dependencies import delete_secret, get_secret, get_tenant
 from zoltag.dropbox_oauth import (
     inspect_dropbox_oauth_config,
+    load_dropbox_oauth_credentials,
     sanitize_redirect_origin,
     sanitize_return_path,
 )
@@ -86,6 +87,7 @@ def _build_dropbox_status(record) -> dict:
         "provider_type": "dropbox",
         "label": _PROVIDER_LABELS["dropbox"],
         "integration_label": record.label,
+        "is_active": bool(record.is_active),
         "connected": connected,
         "can_connect": can_connect,
         "mode": selected_mode,
@@ -119,6 +121,7 @@ def _build_gdrive_status(record) -> dict:
         "provider_type": "gdrive",
         "label": _PROVIDER_LABELS["gdrive"],
         "integration_label": record.label,
+        "is_active": bool(record.is_active),
         "connected": connected,
         "can_connect": can_connect,
         "mode": "tenant_oauth",
@@ -127,6 +130,124 @@ def _build_gdrive_status(record) -> dict:
         "sync_folders": normalize_sync_folders(config_json.get("sync_folders")),
         "source": record.source,
     }
+
+
+def _normalize_dropbox_path(path: str | None) -> str:
+    value = str(path or "").strip()
+    if not value or value == "/":
+        return ""
+    if not value.startswith("/"):
+        value = f"/{value}"
+    value = value.rstrip("/")
+    return value or ""
+
+
+def _extract_search_match_folder_path(match) -> str:
+    metadata_union = getattr(match, "metadata", None)
+    metadata = metadata_union
+    if metadata_union is not None and hasattr(metadata_union, "get_metadata"):
+        try:
+            metadata = metadata_union.get_metadata()
+        except Exception:
+            metadata = metadata_union
+
+    path_display = str(getattr(metadata, "path_display", "") or getattr(metadata, "path_lower", "") or "").strip()
+    if not path_display:
+        path_display = str(getattr(metadata_union, "path_display", "") or "").strip()
+    if not path_display:
+        return ""
+
+    tag = str(getattr(metadata, "_tag", "") or "").strip().lower()
+    if tag == "folder":
+        return path_display
+
+    # File match: use parent folder
+    if "/" in path_display:
+        parent = path_display.rsplit("/", 1)[0]
+        return parent or "/"
+    return "/"
+
+
+def _is_dropbox_folder_entry(entry, folder_metadata_cls=None) -> bool:
+    if folder_metadata_cls is not None:
+        try:
+            if isinstance(entry, folder_metadata_cls):
+                return True
+        except Exception:
+            pass
+    tag = str(getattr(entry, "_tag", "") or getattr(entry, "tag", "") or "").strip().lower()
+    if tag.startswith("."):
+        tag = tag[1:]
+    if tag == "folder":
+        return True
+    if tag in {"file", "deleted"}:
+        return False
+    class_name = str(entry.__class__.__name__ or "").strip().lower()
+    if class_name == "foldermetadata" or "foldermetadata" in class_name:
+        return True
+    if class_name == "filemetadata" or "filemetadata" in class_name or "deletedmetadata" in class_name:
+        return False
+    # Conservative fallback: file-like metadata almost always includes size.
+    if getattr(entry, "size", None) is not None:
+        return False
+    return False
+
+
+def _is_dropbox_file_entry(entry) -> bool:
+    tag = str(getattr(entry, "_tag", "") or getattr(entry, "tag", "") or "").strip().lower()
+    if tag.startswith("."):
+        tag = tag[1:]
+    if tag == "file":
+        return True
+    if tag in {"folder", "deleted"}:
+        return False
+    class_name = str(entry.__class__.__name__ or "").strip().lower()
+    if class_name == "filemetadata" or "filemetadata" in class_name:
+        return True
+    if class_name == "foldermetadata" or "foldermetadata" in class_name or "deletedmetadata" in class_name:
+        return False
+    if getattr(entry, "size", None) is not None:
+        return True
+    return False
+
+
+def _path_display_from_entry(entry) -> str:
+    return str(getattr(entry, "path_display", "") or getattr(entry, "path_lower", "") or "").strip()
+
+
+def _add_parent_folder_paths(path_display: str, ordered_paths: dict[str, bool]) -> None:
+    path_value = str(path_display or "").strip()
+    if not path_value or "/" not in path_value:
+        return
+    parent = path_value.rsplit("/", 1)[0]
+    while parent and parent != "/":
+        ordered_paths.setdefault(parent, True)
+        if "/" not in parent:
+            break
+        parent = parent.rsplit("/", 1)[0]
+
+
+def _add_folder_path_with_ancestors(path_display: str, ordered_paths: dict[str, bool]) -> None:
+    path_value = str(path_display or "").strip()
+    if not path_value:
+        return
+    if not path_value.startswith("/"):
+        path_value = f"/{path_value}"
+    if path_value != "/":
+        path_value = path_value.rstrip("/")
+    ordered_paths.setdefault(path_value or "/", True)
+    _add_parent_folder_paths(path_value, ordered_paths)
+
+
+def _dropbox_path_depth(path_display: str) -> int:
+    value = str(path_display or "").strip().strip("/")
+    if not value:
+        return 0
+    return len([segment for segment in value.split("/") if segment])
+
+
+def _dropbox_relative_depth(path_display: str, root_path: str) -> int:
+    return max(0, _dropbox_path_depth(path_display) - _dropbox_path_depth(root_path))
 
 
 def _build_integrations_status(tenant_row: TenantModel, db: Session) -> dict:
@@ -189,6 +310,195 @@ async def get_integrations_status(
     return _build_integrations_status(tenant_row, db)
 
 
+@router.get("/dropbox/folders")
+async def list_live_dropbox_folders(
+    q: str | None = None,
+    path: str | None = None,
+    limit: int = 100,
+    depth: int | None = None,
+    mode: str | None = None,
+    tenant: Tenant = Depends(get_tenant),
+    _admin: UserProfile = Depends(require_tenant_permission_from_header("provider.view")),
+    db: Session = Depends(get_db),
+):
+    """Live Dropbox folder browse/search for provider sync-folder selection."""
+    tenant_row = db.query(TenantModel).filter(TenantModel.id == tenant.id).first()
+    if not tenant_row:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    repo = TenantIntegrationRepository(db)
+    dropbox_record = repo.get_provider_record(tenant_row, "dropbox")
+    if not dropbox_record:
+        raise HTTPException(status_code=404, detail="Dropbox provider not found")
+
+    refresh_token = _read_secret_value(dropbox_record.dropbox_token_secret_name)
+    if not refresh_token:
+        raise HTTPException(status_code=400, detail="Dropbox is not connected for this tenant")
+
+    try:
+        credentials = load_dropbox_oauth_credentials(
+            tenant_id=dropbox_record.secret_scope,
+            tenant_app_key=str(dropbox_record.config_json.get("app_key") or "").strip(),
+            tenant_app_secret_name=dropbox_record.dropbox_app_secret_name,
+            get_secret=get_secret,
+            selection_mode="managed_only",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    try:
+        from dropbox import Dropbox
+        from dropbox.files import FolderMetadata, SearchOptions
+
+        client = Dropbox(
+            oauth2_refresh_token=refresh_token,
+            app_key=credentials["app_key"],
+            app_secret=credentials["app_secret"],
+        )
+
+        query = str(q or "").strip()
+        mode_value = str(mode or "").strip().lower()
+        browse_path = _normalize_dropbox_path(path)
+        max_results = max(1, min(int(limit or 100), 2000))
+        max_depth = max(0, min(int(depth if depth is not None else 5), 5))
+        ordered_paths: dict[str, bool] = {}
+        has_more = False
+        truncated = False
+
+        if mode_value in {"roots", "root"}:
+            # Pass 1: fast top-level folder fetch only.
+            result = client.files_list_folder("", recursive=False, limit=max_results)
+            while True:
+                for entry in (getattr(result, "entries", None) or []):
+                    folder_path = _path_display_from_entry(entry)
+                    if _is_dropbox_folder_entry(entry, FolderMetadata):
+                        _add_folder_path_with_ancestors(folder_path, ordered_paths)
+                    elif folder_path and not _is_dropbox_file_entry(entry):
+                        _add_folder_path_with_ancestors(folder_path, ordered_paths)
+                if len(ordered_paths) >= max_results:
+                    truncated = True
+                    has_more = True
+                    break
+                if not getattr(result, "has_more", False):
+                    break
+                result = client.files_list_folder_continue(result.cursor)
+            if query:
+                query_lower = query.lower()
+                ordered_paths = {
+                    folder: True
+                    for folder in ordered_paths.keys()
+                    if query_lower in folder.lower()
+                }
+            has_more = has_more or bool(getattr(result, "has_more", False))
+        elif mode_value == "branch":
+            # Pass 2: enumerate one root branch recursively and cap by relative depth.
+            result = client.files_list_folder(browse_path, recursive=True, limit=max_results)
+            if browse_path:
+                ordered_paths.setdefault(browse_path, True)
+            while True:
+                for entry in (getattr(result, "entries", None) or []):
+                    folder_path = _path_display_from_entry(entry)
+                    candidate_path = ""
+                    if _is_dropbox_folder_entry(entry, FolderMetadata):
+                        candidate_path = folder_path
+                    elif folder_path:
+                        if _is_dropbox_file_entry(entry):
+                            if "/" in folder_path:
+                                candidate_path = folder_path.rsplit("/", 1)[0]
+                            else:
+                                candidate_path = "/"
+                        else:
+                            candidate_path = folder_path
+                    normalized_candidate = _normalize_dropbox_path(candidate_path)
+                    if candidate_path == "/":
+                        normalized_candidate = ""
+                    if browse_path:
+                        if normalized_candidate != browse_path and not normalized_candidate.startswith(f"{browse_path}/"):
+                            continue
+                    if _dropbox_relative_depth(normalized_candidate, browse_path) > max_depth:
+                        continue
+                    if normalized_candidate:
+                        ordered_paths.setdefault(normalized_candidate, True)
+                if len(ordered_paths) >= max_results:
+                    truncated = True
+                    has_more = True
+                    break
+                if not getattr(result, "has_more", False):
+                    break
+                result = client.files_list_folder_continue(result.cursor)
+            if query:
+                query_lower = query.lower()
+                ordered_paths = {
+                    folder: True
+                    for folder in ordered_paths.keys()
+                    if query_lower in folder.lower()
+                }
+            has_more = has_more or bool(getattr(result, "has_more", False))
+        elif mode_value == "full":
+            # Full recursive folder catalog (explicit user action only).
+            result = client.files_list_folder(browse_path, recursive=True, limit=max_results)
+            while True:
+                for entry in (getattr(result, "entries", None) or []):
+                    folder_path = _path_display_from_entry(entry)
+                    if _is_dropbox_folder_entry(entry, FolderMetadata):
+                        _add_folder_path_with_ancestors(folder_path, ordered_paths)
+                    elif folder_path:
+                        # Defensive fallback: derive folder paths from file paths or unknown entries.
+                        if _is_dropbox_file_entry(entry):
+                            _add_parent_folder_paths(folder_path, ordered_paths)
+                        else:
+                            _add_folder_path_with_ancestors(folder_path, ordered_paths)
+                if len(ordered_paths) >= max_results:
+                    truncated = True
+                    has_more = True
+                    break
+                if not getattr(result, "has_more", False):
+                    break
+                result = client.files_list_folder_continue(result.cursor)
+            if query:
+                query_lower = query.lower()
+                ordered_paths = {
+                    folder: True
+                    for folder in ordered_paths.keys()
+                    if query_lower in folder.lower()
+                }
+            has_more = has_more or bool(getattr(result, "has_more", False))
+            if not ordered_paths:
+                # Last-resort fallback to already configured sync folders.
+                configured = normalize_sync_folders((dropbox_record.config_json or {}).get("sync_folders"))
+                for configured_path in configured:
+                    _add_folder_path_with_ancestors(configured_path, ordered_paths)
+        elif query:
+            options = SearchOptions(path=browse_path, max_results=max_results)
+            result = client.files_search_v2(query=query, options=options)
+            for match in (getattr(result, "matches", None) or []):
+                folder_path = _extract_search_match_folder_path(match)
+                if folder_path:
+                    ordered_paths.setdefault(folder_path, True)
+            has_more = bool(getattr(result, "has_more", False))
+        else:
+            result = client.files_list_folder(browse_path, recursive=False, limit=max_results)
+            for entry in (getattr(result, "entries", None) or []):
+                folder_path = _path_display_from_entry(entry)
+                if _is_dropbox_folder_entry(entry, FolderMetadata):
+                    ordered_paths.setdefault(folder_path, True)
+            has_more = bool(getattr(result, "has_more", False))
+
+        return {
+            "tenant_id": str(tenant_row.id),
+            "provider": "dropbox",
+            "query": query,
+            "path": browse_path or "/",
+            "folders": list(ordered_paths.keys()),
+            "has_more": has_more,
+            "truncated": truncated,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Dropbox folder lookup failed: {exc}")
+
+
 @router.get("/dropbox/status")
 async def get_dropbox_status(
     tenant: Tenant = Depends(get_tenant),
@@ -239,7 +549,7 @@ async def create_integration_provider(
         tenant_row,
         provider_type,
         label=str(payload.get("label") or "").strip() or None,
-        is_active=bool(payload.get("is_active", True)),
+        is_active=bool(payload.get("is_active", False)),
         is_default_sync_source=bool(payload.get("is_default_sync_source", False)),
         secret_scope=str(payload.get("secret_scope") or "").strip() or None,
         config_json=payload.get("config_json") if isinstance(payload.get("config_json"), dict) else None,
@@ -448,6 +758,15 @@ async def update_dropbox_config(
             tenant_row,
             target_provider,
             sync_folders=normalize_sync_folders(payload.get("sync_folders")),
+        )
+
+    if "is_active" in payload:
+        if target_provider is None:
+            target_provider = repo.resolve_default_sync_provider(tenant_row).provider_type
+        repo.update_provider(
+            tenant_row,
+            target_provider,
+            is_active=bool(payload.get("is_active")),
         )
 
     db.commit()

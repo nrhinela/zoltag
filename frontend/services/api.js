@@ -22,6 +22,12 @@ const KEYWORDS_CACHE_MS = 10000;
 const SYSTEM_SETTINGS_CACHE_MS = 5 * 60 * 1000;
 const INTEGRATION_STATUS_CACHE_MS = 10000;
 
+function shouldRedirectToLoginOnUnauthorized() {
+  if (typeof window === 'undefined') return false;
+  const path = String(window.location.pathname || '');
+  return !(path === '/guest' || path.startsWith('/guest/'));
+}
+
 /**
  * Fetch with authentication headers
  *
@@ -31,7 +37,7 @@ const INTEGRATION_STATUS_CACHE_MS = 10000;
  * - Content-Type: application/json
  *
  * Handles common errors:
- * - 401: Redirects to login
+ * - 401: Redirects to login for app routes (never auto-redirects on /guest)
  * - 403: Shows access denied error
  * - Other errors: Shows error message
  *
@@ -61,18 +67,38 @@ export async function fetchWithAuth(url, options = {}) {
     headers['X-Tenant-ID'] = options.tenantId;
   }
 
-  // Remove tenantId and responseType from options before passing to fetch
-  const { tenantId, responseType, ...fetchOptions } = options;
+  // Remove app-only options before passing to fetch
+  const {
+    tenantId,
+    responseType,
+    suppressUnauthorizedRedirect,
+    onUnauthorized,
+    ...fetchOptions
+  } = options;
 
   const response = await fetch(`${API_BASE_URL}${url}`, {
     ...fetchOptions,
     headers,
   });
 
-  // Handle 401 Unauthorized (redirect to login)
+  // Handle 401 Unauthorized
   if (response.status === 401) {
-    window.location.href = '/login';
-    throw new Error('Unauthorized');
+    if (typeof onUnauthorized === 'function') {
+      try {
+        onUnauthorized(response);
+      } catch (_error) {
+        // Ignore callback failures and preserve auth handling.
+      }
+    }
+
+    const shouldRedirect = !suppressUnauthorizedRedirect && shouldRedirectToLoginOnUnauthorized();
+    if (shouldRedirect) {
+      window.location.href = '/login';
+    }
+
+    const err = new Error('Unauthorized');
+    err.status = 401;
+    throw err;
   }
 
   // Handle 403 Forbidden (access denied)
@@ -87,9 +113,20 @@ export async function fetchWithAuth(url, options = {}) {
     throw new Error(error.detail || 'Request failed');
   }
 
-  // Return blob for image downloads, otherwise return JSON
+  // Return blob for image downloads
   if (responseType === 'blob') {
     return response.blob();
+  }
+
+  // Handle 204 No Content - don't try to parse empty body
+  if (response.status === 204) {
+    return null;
+  }
+
+  // Check if response has content before parsing JSON
+  const contentLength = response.headers.get('content-length');
+  if (contentLength === '0') {
+    return null;
   }
 
   return response.json();
@@ -271,11 +308,34 @@ export async function getTenantsPublic({ force = false } = {}) {
     }, { staleTimeMs: TENANTS_CACHE_MS, force });
 }
 
+export async function getAdminDatabaseMonitor() {
+    return fetchWithAuth(`/admin/database/monitor`);
+}
+
 export async function setRating(tenantId, imageId, rating) {
     return fetchWithAuth(`/images/${imageId}/rating`, {
         method: 'PATCH',
         tenantId,
         body: JSON.stringify({ rating }),
+    });
+}
+
+export async function getImageComments(tenantId, imageId) {
+    return fetchWithAuth(`/images/${imageId}/comments`, { tenantId });
+}
+
+export async function addImageComment(tenantId, imageId, commentText) {
+    return fetchWithAuth(`/images/${imageId}/comments`, {
+        method: 'POST',
+        tenantId,
+        body: JSON.stringify({ comment_text: commentText }),
+    });
+}
+
+export async function deleteImageComment(tenantId, imageId, commentId) {
+    return fetchWithAuth(`/images/${imageId}/comments/${commentId}`, {
+        method: 'DELETE',
+        tenantId,
     });
 }
 
@@ -554,10 +614,80 @@ export async function deleteListItem(tenantId, itemId) {
   return result;
 }
 
+export async function reorderListItems(tenantId, listId, itemIds = []) {
+  const normalizedItemIds = Array.isArray(itemIds)
+    ? itemIds
+      .map((value) => Number(value))
+      .filter((value) => Number.isInteger(value) && value > 0)
+    : [];
+  const result = await fetchWithAuth(`/lists/${listId}/items/reorder`, {
+    method: 'PATCH',
+    tenantId,
+    body: JSON.stringify({ item_ids: normalizedItemIds }),
+  });
+  invalidateQueries(['lists', tenantId]);
+  return result;
+}
+
 export async function updateList(tenantId, list) {
   const result = await listCrud.patch(tenantId, list.id, list);
   invalidateQueries(['lists', tenantId]);
   return result;
+}
+
+export async function getSharesSummary(tenantId) {
+  return fetchWithAuth('/lists/shares/summary', {
+    method: 'GET',
+    tenantId,
+  });
+}
+
+export async function updateListShare(tenantId, listId, shareId, payload = {}) {
+  return fetchWithAuth(`/lists/${listId}/shares/${shareId}`, {
+    method: 'PATCH',
+    tenantId,
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function revokeListShare(tenantId, listId, shareId) {
+  return fetchWithAuth(`/lists/${listId}/shares/${shareId}`, {
+    method: 'DELETE',
+    tenantId,
+  });
+}
+
+export async function hardDeleteListShare(tenantId, shareId) {
+  return fetchWithAuth(`/lists/shares/${shareId}/hard`, {
+    method: 'DELETE',
+    tenantId,
+  });
+}
+
+export async function hardDeleteListShares(tenantId, shareIds = []) {
+  return fetchWithAuth('/lists/shares/hard-delete', {
+    method: 'POST',
+    tenantId,
+    body: JSON.stringify({ share_ids: Array.isArray(shareIds) ? shareIds : [] }),
+  });
+}
+
+export async function getGuestFeedbackLog(tenantId, { force = false, limit = 200 } = {}) {
+  const safeLimit = Number.isFinite(Number(limit)) ? Math.max(1, Math.min(1000, Number(limit))) : 200;
+  return queryRequest(
+    ['guestFeedbackLog', tenantId, safeLimit],
+    () => fetchWithAuth(`/lists/shares/feedback-log?limit=${safeLimit}`, { tenantId }),
+    { staleTimeMs: STATS_CACHE_MS, force }
+  );
+}
+
+export async function getGuestAlerts(tenantId, { force = false, limit = 200 } = {}) {
+  const safeLimit = Number.isFinite(Number(limit)) ? Math.max(1, Math.min(1000, Number(limit))) : 200;
+  return queryRequest(
+    ['guestAlerts', tenantId, safeLimit],
+    () => fetchWithAuth(`/lists/shares/alerts?limit=${safeLimit}`, { tenantId }),
+    { staleTimeMs: STATS_CACHE_MS, force }
+  );
 }
 
 // ============================================================================
@@ -641,6 +771,28 @@ export async function getIntegrationStatus(tenantId) {
 }
 
 /**
+ * Live Dropbox folder browse/search for provider sync-folder configuration
+ * @param {string} tenantId - Tenant ID
+ * @param {{query?: string, path?: string, limit?: number, depth?: number, mode?: string}} options
+ * @returns {Promise<{folders: string[], has_more?: boolean}>}
+ */
+export async function getLiveDropboxFolders(tenantId, options = {}) {
+  const params = new URLSearchParams();
+  const query = String(options?.query || '').trim();
+  const path = String(options?.path || '').trim();
+  const limit = Number(options?.limit || 0);
+  const depth = Number(options?.depth || 0);
+  const mode = String(options?.mode || '').trim();
+  if (query) params.append('q', query);
+  if (path) params.append('path', path);
+  if (Number.isFinite(limit) && limit > 0) params.append('limit', String(limit));
+  if (Number.isFinite(depth) && depth > 0) params.append('depth', String(depth));
+  if (mode) params.append('mode', mode);
+  const suffix = params.toString() ? `?${params.toString()}` : '';
+  return fetchWithAuth(`/admin/integrations/dropbox/folders${suffix}`, { tenantId });
+}
+
+/**
  * Start provider OAuth connection for current tenant (tenant admin scope)
  * @param {string} tenantId - Tenant ID
  * @param {'dropbox'|'gdrive'} provider - Provider id
@@ -692,7 +844,7 @@ export async function disconnectIntegration(tenantId, provider) {
 /**
  * Update integration config for tenant-admin provider settings
  * @param {string} tenantId - Tenant ID
- * @param {{provider?: string, syncFolders?: string[], defaultSourceProvider?: string}} payload
+ * @param {{provider?: string, syncFolders?: string[], defaultSourceProvider?: string, isActive?: boolean}} payload
  * @returns {Promise<Object>} Updated config
  */
 export async function updateIntegrationConfig(tenantId, payload = {}) {
@@ -705,6 +857,9 @@ export async function updateIntegrationConfig(tenantId, payload = {}) {
   }
   if (payload.defaultSourceProvider !== undefined) {
     body.default_source_provider = payload.defaultSourceProvider;
+  }
+  if (payload.isActive !== undefined) {
+    body.is_active = !!payload.isActive;
   }
   const result = await fetchWithAuth('/admin/integrations/dropbox/config', {
     method: 'PATCH',
@@ -1053,6 +1208,20 @@ export async function deleteGlobalWorkflowDefinition(workflowId) {
   return fetchWithAuth(`/jobs/workflows/${workflowId}`, {
     method: 'DELETE',
   });
+}
+
+/**
+ * List workflow runs across all tenants (super-admin)
+ * @param {Object} options
+ * @returns {Promise<Object>}
+ */
+export async function getAllWorkflowRuns(options = {}) {
+  const params = new URLSearchParams();
+  if (options.status) params.set('status', options.status);
+  if (options.limit) params.set('limit', options.limit);
+  if (options.offset) params.set('offset', options.offset);
+  const query = params.toString();
+  return fetchWithAuth(`/jobs/workflows/runs/all${query ? `?${query}` : ''}`);
 }
 
 /**
@@ -1453,6 +1622,81 @@ export async function deletePerson(tenantId, personId) {
     return fetchWithAuth(`/people/${personId}`, {
         method: 'DELETE',
         tenantId
+    });
+}
+
+/**
+ * List reference images for a person.
+ * @param {string} tenantId
+ * @param {number} personId
+ * @param {{includeInactive?: boolean}} options
+ * @returns {Promise<Array>}
+ */
+export async function getPersonReferences(tenantId, personId, options = {}) {
+    const params = new URLSearchParams();
+    if (options.includeInactive) {
+      params.append('include_inactive', 'true');
+    }
+    return fetchWithAuth(`/people/${personId}/references${params.toString() ? `?${params.toString()}` : ''}`, { tenantId });
+}
+
+/**
+ * Create a reference image for a person.
+ * @param {string} tenantId
+ * @param {number} personId
+ * @param {{source_type: 'upload'|'asset', source_asset_id?: string, storage_key?: string, is_active?: boolean, face_count?: number, quality_score?: number}} payload
+ * @returns {Promise<Object>}
+ */
+export async function createPersonReference(tenantId, personId, payload = {}) {
+    return fetchWithAuth(`/people/${personId}/references`, {
+        method: 'POST',
+        tenantId,
+        body: JSON.stringify(payload),
+    });
+}
+
+/**
+ * Delete a person reference image.
+ * @param {string} tenantId
+ * @param {number} personId
+ * @param {string} referenceId
+ * @returns {Promise<Object>}
+ */
+export async function deletePersonReference(tenantId, personId, referenceId) {
+    return fetchWithAuth(`/people/${personId}/references/${referenceId}`, {
+        method: 'DELETE',
+        tenantId,
+    });
+}
+
+/**
+ * Fetch a person reference image as blob for preview rendering.
+ * @param {string} tenantId
+ * @param {number} personId
+ * @param {string} referenceId
+ * @returns {Promise<Blob>}
+ */
+export async function getPersonReferenceContent(tenantId, personId, referenceId) {
+    return fetchWithAuth(`/people/${personId}/references/${referenceId}/content`, {
+        tenantId,
+        responseType: 'blob',
+    });
+}
+
+/**
+ * Upload a dedicated person reference photo outside the asset system.
+ * @param {string} tenantId
+ * @param {number} personId
+ * @param {File} file
+ * @returns {Promise<Object>}
+ */
+export async function uploadPersonReference(tenantId, personId, file) {
+    const formData = new FormData();
+    formData.append('file', file);
+    return fetchWithAuth(`/people/${personId}/references/upload`, {
+        method: 'POST',
+        tenantId,
+        body: formData,
     });
 }
 

@@ -144,6 +144,29 @@ export class AuthGuard extends LitElement {
     this._verifyInFlight = null;
   }
 
+  _shouldSuppressLoginRedirect() {
+    try {
+      const key = 'zoltag:auth:login-redirect-at';
+      const now = Date.now();
+      const last = Number(window.sessionStorage.getItem(key) || '0');
+      if (Number.isFinite(last) && last > 0 && now - last < 15000) {
+        return true;
+      }
+      window.sessionStorage.setItem(key, String(now));
+      return false;
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  _clearLoginRedirectGuard() {
+    try {
+      window.sessionStorage.removeItem('zoltag:auth:login-redirect-at');
+    } catch (_error) {
+      // ignore
+    }
+  }
+
   async _runVerification() {
     if (this._verifyInFlight) {
       return this._verifyInFlight;
@@ -177,6 +200,7 @@ export class AuthGuard extends LitElement {
     this.authenticated = !!session;
 
     if (this.authenticated) {
+      this._clearLoginRedirectGuard();
       await this._runVerification();
     }
 
@@ -188,15 +212,20 @@ export class AuthGuard extends LitElement {
 
       if (event === 'SIGNED_OUT') {
         // Redirect to login on logout
-        window.location.href = '/login';
+        if (window.location.pathname !== '/login') {
+          window.location.href = '/login';
+        }
       } else if (event === 'SIGNED_IN') {
+        this._clearLoginRedirectGuard();
         this._runVerification();
       }
     });
 
     // Redirect to login if not authenticated (do this AFTER setting loading = false)
     if (!this.authenticated) {
-      window.location.href = '/login';
+      if (!this._shouldSuppressLoginRedirect()) {
+        window.location.href = '/login';
+      }
     }
   }
 
@@ -225,6 +254,18 @@ export class AuthGuard extends LitElement {
 
     // Not authenticated
     if (!this.authenticated) {
+      const suppressLoop = this._shouldSuppressLoginRedirect();
+      if (suppressLoop) {
+        return html`
+          <div class="error-screen">
+            <div class="error-message">
+              <h1>Session Missing</h1>
+              <p>Your login session was not established. Please try signing in again.</p>
+              <a href="/login">Retry Login</a>
+            </div>
+          </div>
+        `;
+      }
       return html`
         <div class="loading-screen">
           <div class="loading-card">

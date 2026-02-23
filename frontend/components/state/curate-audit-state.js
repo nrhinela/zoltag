@@ -34,6 +34,7 @@ export class CurateAuditStateController extends BaseStateController {
    */
   handleModeChange(mode) {
     this.host.curateAuditMode = mode;
+    this.host.curateAuditEmptyState = null;
     this.host.curateAuditSelection = [];
     this.host.curateAuditDragSelection = [];
     this.host.curateAuditDragTarget = null;
@@ -72,6 +73,7 @@ export class CurateAuditStateController extends BaseStateController {
    */
   handleAiModelChange(model) {
     this.host.curateAuditAiModel = model;
+    this.host.curateAuditEmptyState = null;
     this.host.curateAuditOffset = 0;
     this.host.curateAuditTotal = null;
     this.host.curateAuditLoadAll = false;
@@ -108,6 +110,7 @@ export class CurateAuditStateController extends BaseStateController {
     this.host.curateAuditMlSimilaritySimilarCount = nextSimilarCount;
     this.host.curateAuditMlSimilarityDedupe = nextDedupe;
     this.host.curateAuditMlSimilarityRandom = nextRandom;
+    this.host.curateAuditEmptyState = null;
     this.host.curateAuditOffset = 0;
     this.host.curateAuditTotal = null;
     this.host.curateAuditLoadAll = false;
@@ -140,6 +143,7 @@ export class CurateAuditStateController extends BaseStateController {
     this.host.curateAuditPageOffset = 0;
     if (!keywordId) {
       this.host.curateAuditImages = [];
+      this.host.curateAuditEmptyState = null;
       this.requestUpdate();
       return;
     }
@@ -761,6 +765,7 @@ export class CurateAuditStateController extends BaseStateController {
       this.host.curateAuditOffset = 0;
       this.host.curateAuditTotal = 0;
       this.host.curateAuditPageOffset = 0;
+      this.host.curateAuditEmptyState = null;
       this.host._curateAuditLastFetchKey = fetchKey;
       this.requestUpdate();
       return;
@@ -773,6 +778,7 @@ export class CurateAuditStateController extends BaseStateController {
     if (!append) {
       // Prevent stale rows from rendering as "source groups" while a new similarity fetch is in-flight.
       this.host.curateAuditImages = [];
+      this.host.curateAuditEmptyState = null;
     }
     try {
       const filters = buildCurateAuditFilterObject(this.host, {
@@ -789,12 +795,14 @@ export class CurateAuditStateController extends BaseStateController {
       const total = Array.isArray(result)
         ? null
         : (Number.isFinite(result?.total) ? result.total : null);
+      const emptyState = Array.isArray(result) ? null : (result?.audit_empty_state || null);
 
       if (append) {
         this.host.curateAuditImages = [...(existingImages || []), ...images];
       } else {
         this.host.curateAuditImages = images;
       }
+      this.host.curateAuditEmptyState = emptyState;
 
       if (!useLoadAll) {
         this.host.curateAuditPageOffset = resolvedOffset;
@@ -838,6 +846,7 @@ export class CurateAuditStateController extends BaseStateController {
       curateAuditFilenameQuery: '',
       curateAuditTextQuery: '',
       curateAuditNoPositivePermatags: false,
+      curateAuditEmptyState: null,
       curateAuditTargets: [],
       curateAuditImages: [],
       curateAuditLoading: false,
@@ -870,6 +879,7 @@ export class CurateAuditStateController extends BaseStateController {
       curateAuditFilenameQuery: host.curateAuditFilenameQuery,
       curateAuditTextQuery: host.curateAuditTextQuery,
       curateAuditNoPositivePermatags: host.curateAuditNoPositivePermatags,
+      curateAuditEmptyState: host.curateAuditEmptyState ? { ...host.curateAuditEmptyState } : null,
       curateAuditTargets: Array.isArray(host.curateAuditTargets) ? [...host.curateAuditTargets] : [],
       curateAuditImages: Array.isArray(host.curateAuditImages) ? [...host.curateAuditImages] : [],
       curateAuditLoading: host.curateAuditLoading,
@@ -931,6 +941,7 @@ export class CurateAuditStateController extends BaseStateController {
     this.host.curateAuditDropboxPathPrefix = '';
     this.host.curateAuditFilenameQuery = '';
     this.host.curateAuditTextQuery = '';
+    this.host.curateAuditEmptyState = null;
     this.requestUpdate();
   }
 }

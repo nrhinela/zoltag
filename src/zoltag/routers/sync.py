@@ -52,11 +52,21 @@ async def trigger_sync(
         provider_name = _normalize_provider(provider or configured_provider)
         if provider_name == "dropbox":
             dropbox_runtime = runtime_context.get("dropbox") or {}
+            if not bool(dropbox_runtime.get("is_active")):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Dropbox integration is inactive. Activate this provider in Admin -> Providers before syncing.",
+                )
             sync_folders = normalize_sync_folders(dropbox_runtime.get("sync_folders"))
             tenant.dropbox_oauth_mode = str(dropbox_runtime.get("oauth_mode") or "").strip().lower() or None
             tenant.dropbox_sync_folders = list(sync_folders)
         else:
             gdrive_runtime = runtime_context.get("gdrive") or {}
+            if not bool(gdrive_runtime.get("is_active")):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Google Drive integration is inactive. Activate this provider in Admin -> Providers before syncing.",
+                )
             sync_folders = normalize_sync_folders(gdrive_runtime.get("sync_folders"))
             tenant.gdrive_sync_folders = list(sync_folders)
         tenant.default_source_provider = configured_provider

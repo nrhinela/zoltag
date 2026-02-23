@@ -1,16 +1,23 @@
 """People management and tagging endpoints."""
 
-from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query
+import mimetypes
+import io
+from typing import List, Literal, Optional
+from uuid import UUID, uuid4
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
+from fastapi.responses import StreamingResponse
 from sqlalchemy import distinct, func, case
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
+from google.cloud import storage
+from google.api_core.exceptions import NotFound
 
 from zoltag.dependencies import get_db, get_tenant
 from zoltag.tenant import Tenant
-from zoltag.metadata import Person, Permatag
+from zoltag.metadata import Asset, Person, PersonReferenceImage, Permatag
 from zoltag.models.config import Keyword, KeywordCategory
 from zoltag.tenant_scope import assign_tenant_scope, tenant_column_filter, tenant_column_filter_for_values
+from zoltag.settings import settings
 
 router = APIRouter(prefix="/api/v1/people", tags=["people"])
 
@@ -94,6 +101,59 @@ class PersonStatsResponse(BaseModel):
     manual_tags: int = 0
     detected_faces: int = 0
     last_tagged_at: Optional[str] = None
+
+
+class PersonReferenceResponse(BaseModel):
+    """Reference image metadata for a person."""
+
+    id: str
+    person_id: int
+    source_type: Literal["upload", "asset"]
+    source_asset_id: Optional[str] = None
+    storage_key: Optional[str] = None
+    is_active: bool = True
+    face_count: int = 0
+    quality_score: Optional[float] = None
+    created_by: Optional[str] = None
+    created_at: str = ""
+    updated_at: str = ""
+
+
+class PersonReferenceCreateRequest(BaseModel):
+    """Create a person reference image from an upload or existing asset."""
+
+    source_type: Literal["upload", "asset"]
+    source_asset_id: Optional[str] = None
+    storage_key: Optional[str] = Field(None, max_length=1024)
+    is_active: bool = True
+    face_count: int = Field(0, ge=0)
+    quality_score: Optional[float] = None
+
+
+def _serialize_reference(reference: PersonReferenceImage) -> PersonReferenceResponse:
+    return PersonReferenceResponse(
+        id=str(reference.id),
+        person_id=reference.person_id,
+        source_type=reference.source_type,
+        source_asset_id=str(reference.source_asset_id) if reference.source_asset_id else None,
+        storage_key=reference.storage_key,
+        is_active=bool(reference.is_active),
+        face_count=int(reference.face_count or 0),
+        quality_score=reference.quality_score,
+        created_by=str(reference.created_by) if reference.created_by else None,
+        created_at=reference.created_at.isoformat() if reference.created_at else "",
+        updated_at=reference.updated_at.isoformat() if reference.updated_at else "",
+    )
+
+
+def _get_person_for_tenant(db: Session, tenant: Tenant, person_id: int) -> Person:
+    person = db.query(Person).filter(
+        Person.id == person_id,
+        tenant_column_filter(Person, tenant),
+    ).first()
+    if not person:
+        raise HTTPException(status_code=404, detail="Person not found")
+    return person
 
 
 # ============================================================================
@@ -281,6 +341,273 @@ async def get_person(
     )
 
 
+@router.get("/{person_id}/references", response_model=List[PersonReferenceResponse])
+async def list_person_references(
+    person_id: int,
+    include_inactive: bool = Query(False),
+    tenant: Tenant = Depends(get_tenant),
+    db: Session = Depends(get_db),
+):
+    """List reference images for a person."""
+    _get_person_for_tenant(db, tenant, person_id)
+
+    query = db.query(PersonReferenceImage).filter(
+        tenant_column_filter(PersonReferenceImage, tenant),
+        PersonReferenceImage.person_id == person_id,
+    )
+    if not include_inactive:
+        query = query.filter(PersonReferenceImage.is_active.is_(True))
+    references = query.order_by(PersonReferenceImage.created_at.desc()).all()
+    return [_serialize_reference(reference) for reference in references]
+
+
+@router.post("/{person_id}/references", response_model=PersonReferenceResponse)
+async def create_person_reference(
+    person_id: int,
+    request: PersonReferenceCreateRequest,
+    tenant: Tenant = Depends(get_tenant),
+    db: Session = Depends(get_db),
+):
+    """Create a reference image for a person."""
+    _get_person_for_tenant(db, tenant, person_id)
+
+    source_type = (request.source_type or "").strip().lower()
+    source_asset_id: UUID | None = None
+    storage_key: str | None = None
+
+    if source_type == "asset":
+        if not request.source_asset_id:
+            raise HTTPException(status_code=400, detail="source_asset_id is required when source_type='asset'")
+        try:
+            source_asset_id = UUID(request.source_asset_id)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="source_asset_id must be a valid UUID")
+
+        asset = db.query(Asset).filter(
+            tenant_column_filter(Asset, tenant),
+            Asset.id == source_asset_id,
+        ).first()
+        if not asset:
+            raise HTTPException(status_code=404, detail="Asset not found for tenant")
+        # Copy asset media into dedicated person-reference storage so
+        # facial-recognition training reads from one canonical source.
+        reference_id = uuid4()
+        reference_filename = (asset.filename or "reference").strip() or "reference"
+        storage_key = tenant.get_person_reference_key(
+            person_id=person_id,
+            reference_id=str(reference_id),
+            filename=reference_filename,
+        )
+        try:
+            storage_client = storage.Client(project=settings.gcp_project_id)
+            src_storage_bucket = storage_client.bucket(tenant.get_storage_bucket(settings))
+            src_thumbnail_bucket = storage_client.bucket(tenant.get_thumbnail_bucket(settings))
+            dest_bucket = storage_client.bucket(tenant.get_person_reference_bucket(settings))
+
+            copied = False
+            thumbnail_key = (asset.thumbnail_key or "").strip()
+            if thumbnail_key:
+                src_thumb_blob = src_thumbnail_bucket.blob(thumbnail_key)
+                if src_thumb_blob.exists():
+                    src_thumbnail_bucket.copy_blob(src_thumb_blob, dest_bucket, storage_key)
+                    copied = True
+            if not copied:
+                source_key = (asset.source_key or "").strip()
+                if not source_key:
+                    raise HTTPException(status_code=404, detail="Asset has no readable source or thumbnail")
+                src_source_blob = src_storage_bucket.blob(source_key)
+                if not src_source_blob.exists():
+                    raise HTTPException(status_code=404, detail="Asset source object not found in storage")
+                src_storage_bucket.copy_blob(src_source_blob, dest_bucket, storage_key)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to copy asset into reference storage: {exc}")
+
+        source_type = "upload"
+        reference = assign_tenant_scope(
+            PersonReferenceImage(
+                id=reference_id,
+                person_id=person_id,
+                source_type=source_type,
+                source_asset_id=source_asset_id,
+                storage_key=storage_key,
+                is_active=bool(request.is_active),
+                face_count=int(request.face_count or 0),
+                quality_score=request.quality_score,
+            ),
+            tenant,
+        )
+        db.add(reference)
+        db.commit()
+        db.refresh(reference)
+        return _serialize_reference(reference)
+    elif source_type == "upload":
+        storage_key = (request.storage_key or "").strip()
+        if not storage_key:
+            raise HTTPException(status_code=400, detail="storage_key is required when source_type='upload'")
+    else:
+        raise HTTPException(status_code=400, detail="source_type must be 'upload' or 'asset'")
+
+    reference = assign_tenant_scope(
+        PersonReferenceImage(
+            person_id=person_id,
+            source_type=source_type,
+            source_asset_id=source_asset_id,
+            storage_key=storage_key,
+            is_active=bool(request.is_active),
+            face_count=int(request.face_count or 0),
+            quality_score=request.quality_score,
+        ),
+        tenant,
+    )
+
+    db.add(reference)
+    db.commit()
+    db.refresh(reference)
+    return _serialize_reference(reference)
+
+
+@router.post("/{person_id}/references/upload", response_model=PersonReferenceResponse)
+async def upload_person_reference(
+    person_id: int,
+    file: UploadFile = File(...),
+    tenant: Tenant = Depends(get_tenant),
+    db: Session = Depends(get_db),
+):
+    """Upload a dedicated person reference photo (outside the asset system)."""
+    _get_person_for_tenant(db, tenant, person_id)
+
+    file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+
+    filename = (file.filename or "").strip() or "reference"
+    reference_id = uuid4()
+    storage_key = tenant.get_person_reference_key(
+        person_id=person_id,
+        reference_id=str(reference_id),
+        filename=filename,
+    )
+
+    reference = assign_tenant_scope(
+        PersonReferenceImage(
+            id=reference_id,
+            person_id=person_id,
+            source_type="upload",
+            storage_key=storage_key,
+            is_active=True,
+            face_count=0,
+        ),
+        tenant,
+    )
+
+    try:
+        storage_client = storage.Client(project=settings.gcp_project_id)
+        bucket = storage_client.bucket(tenant.get_person_reference_bucket(settings))
+        blob = bucket.blob(storage_key)
+        content_type = file.content_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
+        blob.cache_control = "public, max-age=31536000, immutable"
+        blob.upload_from_string(file_bytes, content_type=content_type)
+
+        db.add(reference)
+        db.commit()
+        db.refresh(reference)
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to upload reference photo: {exc}")
+
+    return _serialize_reference(reference)
+
+
+@router.delete("/{person_id}/references/{reference_id}")
+async def delete_person_reference(
+    person_id: int,
+    reference_id: str,
+    tenant: Tenant = Depends(get_tenant),
+    db: Session = Depends(get_db),
+):
+    """Delete a reference image for a person."""
+    _get_person_for_tenant(db, tenant, person_id)
+
+    try:
+        parsed_reference_id = UUID(reference_id)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="reference_id must be a valid UUID")
+
+    reference = db.query(PersonReferenceImage).filter(
+        tenant_column_filter(PersonReferenceImage, tenant),
+        PersonReferenceImage.person_id == person_id,
+        PersonReferenceImage.id == parsed_reference_id,
+    ).first()
+    if not reference:
+        raise HTTPException(status_code=404, detail="Reference not found")
+
+    should_delete_blob = reference.source_type == "upload" and bool((reference.storage_key or "").strip())
+    storage_key = (reference.storage_key or "").strip()
+
+    db.delete(reference)
+    db.commit()
+
+    if should_delete_blob and storage_key:
+        try:
+            storage_client = storage.Client(project=settings.gcp_project_id)
+            bucket = storage_client.bucket(tenant.get_person_reference_bucket(settings))
+            blob = bucket.blob(storage_key)
+            blob.delete()
+        except NotFound:
+            pass
+        except Exception:
+            pass
+    return {"status": "deleted", "person_id": person_id, "reference_id": reference_id}
+
+
+@router.get("/{person_id}/references/{reference_id}/content")
+async def get_person_reference_content(
+    person_id: int,
+    reference_id: str,
+    tenant: Tenant = Depends(get_tenant),
+    db: Session = Depends(get_db),
+):
+    """Stream a person reference image from private reference storage."""
+    _get_person_for_tenant(db, tenant, person_id)
+    try:
+        parsed_reference_id = UUID(reference_id)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="reference_id must be a valid UUID")
+
+    reference = db.query(PersonReferenceImage).filter(
+        tenant_column_filter(PersonReferenceImage, tenant),
+        PersonReferenceImage.person_id == person_id,
+        PersonReferenceImage.id == parsed_reference_id,
+    ).first()
+    if not reference:
+        raise HTTPException(status_code=404, detail="Reference not found")
+
+    storage_key = (reference.storage_key or "").strip()
+    if not storage_key:
+        raise HTTPException(status_code=404, detail="Reference image not available")
+
+    try:
+        storage_client = storage.Client(project=settings.gcp_project_id)
+        bucket = storage_client.bucket(tenant.get_person_reference_bucket(settings))
+        blob = bucket.blob(storage_key)
+        if not blob.exists():
+            raise HTTPException(status_code=404, detail="Reference image not found in storage")
+        image_data = blob.download_as_bytes()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to load reference image: {exc}")
+
+    content_type, _ = mimetypes.guess_type(storage_key)
+    return StreamingResponse(
+        io.BytesIO(image_data),
+        media_type=content_type or "application/octet-stream",
+        headers={"Cache-Control": "private, max-age=120"},
+    )
+
+
 @router.put("/{person_id}", response_model=PersonResponse)
 async def update_person(
     person_id: int,
@@ -353,6 +680,12 @@ async def delete_person(
     try:
         # Get the keyword for this person
         keyword = _get_person_keyword(db, tenant, person.id)
+
+        # Ensure references are removed even if DB-level cascade is unavailable.
+        db.query(PersonReferenceImage).filter(
+            tenant_column_filter(PersonReferenceImage, tenant),
+            PersonReferenceImage.person_id == person.id,
+        ).delete(synchronize_session=False)
 
         # Delete associated keyword (cascade will delete related tags)
         if keyword:

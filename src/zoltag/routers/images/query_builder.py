@@ -20,6 +20,7 @@ from zoltag.tenant import Tenant
 from sqlalchemy import case as sa_case
 from zoltag.metadata import ImageMetadata, MachineTag, KeywordModel
 from zoltag.dependencies import get_tenant_setting
+from zoltag.machine_tag_types import normalize_ml_tag_type
 from zoltag.tenant_scope import tenant_column_filter
 
 
@@ -172,6 +173,7 @@ class QueryBuilder:
                 'active_machine_tag_type',
                 default='siglip'
             )
+        ml_tag_type = normalize_ml_tag_type(ml_tag_type) or 'siglip'
 
         # Check for trained model if using trained tag type
         model_name = None

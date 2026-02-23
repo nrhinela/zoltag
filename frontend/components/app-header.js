@@ -1,6 +1,7 @@
 import { LitElement, html } from 'lit';
 import { getTenantsPublic } from '../services/api.js';
 import { supabase } from '../services/supabase.js';
+import { getStoredAppTenant } from '../services/app-storage.js';
 import {
     canCurateTenant,
     canViewTenantUsers,
@@ -204,13 +205,7 @@ class AppHeader extends LitElement {
   }
 
   _getStoredTenant() {
-      try {
-          return this._normalizeTenantValue(
-              localStorage.getItem('tenantId') || localStorage.getItem('currentTenant') || ''
-          );
-      } catch (_error) {
-          return '';
-      }
+      return this._normalizeTenantValue(getStoredAppTenant());
   }
 
   _getEffectiveTenantId() {

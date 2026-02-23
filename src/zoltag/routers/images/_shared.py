@@ -97,6 +97,7 @@ def _resolve_storage_or_409(
     require_thumbnail: bool = False,
     require_source: bool = False,
     assets_by_id: Optional[dict] = None,
+    preloaded_urls: Optional[dict] = None,
 ):
     try:
         return resolve_image_storage(
@@ -107,6 +108,7 @@ def _resolve_storage_or_409(
             strict=settings.asset_strict_reads,
             require_thumbnail=require_thumbnail,
             require_source=require_source,
+            preloaded_thumbnail_url=preloaded_urls.get(image.id) if preloaded_urls else None,
         )
     except AssetReadinessError as exc:
         raise HTTPException(status_code=409, detail=str(exc))

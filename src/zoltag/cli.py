@@ -650,12 +650,17 @@ def train_keyword_models(tenant_id: str, min_positive: Optional[int]):
     model_name = getattr(tagger, "model_name", settings.tagging_model)
     model_version = getattr(tagger, "model_version", model_name)
 
+    config_mgr = ConfigManager(session, tenant.id)
+    all_keywords = config_mgr.get_all_keywords()
+    keyword_to_category = {kw['keyword']: kw['category'] for kw in all_keywords}
+
     result = build_keyword_models(
         session,
         tenant_id=tenant.id,
         model_name=model_name,
         model_version=model_version,
         min_positive=min_positive or settings.keyword_model_min_positive,
+        keyword_to_category=keyword_to_category,
     )
     session.commit()
     click.echo(f"✓ Trained: {result['trained']} · Skipped: {result['skipped']}")
@@ -931,6 +936,70 @@ def recompute_zeroshot_tags(
         offset,
         replace,
         older_than_days
+    )
+    cmd.run()
+
+
+@cli.command(name='recompute-face-detections')
+@click.option('--tenant-id', required=True, help='Tenant ID for which to recompute detected faces')
+@click.option('--batch-size', default=25, type=int, help='Process images in batches')
+@click.option('--limit', default=None, type=int, help='Limit number of images to process')
+@click.option('--offset', default=0, type=int, help='Offset into image list')
+@click.option('--replace', is_flag=True, default=False, help='Replace existing detected_faces for processed images')
+def recompute_face_detections(
+    tenant_id: str,
+    batch_size: int,
+    limit: Optional[int],
+    offset: int,
+    replace: bool,
+):
+    """Recompute detected faces for tenant images."""
+    from zoltag.cli.commands.face_recognition import RecomputeFaceDetectionsCommand
+
+    cmd = RecomputeFaceDetectionsCommand(
+        tenant_id=tenant_id,
+        batch_size=batch_size,
+        limit=limit,
+        offset=offset,
+        replace=replace,
+    )
+    cmd.run()
+
+
+@cli.command(name='recompute-face-recognition-tags')
+@click.option('--tenant-id', required=True, help='Tenant ID for which to recompute face-recognition suggestions')
+@click.option('--batch-size', default=200, type=int, help='Process candidate images in batches')
+@click.option('--limit', default=None, type=int, help='Limit number of candidate images considered')
+@click.option('--offset', default=0, type=int, help='Offset into candidate image list')
+@click.option('--replace', is_flag=True, default=False, help='Replace existing face-recognition suggestions for scoped keywords')
+@click.option('--person-id', default=None, type=int, help='Scope recompute to one person ID')
+@click.option('--keyword-id', default=None, type=int, help='Scope recompute to one person keyword ID')
+@click.option('--min-references', default=None, type=int, help='Minimum active references required (defaults to app setting)')
+@click.option('--threshold', default=None, type=float, help='Suggestion threshold [0-1] (defaults to app setting)')
+def recompute_face_recognition_tags(
+    tenant_id: str,
+    batch_size: int,
+    limit: Optional[int],
+    offset: int,
+    replace: bool,
+    person_id: Optional[int],
+    keyword_id: Optional[int],
+    min_references: Optional[int],
+    threshold: Optional[float],
+):
+    """Recompute person tag suggestions using face-recognition similarity."""
+    from zoltag.cli.commands.face_recognition import RecomputeFaceRecognitionTagsCommand
+
+    cmd = RecomputeFaceRecognitionTagsCommand(
+        tenant_id=tenant_id,
+        batch_size=batch_size,
+        limit=limit,
+        offset=offset,
+        replace=replace,
+        person_id=person_id,
+        keyword_id=keyword_id,
+        min_references=max(1, int(min_references or settings.face_recognition_min_references)),
+        threshold=float(threshold if threshold is not None else settings.face_recognition_suggest_threshold),
     )
     cmd.run()
 

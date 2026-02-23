@@ -62,14 +62,9 @@ class FilterChips extends LitElement {
   _normalizeKeywordFilter(filter) {
     const keywordsByCategory = {};
     let operator = 'OR';
-    let untagged = false;
 
     if (!filter) {
-      return { keywordsByCategory, operator, untagged };
-    }
-
-    if (filter.untagged || filter.value === '__untagged__') {
-      return { keywordsByCategory, operator, untagged: true };
+      return { keywordsByCategory, operator };
     }
 
     if (filter.keywordsByCategory && typeof filter.keywordsByCategory === 'object') {
@@ -93,19 +88,10 @@ class FilterChips extends LitElement {
       }
     }
 
-    return { keywordsByCategory, operator, untagged };
+    return { keywordsByCategory, operator };
   }
 
-  _buildKeywordFilterPayload({ keywordsByCategory, operator, untagged }) {
-    if (untagged) {
-      return {
-        type: 'keyword',
-        untagged: true,
-        displayLabel: 'Keywords',
-        displayValue: 'Untagged',
-      };
-    }
-
+  _buildKeywordFilterPayload({ keywordsByCategory, operator }) {
     const normalizedKeywords = {};
     Object.entries(keywordsByCategory || {}).forEach(([category, keywordSet]) => {
       const list = Array.from(keywordSet || []).filter(Boolean);
@@ -123,6 +109,135 @@ class FilterChips extends LitElement {
     };
   }
 
+  _getTagCoverageFilter() {
+    return (this.activeFilters || []).find((filter) => filter.type === 'tag_coverage') || null;
+  }
+
+  _normalizeTagCoverageFilter(filter) {
+    if (!filter) return { categories: [], includeUntagged: false, operator: 'AND' };
+    const rawValues = Array.isArray(filter.noPermatagCategories)
+      ? filter.noPermatagCategories
+      : (Array.isArray(filter.categories)
+        ? filter.categories
+        : (filter.category ? [filter.category] : []));
+    const categories = Array.from(
+      new Set(
+        rawValues
+          .map((value) => String(value || '').trim())
+          .filter(Boolean)
+      )
+    );
+    const includeUntagged = Boolean(
+      filter.includeUntagged
+      || filter.noPermatagUntagged
+      || filter.untagged
+      || filter.value === '__untagged__'
+      || filter.permatagPositiveMissing
+    );
+    const rawOperator = String(filter.operator || filter.noPermatagOperator || 'AND').trim().toUpperCase();
+    const operator = rawOperator === 'OR' ? 'OR' : 'AND';
+    return { categories, includeUntagged, operator };
+  }
+
+  _buildTagCoverageDisplayValue({ categories, includeUntagged }) {
+    const labels = [];
+    if (includeUntagged) labels.push('Untagged');
+    labels.push(...categories.map((category) => `No ${category} tags`));
+    if (!labels.length) return '';
+    return labels.length <= 2 ? labels.join(', ') : `${labels.length} rules`;
+  }
+
+  _buildTagCoverageFilterPayload({ categories = [], includeUntagged = false, operator = 'AND' } = {}) {
+    const normalized = this._normalizeTagCoverageFilter({
+      noPermatagCategories: categories,
+      includeUntagged,
+      operator,
+    });
+    if (!normalized.categories.length && !normalized.includeUntagged) {
+      return null;
+    }
+    return {
+      type: 'tag_coverage',
+      noPermatagCategories: normalized.categories,
+      includeUntagged: normalized.includeUntagged,
+      operator: normalized.operator,
+      displayLabel: 'Tag Coverage',
+      displayValue: this._buildTagCoverageDisplayValue(normalized),
+    };
+  }
+
+  _toggleTagCoverageCategory(category) {
+    const normalizedCategory = String(category || '').trim();
+    if (!normalizedCategory) return;
+    const existing = this._normalizeTagCoverageFilter(this._getTagCoverageFilter());
+    const next = new Set(existing.categories);
+    if (next.has(normalizedCategory)) {
+      next.delete(normalizedCategory);
+    } else {
+      next.add(normalizedCategory);
+    }
+    const payload = this._buildTagCoverageFilterPayload({
+      categories: Array.from(next),
+      includeUntagged: existing.includeUntagged,
+      operator: existing.operator,
+    });
+    if (!payload) {
+      this._removeFilterByType('tag_coverage');
+      return;
+    }
+    this._addFilter(payload);
+  }
+
+  _toggleTagCoverageUntagged() {
+    const existing = this._normalizeTagCoverageFilter(this._getTagCoverageFilter());
+    const payload = this._buildTagCoverageFilterPayload({
+      categories: existing.categories,
+      includeUntagged: !existing.includeUntagged,
+      operator: existing.operator,
+    });
+    if (!payload) {
+      this._removeFilterByType('tag_coverage');
+      return;
+    }
+    this._addFilter(payload);
+  }
+
+  _toggleTagCoverageOperator() {
+    const existing = this._normalizeTagCoverageFilter(this._getTagCoverageFilter());
+    const selectionCount = existing.categories.length + (existing.includeUntagged ? 1 : 0);
+    if (selectionCount <= 1) return;
+    const nextOperator = existing.operator === 'OR' ? 'AND' : 'OR';
+    const payload = this._buildTagCoverageFilterPayload({
+      categories: existing.categories,
+      includeUntagged: existing.includeUntagged,
+      operator: nextOperator,
+    });
+    if (payload) {
+      this._addFilter(payload);
+    }
+  }
+
+  _handleTagCoverageRemove(value) {
+    const existing = this._normalizeTagCoverageFilter(this._getTagCoverageFilter());
+    const nextCategories = new Set(existing.categories);
+    let includeUntagged = existing.includeUntagged;
+    if (value === '__untagged__') {
+      includeUntagged = false;
+    } else {
+      nextCategories.delete(String(value || '').trim());
+    }
+    const payload = this._buildTagCoverageFilterPayload({
+      categories: Array.from(nextCategories),
+      includeUntagged,
+      operator: existing.operator,
+    });
+    if (!payload) {
+      this._removeFilterByType('tag_coverage');
+      return;
+    }
+    this._addFilter(payload);
+  }
+
   _getAvailableFilterTypes() {
     const active = new Set(this.activeFilters.map(f => f.type));
     const all = [
@@ -131,6 +246,7 @@ class FilterChips extends LitElement {
       { type: 'media', label: 'Media Type', icon: '🎬' },
       { type: 'folder', label: 'Folder', icon: '📂' },
       { type: 'list', label: 'List', icon: '🧾' },
+      { type: 'tag_coverage', label: 'Tag Coverage', icon: '🛡️' },
       { type: 'filename', label: 'Filename', icon: '📝' },
       { type: 'text_search', label: 'Text search', icon: '🔎' },
     ];
@@ -204,26 +320,9 @@ class FilterChips extends LitElement {
 
     if (!this.keywordMultiSelect) {
       this.valueSelectorOpen = null;
-      if (keyword === '__untagged__') {
-        this._addFilter(this._buildKeywordFilterPayload({ keywordsByCategory: {}, operator: state.operator, untagged: true }));
-        return;
-      }
       const keywordsByCategory = { [category]: new Set([keyword]) };
-      this._addFilter(this._buildKeywordFilterPayload({ keywordsByCategory, operator: state.operator, untagged: false }));
+      this._addFilter(this._buildKeywordFilterPayload({ keywordsByCategory, operator: state.operator }));
       return;
-    }
-
-    if (keyword === '__untagged__') {
-      if (state.untagged) {
-        this._removeKeywordFilter();
-      } else {
-        this._addFilter(this._buildKeywordFilterPayload({ keywordsByCategory: {}, operator: state.operator, untagged: true }));
-      }
-      return;
-    }
-
-    if (state.untagged) {
-      state.untagged = false;
     }
 
     const keywordsByCategory = { ...state.keywordsByCategory };
@@ -244,7 +343,7 @@ class FilterChips extends LitElement {
       return;
     }
 
-    this._addFilter(this._buildKeywordFilterPayload({ keywordsByCategory, operator: state.operator, untagged: false }));
+    this._addFilter(this._buildKeywordFilterPayload({ keywordsByCategory, operator: state.operator }));
   }
 
   _removeKeywordFilter() {
@@ -274,7 +373,7 @@ class FilterChips extends LitElement {
       return;
     }
 
-    this._addFilter(this._buildKeywordFilterPayload({ keywordsByCategory, operator: state.operator, untagged: false }));
+    this._addFilter(this._buildKeywordFilterPayload({ keywordsByCategory, operator: state.operator }));
   }
 
   _toggleKeywordOperator() {
@@ -285,7 +384,6 @@ class FilterChips extends LitElement {
     this._addFilter(this._buildKeywordFilterPayload({
       keywordsByCategory: state.keywordsByCategory,
       operator: nextOperator,
-      untagged: false,
     }));
   }
 
@@ -467,6 +565,29 @@ class FilterChips extends LitElement {
     return getCategoryCount(this.tagStatsBySource, category, this.activeCurateTagSource);
   }
 
+  _getTagCoverageMissingCount(category) {
+    const normalizedCategory = String(category || '').trim();
+    if (!normalizedCategory) return 0;
+
+    if (this.keywords && this.keywords.length) {
+      const categoryMatches = this.keywords.filter((kw) => (
+        String(kw?.category || '').trim().toLowerCase() === normalizedCategory.toLowerCase()
+      ));
+      const withMissingCount = categoryMatches.find((kw) => Number.isFinite(Number(kw?.category_missing_count)));
+      if (withMissingCount) {
+        return Number(withMissingCount.category_missing_count);
+      }
+
+      const withTaggedCount = categoryMatches.find((kw) => Number.isFinite(Number(kw?.category_tagged_count)));
+      const totalImages = Number(this.imageStats?.image_count || 0);
+      if (withTaggedCount && totalImages > 0) {
+        return Math.max(totalImages - Number(withTaggedCount.category_tagged_count || 0), 0);
+      }
+    }
+
+    return 0;
+  }
+
   _renderFilterMenu() {
     const available = this._getAvailableFilterTypes();
     if (!available.length) return html``;
@@ -500,6 +621,8 @@ class FilterChips extends LitElement {
         return this._renderFolderSelector();
       case 'list':
         return this._renderListSelector();
+      case 'tag_coverage':
+        return this._renderTagCoverageSelector();
       case 'filename':
         return this._renderFilenameSelector();
       case 'text_search':
@@ -511,16 +634,12 @@ class FilterChips extends LitElement {
 
   _renderKeywordSelector() {
     const categories = this._getKeywordsByCategory();
-    const untaggedCount = this.imageStats?.untagged_positive_count || 0;
     const keywordFilter = this._getKeywordFilter();
     const keywordState = this._normalizeKeywordFilter(keywordFilter);
     const selectedCount = Object.values(keywordState.keywordsByCategory || {}).reduce((total, set) => total + set.size, 0);
-    const selectedLabel = keywordState.untagged
-      ? 'Untagged'
-      : (selectedCount ? `${selectedCount} selected` : 'None selected');
+    const selectedLabel = selectedCount ? `${selectedCount} selected` : 'None selected';
     const keywordOperator = keywordState.operator || 'OR';
     const query = (this.keywordSearchQuery || '').trim().toLowerCase();
-    const showUntagged = untaggedCount > 0 && (!query || 'untagged'.includes(query));
     const filteredCategories = query
       ? categories
         .map(([category, keywords]) => {
@@ -539,7 +658,7 @@ class FilterChips extends LitElement {
           <div class="flex items-center justify-between">
             <div class="flex items-center gap-3">
               <span class="font-semibold text-gray-700">Keywords</span>
-              ${this.keywordMultiSelect && !keywordState.untagged && selectedCount > 0 ? html`
+              ${this.keywordMultiSelect && selectedCount > 0 ? html`
                 <div class="inline-flex items-center gap-1">
                   <button
                     class=${`px-2 py-0.5 border rounded-full text-[10px] ${keywordOperator === 'OR' ? 'bg-gray-900 text-white border-gray-900' : 'text-gray-600 border-gray-300'}`}
@@ -587,19 +706,6 @@ class FilterChips extends LitElement {
             >
           </div>
         </div>
-        ${showUntagged ? html`
-          <div
-            class=${`px-4 py-2 cursor-pointer border-b border-gray-50 last:border-b-0 transition-colors ${keywordState.untagged ? 'bg-blue-50' : 'hover:bg-gray-100'}`}
-            @click=${() => this._handleKeywordSelect('Untagged', '__untagged__')}
-          >
-            <span class="inline-flex items-center gap-2">
-              <span class=${`inline-flex h-4 w-4 items-center justify-center rounded border text-xs ${keywordState.untagged ? 'border-blue-500 bg-blue-500 text-white' : 'border-gray-300 text-gray-300'}`}>
-                ${keywordState.untagged ? '✓' : ''}
-              </span>
-              <strong>Untagged</strong> (${untaggedCount})
-            </span>
-          </div>
-        ` : ''}
         ${filteredCategories.map(([category, keywords]) => html`
           <div class="px-4 py-2 font-semibold text-gray-600 bg-gray-50 text-xs uppercase tracking-wide flex items-center justify-between">
             <span>${category}</span>
@@ -619,7 +725,7 @@ class FilterChips extends LitElement {
             </div>
           `)}
         `)}
-        ${query && !filteredCategories.length && !showUntagged ? html`
+        ${query && !filteredCategories.length ? html`
           <div class="px-4 py-3 text-sm text-gray-500">No keywords found.</div>
         ` : ''}
       </div>
@@ -659,6 +765,102 @@ class FilterChips extends LitElement {
             })}
           </div>
         </div>
+      </div>
+    `;
+  }
+
+  _renderTagCoverageSelector() {
+    const selectedState = this._normalizeTagCoverageFilter(this._getTagCoverageFilter());
+    const selected = new Set(selectedState.categories);
+    const categories = Array.from(new Set(this._getKeywordsByCategory().map(([category]) => String(category || '').trim()).filter(Boolean)));
+    const untaggedCount = Number(this.imageStats?.untagged_positive_count || 0);
+    const selectedCount = selectedState.categories.length + (selectedState.includeUntagged ? 1 : 0);
+    const selectedLabel = selectedCount ? `${selectedCount} selected` : 'None selected';
+    const operator = selectedState.operator || 'AND';
+
+    return html`
+      <div class="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-50 min-w-[420px] max-w-[560px] max-h-[400px] overflow-y-auto">
+        <div class="sticky top-0 bg-white border-b border-gray-100 px-4 py-2 text-xs">
+          <div class="flex items-center justify-between gap-2">
+            <div class="flex items-center gap-3">
+              <span class="font-semibold text-gray-700">Tag Coverage</span>
+              ${selectedCount > 1 ? html`
+                <div class="inline-flex items-center gap-1">
+                  <button
+                    class=${`px-2 py-0.5 border rounded-full text-[10px] ${operator === 'OR' ? 'bg-gray-900 text-white border-gray-900' : 'text-gray-600 border-gray-300'}`}
+                    @click=${(e) => { e.stopPropagation(); if (operator !== 'OR') this._toggleTagCoverageOperator(); }}
+                  >
+                    OR
+                  </button>
+                  <button
+                    class=${`px-2 py-0.5 border rounded-full text-[10px] ${operator === 'AND' ? 'bg-gray-900 text-white border-gray-900' : 'text-gray-600 border-gray-300'}`}
+                    @click=${(e) => { e.stopPropagation(); if (operator !== 'AND') this._toggleTagCoverageOperator(); }}
+                  >
+                    AND
+                  </button>
+                </div>
+              ` : html``}
+            </div>
+            <div class="flex items-center gap-2">
+              <span class="text-gray-500">${selectedLabel}</span>
+              ${selectedCount ? html`
+                <button
+                  class="px-2 py-1 border rounded-full text-gray-600 hover:bg-gray-50"
+                  @click=${(e) => {
+                    e.stopPropagation();
+                    this._removeFilterByType('tag_coverage');
+                  }}
+                >
+                  Clear
+                </button>
+              ` : html``}
+              <button
+                class="px-2 py-1 border rounded-full text-gray-600 hover:bg-gray-50"
+                @click=${(e) => {
+                  e.stopPropagation();
+                  this.valueSelectorOpen = null;
+                }}
+              >
+                Done
+              </button>
+            </div>
+          </div>
+          <div class="mt-1 text-[11px] text-gray-500">
+            Show items missing positive permatags in selected coverage rules.
+          </div>
+        </div>
+        <div
+          class=${`px-4 py-2 cursor-pointer border-b border-gray-50 transition-colors ${selectedState.includeUntagged ? 'bg-blue-50' : 'hover:bg-gray-100'}`}
+          @click=${() => this._toggleTagCoverageUntagged()}
+        >
+          <span class="inline-flex items-center gap-2">
+            <span class=${`inline-flex h-4 w-4 items-center justify-center rounded border text-xs ${selectedState.includeUntagged ? 'border-blue-500 bg-blue-500 text-white' : 'border-gray-300 text-gray-300'}`}>
+              ${selectedState.includeUntagged ? '✓' : ''}
+            </span>
+            <span>Untagged</span>
+            <span class="text-gray-500 text-sm">(${untaggedCount})</span>
+          </span>
+        </div>
+        ${categories.length ? categories.map((category) => {
+          const isSelected = selected.has(category);
+          const missingCount = this._getTagCoverageMissingCount(category);
+          return html`
+            <div
+              class=${`px-4 py-2 cursor-pointer border-b border-gray-50 last:border-b-0 transition-colors ${isSelected ? 'bg-blue-50' : 'hover:bg-gray-100'}`}
+              @click=${() => this._toggleTagCoverageCategory(category)}
+            >
+              <span class="inline-flex items-center gap-2">
+                <span class=${`inline-flex h-4 w-4 items-center justify-center rounded border text-xs ${isSelected ? 'border-blue-500 bg-blue-500 text-white' : 'border-gray-300 text-gray-300'}`}>
+                  ${isSelected ? '✓' : ''}
+                </span>
+                <span>No ${category} tags</span>
+                <span class="text-gray-500 text-sm">(${missingCount})</span>
+              </span>
+            </div>
+          `;
+        }) : html`
+          <div class="px-4 py-3 text-sm text-gray-500">No categories available.</div>
+        `}
       </div>
     `;
   }
@@ -953,7 +1155,7 @@ class FilterChips extends LitElement {
                     <div class="inline-flex items-center gap-2 px-3 py-1.5 bg-blue-50 border border-blue-200 rounded-full text-sm cursor-pointer hover:bg-blue-100 flex-wrap"
                          @click=${() => this._handleEditFilter(filter.type, index)}>
                       <span class="font-medium text-blue-900">${filter.displayLabel}:</span>
-                      ${!keywordState.untagged && totalKeywords > 1 ? html`
+                      ${totalKeywords > 1 ? html`
                         <button
                           class="px-2 py-0.5 border border-blue-200 rounded-full text-[10px] text-blue-700 hover:bg-blue-100"
                           @click=${(e) => { e.stopPropagation(); this._toggleKeywordOperator(); }}
@@ -962,33 +1164,84 @@ class FilterChips extends LitElement {
                           ${keywordOperator === 'AND' ? 'AND' : 'OR'}
                         </button>
                       ` : html``}
-                      ${keywordState.untagged ? html`
-                        <span class="text-blue-700">Untagged</span>
-                      ` : html`
-                        <span class="inline-flex flex-wrap items-center gap-2 text-blue-700">
-                          ${Object.entries(keywordState.keywordsByCategory || {}).map(([category, keywords]) => {
-                            return html`
-                              <span class="inline-flex items-center gap-2">
-                                <span class="text-blue-900 font-medium">${category}</span>
-                                <span class="inline-flex flex-wrap items-center gap-1">
-                                  ${Array.from(keywords).map((keyword) => html`
-                                    <span class="inline-flex items-center gap-1 px-2 py-0.5 bg-white/70 border border-blue-200 rounded-full text-xs">
-                                      ${keyword}
-                                      <button
-                                        class="text-blue-600 hover:text-blue-800"
-                                        @click=${(e) => { e.stopPropagation(); this._handleKeywordRemove(category, keyword); }}
-                                        aria-label="Remove keyword"
-                                      >
-                                        ×
-                                      </button>
-                                    </span>
-                                  `)}
-                                </span>
+                      <span class="inline-flex flex-wrap items-center gap-2 text-blue-700">
+                        ${Object.entries(keywordState.keywordsByCategory || {}).map(([category, keywords]) => {
+                          return html`
+                            <span class="inline-flex items-center gap-2">
+                              <span class="text-blue-900 font-medium">${category}</span>
+                              <span class="inline-flex flex-wrap items-center gap-1">
+                                ${Array.from(keywords).map((keyword) => html`
+                                  <span class="inline-flex items-center gap-1 px-2 py-0.5 bg-white/70 border border-blue-200 rounded-full text-xs">
+                                    ${keyword}
+                                    <button
+                                      class="text-blue-600 hover:text-blue-800"
+                                      @click=${(e) => { e.stopPropagation(); this._handleKeywordRemove(category, keyword); }}
+                                      aria-label="Remove keyword"
+                                    >
+                                      ×
+                                    </button>
+                                  </span>
+                                `)}
                               </span>
-                            `;
-                          })}
-                        </span>
-                      `}
+                            </span>
+                          `;
+                        })}
+                      </span>
+                      <button
+                        @click=${(e) => { e.stopPropagation(); this._removeFilter(index); }}
+                        class="ml-1 text-blue-600 hover:text-blue-800"
+                        aria-label="Remove filter"
+                      >
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                        </svg>
+                      </button>
+                    </div>
+                  `;
+                }
+                if (filter.type === 'tag_coverage') {
+                  const coverageState = this._normalizeTagCoverageFilter(filter);
+                  const totalRules = coverageState.categories.length + (coverageState.includeUntagged ? 1 : 0);
+                  const coverageOperator = coverageState.operator || 'AND';
+                  return html`
+                    <div class="inline-flex items-center gap-2 px-3 py-1.5 bg-blue-50 border border-blue-200 rounded-full text-sm cursor-pointer hover:bg-blue-100 flex-wrap"
+                         @click=${() => this._handleEditFilter(filter.type, index)}>
+                      <span class="font-medium text-blue-900">${filter.displayLabel}:</span>
+                      ${totalRules > 1 ? html`
+                        <button
+                          class="px-2 py-0.5 border border-blue-200 rounded-full text-[10px] text-blue-700 hover:bg-blue-100"
+                          @click=${(e) => { e.stopPropagation(); this._toggleTagCoverageOperator(); }}
+                          title="Toggle match mode"
+                        >
+                          ${coverageOperator}
+                        </button>
+                      ` : html``}
+                      <span class="inline-flex flex-wrap items-center gap-1 text-blue-700">
+                        ${coverageState.includeUntagged ? html`
+                          <span class="inline-flex items-center gap-1 px-2 py-0.5 bg-white/70 border border-blue-200 rounded-full text-xs">
+                            Untagged
+                            <button
+                              class="text-blue-600 hover:text-blue-800"
+                              @click=${(e) => { e.stopPropagation(); this._handleTagCoverageRemove('__untagged__'); }}
+                              aria-label="Remove untagged"
+                            >
+                              ×
+                            </button>
+                          </span>
+                        ` : html``}
+                        ${coverageState.categories.map((category) => html`
+                          <span class="inline-flex items-center gap-1 px-2 py-0.5 bg-white/70 border border-blue-200 rounded-full text-xs">
+                            No ${category} tags
+                            <button
+                              class="text-blue-600 hover:text-blue-800"
+                              @click=${(e) => { e.stopPropagation(); this._handleTagCoverageRemove(category); }}
+                              aria-label="Remove category"
+                            >
+                              ×
+                            </button>
+                          </span>
+                        `)}
+                      </span>
                       <button
                         @click=${(e) => { e.stopPropagation(); this._removeFilter(index); }}
                         class="ml-1 text-blue-600 hover:text-blue-800"
