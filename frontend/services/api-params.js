@@ -55,7 +55,23 @@ export function addPermatagParams(params, filters = {}) {
   appendIf(params, 'permatag_category', filters.permatagCategory, filters.permatagCategory !== undefined && filters.permatagCategory !== null && filters.permatagCategory !== '');
   appendIf(params, 'permatag_signum', filters.permatagSignum, filters.permatagSignum !== undefined && filters.permatagSignum !== null);
   appendIf(params, 'permatag_missing', 'true', filters.permatagMissing === true);
-  appendIf(params, 'permatag_positive_missing', 'true', filters.permatagPositiveMissing === true);
+  const noPermatagUntagged = Boolean(
+    filters.noPermatagUntagged
+    ?? filters.permatagPositiveMissing
+  );
+  appendIf(params, 'permatag_positive_missing', 'true', noPermatagUntagged);
+  const noPermatagCategories = Array.isArray(filters.noPermatagCategories)
+    ? Array.from(new Set(filters.noPermatagCategories.map((value) => String(value || '').trim()).filter(Boolean)))
+    : [];
+  noPermatagCategories.forEach((category) => {
+    params.append('no_permatag_category', category);
+  });
+  if (noPermatagUntagged || noPermatagCategories.length) {
+    const noPermatagOperator = String(filters.noPermatagOperator || 'AND').trim().toUpperCase() === 'OR'
+      ? 'OR'
+      : 'AND';
+    params.append('no_permatag_operator', noPermatagOperator);
+  }
 }
 
 /**

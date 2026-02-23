@@ -15,6 +15,15 @@ export function buildCurateFilterObject(state, overrides = {}) {
     dropboxPathPrefix: overrides.dropboxPathPrefix !== undefined ? overrides.dropboxPathPrefix : state.curateDropboxPathPrefix,
     filenameQuery: overrides.filenameQuery !== undefined ? overrides.filenameQuery : state.curateFilenameQuery,
     textQuery: overrides.textQuery !== undefined ? overrides.textQuery : state.curateTextQuery,
+    noPermatagCategories: overrides.noPermatagCategories !== undefined
+      ? overrides.noPermatagCategories
+      : (Array.isArray(state.curateNoPermatagCategories) ? state.curateNoPermatagCategories : []),
+    noPermatagUntagged: overrides.noPermatagUntagged !== undefined
+      ? Boolean(overrides.noPermatagUntagged)
+      : Boolean(state.curateNoPositivePermatags),
+    noPermatagOperator: overrides.noPermatagOperator !== undefined
+      ? (String(overrides.noPermatagOperator || 'AND').trim().toUpperCase() === 'OR' ? 'OR' : 'AND')
+      : (String(state.curateNoPermatagOperator || 'AND').trim().toUpperCase() === 'OR' ? 'OR' : 'AND'),
     listId: overrides.listId !== undefined ? overrides.listId : state.curateListId,
     listExcludeId: overrides.listExcludeId !== undefined ? overrides.listExcludeId : state.curateListExcludeId,
   };

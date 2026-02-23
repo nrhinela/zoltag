@@ -20,8 +20,11 @@ import {
 } from './shared/hotspot-history.js';
 import './shared/widgets/keyword-dropdown.js';
 
-const AUDIT_HELP_VISIBILITY_STORAGE_KEY = 'zoltan:app:curate-audit:help-visible';
-const LEGACY_AUDIT_HELP_VISIBILITY_STORAGE_KEYS = ['curate-audit:help-visible'];
+const AUDIT_HELP_VISIBILITY_STORAGE_KEY = 'zoltag:app:curate-audit:help-visible';
+const LEGACY_AUDIT_HELP_VISIBILITY_STORAGE_KEYS = [
+  'curate-audit:help-visible',
+  'zoltan:app:curate-audit:help-visible',
+];
 
 /**
  * Curate Audit Tab Component

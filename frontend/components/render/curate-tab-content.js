@@ -5,9 +5,6 @@ import { renderCurateRatingWidget, renderCurateRatingStatic } from './curate-rat
 export function renderCurateTabContent(host, { formatCurateDate }) {
   const leftImages = host.curateImages;
   const selectedKeywordValueMain = (() => {
-    if (host.curateNoPositivePermatags) {
-      return '__untagged__';
-    }
     const entries = Object.entries(host.curateKeywordFilters || {});
     for (const [category, keywordsSet] of entries) {
       if (keywordsSet && keywordsSet.size > 0) {
@@ -147,6 +144,8 @@ export function renderCurateTabContent(host, { formatCurateDate }) {
             .curateKeywordFilters=${host.curateKeywordFilters}
             .curateKeywordOperators=${host.curateKeywordOperators}
             .curateNoPositivePermatags=${host.curateNoPositivePermatags}
+            .curateNoPermatagCategories=${host.curateNoPermatagCategories}
+            .curateNoPermatagOperator=${host.curateNoPermatagOperator}
             .listFilterId=${host.curateListExcludeId || host.curateListId}
             .listFilterMode=${host.curateListExcludeId ? 'exclude' : 'include'}
             .tagStatsBySource=${host.tagStatsBySource}

@@ -614,6 +614,21 @@ export async function deleteListItem(tenantId, itemId) {
   return result;
 }
 
+export async function reorderListItems(tenantId, listId, itemIds = []) {
+  const normalizedItemIds = Array.isArray(itemIds)
+    ? itemIds
+      .map((value) => Number(value))
+      .filter((value) => Number.isInteger(value) && value > 0)
+    : [];
+  const result = await fetchWithAuth(`/lists/${listId}/items/reorder`, {
+    method: 'PATCH',
+    tenantId,
+    body: JSON.stringify({ item_ids: normalizedItemIds }),
+  });
+  invalidateQueries(['lists', tenantId]);
+  return result;
+}
+
 export async function updateList(tenantId, list) {
   const result = await listCrud.patch(tenantId, list.id, list);
   invalidateQueries(['lists', tenantId]);
@@ -1193,6 +1208,20 @@ export async function deleteGlobalWorkflowDefinition(workflowId) {
   return fetchWithAuth(`/jobs/workflows/${workflowId}`, {
     method: 'DELETE',
   });
+}
+
+/**
+ * List workflow runs across all tenants (super-admin)
+ * @param {Object} options
+ * @returns {Promise<Object>}
+ */
+export async function getAllWorkflowRuns(options = {}) {
+  const params = new URLSearchParams();
+  if (options.status) params.set('status', options.status);
+  if (options.limit) params.set('limit', options.limit);
+  if (options.offset) params.set('offset', options.offset);
+  const query = params.toString();
+  return fetchWithAuth(`/jobs/workflows/runs/all${query ? `?${query}` : ''}`);
 }
 
 /**

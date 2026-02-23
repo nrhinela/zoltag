@@ -106,6 +106,7 @@ class PhotoListItem(Base):
     id = Column(Integer, primary_key=True)
     list_id = Column(Integer, ForeignKey('photo_lists.id', ondelete='CASCADE'), nullable=False, index=True)
     asset_id = Column(sa.UUID, nullable=False, index=True)
+    sort_order = Column(Integer, nullable=False, server_default='0', index=True)
     added_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     # Relationships
@@ -115,6 +116,7 @@ class PhotoListItem(Base):
 
     __table_args__ = (
         Index("idx_photo_list_items_list_asset", "list_id", "asset_id"),
+        Index("idx_photo_list_items_list_sort_order", "list_id", "sort_order"),
     )
     
     def to_dict(self):

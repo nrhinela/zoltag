@@ -101,7 +101,16 @@ function wireFilterPanelListeners(host) {
       : host.curateHideDeleted;
     host.curateKeywordFilters = normalizeKeywords(filters.keywords);
     host.curateKeywordOperators = { ...(filters.operators || {}) };
-    host.curateNoPositivePermatags = Boolean(filters.permatagPositiveMissing);
+    host.curateNoPositivePermatags = Boolean(
+      filters.noPermatagUntagged
+      ?? filters.permatagPositiveMissing
+    );
+    host.curateNoPermatagCategories = Array.isArray(filters.noPermatagCategories)
+      ? [...filters.noPermatagCategories]
+      : [];
+    host.curateNoPermatagOperator = String(filters.noPermatagOperator || 'AND').trim().toUpperCase() === 'OR'
+      ? 'OR'
+      : 'AND';
     host.curateMediaType = mediaType === 'image' || mediaType === 'video' ? mediaType : 'all';
     host.curateDropboxPathPrefix = filters.dropboxPathPrefix || '';
     host.curateFilenameQuery = filters.filenameQuery || '';

@@ -40,6 +40,11 @@ class Settings(BaseSettings):
     db_keepalives_idle: int = 30
     db_keepalives_interval: int = 10
     db_keepalives_count: int = 5
+    # Worker-only Postgres safety rails (milliseconds).
+    # Applied when WORKER_MODE=true to bound lock waits and long/stuck queries.
+    worker_db_statement_timeout_ms: int = 45000
+    worker_db_lock_timeout_ms: int = 3000
+    worker_db_idle_in_transaction_session_timeout_ms: int = 15000
     
     # Google Cloud
     gcp_project_id: str = "photocat-483622"

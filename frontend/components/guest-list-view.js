@@ -359,8 +359,8 @@ export class GuestListView extends LitElement {
   }
 
   async _loadListData() {
-    if (!this.listId || !this.tenantId) {
-      this.error = 'Missing list ID or tenant ID';
+    if (!this.listId) {
+      this.error = 'Missing list ID.';
       return;
     }
 
@@ -369,12 +369,14 @@ export class GuestListView extends LitElement {
 
     try {
       const { fetchWithAuth } = await import('../services/api.js');
+      const requestOptions = { method: 'GET' };
+      if (this.tenantId) {
+        requestOptions.headers = { 'X-Tenant-ID': this.tenantId };
+      }
       const listData = await fetchWithAuth(`/guest/lists/${this.listId}`, {
-        method: 'GET',
-        headers: {
-          'X-Tenant-ID': this.tenantId,
-        },
+        ...requestOptions,
       });
+      this.tenantId = listData?.tenant_id || this.tenantId;
 
       this.list = {
         id: listData.id,
@@ -422,14 +424,15 @@ export class GuestListView extends LitElement {
   }
 
   async _loadReviewedAssetIds() {
-    if (!this.listId || !this.tenantId) return;
+    if (!this.listId) return;
     try {
       const { fetchWithAuth } = await import('../services/api.js');
+      const requestOptions = { method: 'GET' };
+      if (this.tenantId) {
+        requestOptions.headers = { 'X-Tenant-ID': this.tenantId };
+      }
       const data = await fetchWithAuth(`/guest/lists/${this.listId}/my-reactions`, {
-        method: 'GET',
-        headers: {
-          'X-Tenant-ID': this.tenantId,
-        },
+        ...requestOptions,
       });
 
       const reviewed = new Set();
@@ -596,7 +599,7 @@ export class GuestListView extends LitElement {
   }
 
   async _handleDownload(type) {
-    if (!this.listId || !this.tenantId || !Array.isArray(this.images) || this.images.length === 0) return;
+    if (!this.listId || !Array.isArray(this.images) || this.images.length === 0) return;
     if (this.downloadBusy) return;
 
     this.downloadBusy = type;
@@ -629,12 +632,15 @@ export class GuestListView extends LitElement {
         }
 
         try {
-          const blob = await fetchWithAuth(path, {
+          const requestOptions = {
             method: 'GET',
-            headers: {
-              'X-Tenant-ID': this.tenantId,
-            },
             responseType: 'blob',
+          };
+          if (this.tenantId) {
+            requestOptions.headers = { 'X-Tenant-ID': this.tenantId };
+          }
+          const blob = await fetchWithAuth(path, {
+            ...requestOptions,
           });
           const fallback = `image_${i + 1}`;
           const { stem, ext } = this._splitFilename(image.filename || fallback);

@@ -212,22 +212,33 @@ async def create_shares(
             continue
         logger.warning(f"🚀 Processing invite for {email_str}")
 
-        # Create Supabase guest user (but don't use their invite link)
-        try:
-            from zoltag.supabase_admin import create_guest_user
-            logger.warning(f"🚀 Calling create_guest_user for {email_str}")
-            user_data = await create_guest_user(email_str, str(tenant.id))
-            guest_uid = uuid.UUID(user_data["id"])
-            logger.warning(f"🚀 Guest user created: {guest_uid}")
-        except Exception as exc:
-            logger.error(f"❌ Supabase user creation failed for {email_str}: {exc}")
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Failed to create guest user {email_str}: {exc}",
-            )
+        # Prefer an existing app user identity for this email when available.
+        # This keeps guest shares aligned with real-user Supabase UIDs.
+        app_profile = (
+            db.query(UserProfile)
+            .filter(func.lower(UserProfile.email) == email_str)
+            .first()
+        )
+        if app_profile and app_profile.supabase_uid:
+            guest_uid = uuid.UUID(str(app_profile.supabase_uid))
+            logger.warning(f"🚀 Using existing app user UID for {email_str}: {guest_uid}")
+        else:
+            # Create (or fetch existing) Supabase guest user.
+            try:
+                from zoltag.supabase_admin import create_guest_user
+                logger.warning(f"🚀 Calling create_guest_user for {email_str}")
+                user_data = await create_guest_user(email_str, str(tenant.id))
+                guest_uid = uuid.UUID(user_data["id"])
+                logger.warning(f"🚀 Guest user created/fetched: {guest_uid}")
+            except Exception as exc:
+                logger.error(f"❌ Supabase user creation failed for {email_str}: {exc}")
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=f"Failed to create guest user {email_str}: {exc}",
+                )
 
         # Build guest landing URL with context. Supabase redirects here after magic-link verification.
-        guest_redirect_to = f"{app_url}/guest?{urlencode({'tenant_id': str(tenant.id), 'list_id': str(list_id), 'email': email_str})}"
+        guest_redirect_to = f"{app_url}/guest?{urlencode({'list_id': str(list_id), 'email': email_str})}"
         invite_link = guest_redirect_to
 
         # Generate one-time magic link now so invite is a single email flow.
@@ -295,6 +306,7 @@ async def create_shares(
         else:
             # Reactivate a previously revoked share
             share.revoked_at = None
+            share.guest_uid = guest_uid
             share.allow_download_thumbs = body.allow_download_thumbs
             share.allow_download_originals = body.allow_download_originals
             share.expires_at = expires_at

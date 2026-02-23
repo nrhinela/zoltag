@@ -85,6 +85,8 @@ export function initializeAppDefaultState(host) {
   host.curateStatsLoading = false;
   host.curateAdvancedOpen = false;
   host.curateNoPositivePermatags = false;
+  host.curateNoPermatagCategories = [];
+  host.curateNoPermatagOperator = 'AND';
   host.activeCurateTagSource = 'permatags';
   host.curateCategoryCards = [];
   host.searchOrderBy = 'photo_creation';

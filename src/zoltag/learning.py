@@ -282,8 +282,14 @@ def build_keyword_models(
     model_name: str,
     model_version: str,
     min_positive: int = 2,
+    keyword_to_category: Optional[Dict[str, str]] = None,
 ) -> Dict[str, int]:
-    """Create or update keyword models using permatag labels."""
+    """Create or update keyword models using permatag labels.
+
+    When keyword_to_category is provided, images tagged with any sibling keyword
+    in the same category are used as implicit negative examples, dramatically
+    improving model discrimination.
+    """
     permatags = db.query(Permatag).filter(
         tenant_column_filter_for_values(Permatag, tenant_id),
         Permatag.asset_id.is_not(None),
@@ -308,7 +314,23 @@ def build_keyword_models(
     trained = 0
     skipped = 0
     for keyword, pos_ids in positive_ids.items():
-        neg_ids = negative_ids.get(keyword, [])
+        # Start with explicit human-marked negatives
+        neg_id_set: set = set(negative_ids.get(keyword, []))
+
+        # Add implicit negatives: images tagged with any sibling keyword in the
+        # same category, excluding images that are also positive for this keyword
+        if keyword_to_category:
+            category = keyword_to_category.get(keyword)
+            if category:
+                pos_id_set = set(pos_ids)
+                for sibling, sibling_pos_ids in positive_ids.items():
+                    if sibling == keyword:
+                        continue
+                    if keyword_to_category.get(sibling) == category:
+                        neg_id_set.update(set(sibling_pos_ids) - pos_id_set)
+
+        neg_ids = list(neg_id_set)
+
         # Require minimum positive examples, but allow zero negative examples
         if len(pos_ids) < min_positive:
             skipped += 1
@@ -322,8 +344,7 @@ def build_keyword_models(
             continue
 
         pos_centroid = np.mean(np.array(pos_embeddings), axis=0).tolist()
-        # Use zero vector if no negative examples available
-        neg_centroid = np.mean(np.array(neg_embeddings), axis=0).tolist() if neg_embeddings else [0.0] * len(pos_centroid)
+        neg_centroid = np.mean(np.array(neg_embeddings), axis=0).tolist() if neg_embeddings else None
 
         # Look up keyword_id for this keyword name
         keyword_obj = db.query(Keyword).filter(

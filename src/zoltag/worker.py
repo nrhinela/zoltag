@@ -9,19 +9,24 @@ import subprocess
 import sys
 import time
 import uuid
+import zoneinfo
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from threading import Event, Lock, Thread
 from typing import Any, Callable, Optional
 
+from cronsim import CronSim
+from sqlalchemy.orm import joinedload
 from zoltag.cli.introspection import build_queue_command_argv
 from zoltag.database import SessionLocal
-from zoltag.metadata import Job, JobAttempt, JobDefinition, JobWorker
+from zoltag.metadata import Job, JobAttempt, JobDefinition, JobTrigger, JobWorker, WorkflowRun
+from zoltag.metadata import Tenant as TenantModel
 from zoltag.auth.models import UserProfile
 from zoltag.workflow_queue import (
     handle_workflow_job_state_change,
     mark_workflow_step_running,
     reconcile_running_workflows,
+    start_workflow_run,
 )
 
 # Ensure SQLAlchemy registers auth tables (notably user_profiles), which are
@@ -37,7 +42,8 @@ _DEFAULT_LEASE_SECONDS = 300
 _DEFAULT_IDLE_HEARTBEAT_SECONDS = 30.0
 _DEFAULT_LOG_FLUSH_SECONDS = 2.0
 _DEFAULT_CANCEL_CHECK_SECONDS = 1.0
-_DEFAULT_WORKFLOW_RECONCILE_SECONDS = 10.0
+_DEFAULT_WORKFLOW_RECONCILE_SECONDS = 60.0
+_DEFAULT_SCHEDULE_TICK_SECONDS = 60.0
 
 _worker_thread: Optional[Thread] = None
 _worker_stop_event: Optional[Event] = None
@@ -651,6 +657,108 @@ def _reconcile_workflows_once(*, limit_runs: int = 25) -> None:
         db.close()
 
 
+def _fire_due_schedule_triggers() -> None:
+    """Evaluate global schedule triggers and fan out workflow runs to all active tenants.
+
+    For each enabled global trigger (tenant_id IS NULL, trigger_type='schedule')
+    whose cron expression fired within the last tick window, one WorkflowRun is
+    created per active tenant — skipping any tenant that already has a run for
+    this workflow within the dedupe window.
+
+    Called from the worker loop on a configurable interval (default 60s).
+    """
+    db = SessionLocal()
+    try:
+        now = _now_utc()
+
+        triggers = (
+            db.query(JobTrigger)
+            .options(joinedload(JobTrigger.workflow_definition))
+            .filter(
+                JobTrigger.tenant_id.is_(None),
+                JobTrigger.trigger_type == "schedule",
+                JobTrigger.is_enabled.is_(True),
+                JobTrigger.workflow_definition_id.is_not(None),
+            )
+            .all()
+        )
+        if not triggers:
+            return
+
+        tenants = db.query(TenantModel).filter(TenantModel.active.is_(True)).all()
+        if not tenants:
+            return
+
+        tick_seconds = _DEFAULT_SCHEDULE_TICK_SECONDS
+
+        for trigger in triggers:
+            cron_expr = str(trigger.cron_expr or "").strip()
+            tz_name = str(trigger.timezone or "UTC").strip()
+            workflow_def = trigger.workflow_definition
+            if not cron_expr or workflow_def is None:
+                continue
+
+            try:
+                tz = zoneinfo.ZoneInfo(tz_name)
+            except Exception:
+                logger.warning("Schedule trigger %s has unknown timezone %r, skipping", trigger.id, tz_name)
+                continue
+
+            window_start = now - timedelta(seconds=tick_seconds)
+            try:
+                fire_time = next(CronSim(cron_expr, window_start.astimezone(tz)), None)
+            except Exception:
+                logger.warning("Schedule trigger %s has invalid cron %r, skipping", trigger.id, cron_expr)
+                continue
+
+            if fire_time is None or fire_time.astimezone(timezone.utc) > now:
+                continue  # not due this tick
+
+            dedupe_window = int(trigger.dedupe_window_seconds or 300)
+
+            for tenant in tenants:
+                try:
+                    existing = (
+                        db.query(WorkflowRun.id)
+                        .filter(
+                            WorkflowRun.tenant_id == tenant.id,
+                            WorkflowRun.workflow_definition_id == workflow_def.id,
+                            WorkflowRun.queued_at >= now - timedelta(seconds=dedupe_window),
+                        )
+                        .first()
+                    )
+                    if existing:
+                        continue
+
+                    start_workflow_run(
+                        db,
+                        tenant_id=tenant.id,
+                        workflow=workflow_def,
+                        created_by=None,
+                        priority=200,
+                    )
+                    db.commit()
+                    logger.info(
+                        "Schedule trigger %s fired workflow '%s' for tenant %s",
+                        trigger.id,
+                        workflow_def.key,
+                        tenant.id,
+                    )
+                except Exception:
+                    db.rollback()
+                    logger.exception(
+                        "Failed to start workflow for schedule trigger %s tenant %s",
+                        trigger.id,
+                        tenant.id,
+                    )
+
+    except Exception:
+        db.rollback()
+        logger.exception("Schedule trigger tick failed")
+    finally:
+        db.close()
+
+
 def run_loop(
     *,
     stop_event: Optional[Event] = None,
@@ -668,8 +776,12 @@ def run_loop(
         os.getenv("JOB_WORKFLOW_RECONCILE_SECONDS") or _DEFAULT_WORKFLOW_RECONCILE_SECONDS
     )
     workflow_reconcile_limit = int(os.getenv("JOB_WORKFLOW_RECONCILE_LIMIT") or 25)
+    schedule_tick_interval = float(
+        os.getenv("JOB_SCHEDULE_TICK_SECONDS") or _DEFAULT_SCHEDULE_TICK_SECONDS
+    )
     last_idle_heartbeat_at = 0.0
     last_workflow_reconcile_at = 0.0
+    last_schedule_tick_at = 0.0
 
     logger.info("Job worker started: worker_id=%s lease_seconds=%s", worker_id, lease_seconds)
 
@@ -678,6 +790,10 @@ def run_loop(
         if now_monotonic - last_workflow_reconcile_at >= workflow_reconcile_interval:
             last_workflow_reconcile_at = now_monotonic
             _reconcile_workflows_once(limit_runs=workflow_reconcile_limit)
+
+        if now_monotonic - last_schedule_tick_at >= schedule_tick_interval:
+            last_schedule_tick_at = now_monotonic
+            _fire_due_schedule_triggers()
 
         try:
             claimed_job = _claim_next_job(

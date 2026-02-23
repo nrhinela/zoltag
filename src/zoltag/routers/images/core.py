@@ -7,7 +7,7 @@ import threading
 import time
 from typing import Dict, List, Optional, Tuple
 from uuid import UUID
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import func, distinct, and_, case, cast, Text, literal, or_, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, load_only
@@ -1312,6 +1312,8 @@ async def list_images(
     permatag_signum: Optional[int] = None,
     permatag_missing: bool = False,
     permatag_positive_missing: bool = False,
+    no_permatag_category: Optional[List[str]] = Query(default=None),
+    no_permatag_operator: str = "AND",
     category_filter_source: Optional[str] = None,
     category_filter_operator: Optional[str] = None,
     date_order: str = "desc",
@@ -1400,6 +1402,8 @@ async def list_images(
         permatag_signum=permatag_signum,
         permatag_missing=permatag_missing,
         permatag_positive_missing=permatag_positive_missing,
+        no_permatag_categories=no_permatag_category,
+        no_permatag_operator=no_permatag_operator,
         ml_keyword=ml_keyword,
         ml_tag_type=normalized_ml_tag_type,
         apply_ml_tag_filter=not constrain_to_ml_matches,
@@ -1992,6 +1996,8 @@ async def list_images(
                     permatag_signum=1,
                     permatag_missing=False,
                     permatag_positive_missing=False,
+                    no_permatag_categories=no_permatag_category,
+                    no_permatag_operator=no_permatag_operator,
                     ml_keyword=ml_keyword,
                     ml_tag_type=normalized_ml_tag_type,
                     apply_ml_tag_filter=False,
@@ -2015,6 +2021,8 @@ async def list_images(
                     permatag_signum=None,
                     permatag_missing=True,
                     permatag_positive_missing=permatag_positive_missing,
+                    no_permatag_categories=no_permatag_category,
+                    no_permatag_operator=no_permatag_operator,
                     ml_keyword=ml_keyword,
                     ml_tag_type=normalized_ml_tag_type,
                     apply_ml_tag_filter=False,

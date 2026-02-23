@@ -60,6 +60,9 @@ export class ImageFilterPanel {
       textQuery: '',
       mediaType: 'all',
       permatagPositiveMissing: false,
+      noPermatagCategories: [],
+      noPermatagUntagged: false,
+      noPermatagOperator: 'AND',
       listId: undefined,
       listExcludeId: undefined,
     };
@@ -237,6 +240,9 @@ export class ImageFilterPanel {
       textQuery: '',
       mediaType: 'all',
       permatagPositiveMissing: false,
+      noPermatagCategories: [],
+      noPermatagUntagged: false,
+      noPermatagOperator: 'AND',
     };
     this._emit('filters-changed', { tabId: this.tabId, filters: this.filters });
   }
@@ -286,6 +292,20 @@ export class ImageFilterPanel {
       if (!filters.mediaType) {
         filters.mediaType = 'all';
       }
+      if (!Array.isArray(filters.noPermatagCategories)) {
+        if (filters.noPermatagCategories === undefined || filters.noPermatagCategories === null || filters.noPermatagCategories === '') {
+          filters.noPermatagCategories = [];
+        } else {
+          filters.noPermatagCategories = [String(filters.noPermatagCategories)];
+        }
+      }
+      filters.noPermatagUntagged = Boolean(
+        filters.noPermatagUntagged
+        ?? filters.permatagPositiveMissing
+      );
+      filters.noPermatagOperator = String(filters.noPermatagOperator || 'AND').trim().toUpperCase() === 'OR'
+        ? 'OR'
+        : 'AND';
       this.updateFilters(filters);
     } catch (error) {
       console.error(`Error deserializing state for ${this.tabId}:`, error);

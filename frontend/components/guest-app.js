@@ -12,12 +12,12 @@ import './guest-list-view.js';
  * Flow:
  * 1. User clicks magic link from email (format: /guest#access_token=...)
  * 2. Supabase JS client exchanges hash for session
- * 3. JWT contains user_role='guest' and tenant_ids array
- * 4. Component validates guest role and routes to list view
+ * 3. Supabase session is established
+ * 4. Component routes based on list-share entitlements
  *
  * @property {Boolean} authenticated - Whether user has valid session
  * @property {Boolean} loading - Loading state
- * @property {Boolean} isGuest - Whether user has guest role in JWT
+ * @property {Boolean} isGuest - Legacy flag mirroring authenticated guest-shell access
  * @property {String} error - Error message if any
  * @property {String} tenantId - Current tenant ID from URL or JWT
  * @property {Number} listId - List ID from URL
@@ -40,8 +40,9 @@ export class GuestApp extends LitElement {
     verifyMessage: { type: String },
     currentUser: { type: Object },
     userMenuOpen: { type: Boolean },
-    guestTenantIds: { type: Array },
     collectionsRefreshing: { type: Boolean },
+    accountMismatch: { type: Boolean },
+    invitedEmail: { type: String },
   };
 
   static styles = css`
@@ -441,55 +442,75 @@ export class GuestApp extends LitElement {
     this.verifyMessage = '';
     this.currentUser = null;
     this.userMenuOpen = false;
-    this.guestTenantIds = [];
     this.collectionsRefreshing = false;
+    this.accountMismatch = false;
+    this.invitedEmail = '';
+    this._suppressSignedOutMessage = false;
     this._handleDocumentClick = this._handleDocumentClick.bind(this);
     this._handleWindowFocus = this._handleWindowFocus.bind(this);
+  }
+
+  _normalizeEmail(value) {
+    return String(value || '').trim().toLowerCase();
+  }
+
+  _readEmailParamPreservePlus() {
+    const rawSearch = String(window.location.search || '');
+    const match = rawSearch.match(/[?&]email=([^&]*)/i);
+    if (match && match[1] !== undefined) {
+      try {
+        // Preserve literal '+' in older links that were not URL-encoded.
+        return decodeURIComponent(String(match[1]).replace(/\+/g, '%2B'));
+      } catch (_err) {
+        return String(match[1] || '');
+      }
+    }
+    return '';
+  }
+
+  _isInviteAccountMismatch(session) {
+    const invited = this._normalizeEmail(this.invitedEmail);
+    if (!invited) return false;
+    const signedIn = this._normalizeEmail(session?.user?.email);
+    if (!signedIn) return false;
+    return signedIn !== invited;
   }
 
   async connectedCallback() {
     super.connectedCallback();
 
-    // Parse URL for list ID, tenant ID, and email
+    // Parse URL for list ID and email
     const urlParams = new URLSearchParams(window.location.search);
     let listIdParam = urlParams.get('list_id');
-    let tenantIdParam = urlParams.get('tenant_id');
-    const emailParam = urlParams.get('email');
+    const emailParam = this._readEmailParamPreservePlus() || urlParams.get('email');
 
     // Pre-fill email if provided in URL
     if (emailParam) {
-      this.authEmail = emailParam;
+      this.invitedEmail = this._normalizeEmail(emailParam);
+      this.authEmail = this.invitedEmail;
     }
 
     this._setAuthErrorFromUrl();
 
-    // Then try hash fragment (new method from invite links: #list_id,tenant_id)
+    // Then try hash fragment (new method from invite links: #list_id)
     if (!listIdParam && window.location.hash) {
       const hash = window.location.hash.substring(1); // Remove #
-      const parts = hash.split(',');
-      if (
-        parts.length >= 2 &&
-        /^\d+$/.test(parts[0]) &&
-        /^[0-9a-fA-F-]{36}$/.test(parts[1])
-      ) {
-        listIdParam = parts[0];
-        tenantIdParam = parts[1];
+      if (/^\d+$/.test(hash)) {
+        listIdParam = hash;
       }
     }
 
     if (listIdParam) {
       this.listId = parseInt(listIdParam);
     }
-    if (tenantIdParam) {
-      this.tenantId = tenantIdParam;
-    }
-
     // Check authentication state
     const session = await getSession();
-    this.authenticated = !!session;
+    const accountMismatch = this._isInviteAccountMismatch(session);
+    this.accountMismatch = accountMismatch;
+    this.authenticated = !!session && !accountMismatch;
     this.currentUser = session?.user || null;
 
-    if (this.authenticated) {
+    if (this.authenticated && session) {
       await this._validateGuestAccess(session);
     }
 
@@ -497,17 +518,34 @@ export class GuestApp extends LitElement {
 
     // Listen for auth state changes
     this.authSubscription = onAuthStateChange(async (event, session) => {
-      this.authenticated = !!session;
       this.currentUser = session?.user || null;
 
       if (session) {
-        await this._validateGuestAccess(session);
+        const accountMismatch = this._isInviteAccountMismatch(session);
+        this.accountMismatch = accountMismatch;
+        this.authenticated = !accountMismatch;
+
+        if (accountMismatch) {
+          this.isGuest = false;
+          this.error = null;
+          this.availableLists = null;
+        } else {
+          await this._validateGuestAccess(session);
+        }
       } else if (event === 'SIGNED_OUT') {
+        this.authenticated = false;
+        this.accountMismatch = false;
         this.isGuest = false;
         this.error = null;
         this.authSuccess = false;
-        this.authMessage = this._expiredOrUsedLinkMessage();
+        if (this._suppressSignedOutMessage) {
+          this._suppressSignedOutMessage = false;
+        } else {
+          this.authMessage = this._expiredOrUsedLinkMessage();
+        }
       } else {
+        this.authenticated = false;
+        this.accountMismatch = false;
         this.isGuest = false;
         this.error = null;
       }
@@ -520,38 +558,7 @@ export class GuestApp extends LitElement {
 
   async _validateGuestAccess(session) {
     try {
-      // Decode JWT to check user_role
-      const token = session.access_token;
-      const payload = JSON.parse(atob(token.split('.')[1]));
-
-      // Check if user has guest role
-      const sessionRole = session?.user?.app_metadata?.role;
-      const jwtRole = payload.user_role || payload?.app_metadata?.role;
-      this.isGuest = (jwtRole || sessionRole) === 'guest';
-
-      if (!this.isGuest) {
-        // Ignore existing real-user sessions on /guest without affecting /app tabs.
-        this.authenticated = false;
-        this.isGuest = false;
-        this.error = null;
-        this.availableLists = null;
-        return;
-      }
-
-      // Extract tenant_ids from JWT
-      const tenantIds = payload.tenant_ids || payload?.app_metadata?.tenant_ids || session?.user?.app_metadata?.tenant_ids || [];
-      this.guestTenantIds = Array.isArray(tenantIds) ? tenantIds : [];
-
-      // If tenant_id is in URL, validate it's in the JWT
-      if (this.tenantId && !tenantIds.includes(this.tenantId)) {
-        this.error = 'You do not have access to this tenant.';
-        return;
-      }
-
-      // If no tenant_id in URL but only one in JWT, use it
-      if (!this.tenantId && tenantIds.length === 1) {
-        this.tenantId = tenantIds[0];
-      }
+      this.isGuest = !!session;
 
       // If no list_id in URL, fetch accessible lists and let user choose
       if (!this.listId) {
@@ -570,32 +577,15 @@ export class GuestApp extends LitElement {
   async _fetchAccessibleLists() {
     try {
       const { fetchWithAuth } = await import('../services/api.js');
-      const tenantIdsToQuery = this.tenantId
-        ? [this.tenantId]
-        : (Array.isArray(this.guestTenantIds) ? this.guestTenantIds : []);
-
-      if (!tenantIdsToQuery.length) {
-        throw new Error('No tenant access found for this guest account.');
-      }
-
-      const listResponses = await Promise.all(
-        tenantIdsToQuery.map(async (tenantId) => {
-          const response = await fetchWithAuth('/guest/lists', {
-            headers: { 'X-Tenant-ID': tenantId },
-          });
-          const lists = Array.isArray(response?.lists) ? response.lists : [];
-          return lists.map((item) => ({
-            ...item,
-            tenant_id: tenantId,
-          }));
-        }),
-      );
-
-      const merged = listResponses.flat();
+      const requestOptions = this.tenantId
+        ? { headers: { 'X-Tenant-ID': this.tenantId } }
+        : {};
+      const response = await fetchWithAuth('/guest/lists', requestOptions);
+      const merged = Array.isArray(response?.lists) ? response.lists : [];
       const deduped = [];
       const seen = new Set();
       for (const list of merged) {
-        const key = `${list.tenant_id}:${list.list_id}`;
+        const key = `${list?.tenant_id || ''}:${list?.list_id || ''}`;
         if (seen.has(key)) continue;
         seen.add(key);
         deduped.push(list);
@@ -608,6 +598,9 @@ export class GuestApp extends LitElement {
       });
 
       this.availableLists = deduped;
+      if (!this.tenantId && deduped.length === 1 && deduped[0]?.tenant_id) {
+        this.tenantId = String(deduped[0].tenant_id);
+      }
       this.loading = false;
     } catch (err) {
       console.error('Failed to fetch accessible lists:', err);
@@ -618,16 +611,11 @@ export class GuestApp extends LitElement {
 
   _selectList(listId, tenantId = this.tenantId) {
     // Keep navigation in-app for smooth transitions.
-    const selectedTenant = tenantId || this.tenantId || (this.guestTenantIds?.[0] || '');
-    if (!selectedTenant) {
-      this.error = 'Could not determine tenant for selected list.';
-      return;
-    }
     this.listId = Number(listId);
-    this.tenantId = selectedTenant;
+    this.tenantId = tenantId || this.tenantId || null;
     this.availableLists = null;
     this.error = null;
-    window.location.hash = `${this.listId},${selectedTenant}`;
+    window.location.hash = `${this.listId}`;
   }
 
   _goToApp() {
@@ -643,7 +631,7 @@ export class GuestApp extends LitElement {
     window.history.replaceState({}, '', `${window.location.pathname}${window.location.search}`);
     try {
       await this._refreshGuestSessionState();
-      const canQueryLists = !this.listId && (this.isGuest || (Array.isArray(this.guestTenantIds) && this.guestTenantIds.length > 0));
+      const canQueryLists = this.authenticated && !this.listId;
       if (canQueryLists) {
         await this._fetchAccessibleLists();
       }
@@ -741,6 +729,29 @@ export class GuestApp extends LitElement {
     }
   }
 
+  async _handleSwitchToInvitedAccount() {
+    try {
+      this._suppressSignedOutMessage = true;
+      const { signOut } = await import('../services/supabase.js');
+      await signOut();
+    } catch (err) {
+      console.error('Failed to switch account for invite:', err);
+    } finally {
+      this.authenticated = false;
+      this.accountMismatch = false;
+      this.isGuest = false;
+      this.error = null;
+      this.availableLists = null;
+      this.currentUser = null;
+      this.authSuccess = false;
+      if (this.invitedEmail) {
+        this.authEmail = this.invitedEmail;
+      }
+      this.authMessage = 'Signed out. Continue with the invited email below to access this collection.';
+      this.requestUpdate();
+    }
+  }
+
   disconnectedCallback() {
     super.disconnectedCallback();
     if (this.authSubscription) {
@@ -752,14 +763,15 @@ export class GuestApp extends LitElement {
 
   async _refreshGuestSessionState() {
     const session = await getSession();
-    this.authenticated = !!session;
+    const accountMismatch = this._isInviteAccountMismatch(session);
+    this.accountMismatch = accountMismatch;
+    this.authenticated = !!session && !accountMismatch;
     this.currentUser = session?.user || null;
 
-    if (session) {
+    if (session && this.authenticated) {
       await this._validateGuestAccess(session);
     } else {
       this.isGuest = false;
-      this.guestTenantIds = [];
       this.availableLists = null;
     }
   }
@@ -768,7 +780,7 @@ export class GuestApp extends LitElement {
     try {
       await this._refreshGuestSessionState();
 
-      if (this.authenticated && this.isGuest && !this.listId) {
+      if (this.authenticated && !this.listId) {
         await this._fetchAccessibleLists();
       }
       this.requestUpdate();
@@ -781,7 +793,7 @@ export class GuestApp extends LitElement {
     this.collectionsRefreshing = true;
     try {
       await this._refreshGuestSessionState();
-      const canQueryLists = !this.listId && (this.isGuest || (Array.isArray(this.guestTenantIds) && this.guestTenantIds.length > 0));
+      const canQueryLists = this.authenticated && !this.listId;
       if (canQueryLists) {
         await this._fetchAccessibleLists();
       }
@@ -922,6 +934,12 @@ export class GuestApp extends LitElement {
 
   _renderGuestAuthForm() {
     return html`
+      ${this.authMessage ? html`
+        <p class="guest-auth-message ${this.authSuccess ? 'ok' : 'err'}">
+          ${this.authMessage}
+        </p>
+      ` : ''}
+
       <form @submit=${this._handleRequestNewLink} class="guest-auth-form">
         <input
           type="email"
@@ -940,12 +958,6 @@ export class GuestApp extends LitElement {
           ${this.authLoading ? 'Sending...' : 'Send Magic Link'}
         </button>
       </form>
-
-      ${this.authMessage ? html`
-        <p class="guest-auth-message ${this.authSuccess ? 'ok' : 'err'}">
-          ${this.authMessage}
-        </p>
-      ` : ''}
 
       ${this.authSuccess ? html`
         <div class="guest-auth-divider">or</div>
@@ -1032,6 +1044,18 @@ export class GuestApp extends LitElement {
                 ${unresolvedAuthError ? html`
                   <p class="guest-auth-message err">${unresolvedAuthError}</p>
                 ` : ''}
+                ${this.accountMismatch ? html`
+                  <p class="guest-auth-message err">
+                    This invite is for <strong>${this.invitedEmail || this.authEmail || 'the invited email'}</strong>, but you are currently signed in as <strong>${this._getUserEmail() || 'another user'}</strong>.
+                  </p>
+                  <button
+                    type="button"
+                    class="guest-auth-submit secondary"
+                    @click=${this._handleSwitchToInvitedAccount}
+                  >
+                    Sign Out & Continue
+                  </button>
+                ` : ''}
                 ${this._renderGuestAuthForm()}
                 <p class="guest-auth-footer">
                   This is a secure guest access flow. If you did not request access, you can ignore this page.
@@ -1074,36 +1098,7 @@ export class GuestApp extends LitElement {
       `;
     }
 
-    if (this.authenticated && !this.isGuest) {
-      return html`
-        <div class="guest-shell">
-          <header class="guest-topbar">
-            <div class="guest-topbar-inner">
-              <div>
-                <h1 class="guest-brand-title">Zoltag - Guest Access</h1>
-                <p class="guest-brand-subtitle">Sign in with your invited guest account</p>
-              </div>
-              <div class="guest-topbar-actions">
-                ${this._renderAccountModeSwitch()}
-              </div>
-            </div>
-          </header>
-          <main class="guest-content">
-            <section class="guest-auth-wrap">
-              <div class="guest-auth-panel">
-                <h2 class="guest-auth-title">Sign In to View Shared Photos</h2>
-                <p class="guest-auth-subtitle">
-                  This guest link can only be used with the invited email account. If your link expired or was used already, request a new one.
-                </p>
-                ${this._renderGuestAuthForm()}
-              </div>
-            </section>
-          </main>
-        </div>
-      `;
-    }
-
-    if (this.isGuest && !this.listId) {
+    if (this.authenticated && !this.listId) {
       if (!this.availableLists || this.collectionsRefreshing) {
         return html`
           <div class="guest-shell">
@@ -1223,7 +1218,7 @@ export class GuestApp extends LitElement {
     }
 
     // Valid guest access - show list view
-    if (this.isGuest && this.listId && this.tenantId) {
+    if (this.authenticated && this.listId) {
       return html`
         <guest-list-view
           .listId=${this.listId}

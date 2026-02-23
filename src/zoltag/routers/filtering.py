@@ -812,6 +812,44 @@ def apply_no_positive_permatag_filter_subquery(db: Session, tenant: Tenant):
     ).subquery()
 
 
+def apply_no_positive_permatag_categories_filter_subquery(
+    db: Session,
+    tenant: Tenant,
+    categories: List[str],
+):
+    """Return subquery of images with no positive permatags in given categories."""
+    normalized_categories = [
+        str(category or "").strip().lower()
+        for category in (categories or [])
+        if str(category or "").strip()
+    ]
+    if not normalized_categories:
+        return db.query(ImageMetadata.id).filter(
+            tenant_column_filter(ImageMetadata, tenant)
+        ).subquery()
+
+    blocked_assets = (
+        db.query(Permatag.asset_id)
+        .join(Keyword, Keyword.id == Permatag.keyword_id)
+        .join(KeywordCategory, KeywordCategory.id == Keyword.category_id)
+        .filter(
+            tenant_column_filter(Permatag, tenant),
+            tenant_column_filter(Keyword, tenant),
+            tenant_column_filter(KeywordCategory, tenant),
+            Permatag.signum == 1,
+            Permatag.asset_id.is_not(None),
+            func.lower(KeywordCategory.name).in_(normalized_categories),
+        )
+        .distinct()
+        .subquery()
+    )
+
+    return db.query(ImageMetadata.id).filter(
+        tenant_column_filter(ImageMetadata, tenant),
+        ~ImageMetadata.asset_id.in_(select(blocked_assets.c.asset_id))
+    ).subquery()
+
+
 def apply_ml_tag_type_filter_subquery(
     db: Session,
     tenant: Tenant,
@@ -884,6 +922,8 @@ def build_image_query_with_subqueries(
     permatag_signum: Optional[int] = None,
     permatag_missing: bool = False,
     permatag_positive_missing: bool = False,
+    no_permatag_categories: Optional[List[str]] = None,
+    no_permatag_operator: str = "AND",
     dropbox_path_prefix: Optional[str] = None,
     filename_query: Optional[str] = None,
     media_type: Optional[str] = None,
@@ -911,6 +951,8 @@ def build_image_query_with_subqueries(
         permatag_signum: Optional permatag signum (1 or -1)
         permatag_missing: Whether to exclude permatag matches
         permatag_positive_missing: Whether to exclude images with positive permatags
+        no_permatag_categories: Optional list of categories where positive permatags must be absent
+        no_permatag_operator: Operator for combining no-permatag conditions ("AND" or "OR")
         filename_query: Case-insensitive partial filename match
         media_type: Optional media type filter ('image' or 'video')
         ml_keyword: Optional ML keyword to filter by (for zero-shot tagging)
@@ -1021,8 +1063,48 @@ def build_image_query_with_subqueries(
             )
             subqueries_list.append(permatag_subquery)
 
+    normalized_no_permatag_categories = list(dict.fromkeys(
+        str(category or "").strip()
+        for category in (no_permatag_categories or [])
+        if str(category or "").strip()
+    ))
+    normalized_no_permatag_operator = str(no_permatag_operator or "AND").strip().upper()
+    if normalized_no_permatag_operator not in {"AND", "OR"}:
+        normalized_no_permatag_operator = "AND"
+
+    no_permatag_conditions = []
     if permatag_positive_missing:
-        subqueries_list.append(apply_no_positive_permatag_filter_subquery(db, tenant))
+        any_positive_exists = db.query(Permatag.id).filter(
+            tenant_column_filter(Permatag, tenant),
+            Permatag.signum == 1,
+            Permatag.asset_id.is_not(None),
+            Permatag.asset_id == ImageMetadata.asset_id,
+        )
+        no_permatag_conditions.append(~any_positive_exists.exists())
+
+    for category_name in normalized_no_permatag_categories:
+        category_positive_exists = (
+            db.query(Permatag.id)
+            .join(Keyword, Keyword.id == Permatag.keyword_id)
+            .join(KeywordCategory, KeywordCategory.id == Keyword.category_id)
+            .filter(
+                tenant_column_filter(Permatag, tenant),
+                tenant_column_filter(Keyword, tenant),
+                tenant_column_filter(KeywordCategory, tenant),
+                Permatag.signum == 1,
+                Permatag.asset_id.is_not(None),
+                Permatag.asset_id == ImageMetadata.asset_id,
+                func.lower(KeywordCategory.name) == category_name.lower(),
+            )
+        )
+        no_permatag_conditions.append(~category_positive_exists.exists())
+
+    if no_permatag_conditions:
+        if normalized_no_permatag_operator == "OR":
+            base_query = base_query.filter(or_(*no_permatag_conditions))
+        else:
+            for condition in no_permatag_conditions:
+                base_query = base_query.filter(condition)
 
     if dropbox_path_prefix:
         normalized_prefixes = []

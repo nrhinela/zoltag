@@ -7,7 +7,7 @@ from sqlalchemy import func, distinct, and_, case
 from zoltag.database import SessionLocal
 from zoltag.dependencies import get_tenant, get_tenant_setting
 from zoltag.tenant import Tenant
-from zoltag.metadata import ImageMetadata, MachineTag, Permatag
+from zoltag.metadata import ImageMetadata, Permatag
 from zoltag.models.config import Keyword, KeywordCategory, PhotoList
 from zoltag.tenant_scope import tenant_column_filter_for_values
 
@@ -93,10 +93,12 @@ def _compute_image_stats(tenant_id: str, include_ratings: bool) -> dict:
         # Get active tag type from tenant settings
         active_tag_type = get_tenant_setting(db, tenant_id, 'active_machine_tag_type', default='siglip')
 
-        ml_tag_count = db.query(func.count(distinct(MachineTag.asset_id))).filter(
-            tenant_column_filter_for_values(MachineTag, tenant_id),
-            MachineTag.tag_type == active_tag_type,
-            MachineTag.asset_id.is_not(None),
+        # Count images with ML tags via tags_applied flag on image_metadata.
+        # COUNT(DISTINCT machine_tags.asset_id) is prohibitively slow at scale
+        # (~1M+ tag rows per tenant, 76+ tags/image).
+        ml_tag_count = db.query(func.count(ImageMetadata.id)).filter(
+            tenant_column_filter_for_values(ImageMetadata, tenant_id),
+            ImageMetadata.tags_applied.is_(True),
         ).scalar() or 0
 
         keyword_count = db.query(func.count(Keyword.id)).filter(
@@ -166,7 +168,6 @@ def _compute_image_stats(tenant_id: str, include_ratings: bool) -> dict:
                     tenant_column_filter_for_values(Permatag, tenant_id),
                     Permatag.asset_id.is_not(None),
                     Permatag.signum == 1,
-                    Permatag.keyword_id.in_(keyword_ids)
                 ).group_by(Permatag.keyword_id).all()
 
                 for kw_id, total in keyword_total_rows:
@@ -179,15 +180,13 @@ def _compute_image_stats(tenant_id: str, include_ratings: bool) -> dict:
                 keyword_rating_rows = db.query(
                     Permatag.keyword_id,
                     ImageMetadata.rating,
-                    func.count(distinct(Permatag.asset_id))
+                    func.count(Permatag.asset_id)
                 ).join(
                     ImageMetadata, ImageMetadata.asset_id == Permatag.asset_id
                 ).filter(
                     tenant_column_filter_for_values(Permatag, tenant_id),
-                    tenant_column_filter_for_values(ImageMetadata, tenant_id),
                     Permatag.asset_id.is_not(None),
                     Permatag.signum == 1,
-                    Permatag.keyword_id.in_(keyword_ids),
                     ImageMetadata.rating.in_([0, 1, 2, 3])
                 ).group_by(
                     Permatag.keyword_id,
@@ -227,11 +226,8 @@ def _compute_image_stats(tenant_id: str, include_ratings: bool) -> dict:
                     ImageMetadata, ImageMetadata.asset_id == Permatag.asset_id
                 ).filter(
                     tenant_column_filter_for_values(Permatag, tenant_id),
-                    tenant_column_filter_for_values(ImageMetadata, tenant_id),
                     Permatag.asset_id.is_not(None),
                     Permatag.signum == 1,
-                    Keyword.category_id.in_(category_ids),
-                    tenant_column_filter_for_values(Keyword, tenant_id),
                     ImageMetadata.rating.in_([0, 1, 2, 3])
                 ).group_by(
                     Keyword.category_id,

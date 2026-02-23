@@ -63,6 +63,7 @@ dependencies = [
     "httpx>=0.26.0",
     "resend>=2.4.0",
     "click>=8.1.0",
+    "cronsim>=2.5",
 ]
 
 [project.scripts]

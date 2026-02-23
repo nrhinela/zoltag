@@ -2,8 +2,26 @@
 
 from __future__ import annotations
 
+import time
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
+
+# Debounce reconcile calls from API endpoints — only run at most once per N seconds.
+_RECONCILE_DEBOUNCE_SECONDS = 30.0
+_last_api_reconcile_at: float = 0.0
+
+
+def _maybe_reconcile(db) -> None:
+    global _last_api_reconcile_at
+    now = time.monotonic()
+    if now - _last_api_reconcile_at < _RECONCILE_DEBOUNCE_SECONDS:
+        return
+    _last_api_reconcile_at = now
+    try:
+        reconcile_running_workflows(db, limit_runs=25)
+        db.commit()
+    except Exception:
+        db.rollback()
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from sqlalchemy import func
@@ -26,6 +44,7 @@ from zoltag.metadata import (
     JobDefinition,
     JobTrigger,
     JobWorker,
+    Tenant as TenantModel,
     WorkflowDefinition,
     WorkflowRun,
     WorkflowStepRun,
@@ -140,6 +159,7 @@ def _serialize_definition(definition: JobDefinition) -> dict:
 
 def _serialize_trigger(trigger: JobTrigger) -> dict:
     definition = getattr(trigger, "definition", None)
+    workflow_definition = getattr(trigger, "workflow_definition", None)
     return {
         "id": str(trigger.id),
         "tenant_id": str(trigger.tenant_id) if trigger.tenant_id else None,
@@ -149,8 +169,10 @@ def _serialize_trigger(trigger: JobTrigger) -> dict:
         "event_name": trigger.event_name,
         "cron_expr": trigger.cron_expr,
         "timezone": trigger.timezone,
-        "definition_id": str(trigger.definition_id),
+        "definition_id": str(trigger.definition_id) if trigger.definition_id else None,
         "definition_key": str(getattr(definition, "key", "") or ""),
+        "workflow_definition_id": str(trigger.workflow_definition_id) if trigger.workflow_definition_id else None,
+        "workflow_definition_key": str(getattr(workflow_definition, "key", "") or ""),
         "payload_template": trigger.payload_template or {},
         "dedupe_window_seconds": trigger.dedupe_window_seconds,
         "created_by": str(trigger.created_by) if trigger.created_by else None,
@@ -542,12 +564,15 @@ async def list_job_triggers(
     db: Session = Depends(get_db),
 ):
     """List global job triggers (super-admin)."""
-    query = db.query(JobTrigger).options(joinedload(JobTrigger.definition)).filter(
+    query = db.query(JobTrigger).options(
+        joinedload(JobTrigger.definition),
+        joinedload(JobTrigger.workflow_definition),
+    ).filter(
         JobTrigger.tenant_id.is_(None)
     )
     if not include_disabled:
         query = query.filter(JobTrigger.is_enabled.is_(True))
-    rows = query.order_by(JobTrigger.created_at.desc()).all()
+    rows = query.order_by(JobTrigger.label.asc()).all()
     return {"scope": "global", "triggers": [_serialize_trigger(row) for row in rows]}
 
 
@@ -566,24 +591,45 @@ async def create_job_trigger(
     if not label:
         raise HTTPException(status_code=400, detail="label is required")
 
-    definition_key = str((body or {}).get("definition_key") or "").strip()
-    definition_id = str((body or {}).get("definition_id") or "").strip()
     definition = None
-    if definition_key:
-        definition = db.query(JobDefinition).filter(
-            JobDefinition.key == definition_key,
-            JobDefinition.is_active.is_(True),
-        ).first()
-    elif definition_id:
-        parsed_definition_id = _parse_uuid_or_400(definition_id)
-        definition = db.query(JobDefinition).filter(
-            JobDefinition.id == parsed_definition_id,
-            JobDefinition.is_active.is_(True),
-        ).first()
+    workflow_definition = None
+
+    if trigger_type == "event":
+        definition_key = str((body or {}).get("definition_key") or "").strip()
+        definition_id = str((body or {}).get("definition_id") or "").strip()
+        if definition_key:
+            definition = db.query(JobDefinition).filter(
+                JobDefinition.key == definition_key,
+                JobDefinition.is_active.is_(True),
+            ).first()
+        elif definition_id:
+            parsed_definition_id = _parse_uuid_or_400(definition_id)
+            definition = db.query(JobDefinition).filter(
+                JobDefinition.id == parsed_definition_id,
+                JobDefinition.is_active.is_(True),
+            ).first()
+        else:
+            raise HTTPException(status_code=400, detail="definition_key or definition_id is required for event trigger")
+        if not definition:
+            raise HTTPException(status_code=404, detail="Active job definition not found")
     else:
-        raise HTTPException(status_code=400, detail="definition_key or definition_id is required")
-    if not definition:
-        raise HTTPException(status_code=404, detail="Active job definition not found")
+        workflow_key = str((body or {}).get("workflow_key") or "").strip()
+        workflow_id = str((body or {}).get("workflow_definition_id") or "").strip()
+        if workflow_key:
+            workflow_definition = db.query(WorkflowDefinition).filter(
+                WorkflowDefinition.key == workflow_key,
+                WorkflowDefinition.is_active.is_(True),
+            ).first()
+        elif workflow_id:
+            parsed_wf_id = _parse_uuid_or_400(workflow_id)
+            workflow_definition = db.query(WorkflowDefinition).filter(
+                WorkflowDefinition.id == parsed_wf_id,
+                WorkflowDefinition.is_active.is_(True),
+            ).first()
+        else:
+            raise HTTPException(status_code=400, detail="workflow_key or workflow_definition_id is required for schedule trigger")
+        if not workflow_definition:
+            raise HTTPException(status_code=404, detail="Active workflow definition not found")
 
     payload_template = (body or {}).get("payload_template") or {}
     if not isinstance(payload_template, dict):
@@ -610,7 +656,8 @@ async def create_job_trigger(
         event_name=event_name,
         cron_expr=cron_expr,
         timezone=timezone_name,
-        definition_id=definition.id,
+        definition_id=definition.id if definition else None,
+        workflow_definition_id=workflow_definition.id if workflow_definition else None,
         payload_template=payload_template,
         dedupe_window_seconds=_to_int(
             (body or {}).get("dedupe_window_seconds"),
@@ -625,6 +672,7 @@ async def create_job_trigger(
     db.commit()
     db.refresh(row)
     row.definition = definition
+    row.workflow_definition = workflow_definition
     return _serialize_trigger(row)
 
 
@@ -637,7 +685,10 @@ async def update_job_trigger(
 ):
     """Update global trigger (super-admin)."""
     parsed_trigger_id = _parse_uuid_or_400(trigger_id)
-    row = db.query(JobTrigger).options(joinedload(JobTrigger.definition)).filter(
+    row = db.query(JobTrigger).options(
+        joinedload(JobTrigger.definition),
+        joinedload(JobTrigger.workflow_definition),
+    ).filter(
         JobTrigger.id == parsed_trigger_id,
         JobTrigger.tenant_id.is_(None),
     ).first()
@@ -700,6 +751,26 @@ async def update_job_trigger(
             raise HTTPException(status_code=404, detail="Active job definition not found")
         row.definition_id = next_definition.id
         row.definition = next_definition
+
+    if "workflow_key" in (body or {}) or "workflow_definition_id" in (body or {}):
+        next_workflow = None
+        workflow_key = str((body or {}).get("workflow_key") or "").strip()
+        workflow_id = str((body or {}).get("workflow_definition_id") or "").strip()
+        if workflow_key:
+            next_workflow = db.query(WorkflowDefinition).filter(
+                WorkflowDefinition.key == workflow_key,
+                WorkflowDefinition.is_active.is_(True),
+            ).first()
+        elif workflow_id:
+            parsed_wf_id = _parse_uuid_or_400(workflow_id)
+            next_workflow = db.query(WorkflowDefinition).filter(
+                WorkflowDefinition.id == parsed_wf_id,
+                WorkflowDefinition.is_active.is_(True),
+            ).first()
+        if not next_workflow:
+            raise HTTPException(status_code=404, detail="Active workflow definition not found")
+        row.workflow_definition_id = next_workflow.id
+        row.workflow_definition = next_workflow
 
     row.updated_at = _now_utc()
     db.commit()
@@ -859,6 +930,16 @@ async def delete_workflow_definition(
     if active_runs:
         raise HTTPException(status_code=409, detail="Cannot delete workflow with running executions")
 
+    # Delete historical runs (and their step_runs via cascade) before deleting the definition
+    historical_runs = (
+        db.query(WorkflowRun)
+        .filter(WorkflowRun.workflow_definition_id == row.id)
+        .all()
+    )
+    for run in historical_runs:
+        db.delete(run)
+    db.flush()
+
     db.delete(row)
     db.commit()
     return {"deleted": True, "workflow_id": str(parsed_id)}
@@ -942,11 +1023,7 @@ async def list_workflow_runs(
     db: Session = Depends(get_db),
 ):
     """List workflow runs for tenant."""
-    try:
-        reconcile_running_workflows(db, limit_runs=200)
-        db.commit()
-    except Exception:
-        db.rollback()
+    _maybe_reconcile(db)
 
     status_value = str(status or "").strip().lower() or None
     if status_value and status_value not in _VALID_WORKFLOW_STATUSES:
@@ -974,6 +1051,62 @@ async def list_workflow_runs(
     }
 
 
+@router.get("/workflows/runs/all")
+async def list_all_workflow_runs(
+    status: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    _admin: UserProfile = Depends(require_super_admin),
+    db: Session = Depends(get_db),
+):
+    """List workflow runs across all tenants (super-admin)."""
+    _maybe_reconcile(db)
+
+    status_value = str(status or "").strip().lower() or None
+    if status_value and status_value not in _VALID_WORKFLOW_STATUSES:
+        raise HTTPException(status_code=400, detail="Invalid workflow status filter")
+
+    query = (
+        db.query(WorkflowRun)
+        .options(
+            joinedload(WorkflowRun.definition),
+        )
+    )
+    if status_value:
+        query = query.filter(WorkflowRun.status == status_value)
+    total = int(query.order_by(None).count() or 0)
+    rows = query.order_by(WorkflowRun.queued_at.desc(), WorkflowRun.id.desc()).limit(limit).offset(offset).all()
+
+    # Build tenant name lookup
+    tenant_ids = list({row.tenant_id for row in rows})
+    tenant_names = {}
+    if tenant_ids:
+        tenants = db.query(TenantModel.id, TenantModel.identifier).filter(TenantModel.id.in_(tenant_ids)).all()
+        tenant_names = {str(t.id): t.identifier for t in tenants}
+
+    def _serialize_run_slim(run: WorkflowRun) -> dict:
+        definition = getattr(run, "definition", None)
+        return {
+            "id": str(run.id),
+            "tenant_id": str(run.tenant_id),
+            "tenant_name": tenant_names.get(str(run.tenant_id), str(run.tenant_id)),
+            "workflow_key": str(getattr(definition, "key", "") or ""),
+            "status": run.status,
+            "failure_policy": run.failure_policy,
+            "error_text": run.last_error,
+            "queued_at": run.queued_at,
+            "started_at": run.started_at,
+            "finished_at": run.finished_at,
+        }
+
+    return {
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "runs": [_serialize_run_slim(row) for row in rows],
+    }
+
+
 @router.get("/workflows/runs/{run_id}")
 async def get_workflow_run(
     run_id: str,
@@ -982,11 +1115,7 @@ async def get_workflow_run(
     db: Session = Depends(get_db),
 ):
     """Fetch one workflow run with step state."""
-    try:
-        reconcile_running_workflows(db, limit_runs=200)
-        db.commit()
-    except Exception:
-        db.rollback()
+    _maybe_reconcile(db)
 
     run = _workflow_run_or_404(db, tenant, run_id)
     return _serialize_workflow_run(run, include_steps=True)

@@ -8,6 +8,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from fastapi.responses import StreamingResponse
@@ -48,18 +49,17 @@ router = APIRouter(
 class GuestIdentity:
     supabase_uid: uuid.UUID
     email: str
-    tenant_id: uuid.UUID
+    tenant_id: Optional[uuid.UUID]
 
 
 async def _get_guest_identity(
     authorization: Optional[str] = Header(None),
-    x_tenant_id: str = Header(..., alias="X-Tenant-ID"),
+    x_tenant_id: Optional[str] = Header(None, alias="X-Tenant-ID"),
 ) -> GuestIdentity:
-    """Validate the JWT for a guest user.
+    """Validate the JWT for an authenticated user on guest endpoints.
 
     - Verifies signature via Supabase JWKS.
-    - Requires user_role == 'guest' in the JWT claims (set by Custom Access Token Hook).
-    - Requires X-Tenant-ID to be present in the JWT's tenant_ids claim.
+    - Optionally scopes to X-Tenant-ID when provided.
     """
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing authorization token.")
@@ -70,16 +70,9 @@ async def _get_guest_identity(
     except JWTError:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token.")
 
-    if claims.get("user_role") != "guest":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Guest access only.")
-
-    tenant_ids = claims.get("tenant_ids") or []
-    if x_tenant_id not in tenant_ids:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized for this tenant.")
-
     try:
         guest_uid = uuid.UUID(claims["sub"])
-        tenant_id = uuid.UUID(x_tenant_id)
+        tenant_id = uuid.UUID(x_tenant_id) if x_tenant_id else None
     except (KeyError, ValueError):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token claims.")
 
@@ -95,21 +88,18 @@ def _get_active_share(
 ) -> ListShare:
     """Return the active ListShare for (list_id, guest_uid), or raise 403."""
     now = datetime.now(tz=timezone.utc)
-    email_normalized = (guest.email or "").strip().lower()
-    identity_filter = [ListShare.guest_uid == guest.supabase_uid]
-    if email_normalized:
-        identity_filter.append(func.lower(ListShare.guest_email) == email_normalized)
-    share = (
+    query = (
         db.query(ListShare)
         .filter(
             ListShare.list_id == list_id,
-            or_(*identity_filter),
-            ListShare.tenant_id == guest.tenant_id,
+            ListShare.guest_uid == guest.supabase_uid,
             ListShare.revoked_at.is_(None),
             (ListShare.expires_at.is_(None)) | (ListShare.expires_at > now),
         )
-        .first()
     )
+    if guest.tenant_id is not None:
+        query = query.filter(ListShare.tenant_id == guest.tenant_id)
+    share = query.first()
     if not share:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -187,21 +177,20 @@ async def get_guest_lists(
     db: Session = Depends(get_db),
 ):
     """Fetch all lists accessible to this guest."""
-    # Find all active shares for this guest in this tenant
-    email_normalized = (guest.email or "").strip().lower()
-    identity_filter = [ListShare.guest_uid == guest.supabase_uid]
-    if email_normalized:
-        identity_filter.append(func.lower(ListShare.guest_email) == email_normalized)
+    now = datetime.now(tz=timezone.utc)
+    # Find all active shares for this authenticated user.
 
-    shares = (
+    shares_query = (
         db.query(ListShare)
         .filter(
-            or_(*identity_filter),
-            ListShare.tenant_id == guest.tenant_id,
+            ListShare.guest_uid == guest.supabase_uid,
             ListShare.revoked_at.is_(None),
+            (ListShare.expires_at.is_(None)) | (ListShare.expires_at > now),
         )
-        .all()
     )
+    if guest.tenant_id is not None:
+        shares_query = shares_query.filter(ListShare.tenant_id == guest.tenant_id)
+    shares = shares_query.all()
     share_ids = [share.id for share in shares if share.id is not None]
     reviewed_assets_by_list: dict[int, set[str]] = {}
     if share_ids:
@@ -211,7 +200,6 @@ async def get_guest_lists(
             .filter(
                 MemberRating.share_id.in_(share_ids),
                 MemberRating.user_uid == guest.supabase_uid,
-                MemberRating.tenant_id == guest.tenant_id,
             )
             .all()
         )
@@ -221,7 +209,6 @@ async def get_guest_lists(
             .filter(
                 MemberComment.share_id.in_(share_ids),
                 MemberComment.user_uid == guest.supabase_uid,
-                MemberComment.tenant_id == guest.tenant_id,
             )
             .all()
         )
@@ -269,6 +256,7 @@ async def get_guest_lists(
 
             result.append({
                 "list_id": photo_list.id,
+                "tenant_id": str(share.tenant_id),
                 "title": photo_list.title,
                 "item_count": item_count,
                 "reviewed_count": len(reviewed_assets_by_list.get(photo_list.id, set())),
@@ -288,6 +276,7 @@ async def get_guest_list(
 ):
     """Fetch list metadata and items for a guest."""
     share = _get_active_share(list_id=list_id, guest=guest, db=db)
+    tenant_id = share.tenant_id
 
     photo_list = db.query(PhotoList).filter(PhotoList.id == list_id).first()
     if not photo_list:
@@ -296,7 +285,11 @@ async def get_guest_list(
     list_items = (
         db.query(PhotoListItem)
         .filter(PhotoListItem.list_id == list_id)
-        .order_by(PhotoListItem.added_at)
+        .order_by(
+            PhotoListItem.sort_order.asc(),
+            PhotoListItem.added_at.asc(),
+            PhotoListItem.id.asc(),
+        )
         .all()
     )
 
@@ -307,7 +300,7 @@ async def get_guest_list(
             db.query(ListShare.id)
             .filter(
                 ListShare.list_id == list_id,
-                ListShare.tenant_id == guest.tenant_id,
+                ListShare.tenant_id == tenant_id,
             )
             .all()
         )
@@ -316,12 +309,12 @@ async def get_guest_list(
         db.query(ImageMetadata)
         .filter(
             ImageMetadata.asset_id.in_(asset_ids) if asset_ids else False,
-            ImageMetadata.tenant_id == guest.tenant_id,
+            ImageMetadata.tenant_id == tenant_id,
         )
         .all()
     )
     image_by_asset_id = {str(row.asset_id): row for row in image_rows if row.asset_id is not None}
-    tenant = _build_tenant_runtime(db, guest.tenant_id)
+    tenant = _build_tenant_runtime(db, tenant_id)
     assets_by_id = load_assets_for_images(db, image_rows)
     preloaded_thumbnail_urls = bulk_preload_thumbnail_urls(image_rows, tenant, assets_by_id)
     rating_counts_by_asset = {}
@@ -332,7 +325,7 @@ async def get_guest_list(
             .filter(
                 MemberRating.asset_id.in_(asset_ids),
                 MemberRating.share_id.in_(share_ids),
-                MemberRating.tenant_id == guest.tenant_id,
+                MemberRating.tenant_id == tenant_id,
             )
             .group_by(MemberRating.asset_id, MemberRating.rating)
             .all()
@@ -342,7 +335,7 @@ async def get_guest_list(
             .filter(
                 MemberComment.asset_id.in_(asset_ids),
                 MemberComment.share_id.in_(share_ids),
-                MemberComment.tenant_id == guest.tenant_id,
+                MemberComment.tenant_id == tenant_id,
             )
             .group_by(MemberComment.asset_id)
             .all()
@@ -357,6 +350,7 @@ async def get_guest_list(
 
     return {
         "id": photo_list.id,
+        "tenant_id": str(tenant_id),
         "title": photo_list.title,
         "share_permissions": {
             "allow_download_thumbs": bool(share.allow_download_thumbs),
@@ -375,6 +369,7 @@ async def get_guest_list(
                 else None,
                 "rating_counts": rating_counts_by_asset.get(str(item.asset_id), {"0": 0, "1": 0, "2": 0, "3": 0}),
                 "comment_count": comment_counts_by_asset.get(str(item.asset_id), 0),
+                "sort_order": item.sort_order,
                 "added_at": item.added_at.isoformat() if item.added_at else None,
             }
             for item in list_items
@@ -390,21 +385,22 @@ async def get_guest_asset_full(
     db: Session = Depends(get_db),
 ):
     """Stream full-size bytes for an asset in a guest-shared list."""
-    _get_active_share(list_id=list_id, guest=guest, db=db)
+    share = _get_active_share(list_id=list_id, guest=guest, db=db)
+    tenant_id = share.tenant_id
     _assert_asset_in_list(asset_id, list_id, db)
 
     image = (
         db.query(ImageMetadata)
         .filter(
             ImageMetadata.asset_id == asset_id,
-            ImageMetadata.tenant_id == guest.tenant_id,
+            ImageMetadata.tenant_id == tenant_id,
         )
         .first()
     )
     if not image:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Image not found.")
 
-    tenant = _build_tenant_runtime(db, guest.tenant_id)
+    tenant = _build_tenant_runtime(db, tenant_id)
     storage_info = _resolve_storage_or_409(
         image=image,
         tenant=tenant,
@@ -451,10 +447,11 @@ async def create_comment(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="comment_text cannot be empty.")
 
     share = _get_active_share(list_id=list_id, guest=guest, db=db)
+    tenant_id = share.tenant_id
     _assert_asset_in_list(body.asset_id, list_id, db)
 
     comment = MemberComment(
-        tenant_id=guest.tenant_id,
+        tenant_id=tenant_id,
         asset_id=body.asset_id,
         user_uid=guest.supabase_uid,
         comment_text=body.comment_text.strip(),
@@ -484,14 +481,15 @@ async def delete_comment(
     db: Session = Depends(get_db),
 ):
     """Delete one of the guest's own comments."""
-    _get_active_share(list_id=list_id, guest=guest, db=db)
+    share = _get_active_share(list_id=list_id, guest=guest, db=db)
+    tenant_id = share.tenant_id
 
     comment = (
         db.query(MemberComment)
         .filter(
             MemberComment.id == comment_id,
             MemberComment.user_uid == guest.supabase_uid,
-            MemberComment.tenant_id == guest.tenant_id,
+            MemberComment.tenant_id == tenant_id,
         )
         .first()
     )
@@ -514,6 +512,7 @@ async def upsert_rating(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="rating must be between 0 and 3.")
 
     share = _get_active_share(list_id=list_id, guest=guest, db=db)
+    tenant_id = share.tenant_id
     _assert_asset_in_list(body.asset_id, list_id, db)
 
     existing = (
@@ -521,7 +520,7 @@ async def upsert_rating(
         .filter(
             MemberRating.asset_id == body.asset_id,
             MemberRating.user_uid == guest.supabase_uid,
-            MemberRating.tenant_id == guest.tenant_id,
+            MemberRating.tenant_id == tenant_id,
         )
         .first()
     )
@@ -535,7 +534,7 @@ async def upsert_rating(
         rating_row = existing
     else:
         rating_row = MemberRating(
-            tenant_id=guest.tenant_id,
+            tenant_id=tenant_id,
             asset_id=body.asset_id,
             user_uid=guest.supabase_uid,
             rating=body.rating,
@@ -562,6 +561,7 @@ async def get_my_reactions(
 ):
     """Comments on this share + ratings submitted by current guest for this list."""
     share = _get_active_share(list_id=list_id, guest=guest, db=db)
+    tenant_id = share.tenant_id
     list_asset_ids = [
         row[0]
         for row in db.query(PhotoListItem.asset_id).filter(
@@ -571,7 +571,7 @@ async def get_my_reactions(
     ]
 
     comments_query = db.query(MemberComment).filter(
-        MemberComment.tenant_id == guest.tenant_id,
+        MemberComment.tenant_id == tenant_id,
     )
     if list_asset_ids:
         comments_query = comments_query.filter(MemberComment.asset_id.in_(list_asset_ids))
@@ -712,7 +712,7 @@ async def request_magic_link(
 
     try:
         app_url = getattr(settings, "app_url", "")
-        redirect_to = f"{app_url}/guest?tenant_id={tenant_id}"
+        redirect_to = f"{app_url}/guest?{urlencode({'email': email})}"
 
         from zoltag.supabase_admin import generate_magic_link
         link_data = await generate_magic_link(email, redirect_to)

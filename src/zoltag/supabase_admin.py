@@ -24,7 +24,8 @@ def _headers() -> dict:
 async def create_guest_user(email: str, tenant_id: str) -> dict:
     """Create a guest user in Supabase (or update if exists).
 
-    Sets app_metadata.role = 'guest' and adds tenant_id to tenant_ids list.
+    For new users, sets app_metadata.role = 'guest'.
+    For existing users, returns the existing user unchanged.
     Returns user data dict with 'id' field.
     """
     import logging
@@ -37,7 +38,6 @@ async def create_guest_user(email: str, tenant_id: str) -> dict:
         "email_confirm": True,  # Auto-confirm - they'll use magic link to sign in
         "app_metadata": {
             "role": "guest",
-            "tenant_ids": [tenant_id],
         },
     }
 
@@ -47,9 +47,9 @@ async def create_guest_user(email: str, tenant_id: str) -> dict:
         resp = await client.post(url, json=payload, headers=_headers())
 
     if resp.status_code == 422:
-        # User already exists - update metadata
-        logger.info(f"Guest user {email} already exists, updating metadata")
-        user_data = await _upsert_guest_metadata(email, tenant_id)
+        # User already exists - do not mutate existing metadata/role.
+        logger.info(f"Guest user {email} already exists, returning existing user")
+        user_data = await _get_user_by_email(email)
         return user_data
 
     if resp.status_code not in (200, 201):
@@ -64,8 +64,8 @@ async def create_guest_user(email: str, tenant_id: str) -> dict:
 async def invite_user_by_email(email: str, redirect_to: str, tenant_id: str) -> dict:
     """Invite a guest user via Supabase Admin API.
 
-    Creates the user if they don't exist, sends a magic-link invite email,
-    and sets app_metadata.role = 'guest' + appends tenant_id to tenant_ids.
+    Creates the user if they don't exist, sends a magic-link invite email.
+    Existing users are returned unchanged (no role mutation).
     Returns dict with user data and invite_link.
     """
     import logging
@@ -78,7 +78,6 @@ async def invite_user_by_email(email: str, redirect_to: str, tenant_id: str) -> 
         "email_confirm": False,  # Don't auto-confirm so invite email is sent
         "app_metadata": {
             "role": "guest",
-            "tenant_ids": [tenant_id],
         },
     }
 
@@ -91,9 +90,9 @@ async def invite_user_by_email(email: str, redirect_to: str, tenant_id: str) -> 
     logger.info(f"Supabase create user response body: {resp.text}")
 
     if resp.status_code == 422:
-        # User already exists — look them up and update app_metadata
-        logger.info(f"User {email} already exists, updating metadata and resending invite")
-        user_data = await _upsert_guest_metadata(email, tenant_id)
+        # User already exists — look up user without mutating metadata.
+        logger.info(f"User {email} already exists, resending invite")
+        user_data = await _get_user_by_email(email)
         # Send invite email to existing user
         invite_link = await _send_invite_email(email, redirect_to)
         user_data['invite_link'] = invite_link
@@ -219,8 +218,8 @@ async def _send_invite_email(email: str, redirect_to: str) -> str:
     return action_link
 
 
-async def _upsert_guest_metadata(email: str, tenant_id: str) -> dict:
-    """Fetch an existing user by email and append tenant_id to their tenant_ids list."""
+async def _get_user_by_email(email: str) -> dict:
+    """Fetch an existing Supabase user by email."""
     # List users filtered by email
     url = f"{_base_url()}/auth/v1/admin/users"
     async with httpx.AsyncClient() as client:
@@ -230,22 +229,12 @@ async def _upsert_guest_metadata(email: str, tenant_id: str) -> dict:
     users = data.get("users") or []
     if not users:
         raise ValueError(f"Could not find Supabase user for email {email!r}")
-    user = users[0]
-    user_id = user["id"]
-    existing_meta = user.get("app_metadata") or {}
-    existing_ids: list = list(existing_meta.get("tenant_ids") or [])
-    if tenant_id not in existing_ids:
-        existing_ids.append(tenant_id)
+    return users[0]
 
-    patch_url = f"{_base_url()}/auth/v1/admin/users/{user_id}"
-    async with httpx.AsyncClient() as client:
-        resp = await client.put(
-            patch_url,
-            json={"app_metadata": {**existing_meta, "role": "guest", "tenant_ids": existing_ids}},
-            headers=_headers(),
-        )
-    resp.raise_for_status()
-    return resp.json()
+
+async def _upsert_guest_metadata(email: str, tenant_id: str) -> dict:
+    """Backward-compatible alias: no-op metadata upsert, returns existing user."""
+    return await _get_user_by_email(email)
 
 
 async def generate_magic_link(email: str, redirect_to: str) -> Optional[dict]:

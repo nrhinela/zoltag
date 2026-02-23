@@ -140,6 +140,8 @@ class ZoltagApp extends LitElement {
       homeSubTab: { type: String },
       curateAdvancedOpen: { type: Boolean },
       curateNoPositivePermatags: { type: Boolean },
+      curateNoPermatagCategories: { type: Array },
+      curateNoPermatagOperator: { type: String },
       activeCurateTagSource: { type: String },
       curateCategoryCards: { type: Array },
       curateAuditTargets: { type: Array },

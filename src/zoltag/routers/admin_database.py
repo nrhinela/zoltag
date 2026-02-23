@@ -100,6 +100,7 @@ async def get_database_monitor(
     db_stats = _row_dict(db_row)
 
     calls_total = None
+    top_queries = []
     try:
         calls_total = db.execute(
             text(
@@ -110,9 +111,51 @@ async def get_database_monitor(
                 """
             )
         ).scalar()
+        top_query_rows = db.execute(
+            text(
+                """
+                select
+                  left(query, 120) as query,
+                  calls::bigint as calls,
+                  round(total_exec_time::numeric, 1) as total_exec_time_ms,
+                  round(mean_exec_time::numeric, 2) as mean_exec_time_ms,
+                  rows::bigint as rows
+                from pg_stat_statements
+                where dbid = (select oid from pg_database where datname = current_database())
+                  and calls > 0
+                order by total_exec_time desc
+                limit 15;
+                """
+            )
+        ).fetchall()
+        top_queries = [_row_dict(r) for r in top_query_rows]
     except Exception:
         # Extension may be unavailable; return null.
         calls_total = None
+        top_queries = []
+
+    table_stats = []
+    try:
+        table_stat_rows = db.execute(
+            text(
+                """
+                select
+                  relname as table_name,
+                  seq_scan::bigint as seq_scan,
+                  idx_scan::bigint as idx_scan,
+                  n_tup_ins::bigint as inserts,
+                  n_tup_upd::bigint as updates,
+                  n_tup_del::bigint as deletes,
+                  n_live_tup::bigint as live_rows
+                from pg_stat_user_tables
+                order by (n_tup_ins + n_tup_upd + n_tup_del) desc
+                limit 20;
+                """
+            )
+        ).fetchall()
+        table_stats = [_row_dict(r) for r in table_stat_rows]
+    except Exception:
+        table_stats = []
 
     transaction_total = int(db_stats.get("xact_commit", 0) or 0) + int(db_stats.get("xact_rollback", 0) or 0)
 
@@ -127,5 +170,7 @@ async def get_database_monitor(
             "transactions_total": transaction_total,
             "calls_total": int(calls_total) if calls_total is not None else None,
         },
+        "top_queries": top_queries,
+        "table_stats": table_stats,
     }
 

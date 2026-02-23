@@ -118,6 +118,9 @@ export class CurateBrowseFolderTab extends LitElement {
       categoryFilterOperator: undefined,
       categoryFilterSource: 'permatags',
       textQuery: '',
+      noPermatagCategories: [],
+      noPermatagUntagged: false,
+      noPermatagOperator: 'AND',
     };
     this.listExcludeId = '';
 
@@ -955,13 +958,16 @@ export class CurateBrowseFolderTab extends LitElement {
       rating: undefined,
       ratingOperator: undefined,
       permatagPositiveMissing: false,
+      noPermatagCategories: [],
+      noPermatagUntagged: false,
+      noPermatagOperator: 'AND',
     };
 
     chips.forEach((chip) => {
       switch (chip.type) {
         case 'keyword': {
           if (chip.untagged || chip.value === '__untagged__') {
-            nextFilters.permatagPositiveMissing = true;
+            nextFilters.noPermatagUntagged = true;
             break;
           }
           const keywordsByCategory = chip.keywordsByCategory && typeof chip.keywordsByCategory === 'object'
@@ -1003,6 +1009,19 @@ export class CurateBrowseFolderTab extends LitElement {
         case 'text_search':
           nextFilters.textQuery = chip.value || '';
           break;
+        case 'tag_coverage': {
+          const categories = Array.isArray(chip.noPermatagCategories)
+            ? chip.noPermatagCategories
+            : (chip.category ? [chip.category] : []);
+          nextFilters.noPermatagCategories = Array.from(
+            new Set(categories.map((value) => String(value || '').trim()).filter(Boolean))
+          );
+          nextFilters.noPermatagUntagged = Boolean(chip.includeUntagged || chip.untagged || chip.value === '__untagged__');
+          nextFilters.noPermatagOperator = String(chip.operator || 'AND').trim().toUpperCase() === 'OR'
+            ? 'OR'
+            : 'AND';
+          break;
+        }
       }
     });
 
@@ -1263,7 +1282,7 @@ export class CurateBrowseFolderTab extends LitElement {
             .keywords=${this.keywords}
             .activeFilters=${this.browseChipFilters}
             .lists=${this._lists}
-            .availableFilterTypes=${['keyword', 'rating', 'list', 'filename', 'text_search']}
+            .availableFilterTypes=${['keyword', 'rating', 'list', 'tag_coverage', 'filename', 'text_search']}
             .renderSortControls=${() => html`
               <div class="flex items-center gap-2">
                 <span class="text-sm font-semibold text-gray-700">Sort:</span>

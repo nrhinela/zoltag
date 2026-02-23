@@ -7,6 +7,13 @@ function fmtNumber(value) {
   return n.toLocaleString();
 }
 
+function fmtMs(value) {
+  const n = Number(value ?? null);
+  if (!Number.isFinite(n)) return '--';
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}s`;
+  return `${n.toFixed(1)}ms`;
+}
+
 function fmtDate(value) {
   if (!value) return '--';
   const d = new Date(value);
@@ -304,6 +311,74 @@ export class AdminDatabaseMonitor extends LitElement {
     `;
   }
 
+  _renderTopQueries() {
+    const rows = Array.isArray(this.snapshot?.top_queries) ? this.snapshot.top_queries : [];
+    return html`
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Query (truncated)</th>
+              <th>Calls</th>
+              <th>Total Time</th>
+              <th>Avg Time</th>
+              <th>Rows</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.length === 0 ? html`
+              <tr><td colspan="5">No data (pg_stat_statements may be unavailable)</td></tr>
+            ` : rows.map((row) => html`
+              <tr>
+                <td style="max-width:420px; white-space:pre-wrap; font-family:monospace; font-size:11px; word-break:break-all;">${row.query || ''}</td>
+                <td>${fmtNumber(row.calls)}</td>
+                <td>${fmtMs(row.total_exec_time_ms)}</td>
+                <td>${fmtMs(row.mean_exec_time_ms)}</td>
+                <td>${fmtNumber(row.rows)}</td>
+              </tr>
+            `)}
+          </tbody>
+        </table>
+      </div>
+    `;
+  }
+
+  _renderTableStats() {
+    const rows = Array.isArray(this.snapshot?.table_stats) ? this.snapshot.table_stats : [];
+    return html`
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Table</th>
+              <th>Live Rows</th>
+              <th>Seq Scans</th>
+              <th>Idx Scans</th>
+              <th>Inserts</th>
+              <th>Updates</th>
+              <th>Deletes</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.length === 0 ? html`
+              <tr><td colspan="7">No table stats available</td></tr>
+            ` : rows.map((row) => html`
+              <tr>
+                <td style="font-family:monospace; font-weight:${row.table_name === 'machine_tags' ? '700' : '400'};">${row.table_name}</td>
+                <td>${fmtNumber(row.live_rows)}</td>
+                <td>${fmtNumber(row.seq_scan)}</td>
+                <td>${fmtNumber(row.idx_scan)}</td>
+                <td>${fmtNumber(row.inserts)}</td>
+                <td>${fmtNumber(row.updates)}</td>
+                <td>${fmtNumber(row.deletes)}</td>
+              </tr>
+            `)}
+          </tbody>
+        </table>
+      </div>
+    `;
+  }
+
   render() {
     return html`
       <div class="panel">
@@ -328,6 +403,12 @@ export class AdminDatabaseMonitor extends LitElement {
 
         <h3 style="margin: 0 0 8px 0; font-size: 14px; color: #111827;">Process Counts</h3>
         ${this._renderProcesses()}
+
+        <h3 style="margin: 8px 0 8px 0; font-size: 14px; color: #111827;">Top Queries by Total Time (pg_stat_statements)</h3>
+        ${this._renderTopQueries()}
+
+        <h3 style="margin: 8px 0 8px 0; font-size: 14px; color: #111827;">Table Write/Read Volume (since stats reset)</h3>
+        ${this._renderTableStats()}
 
         <h3 style="margin: 8px 0 8px 0; font-size: 14px; color: #111827;">Recent Samples (Session)</h3>
         ${this._renderHistory()}

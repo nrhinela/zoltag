@@ -128,7 +128,13 @@ export class ShareListModal extends LitElement {
         method: 'GET',
         tenantId: this.tenantId,
       });
-      this.existingShares = shares || [];
+      this.existingShares = Array.isArray(shares)
+        ? [...shares].sort((a, b) => {
+          const aTs = a?.created_at ? new Date(a.created_at).getTime() : 0;
+          const bTs = b?.created_at ? new Date(b.created_at).getTime() : 0;
+          return bTs - aTs;
+        })
+        : [];
       this.requestUpdate();
     } catch (error) {
       console.error('Failed to load shares:', error);
@@ -171,6 +177,13 @@ export class ShareListModal extends LitElement {
     if (!expiresAt) return 'Never';
     const date = new Date(expiresAt);
     return date.toLocaleDateString();
+  }
+
+  _formatCreatedDate(createdAt) {
+    if (!createdAt) return 'Unknown';
+    const date = new Date(createdAt);
+    if (Number.isNaN(date.getTime())) return 'Unknown';
+    return date.toLocaleString();
   }
 
   updated(changedProperties) {
@@ -315,6 +328,9 @@ export class ShareListModal extends LitElement {
                   <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
                     <div class="flex-1">
                       <div class="text-sm font-medium text-gray-900">${share.guest_email}</div>
+                      <div class="text-xs text-gray-500">
+                        Created: ${this._formatCreatedDate(share.created_at)}
+                      </div>
                       <div class="text-xs text-gray-500">
                         Expires: ${this._formatExpiryDate(share.expires_at)}
                         ${share.allow_download_originals ? ' • Can download originals' :

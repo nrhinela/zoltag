@@ -650,12 +650,17 @@ def train_keyword_models(tenant_id: str, min_positive: Optional[int]):
     model_name = getattr(tagger, "model_name", settings.tagging_model)
     model_version = getattr(tagger, "model_version", model_name)
 
+    config_mgr = ConfigManager(session, tenant.id)
+    all_keywords = config_mgr.get_all_keywords()
+    keyword_to_category = {kw['keyword']: kw['category'] for kw in all_keywords}
+
     result = build_keyword_models(
         session,
         tenant_id=tenant.id,
         model_name=model_name,
         model_version=model_version,
         min_positive=min_positive or settings.keyword_model_min_positive,
+        keyword_to_category=keyword_to_category,
     )
     session.commit()
     click.echo(f"✓ Trained: {result['trained']} · Skipped: {result['skipped']}")

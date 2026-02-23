@@ -345,6 +345,9 @@ export class SearchTab extends LitElement {
       textQuery: '',
       mediaType: 'all',
       permatagPositiveMissing: false,
+      noPermatagCategories: [],
+      noPermatagUntagged: false,
+      noPermatagOperator: 'AND',
       listId: undefined,
       listExcludeId: undefined,
       hybridVectorWeight: undefined,
@@ -378,6 +381,16 @@ export class SearchTab extends LitElement {
       ...normalized,
       keywords: this._cloneKeywordFilters(normalized.keywords),
       operators: { ...(normalized.operators || {}) },
+      noPermatagCategories: Array.isArray(normalized.noPermatagCategories)
+        ? [...normalized.noPermatagCategories]
+        : [],
+      noPermatagUntagged: Boolean(
+        normalized.noPermatagUntagged
+        ?? normalized.permatagPositiveMissing
+      ),
+      noPermatagOperator: String(normalized.noPermatagOperator || 'AND').trim().toUpperCase() === 'OR'
+        ? 'OR'
+        : 'AND',
     };
   }
 
@@ -1852,14 +1865,7 @@ export class SearchTab extends LitElement {
     }
     const mediaType = String(filters.mediaType || filters.media_type || 'all').trim().toLowerCase();
 
-    if (filters.permatagPositiveMissing) {
-      nextChips.push({
-        type: 'keyword',
-        untagged: true,
-        displayLabel: 'Keywords',
-        displayValue: 'Untagged',
-      });
-    } else if (filters.keywords && typeof filters.keywords === 'object' && Object.keys(filters.keywords).length > 0) {
+    if (filters.keywords && typeof filters.keywords === 'object' && Object.keys(filters.keywords).length > 0) {
       const keywordsByCategory = {};
       for (const [category, rawValues] of Object.entries(filters.keywords)) {
         const values = Array.isArray(rawValues)
@@ -1885,6 +1891,32 @@ export class SearchTab extends LitElement {
           displayValue: 'Multiple',
         });
       }
+    }
+
+    const noPermatagCategories = Array.isArray(filters.noPermatagCategories)
+      ? Array.from(new Set(filters.noPermatagCategories.map((value) => String(value || '').trim()).filter(Boolean)))
+      : [];
+    const noPermatagUntagged = Boolean(
+      filters.noPermatagUntagged
+      ?? filters.permatagPositiveMissing
+    );
+    const noPermatagOperator = String(filters.noPermatagOperator || 'AND').trim().toUpperCase() === 'OR'
+      ? 'OR'
+      : 'AND';
+    if (noPermatagCategories.length || noPermatagUntagged) {
+      const displayValues = [];
+      if (noPermatagUntagged) displayValues.push('Untagged');
+      displayValues.push(...noPermatagCategories.map((category) => `No ${category} tags`));
+      nextChips.push({
+        type: 'tag_coverage',
+        noPermatagCategories,
+        includeUntagged: noPermatagUntagged,
+        operator: noPermatagOperator,
+        displayLabel: 'Tag Coverage',
+        displayValue: displayValues.length <= 2
+          ? displayValues.join(', ')
+          : `${displayValues.length} rules`,
+      });
     }
 
     if (filters.ratingOperator === 'is_null') {
@@ -2208,6 +2240,9 @@ export class SearchTab extends LitElement {
       textQuery: shouldPreserveTextSearch
         ? String(currentFilters.textQuery || this.vectorstoreQuery || '').trim()
         : '',
+      noPermatagCategories: [],
+      noPermatagUntagged: false,
+      noPermatagOperator: 'AND',
       hybridVectorWeight: shouldPreserveTextSearch ? currentFilters.hybridVectorWeight : undefined,
       hybridLexicalWeight: shouldPreserveTextSearch ? currentFilters.hybridLexicalWeight : undefined,
       listId: undefined,
@@ -2219,7 +2254,7 @@ export class SearchTab extends LitElement {
       switch (chip.type) {
         case 'keyword': {
           if (chip.untagged || chip.value === '__untagged__') {
-            searchFilters.permatagPositiveMissing = true;
+            searchFilters.noPermatagUntagged = true;
             break;
           }
           const keywordsByCategory = chip.keywordsByCategory && typeof chip.keywordsByCategory === 'object'
@@ -2268,6 +2303,19 @@ export class SearchTab extends LitElement {
         case 'media':
           searchFilters.mediaType = chip.value === 'video' ? 'video' : (chip.value === 'image' ? 'image' : 'all');
           break;
+        case 'tag_coverage': {
+          const categories = Array.isArray(chip.noPermatagCategories)
+            ? chip.noPermatagCategories
+            : (chip.category ? [chip.category] : []);
+          searchFilters.noPermatagCategories = Array.from(
+            new Set(categories.map((value) => String(value || '').trim()).filter(Boolean))
+          );
+          searchFilters.noPermatagUntagged = Boolean(chip.includeUntagged || chip.untagged || chip.value === '__untagged__');
+          searchFilters.noPermatagOperator = String(chip.operator || 'AND').trim().toUpperCase() === 'OR'
+            ? 'OR'
+            : 'AND';
+          break;
+        }
         case 'similarity':
           break;
       }
@@ -3076,7 +3124,7 @@ export class SearchTab extends LitElement {
               .keywords=${this.keywords}
               .imageStats=${this.imageStats}
               .activeFilters=${this.searchChipFilters}
-              .availableFilterTypes=${['keyword', 'rating', 'media', 'folder', 'list', 'filename', 'text_search']}
+              .availableFilterTypes=${['keyword', 'rating', 'media', 'folder', 'list', 'tag_coverage', 'filename', 'text_search']}
               .hideFiltersSection=${Boolean(this.searchSimilarityAssetUuid)}
               .dropboxFolders=${this.searchDropboxOptions || []}
               .lists=${this.searchLists}

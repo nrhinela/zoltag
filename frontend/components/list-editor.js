@@ -1,4 +1,5 @@
 import { LitElement, html, css } from 'lit';
+import { keyed } from 'lit/directives/keyed.js';
 import { tailwind } from './tailwind-lit.js';
 import {
   getLists,
@@ -7,6 +8,7 @@ import {
   deleteList,
   getListItems,
   deleteListItem,
+  reorderListItems,
   fetchWithAuth,
   listAssetVariants,
   getAssetVariantContent,
@@ -107,6 +109,201 @@ class ListEditor extends LitElement {
       justify-content: space-between;
       gap: 8px;
     }
+    .list-view-toggle {
+      display: inline-flex;
+      align-items: center;
+      border: 1px solid #d1d5db;
+      border-radius: 0.5rem;
+      overflow: hidden;
+      background: #ffffff;
+    }
+    .list-view-toggle-btn {
+      border: none;
+      background: #ffffff;
+      color: #4b5563;
+      padding: 0.375rem 0.65rem;
+      font-size: 0.8rem;
+      font-weight: 600;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      cursor: pointer;
+    }
+    .list-view-toggle-btn + .list-view-toggle-btn {
+      border-left: 1px solid #e5e7eb;
+    }
+    .list-view-toggle-btn.active {
+      background: #eff6ff;
+      color: #1d4ed8;
+    }
+    .slideshow-shell {
+      border: 1px solid #e5e7eb;
+      border-radius: 0.75rem;
+      background: #ffffff;
+      overflow: hidden;
+    }
+    .slideshow-stage-wrap {
+      position: relative;
+      min-height: 420px;
+      height: min(72vh, 760px);
+      background: radial-gradient(circle at top right, rgba(99, 102, 241, 0.09), transparent 40%), #0f172a;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+    .slideshow-stage {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 18px;
+      box-sizing: border-box;
+      animation: slideshow-enter-right 320ms ease;
+    }
+    .slideshow-stage.from-left {
+      animation-name: slideshow-enter-left;
+    }
+    .slideshow-image {
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+      border-radius: 0.75rem;
+      box-shadow: 0 22px 44px rgba(15, 23, 42, 0.45);
+      cursor: pointer;
+      user-select: none;
+    }
+    .slideshow-nav-btn {
+      position: absolute;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 40px;
+      height: 40px;
+      border: 1px solid rgba(255, 255, 255, 0.24);
+      border-radius: 9999px;
+      background: rgba(15, 23, 42, 0.56);
+      color: #ffffff;
+      font-size: 1.05rem;
+      line-height: 1;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      backdrop-filter: blur(4px);
+      transition: background-color 120ms ease, transform 120ms ease;
+    }
+    .slideshow-nav-btn:hover {
+      background: rgba(15, 23, 42, 0.75);
+      transform: translateY(-50%) scale(1.03);
+    }
+    .slideshow-nav-btn.prev {
+      left: 14px;
+    }
+    .slideshow-nav-btn.next {
+      right: 14px;
+    }
+    .slideshow-nav-btn:disabled {
+      opacity: 0.38;
+      cursor: not-allowed;
+      transform: translateY(-50%);
+    }
+    .slideshow-meta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 12px;
+      border-top: 1px solid #e5e7eb;
+      background: #ffffff;
+      flex-wrap: wrap;
+    }
+    .slideshow-meta-main {
+      min-width: 0;
+      flex: 1;
+    }
+    .slideshow-meta-title {
+      font-size: 0.95rem;
+      font-weight: 700;
+      color: #111827;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .slideshow-meta-sub {
+      margin-top: 2px;
+      font-size: 0.75rem;
+      color: #6b7280;
+    }
+    .slideshow-counter {
+      font-size: 0.78rem;
+      color: #4b5563;
+      border: 1px solid #d1d5db;
+      border-radius: 9999px;
+      padding: 0.2rem 0.55rem;
+      background: #f8fafc;
+      font-weight: 600;
+    }
+    .slideshow-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .slideshow-filmstrip {
+      border-top: 1px solid #e5e7eb;
+      padding: 10px 12px;
+      background: #f8fafc;
+      overflow-x: auto;
+      white-space: nowrap;
+      display: flex;
+      gap: 8px;
+    }
+    .slideshow-thumb {
+      border: 2px solid transparent;
+      border-radius: 0.5rem;
+      width: 72px;
+      height: 72px;
+      overflow: hidden;
+      padding: 0;
+      background: #ffffff;
+      cursor: pointer;
+      flex: 0 0 auto;
+    }
+    .slideshow-thumb.active {
+      border-color: #2563eb;
+      box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.18);
+    }
+    .slideshow-thumb img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    .slideshow-help {
+      margin-top: 8px;
+      font-size: 0.78rem;
+      color: #6b7280;
+    }
+    @keyframes slideshow-enter-right {
+      from {
+        opacity: 0.2;
+        transform: translateX(26px) scale(0.995);
+      }
+      to {
+        opacity: 1;
+        transform: translateX(0) scale(1);
+      }
+    }
+    @keyframes slideshow-enter-left {
+      from {
+        opacity: 0.2;
+        transform: translateX(-26px) scale(0.995);
+      }
+      to {
+        opacity: 1;
+        transform: translateX(0) scale(1);
+      }
+    }
   `];
 
   static properties = {
@@ -133,6 +330,13 @@ class ListEditor extends LitElement {
     renderCuratePermatagSummary: { type: Object },
     formatCurateDate: { type: Object },
     shareModalActive: { type: Boolean },
+    listViewMode: { type: String },
+    slideshowIndex: { type: Number },
+    slideshowDirection: { type: Number },
+    slideshowFrameKey: { type: Number },
+    slideshowFullImageUrl: { type: String },
+    slideshowFullImageLoading: { type: Boolean },
+    slideshowFullImageError: { type: String },
   };
 
   constructor() {
@@ -162,6 +366,29 @@ class ListEditor extends LitElement {
     this._isVisible = false;
     this._hasRefreshedOnce = false;
     this._lastInitialSelectionKey = '';
+    this._draggedListItemId = null;
+    this._listOrderBeforeDrag = [];
+    this._isPersistingListOrder = false;
+    this.listViewMode = 'thumb';
+    this.slideshowIndex = 0;
+    this.slideshowDirection = 1;
+    this.slideshowFrameKey = 0;
+    this.slideshowFullImageUrl = '';
+    this.slideshowFullImageLoading = false;
+    this.slideshowFullImageError = '';
+    this._slideshowFullImageId = null;
+    this._slideshowFullImageCache = new Map();
+    this._slideshowFullImageInFlight = new Map();
+    this._slideshowCacheToken = 0;
+    this._slideshowPrefetchQueue = [];
+    this._slideshowPrefetchActive = 0;
+    this._slideshowPrefetchConcurrency = 3;
+    this._slideshowNavUnlockAt = 0;
+    this._slideshowNavUnlockTimer = null;
+    this._slideshowNavCycleKey = 0;
+    this._slideshowNavLockDurationMs = 3000;
+    this._slideshowFullImageAbortController = null;
+    this._handleKeydown = this._handleKeydown.bind(this);
   }
 
   // Use Light DOM instead of Shadow DOM to access Tailwind CSS classes
@@ -171,10 +398,18 @@ class ListEditor extends LitElement {
 
   connectedCallback() {
     super.connectedCallback();
+    window.addEventListener('keydown', this._handleKeydown);
     this.fetchLists();
   }
 
   disconnectedCallback() {
+    window.removeEventListener('keydown', this._handleKeydown);
+    this._abortSlideshowImageLoad();
+    this._clearSlideshowFullImageCache();
+    if (this._slideshowNavUnlockTimer) {
+      clearTimeout(this._slideshowNavUnlockTimer);
+      this._slideshowNavUnlockTimer = null;
+    }
     super.disconnectedCallback();
     if (this._refreshTimer) {
       clearTimeout(this._refreshTimer);
@@ -194,6 +429,18 @@ class ListEditor extends LitElement {
       || changedProperties.has('lists')
     ) {
       this._applyInitialListSelection();
+    }
+  }
+
+  updated(changedProperties) {
+    if (
+      changedProperties.has('listViewMode')
+      || changedProperties.has('slideshowIndex')
+      || changedProperties.has('listItems')
+      || changedProperties.has('selectedList')
+      || changedProperties.has('tenant')
+    ) {
+      this._syncSlideshowFullImage();
     }
   }
 
@@ -336,6 +583,13 @@ class ListEditor extends LitElement {
     if (!list?.id) return;
     this.openingListId = String(list.id);
     this.selectedList = list;
+    this.listViewMode = 'thumb';
+    this.slideshowIndex = 0;
+    this.slideshowDirection = 1;
+    this.slideshowFrameKey = 0;
+    this._abortSlideshowImageLoad();
+    this._clearSlideshowFullImageCache();
+    this._resetSlideshowFullImageState();
     this.listItems = [];
     this.isLoadingItems = true;
     try {
@@ -360,6 +614,11 @@ class ListEditor extends LitElement {
     this.selectedList = null;
     this.listItems = [];
     this.editingSelectedList = false;
+    this.listViewMode = 'thumb';
+    this.slideshowIndex = 0;
+    this._abortSlideshowImageLoad();
+    this._clearSlideshowFullImageCache();
+    this._resetSlideshowFullImageState();
   }
 
   async _removeListItem(itemId) {
@@ -371,6 +630,87 @@ class ListEditor extends LitElement {
       await this.fetchLists({ force: true });
     } catch (error) {
       console.error('Error deleting list item:', error);
+    }
+  }
+
+  _getListItemByImageId(imageId) {
+    const normalizedImageId = Number(imageId);
+    if (!Number.isFinite(normalizedImageId)) return null;
+    const items = Array.isArray(this.listItems) ? this.listItems : [];
+    return items.find((item) => {
+      const image = item?.image || item?.photo || {};
+      const itemImageId = Number(image.id ?? item.photo_id ?? item.id);
+      return Number.isFinite(itemImageId) && itemImageId === normalizedImageId;
+    }) || null;
+  }
+
+  _getCurrentListItemOrder() {
+    const items = Array.isArray(this.listItems) ? this.listItems : [];
+    return items.map((item) => Number(item?.id)).filter((id) => Number.isInteger(id) && id > 0);
+  }
+
+  _handleListItemDragStart(event, image) {
+    if (!this.selectedList?.can_edit) {
+      event.preventDefault();
+      return;
+    }
+    const item = this._getListItemByImageId(image?.id);
+    if (!item?.id) {
+      event.preventDefault();
+      return;
+    }
+    this._draggedListItemId = Number(item.id);
+    this._listOrderBeforeDrag = this._getCurrentListItemOrder();
+    if (event?.dataTransfer) {
+      event.dataTransfer.effectAllowed = 'move';
+      event.dataTransfer.setData('text/plain', String(item.id));
+    }
+  }
+
+  _handleListItemDragOver(event, targetImageId) {
+    if (!this.selectedList?.can_edit) return;
+    if (!this._draggedListItemId) return;
+    event.preventDefault();
+    const targetItem = this._getListItemByImageId(targetImageId);
+    if (!targetItem?.id) return;
+    const targetItemId = Number(targetItem.id);
+    if (!Number.isInteger(targetItemId) || targetItemId === this._draggedListItemId) return;
+    const items = Array.isArray(this.listItems) ? [...this.listItems] : [];
+    const fromIndex = items.findIndex((item) => Number(item?.id) === this._draggedListItemId);
+    const toIndex = items.findIndex((item) => Number(item?.id) === targetItemId);
+    if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return;
+    const [moved] = items.splice(fromIndex, 1);
+    items.splice(toIndex, 0, moved);
+    this.listItems = items;
+  }
+
+  async _handleListItemDragEnd() {
+    const draggedItemId = this._draggedListItemId;
+    this._draggedListItemId = null;
+    if (!this.selectedList?.can_edit || !draggedItemId) return;
+    const before = Array.isArray(this._listOrderBeforeDrag) ? this._listOrderBeforeDrag : [];
+    const after = this._getCurrentListItemOrder();
+    this._listOrderBeforeDrag = [];
+    if (!after.length || JSON.stringify(before) === JSON.stringify(after)) return;
+
+    if (this._isPersistingListOrder) return;
+    this._isPersistingListOrder = true;
+    try {
+      await reorderListItems(this.tenant, this.selectedList.id, after);
+    } catch (error) {
+      console.error('Error reordering list items:', error);
+      // Roll back local order when persistence fails.
+      if (before.length) {
+        const rank = new Map(before.map((itemId, index) => [Number(itemId), index]));
+        this.listItems = [...(Array.isArray(this.listItems) ? this.listItems : [])]
+          .sort((a, b) => {
+            const aRank = rank.has(Number(a?.id)) ? rank.get(Number(a?.id)) : Number.MAX_SAFE_INTEGER;
+            const bRank = rank.has(Number(b?.id)) ? rank.get(Number(b?.id)) : Number.MAX_SAFE_INTEGER;
+            return aRank - bRank;
+          });
+      }
+    } finally {
+      this._isPersistingListOrder = false;
     }
   }
 
@@ -1017,6 +1357,338 @@ class ListEditor extends LitElement {
     this.thumbSize = nextSize;
   }
 
+  _getListImagesForView() {
+    const items = Array.isArray(this.listItems) ? this.listItems : [];
+    const images = items
+      .map((item) => item.image || item.photo || {})
+      .filter((image) => image?.id);
+    const itemByImageId = new Map();
+    items.forEach((item) => {
+      const photo = item.image || item.photo || {};
+      const imageId = Number(photo.id ?? item.photo_id ?? item.id);
+      if (Number.isFinite(imageId)) {
+        itemByImageId.set(imageId, item);
+      }
+    });
+    return { items, images, itemByImageId };
+  }
+
+  _setListViewMode(mode) {
+    const normalized = String(mode || '').toLowerCase() === 'slideshow' ? 'slideshow' : 'thumb';
+    this.listViewMode = normalized;
+    this.slideshowDirection = 1;
+    if (normalized === 'slideshow') {
+      this.slideshowFrameKey += 1;
+    } else {
+      this._abortSlideshowImageLoad();
+      this._resetSlideshowFullImageState();
+      this._clearSlideshowNavigationLock();
+    }
+  }
+
+  _ensureSlideshowIndexInRange(total) {
+    const max = Math.max(0, Number(total || 0) - 1);
+    if (!Number.isFinite(this.slideshowIndex) || this.slideshowIndex < 0) {
+      this.slideshowIndex = 0;
+      return;
+    }
+    if (this.slideshowIndex > max) {
+      this.slideshowIndex = max;
+    }
+  }
+
+  _setSlideshowIndex(index, direction = 1) {
+    const { images } = this._getListImagesForView();
+    const total = images.length;
+    if (!total) {
+      this.slideshowIndex = 0;
+      return;
+    }
+    if (this._isSlideshowNavigationLocked()) return;
+    const next = Math.max(0, Math.min(total - 1, Number(index) || 0));
+    if (next === this.slideshowIndex) return;
+    this.slideshowDirection = direction < 0 ? -1 : 1;
+    this.slideshowIndex = next;
+    this.slideshowFrameKey += 1;
+    const pendingPrefetch = this._prefetchNextSlideshowImages(images, next, 8);
+    if (pendingPrefetch > 0) {
+      this._lockSlideshowNavigation(3000);
+    } else {
+      this._clearSlideshowNavigationLock();
+    }
+  }
+
+  _goToPreviousSlide() {
+    this._setSlideshowIndex(this.slideshowIndex - 1, -1);
+  }
+
+  _goToNextSlide() {
+    this._setSlideshowIndex(this.slideshowIndex + 1, 1);
+  }
+
+  _handleKeydown(event) {
+    if (this.listViewMode !== 'slideshow' || !this.selectedList) return;
+    if (this._isSlideshowNavigationLocked()) return;
+    const target = event?.target;
+    const tag = String(target?.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'textarea' || target?.isContentEditable) return;
+    if (event.key === 'ArrowLeft') {
+      event.preventDefault();
+      this._goToPreviousSlide();
+      return;
+    }
+    if (event.key === 'ArrowRight') {
+      event.preventDefault();
+      this._goToNextSlide();
+    }
+  }
+
+  _isSlideshowNavigationLocked() {
+    return this.listViewMode === 'slideshow' && Date.now() < (this._slideshowNavUnlockAt || 0);
+  }
+
+  _lockSlideshowNavigation(durationMs = 3000) {
+    if (this._slideshowNavUnlockTimer) {
+      clearTimeout(this._slideshowNavUnlockTimer);
+      this._slideshowNavUnlockTimer = null;
+    }
+    const duration = Math.max(0, Number(durationMs) || 0);
+    this._slideshowNavUnlockAt = Date.now() + duration;
+    this.requestUpdate();
+    if (duration > 0) {
+      this._slideshowNavUnlockTimer = setTimeout(() => {
+        this._slideshowNavUnlockTimer = null;
+        this.requestUpdate();
+      }, duration + 10);
+    }
+    this._slideshowNavLockDurationMs = duration;
+    this._slideshowNavCycleKey += 1;
+  }
+
+  _clearSlideshowNavigationLock() {
+    if (this._slideshowNavUnlockTimer) {
+      clearTimeout(this._slideshowNavUnlockTimer);
+      this._slideshowNavUnlockTimer = null;
+    }
+    this._slideshowNavUnlockAt = 0;
+    this._slideshowNavLockDurationMs = 0;
+    this.requestUpdate();
+  }
+
+  _resetSlideshowFullImageState() {
+    this.slideshowFullImageUrl = '';
+    this.slideshowFullImageLoading = false;
+    this.slideshowFullImageError = '';
+    this._slideshowFullImageId = null;
+  }
+
+  _abortSlideshowImageLoad() {
+    if (this._slideshowFullImageAbortController) {
+      this._slideshowFullImageAbortController.abort();
+      this._slideshowFullImageAbortController = null;
+    }
+  }
+
+  _clearSlideshowFullImageCache() {
+    this._slideshowCacheToken += 1;
+    if (this._slideshowFullImageCache?.size) {
+      this._slideshowFullImageCache.forEach((url) => {
+        if (url) {
+          URL.revokeObjectURL(url);
+        }
+      });
+    }
+    this._slideshowFullImageCache = new Map();
+    this._slideshowFullImageInFlight = new Map();
+    this._slideshowPrefetchQueue = [];
+    this._slideshowPrefetchActive = 0;
+  }
+
+  _drainSlideshowPrefetchQueue() {
+    const maxConcurrent = Math.max(1, Number(this._slideshowPrefetchConcurrency) || 1);
+    while (
+      this._slideshowPrefetchActive < maxConcurrent
+      && Array.isArray(this._slideshowPrefetchQueue)
+      && this._slideshowPrefetchQueue.length > 0
+    ) {
+      const task = this._slideshowPrefetchQueue.shift();
+      if (!task || !Number.isFinite(task.imageId)) continue;
+
+      if (task.cacheToken !== this._slideshowCacheToken) {
+        this._slideshowFullImageInFlight.delete(task.imageId);
+        task.resolve(null);
+        continue;
+      }
+
+      const cached = this._slideshowFullImageCache.get(task.imageId);
+      if (cached) {
+        this._slideshowFullImageInFlight.delete(task.imageId);
+        task.resolve(cached);
+        continue;
+      }
+
+      this._slideshowPrefetchActive += 1;
+      fetchWithAuth(`/images/${task.imageId}/full`, {
+        tenantId: this.tenant,
+        responseType: 'blob',
+      })
+        .then((blob) => {
+          if (!blob || task.cacheToken !== this._slideshowCacheToken) return null;
+          const blobUrl = URL.createObjectURL(blob);
+          if (task.cacheToken !== this._slideshowCacheToken) {
+            URL.revokeObjectURL(blobUrl);
+            return null;
+          }
+          this._slideshowFullImageCache.set(task.imageId, blobUrl);
+          // Update filmstrip opacity as each full-size image lands in cache.
+          this.requestUpdate();
+          return blobUrl;
+        })
+        .catch(() => null)
+        .then((blobUrl) => {
+          task.resolve(blobUrl || null);
+        })
+        .finally(() => {
+          this._slideshowPrefetchActive = Math.max(0, this._slideshowPrefetchActive - 1);
+          this._slideshowFullImageInFlight.delete(task.imageId);
+          this._drainSlideshowPrefetchQueue();
+        });
+    }
+  }
+
+  _queueSlideshowImagePrefetch(imageId) {
+    if (!Number.isFinite(imageId) || imageId <= 0 || !this.tenant) {
+      return Promise.resolve(null);
+    }
+    const cached = this._slideshowFullImageCache.get(imageId);
+    if (cached) {
+      return Promise.resolve(cached);
+    }
+    const existingPromise = this._slideshowFullImageInFlight.get(imageId);
+    if (existingPromise) {
+      return existingPromise;
+    }
+
+    const cacheToken = this._slideshowCacheToken;
+    let resolver = null;
+    const promise = new Promise((resolve) => {
+      resolver = resolve;
+    });
+    this._slideshowFullImageInFlight.set(imageId, promise);
+    this._slideshowPrefetchQueue.push({
+      imageId,
+      cacheToken,
+      resolve: resolver,
+    });
+    this._drainSlideshowPrefetchQueue();
+    return promise;
+  }
+
+  _isSlideshowFullImageCached(imageId) {
+    const parsedId = Number(imageId);
+    if (!Number.isFinite(parsedId) || parsedId <= 0) return false;
+    return !!this._slideshowFullImageCache.get(parsedId);
+  }
+
+  _prefetchNextSlideshowImages(images, currentIndex, count = 8) {
+    if (this.listViewMode !== 'slideshow') return 0;
+    if (!Array.isArray(images) || !images.length) return 0;
+    const start = Math.max(0, Number(currentIndex) || 0);
+    const maxPrefetch = Math.max(0, Number(count) || 0);
+    let pendingCount = 0;
+    for (let offset = 1; offset <= maxPrefetch; offset += 1) {
+      const image = images[start + offset];
+      if (!image) break;
+      const imageId = Number(image.id);
+      if (!Number.isFinite(imageId) || imageId <= 0) continue;
+      const cached = this._slideshowFullImageCache.get(imageId);
+      const inFlight = this._slideshowFullImageInFlight.get(imageId);
+      if (cached) continue;
+      this._queueSlideshowImagePrefetch(imageId);
+      if (inFlight || this._slideshowFullImageInFlight.get(imageId)) {
+        pendingCount += 1;
+      }
+    }
+    return pendingCount;
+  }
+
+  async _syncSlideshowFullImage() {
+    if (this.listViewMode !== 'slideshow') return;
+    const { images } = this._getListImagesForView();
+    this._ensureSlideshowIndexInRange(images.length);
+    const currentIndex = this.slideshowIndex;
+    const currentImage = images[currentIndex];
+    const imageId = Number(currentImage?.id);
+    if (!Number.isFinite(imageId) || !this.tenant) {
+      this._abortSlideshowImageLoad();
+      this._resetSlideshowFullImageState();
+      return;
+    }
+
+    // Kick off forward prefetch immediately for the active slide so requests
+    // begin in parallel with the current full-size load.
+    this._prefetchNextSlideshowImages(images, currentIndex, 8);
+
+    const cachedUrl = this._slideshowFullImageCache.get(imageId);
+    if (cachedUrl) {
+      this._abortSlideshowImageLoad();
+      this.slideshowFullImageUrl = cachedUrl;
+      this.slideshowFullImageLoading = false;
+      this.slideshowFullImageError = '';
+      this._slideshowFullImageId = imageId;
+      this._prefetchNextSlideshowImages(images, currentIndex, 8);
+      return;
+    }
+
+    this._abortSlideshowImageLoad();
+    const controller = new AbortController();
+    this._slideshowFullImageAbortController = controller;
+    this.slideshowFullImageLoading = true;
+    this.slideshowFullImageError = '';
+    this.slideshowFullImageUrl = '';
+    this._slideshowFullImageId = imageId;
+
+    try {
+      let blobUrl = null;
+      const inFlightPromise = this._slideshowFullImageInFlight.get(imageId);
+      if (inFlightPromise) {
+        blobUrl = await inFlightPromise;
+      }
+      if (controller.signal.aborted) return;
+      if (!blobUrl) {
+        const fullBlob = await fetchWithAuth(`/images/${imageId}/full`, {
+          tenantId: this.tenant,
+          responseType: 'blob',
+          signal: controller.signal,
+        });
+        if (controller.signal.aborted) return;
+        blobUrl = URL.createObjectURL(fullBlob);
+        this._slideshowFullImageCache.set(imageId, blobUrl);
+      }
+
+      const { images: latestImages } = this._getListImagesForView();
+      const latestImageId = Number(latestImages[this.slideshowIndex]?.id);
+      if (this.listViewMode === 'slideshow' && latestImageId === imageId) {
+        this.slideshowFullImageUrl = blobUrl;
+        this.slideshowFullImageLoading = false;
+        this.slideshowFullImageError = '';
+        this._slideshowFullImageId = imageId;
+        this._prefetchNextSlideshowImages(latestImages, this.slideshowIndex, 8);
+      }
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      this.slideshowFullImageLoading = false;
+      this.slideshowFullImageError = error?.message || 'Failed to load full image';
+      this.slideshowFullImageUrl = '';
+      this._slideshowFullImageId = imageId;
+      this._clearSlideshowNavigationLock();
+    } finally {
+      if (this._slideshowFullImageAbortController === controller) {
+        this._slideshowFullImageAbortController = null;
+      }
+    }
+  }
+
   _renderListSkeleton() {
     return html`
       <div class="mb-4 rounded-xl border border-gray-200 bg-white p-4">
@@ -1180,58 +1852,200 @@ class ListEditor extends LitElement {
                 </div>
               </div>
 
-              <div class="text-sm font-semibold text-gray-700 mb-3">List Items (${this.listItems.length})</div>
+              <div class="mb-3 flex items-center justify-between gap-3">
+                <div class="text-sm font-semibold text-gray-700">List Items (${this.listItems.length})</div>
+                <div class="inline-flex items-center overflow-hidden rounded-lg border border-gray-300 bg-white" role="tablist" aria-label="List view mode">
+                  <button
+                    type="button"
+                    class="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold ${this.listViewMode === 'thumb' ? 'bg-blue-50 text-blue-700' : 'text-gray-600 hover:bg-gray-50'}"
+                    @click=${() => this._setListViewMode('thumb')}
+                    title="Thumbnail view"
+                    aria-selected=${this.listViewMode === 'thumb' ? 'true' : 'false'}
+                  >
+                    <span aria-hidden="true">▦</span>
+                    <span>Thumb</span>
+                  </button>
+                </div>
+              </div>
+              ${this.selectedList.can_edit && this.listViewMode === 'thumb' ? html`
+                <div class="mb-3 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-900">
+                  <span class="font-semibold">Tip:</span>
+                  You can drag and drop list items to change sort order. Changes save automatically.
+                </div>
+              ` : html``}
               ${this.listItems.length === 0 ? html`
                 <p class="text-base text-gray-500">No items in this list yet.</p>
               ` : (() => {
-                const items = Array.isArray(this.listItems) ? this.listItems : [];
-                const images = items
-                  .map((item) => item.image || item.photo || {})
-                  .filter((image) => image?.id);
-                const itemByImageId = new Map();
-                items.forEach((item) => {
-                  const photo = item.image || item.photo || {};
-                  const imageId = Number(photo.id ?? item.photo_id ?? item.id);
-                  if (Number.isFinite(imageId)) {
-                    itemByImageId.set(imageId, item);
-                  }
-                });
-                return html`
-                  <div class="list-items-grid" style="--curate-thumb-size: ${this.thumbSize}px;">
-                    ${renderImageGrid({
-                      images,
-                      selection: [],
-                      flashSelectionIds: new Set(),
-                      renderFunctions: {
-                        renderCurateRatingWidget: this.renderCurateRatingWidget,
-                        renderCurateRatingStatic: this.renderCurateRatingStatic,
-                        renderCuratePermatagSummary: this.renderCuratePermatagSummary,
-                        formatCurateDate: this.formatCurateDate,
-                      },
-                      eventHandlers: {
-                        onImageClick: (event, image) => this._handleListItemImageSelected(event, image),
-                        onDragStart: (event) => event.preventDefault(),
-                      },
-                      options: {
-                        emptyMessage: 'No items in this list yet.',
-                        showPermatags: true,
-                        renderItemFooter: (image) => {
-                          const item = itemByImageId.get(Number(image.id));
-                          const addedAt = item?.added_at ? new Date(item.added_at).toLocaleString() : '';
-                          return html`
-                            <div class="text-sm font-semibold text-gray-900 truncate">${image.filename || `#${image.id}`}</div>
-                            <div class="list-item-meta">
-                              <div class="text-[11px] text-gray-500">${addedAt ? `Added: ${addedAt}` : ''}</div>
-                              ${item ? html`
-                                <button @click=${() => this._removeListItem(item.id)} class="text-sm text-red-600 border border-red-200 rounded-lg px-2 py-1 hover:bg-red-50">Remove</button>
-                              ` : ''}
-                            </div>
-                          `;
+                const { images, itemByImageId } = this._getListImagesForView();
+                this._ensureSlideshowIndexInRange(images.length);
+                const currentImage = images[this.slideshowIndex] || null;
+                const currentItem = currentImage ? itemByImageId.get(Number(currentImage.id)) : null;
+                const currentAddedAt = currentItem?.added_at ? new Date(currentItem.added_at).toLocaleString() : '';
+                const currentImageId = Number(currentImage?.id);
+                const navLocked = this._isSlideshowNavigationLocked();
+                const navLockDurationMs = Math.max(0, Number(this._slideshowNavLockDurationMs) || 3000);
+                const mainImageSrc = (
+                  Number.isFinite(currentImageId)
+                  && this._slideshowFullImageId === currentImageId
+                  && this.slideshowFullImageUrl
+                )
+                  ? this.slideshowFullImageUrl
+                  : (
+                    currentImage?.thumbnail_url
+                    || (Number.isFinite(currentImageId) ? `/api/v1/images/${currentImageId}/thumbnail` : '')
+                  );
+                return this.listViewMode === 'thumb'
+                  ? html`
+                    <div class="list-items-grid" style="--curate-thumb-size: ${this.thumbSize}px;">
+                      ${renderImageGrid({
+                        images,
+                        selection: [],
+                        flashSelectionIds: new Set(),
+                        renderFunctions: {
+                          renderCurateRatingWidget: this.renderCurateRatingWidget,
+                          renderCurateRatingStatic: this.renderCurateRatingStatic,
+                          renderCuratePermatagSummary: this.renderCuratePermatagSummary,
+                          formatCurateDate: this.formatCurateDate,
                         },
-                      },
-                    })}
-                  </div>
-                `;
+                        eventHandlers: {
+                          onImageClick: (event, image) => this._handleListItemImageSelected(event, image),
+                          onDragStart: (event, image) => this._handleListItemDragStart(event, image),
+                          onDragOver: (event, imageId) => this._handleListItemDragOver(event, imageId),
+                          onDragEnd: () => this._handleListItemDragEnd(),
+                        },
+                        options: {
+                          emptyMessage: 'No items in this list yet.',
+                          enableReordering: !!this.selectedList?.can_edit,
+                          showPermatags: true,
+                          renderItemFooter: (image) => {
+                            const item = itemByImageId.get(Number(image.id));
+                            const addedAt = item?.added_at ? new Date(item.added_at).toLocaleString() : '';
+                            return html`
+                              <div class="text-sm font-semibold text-gray-900 truncate">${image.filename || `#${image.id}`}</div>
+                              <div class="list-item-meta">
+                                <div class="text-[11px] text-gray-500">${addedAt ? `Added: ${addedAt}` : ''}</div>
+                                ${item ? html`
+                                  <button @click=${() => this._removeListItem(item.id)} class="text-sm text-red-600 border border-red-200 rounded-lg px-2 py-1 hover:bg-red-50">Remove</button>
+                                ` : ''}
+                              </div>
+                            `;
+                          },
+                        },
+                      })}
+                    </div>
+                  `
+                  : html`
+                    <style>
+                      @keyframes list-slideshow-enter-right {
+                        from { opacity: 0.2; transform: translateX(28px) scale(0.995); }
+                        to { opacity: 1; transform: translateX(0) scale(1); }
+                      }
+                      @keyframes list-slideshow-enter-left {
+                        from { opacity: 0.2; transform: translateX(-28px) scale(0.995); }
+                        to { opacity: 1; transform: translateX(0) scale(1); }
+                      }
+                      @keyframes list-slideshow-lock-progress {
+                        from { width: 0%; }
+                        to { width: 100%; }
+                      }
+                    </style>
+                    <div class="overflow-hidden rounded-xl border border-gray-200 bg-white">
+                      <div class="relative flex h-[62vh] min-h-[420px] max-h-[760px] items-center justify-center overflow-hidden bg-slate-900 p-5">
+                        ${currentImage ? keyed(
+                          `${currentImage.id}-${this.slideshowFrameKey}`,
+                          html`
+                            <img
+                              class="max-h-full max-w-full cursor-pointer select-none rounded-xl object-contain shadow-2xl"
+                              style="animation: ${this.slideshowDirection < 0 ? 'list-slideshow-enter-left' : 'list-slideshow-enter-right'} 320ms ease;"
+                              src=${mainImageSrc}
+                              alt=${currentImage.filename || `#${currentImage.id}`}
+                              @click=${(event) => this._handleListItemImageSelected(event, currentImage)}
+                            >
+                          `,
+                        ) : ''}
+                        ${this.slideshowFullImageLoading ? html`
+                          <div class="pointer-events-none absolute inset-0 flex items-center justify-center">
+                            <span class="inline-block h-8 w-8 rounded-full border-2 border-white/50 border-t-white animate-spin"></span>
+                          </div>
+                        ` : ''}
+                        <button
+                          type="button"
+                          class="absolute left-4 top-1/2 inline-flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-white/30 bg-slate-900/60 text-xl text-white backdrop-blur-sm transition hover:bg-slate-900/80 disabled:cursor-not-allowed disabled:opacity-40"
+                          title="Previous photo"
+                          @click=${this._goToPreviousSlide}
+                          ?disabled=${navLocked || this.slideshowIndex <= 0}
+                        >
+                          ‹
+                        </button>
+                        <button
+                          type="button"
+                          class="absolute right-4 top-1/2 inline-flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-white/30 bg-slate-900/60 text-xl text-white backdrop-blur-sm transition hover:bg-slate-900/80 disabled:cursor-not-allowed disabled:opacity-40"
+                          title="Next photo"
+                          @click=${this._goToNextSlide}
+                          ?disabled=${navLocked || this.slideshowIndex >= images.length - 1}
+                        >
+                          ›
+                        </button>
+                        ${navLocked ? keyed(
+                          `slideshow-nav-lock-${this._slideshowNavCycleKey}`,
+                          html`
+                            <div class="pointer-events-none absolute inset-x-0 bottom-0 h-1.5 bg-white/15">
+                              <div
+                                class="h-full bg-blue-400/95"
+                                style="width: 0%; animation: list-slideshow-lock-progress ${navLockDurationMs}ms linear forwards;"
+                              ></div>
+                            </div>
+                          `
+                        ) : ''}
+                      </div>
+
+                      <div class="flex flex-wrap items-center justify-between gap-3 border-t border-gray-200 bg-white px-3 py-2">
+                        <div class="min-w-0 flex-1">
+                          <div class="truncate text-sm font-semibold text-gray-900">${currentImage?.filename || `#${currentImage?.id || ''}`}</div>
+                          <div class="mt-0.5 text-xs text-gray-500">${currentAddedAt ? `Added: ${currentAddedAt}` : ' '}</div>
+                        </div>
+                        <div class="inline-flex items-center gap-2">
+                          <span class="rounded-full border border-gray-300 bg-slate-50 px-2 py-0.5 text-xs font-semibold text-gray-700">
+                            ${images.length ? `${this.slideshowIndex + 1} / ${images.length}` : '0 / 0'}
+                          </span>
+                          ${this.slideshowFullImageError ? html`
+                            <span class="text-xs text-amber-700">${this.slideshowFullImageError}</span>
+                          ` : ''}
+                          ${currentImage ? html`
+                            <button
+                              type="button"
+                              class="rounded-lg border border-gray-300 px-3 py-1 text-sm text-gray-700 hover:bg-gray-50"
+                              @click=${(event) => this._handleListItemImageSelected(event, currentImage)}
+                            >
+                              Open
+                            </button>
+                          ` : ''}
+                        </div>
+                      </div>
+
+                      <div class="flex gap-2 overflow-x-auto border-t border-gray-200 bg-slate-50 px-3 py-2">
+                        ${images.map((image, index) => html`
+                          <button
+                            type="button"
+                            class="h-12 w-12 shrink-0 overflow-hidden rounded-md border-2 ${index === this.slideshowIndex ? 'border-blue-600 shadow-[0_0_0_2px_rgba(37,99,235,0.18)]' : 'border-transparent'}"
+                            title=${image.filename || `#${image.id}`}
+                            @click=${() => this._setSlideshowIndex(index, index < this.slideshowIndex ? -1 : 1)}
+                            ?disabled=${navLocked}
+                          >
+                            <img
+                              class="h-full w-full object-cover transition-opacity duration-200"
+                              style="opacity: ${this._isSlideshowFullImageCached(image.id) ? '1' : '0.58'};"
+                              src=${image.thumbnail_url || `/api/v1/images/${image.id}/thumbnail`}
+                              alt=${image.filename || `#${image.id}`}
+                            >
+                          </button>
+                        `)}
+                      </div>
+                    </div>
+                    <div class="mt-2 text-xs text-gray-500">
+                      Use <span class="font-semibold">←</span> and <span class="font-semibold">→</span> keys to navigate.
+                    </div>
+                  `;
               })()}
             `}
           </div>

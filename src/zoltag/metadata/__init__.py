@@ -482,6 +482,7 @@ class JobTrigger(Base):
     cron_expr = Column(Text)
     timezone = Column(Text)
     definition_id = Column(UUID(as_uuid=True), ForeignKey("job_definitions.id", ondelete="RESTRICT"), nullable=False, index=True)
+    workflow_definition_id = Column(UUID(as_uuid=True), ForeignKey("workflow_definitions.id", ondelete="RESTRICT"), nullable=True, index=True)
     payload_template = Column(JSONB, nullable=False, default=dict)
     dedupe_window_seconds = Column(Integer, nullable=False, default=300)
     created_by = Column(UUID(as_uuid=True), ForeignKey("user_profiles.supabase_uid", ondelete="SET NULL"))
@@ -489,6 +490,7 @@ class JobTrigger(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     definition = relationship("JobDefinition")
+    workflow_definition = relationship("WorkflowDefinition")
 
     __table_args__ = (
         Index("idx_job_triggers_tenant_enabled", "tenant_id", "is_enabled"),
