@@ -112,6 +112,8 @@ async def upload_images(
                         keywords,
                         threshold=settings.zeroshot_tag_threshold
                     )
+                    if settings.zeroshot_tag_top_n is not None:
+                        category_tags = category_tags[:settings.zeroshot_tag_top_n]
                     all_tags.extend(category_tags)
 
                 tags_with_confidence = all_tags
@@ -530,7 +532,8 @@ async def retag_single_image(
             image_data=image_data,
             keywords_by_category=by_category,
             model_type=model_type,
-            threshold=settings.zeroshot_tag_threshold
+            threshold=settings.zeroshot_tag_threshold,
+            top_n=settings.zeroshot_tag_top_n,
         )
 
         # Create new tags - look up keyword_ids from database
@@ -650,7 +653,8 @@ async def retag_all_images(
                 image_data=image_data,
                 keywords_by_category=by_category,
                 model_type=model_type,
-                threshold=settings.zeroshot_tag_threshold
+                threshold=settings.zeroshot_tag_threshold,
+                top_n=settings.zeroshot_tag_top_n,
             )
 
             for keyword, confidence in all_tags:

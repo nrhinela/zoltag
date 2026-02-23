@@ -74,7 +74,9 @@ export function buildCurateAuditFilterObject(state, overrides = {}) {
     mediaType: overrides.mediaType !== undefined ? overrides.mediaType : (state.curateAuditMediaType || 'all'),
     permatagKeyword: state.curateAuditKeyword,
     permatagCategory: state.curateAuditCategory,
-    permatagSignum: 1,
+    // Find Missing should exclude assets that already have this keyword at any signum.
+    // Omitting permatag_signum keeps backend filtering signum-agnostic.
+    permatagSignum: state.curateAuditMode === 'missing' ? null : 1,
     permatagMissing: state.curateAuditMode === 'missing',
     hideZeroRating: state.curateAuditHideDeleted,
     dropboxPathPrefix: overrides.dropboxPathPrefix !== undefined ? overrides.dropboxPathPrefix : state.curateAuditDropboxPathPrefix,

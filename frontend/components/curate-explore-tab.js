@@ -1588,9 +1588,11 @@ export class CurateExploreTab extends LitElement {
               mode="tags"
               .targets=${this.curateExploreTargets}
               .keywordsByCategory=${this._getKeywordsByCategory()}
+              .lists=${this._lists || []}
               .dragTargetId=${this._curateExploreHotspotDragTarget}
               @hotspot-keyword-change=${(event) => this._handleCurateExploreHotspotKeywordChange({ target: { value: event.detail.value } }, event.detail.targetId)}
               @hotspot-action-change=${(event) => this._handleCurateExploreHotspotActionChange({ target: { value: event.detail.value } }, event.detail.targetId)}
+              @hotspot-type-change=${(event) => this._handleCurateExploreHotspotTypeChange({ target: { value: event.detail.value } }, event.detail.targetId)}
               @hotspot-add=${this._handleCurateExploreHotspotAddTarget}
               @hotspot-remove=${(event) => this._handleCurateExploreHotspotRemoveTarget(event.detail.targetId)}
               @hotspot-dragover=${(event) => this._handleCurateExploreHotspotDragOver(event.detail.event, event.detail.targetId)}

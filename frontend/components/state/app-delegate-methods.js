@@ -211,6 +211,9 @@ export function bindAppDelegateMethods(host) {
   host._refreshCurateAudit = () =>
     host._curateAuditState.refreshAudit();
 
+  host._handleCurateAuditSaveAndLoadMore = async (detail = {}) =>
+    host._curateAuditState.saveAndLoadMore(detail);
+
   host._handleCurateImageClick = (event, image, imageSet) =>
     host._curateHomeState.handleCurateImageClick(event, image, imageSet);
 

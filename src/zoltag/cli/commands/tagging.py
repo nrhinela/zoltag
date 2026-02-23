@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 from google.cloud import storage
 from sqlalchemy import func
+from sqlalchemy.exc import OperationalError
 
 from zoltag.settings import settings
 from zoltag.config.db_config import ConfigManager
@@ -175,6 +176,7 @@ class RecomputeZeroShotTagsCommand(CliCommand):
                             db=None,
                             assets_by_id=assets_by_id,
                             strict=False,
+                            preloaded_thumbnail_url="",  # skip URL signing; CLI only needs the key
                         )
                         thumbnail_key = storage_info.thumbnail_key
                         if not thumbnail_key:
@@ -236,6 +238,8 @@ class RecomputeZeroShotTagsCommand(CliCommand):
                                 text_embeddings,
                                 threshold=settings.zeroshot_tag_threshold
                             )
+                            if settings.zeroshot_tag_top_n is not None:
+                                category_tags = category_tags[:settings.zeroshot_tag_top_n]
                             all_tags.extend(category_tags)
 
                         tags_with_confidence = all_tags
@@ -266,9 +270,22 @@ class RecomputeZeroShotTagsCommand(CliCommand):
                             reached_limit = True
                             break
 
+                    except OperationalError as e:
+                        click.echo(f"\n  DB connection lost ({image.filename}): {e}")
+                        try:
+                            self.db.rollback()
+                        except Exception:
+                            pass
+                        self.db.close()
+                        self.db = self.Session()
+                        skipped += 1
+                        bar.update(1)
                     except Exception as e:
                         click.echo(f"\n  Error processing {image.filename}: {e}")
-                        self.db.rollback()
+                        try:
+                            self.db.rollback()
+                        except Exception:
+                            pass
                         skipped += 1
                         bar.update(1)
 

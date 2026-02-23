@@ -1149,6 +1149,7 @@ export const zoltagAppStyles = css`
         padding: 12px;
         min-height: 140px;
         background-color: #f9fafb;
+        position: relative;
         transition: border-color 0.2s ease, background-color 0.2s ease;
     }
     .list-target-card--active {
@@ -1161,9 +1162,23 @@ export const zoltagAppStyles = css`
         padding: 2px 10px;
         font-size: 11px;
         font-weight: 600;
-        color: #6b7280;
+        color: #1f2937;
         background: #ffffff;
         transition: border-color 0.2s ease, color 0.2s ease, background-color 0.2s ease;
+    }
+    /* inside the hotspot header, View/Back should match the type select appearance */
+    .hotspot-header .list-target-tab {
+        border-radius: 0;
+        border: none;
+        border-left: 1px solid #e5e7eb;
+        background: #f9fafb;
+        padding: 8px 10px;
+        font-size: 0.72rem;
+        align-self: stretch;
+    }
+    .hotspot-header .list-target-tab.active {
+        background: #eff6ff;
+        color: #2563eb;
     }
     .list-target-header {
         display: flex;
@@ -1724,6 +1739,20 @@ export const zoltagAppStyles = css`
         font-size: 0.75rem;
         background: #fff;
     }
+    .curate-utility-controls .curate-utility-field {
+        width: 100%;
+        min-width: 0;
+        max-width: 100%;
+        padding: 6px 8px;
+        border: 1px solid #d1d5db;
+        border-radius: 8px;
+        font-size: 0.75rem;
+        background: #fff;
+        color: #374151;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
     .curate-utility-controls .curate-utility-type-select {
         flex: 0 1 104px;
         min-width: 84px;
@@ -1739,6 +1768,117 @@ export const zoltagAppStyles = css`
     .curate-utility-controls select.curate-utility-select.selected {
         background: #fef3c7;
         border-color: #fde68a;
+    }
+    /* Hotspot header — full-width control row, separated from body */
+    .hotspot-header {
+        display: flex;
+        align-items: stretch;
+        gap: 0;
+        min-width: 0;
+        margin: -12px -12px 10px -12px; /* bleed to card edges */
+        border-bottom: 1px solid #e5e7eb;
+        border-radius: 12px 12px 0 0;
+    }
+    /* +/- signum toggle button */
+    .hotspot-signum {
+        flex-shrink: 0;
+        width: 52px;
+        border: none;
+        border-radius: 12px 0 0 0;
+        border-right: 1px solid #e5e7eb;
+        border-radius: 0;
+        background: #f9fafb;
+        font-size: 1.6rem;
+        font-weight: 700;
+        line-height: 1;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        transition: background 0.1s;
+    }
+    .hotspot-signum--add {
+        color: #16a34a;
+        background: #f0fdf4;
+    }
+    .hotspot-signum--add:hover {
+        background: #dcfce7;
+    }
+    .hotspot-signum--remove {
+        color: #dc2626;
+        background: #fef2f2;
+    }
+    .hotspot-signum--remove:hover {
+        background: #fee2e2;
+    }
+    /* keyword / rating picker — stretches to fill available space */
+    .hotspot-keyword-select {
+        flex: 1 1 auto;
+        min-width: 0;
+        padding: 8px 10px;
+        border: none;
+        border-radius: 0;
+        font-size: 0.78rem;
+        background: #fff;
+        color: #1f2937;
+    }
+    .hotspot-keyword-select--set {
+        font-weight: 600;
+        color: #1f2937;
+    }
+    /* type selector — flush right, no border */
+    .hotspot-type-select {
+        flex: 0 0 auto;
+        padding: 8px 6px;
+        border: none;
+        border-left: 1px solid #e5e7eb;
+        border-radius: 0 12px 0 0;
+        font-size: 0.72rem;
+        background: #f9fafb;
+        color: #1f2937;
+    }
+    /* inline new-list create form — sits below the header row */
+    .hotspot-list-create {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 10px;
+        border-bottom: 1px solid #e5e7eb;
+        background: #fff;
+    }
+    .hotspot-list-create-input {
+        flex: 1 1 auto;
+        min-width: 0;
+        padding: 2px 8px;
+        border: 1px solid #d1d5db;
+        border-radius: 999px;
+        font-size: 0.78rem;
+        background: #fff;
+    }
+    /* remove button — pinned to bottom-right of the box */
+    .hotspot-remove {
+        position: absolute;
+        bottom: 6px;
+        right: 6px;
+        width: 26px;
+        height: 26px;
+        border-radius: 9999px;
+        border: 1px solid #e5e7eb;
+        background: #fff;
+        color: #9ca3af;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 14px;
+        line-height: 1;
+        cursor: pointer;
+        z-index: 2;
+    }
+    .hotspot-remove:hover {
+        color: #dc2626;
+        border-color: #fecaca;
+        background: #fef2f2;
     }
     .curate-pane.utility-targets .curate-pane-body {
         overflow-x: hidden;

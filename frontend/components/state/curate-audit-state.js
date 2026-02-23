@@ -10,6 +10,9 @@ import {
 import { parseUtilityKeywordValue } from '../shared/hotspot-controls.js';
 import { enqueueCommand } from '../../services/command-queue.js';
 
+const AUDIT_PRIMARY_TARGET_ID = 'audit-hotspot-primary';
+const AUDIT_NOT_TARGET_ID = 'audit-hotspot-not';
+
 /**
  * Curate Audit State Controller
  *
@@ -22,6 +25,13 @@ import { enqueueCommand } from '../../services/command-queue.js';
 export class CurateAuditStateController extends BaseStateController {
   constructor(host) {
     super(host);
+    this._pendingSaveAndLoadMoreCommands = new Set();
+  }
+
+  _isAuditNotTarget(target) {
+    const id = String(target?.id || '').trim();
+    const role = String(target?.auditRole || '').trim().toLowerCase();
+    return id === AUDIT_NOT_TARGET_ID || role === 'not';
   }
 
   // ========================================================================
@@ -366,6 +376,10 @@ export class CurateAuditStateController extends BaseStateController {
         return this.handleHotspotRemoveTarget(targetId);
       case 'drop':
         return this.handleHotspotDrop(event.detail.event, targetId);
+      case 'list':
+        return this.handleHotspotListChange(value, targetId);
+      case 'view-list':
+        return this.handleHotspotViewList(targetId);
       default:
         console.warn('Unknown hotspot change type:', changeType);
     }
@@ -379,6 +393,10 @@ export class CurateAuditStateController extends BaseStateController {
   handleHotspotKeywordChange(value, targetId) {
     const { category, keyword } = parseUtilityKeywordValue(value);
     const targets = this.getHostProperty('curateAuditTargets') || [];
+    const target = targets.find((entry) => entry.id === targetId);
+    if (this._isAuditNotTarget(target)) {
+      return;
+    }
     const updated = targets.map((target) =>
       target.id === targetId
         ? {
@@ -400,6 +418,10 @@ export class CurateAuditStateController extends BaseStateController {
    */
   handleHotspotActionChange(value, targetId) {
     const targets = this.getHostProperty('curateAuditTargets') || [];
+    const target = targets.find((entry) => entry.id === targetId);
+    if (this._isAuditNotTarget(target)) {
+      return;
+    }
     const updated = targets.map((target) =>
       target.id === targetId ? { ...target, action: value } : target
     );
@@ -413,15 +435,21 @@ export class CurateAuditStateController extends BaseStateController {
    */
   handleHotspotTypeChange(value, targetId) {
     const targets = this.getHostProperty('curateAuditTargets') || [];
-    const nextType = value === 'rating' ? 'rating' : 'keyword';
+    const target = targets.find((entry) => entry.id === targetId);
+    if (this._isAuditNotTarget(target)) {
+      return;
+    }
+    const nextType = value === 'rating' ? 'rating' : value === 'list' ? 'list' : 'keyword';
     const updated = targets.map((target) =>
       target.id === targetId
         ? {
             ...target,
             type: nextType,
             ...(nextType === 'rating'
-              ? { keyword: '', category: '', rating: '', action: 'add' }
-              : { rating: null }),
+              ? { keyword: '', category: '', rating: '', action: 'add', listId: null }
+              : nextType === 'list'
+              ? { keyword: '', category: '', rating: null, listId: null }
+              : { rating: null, listId: null }),
             count: 0,
           }
         : target
@@ -436,8 +464,41 @@ export class CurateAuditStateController extends BaseStateController {
    */
   handleHotspotRatingChange(value, targetId) {
     const targets = this.getHostProperty('curateAuditTargets') || [];
+    const target = targets.find((entry) => entry.id === targetId);
+    if (this._isAuditNotTarget(target)) {
+      return;
+    }
     const updated = targets.map((target) =>
       target.id === targetId ? { ...target, rating: value } : target
+    );
+    this.setHostProperty('curateAuditTargets', updated);
+  }
+
+  /**
+   * Handle hotspot list selection change.
+   * @param {string} value - List ID value
+   * @param {string} targetId - Target hotspot ID
+   */
+  handleHotspotListChange(value, targetId) {
+    const targets = this.getHostProperty('curateAuditTargets') || [];
+    const target = targets.find((entry) => entry.id === targetId);
+    if (this._isAuditNotTarget(target)) {
+      return;
+    }
+    const updated = targets.map((entry) =>
+      entry.id === targetId ? { ...entry, listId: value || null, count: 0 } : entry
+    );
+    this.setHostProperty('curateAuditTargets', updated);
+  }
+
+  /**
+   * Toggle list view for a hotspot target.
+   * @param {string} targetId - Target hotspot ID
+   */
+  handleHotspotViewList(targetId) {
+    const targets = this.getHostProperty('curateAuditTargets') || [];
+    const updated = targets.map((entry) =>
+      entry.id === targetId ? { ...entry, listView: !entry.listView } : entry
     );
     this.setHostProperty('curateAuditTargets', updated);
   }
@@ -465,6 +526,10 @@ export class CurateAuditStateController extends BaseStateController {
    */
   handleHotspotRemoveTarget(targetId) {
     const targets = this.getHostProperty('curateAuditTargets') || [];
+    const target = targets.find((entry) => entry.id === targetId);
+    if (this._isAuditNotTarget(target)) {
+      return;
+    }
     const filtered = targets.filter((target) => target.id !== targetId);
     this.setHostProperty('curateAuditTargets', filtered);
   }
@@ -546,6 +611,7 @@ export class CurateAuditStateController extends BaseStateController {
    */
   syncHotspotPrimary() {
     const defaultAction = this.host.curateAuditMode === 'existing' ? 'remove' : 'add';
+    const includeNotHotspot = this.host.curateAuditMode === 'missing';
     const keyword = this.host.curateAuditKeyword || '';
     let category = '';
 
@@ -564,27 +630,53 @@ export class CurateAuditStateController extends BaseStateController {
       this.host.curateAuditCategory = category;
     }
 
-    if (!this.host.curateAuditTargets || !this.host.curateAuditTargets.length) {
-      this.host.curateAuditTargets = [
-        { id: 1, type: 'keyword', category, keyword, action: defaultAction, count: 0 },
-      ];
-      this.host._curateAuditHotspotNextId = 2;
-      this.requestUpdate();
-      return;
-    }
+    const targets = Array.isArray(this.host.curateAuditTargets) ? this.host.curateAuditTargets : [];
+    const existingPrimary = targets.find((target) => String(target?.id || '') === AUDIT_PRIMARY_TARGET_ID);
+    const fallbackPrimaryIndex = existingPrimary ? -1 : (targets.length ? 0 : -1);
+    const primarySource = existingPrimary || (fallbackPrimaryIndex >= 0 ? targets[fallbackPrimaryIndex] : null) || {};
+    const existingNot = targets.find((target) => String(target?.id || '') === AUDIT_NOT_TARGET_ID);
 
-    const [first, ...rest] = this.host.curateAuditTargets;
-    const nextFirst = {
-      ...first,
-      type: first?.type || 'keyword',
-      category,
+    const nextPrimary = {
+      ...primarySource,
+      id: AUDIT_PRIMARY_TARGET_ID,
+      type: 'keyword',
+      category: keyword ? category : '',
       keyword,
       action: defaultAction,
+      rating: null,
+      count: 0,
     };
-    if (!keyword || first.keyword !== keyword || first.action !== defaultAction) {
-      nextFirst.count = 0;
+    if (keyword && primarySource.keyword === keyword && primarySource.action === defaultAction) {
+      nextPrimary.count = Number(primarySource.count || 0);
     }
-    this.host.curateAuditTargets = [nextFirst, ...rest];
+
+    const extras = targets.filter((target, index) => {
+      const id = String(target?.id || '');
+      if (id === AUDIT_PRIMARY_TARGET_ID || id === AUDIT_NOT_TARGET_ID) return false;
+      if (index === fallbackPrimaryIndex) return false;
+      return true;
+    });
+
+    const nextTargets = [nextPrimary];
+    if (includeNotHotspot && keyword) {
+      const nextNot = {
+        ...(existingNot || {}),
+        id: AUDIT_NOT_TARGET_ID,
+        auditRole: 'not',
+        type: 'keyword',
+        category,
+        keyword,
+        action: 'remove',
+        rating: null,
+        count: 0,
+      };
+      if (existingNot && existingNot.keyword === keyword && existingNot.category === category) {
+        nextNot.count = Number(existingNot.count || 0);
+      }
+      nextTargets.push(nextNot);
+    }
+
+    this.host.curateAuditTargets = [...nextTargets, ...extras];
     this.requestUpdate();
   }
 
@@ -638,6 +730,104 @@ export class CurateAuditStateController extends BaseStateController {
     }
     const offset = this.host.curateAuditPageOffset || 0;
     this.fetchCurateAuditImages({ offset });
+  }
+
+  async saveAndLoadMore(detail = {}) {
+    if (this.host.curateAuditMode !== 'missing') {
+      this.refreshAudit();
+      return;
+    }
+    const keyword = String(detail?.keyword || this.host.curateAuditKeyword || '').trim();
+    if (!keyword) {
+      this.refreshAudit();
+      return;
+    }
+    const category = String(detail?.category || this.host.curateAuditCategory || '').trim() || 'Uncategorized';
+    const imageIds = Array.isArray(detail?.imageIds)
+      ? Array.from(new Set(
+        detail.imageIds
+          .map((id) => Number(id))
+          .filter((id) => Number.isFinite(id) && id > 0)
+      ))
+      : [];
+
+    if (!imageIds.length) {
+      this._showAuditConfirmationNotice('Confirmed 0 were not matches.', 2500);
+      this.refreshAudit();
+      return;
+    }
+
+    const operations = imageIds.map((imageId) => ({
+      image_id: imageId,
+      keyword,
+      category,
+      signum: -1,
+    }));
+    const commandId = enqueueCommand({
+      type: 'bulk-permatags',
+      tenantId: this.host.tenant,
+      operations,
+      description: `tag audit · confirm non-matches · ${operations.length} updates`,
+    });
+    this._pendingSaveAndLoadMoreCommands.add(commandId);
+    this._showAuditConfirmationNotice(`Confirming ${operations.length} non-matches...`, 1800);
+  }
+
+  handleQueueCommandComplete(detail = {}) {
+    if (detail?.type !== 'bulk-permatags') return false;
+    const commandId = String(detail?.id || '').trim();
+    if (!commandId || !this._pendingSaveAndLoadMoreCommands.has(commandId)) {
+      return false;
+    }
+
+    this._pendingSaveAndLoadMoreCommands.delete(commandId);
+    const result = detail?.result || {};
+    const created = Number(result?.created || 0);
+    const updated = Number(result?.updated || 0);
+    const skipped = Number(result?.skipped || 0);
+    const errors = Array.isArray(result?.errors) ? result.errors.length : 0;
+    const confirmed = Math.max(0, created + updated);
+    if (skipped > 0 || errors > 0) {
+      this._showAuditConfirmationNotice(
+        `Confirmed ${confirmed} were not matches (${skipped} skipped, ${errors} errors).`,
+        4000
+      );
+    } else {
+      this._showAuditConfirmationNotice(`Confirmed ${confirmed} were not matches.`, 2500);
+    }
+    this.refreshAudit();
+    return true;
+  }
+
+  handleQueueCommandFailed(detail = {}) {
+    if (detail?.type !== 'bulk-permatags') return false;
+    const commandId = String(detail?.id || '').trim();
+    if (!commandId || !this._pendingSaveAndLoadMoreCommands.has(commandId)) {
+      return false;
+    }
+
+    this._pendingSaveAndLoadMoreCommands.delete(commandId);
+    this._showAuditConfirmationNotice('Failed to confirm non-matches. Please try again.', 4000);
+    return true;
+  }
+
+  _showAuditConfirmationNotice(message, durationMs = 2500) {
+    const notice = String(message || '').trim();
+    if (!notice) return;
+    if (this.host._appEventsState && typeof this.host._appEventsState._showQueueNotice === 'function') {
+      this.host._appEventsState._showQueueNotice(notice, 'warning', durationMs);
+      return;
+    }
+    if (this.host._queueNoticeTimer) {
+      clearTimeout(this.host._queueNoticeTimer);
+    }
+    this.host.queueNotice = { message: notice, level: 'warning', createdAt: Date.now() };
+    this.host._queueNoticeTimer = setTimeout(() => {
+      this.host.queueNotice = null;
+      this.host._queueNoticeTimer = null;
+      this.requestUpdate();
+    }, Math.max(1200, Number(durationMs) || 2500));
+    this.requestUpdate();
   }
 
   // ========================================================================
@@ -916,6 +1106,7 @@ export class CurateAuditStateController extends BaseStateController {
    * Reset Curate Audit state when tenant changes.
    */
   resetForTenantChange() {
+    this._pendingSaveAndLoadMoreCommands.clear();
     this.host.curateAuditMode = 'missing';
     this.host.curateAuditKeyword = '';
     this.host.curateAuditCategory = '';

@@ -246,9 +246,9 @@ class FilterChips extends LitElement {
       { type: 'media', label: 'Media Type', icon: '🎬' },
       { type: 'folder', label: 'Folder', icon: '📂' },
       { type: 'list', label: 'List', icon: '🧾' },
-      { type: 'tag_coverage', label: 'Tag Coverage', icon: '🛡️' },
       { type: 'filename', label: 'Filename', icon: '📝' },
       { type: 'text_search', label: 'Text search', icon: '🔎' },
+      { type: 'tag_coverage', label: 'Tag Coverage', icon: '🛡️' },
     ];
     const allowed = Array.isArray(this.availableFilterTypes) && this.availableFilterTypes.length
       ? new Set(this.availableFilterTypes)

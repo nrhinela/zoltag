@@ -651,7 +651,7 @@ def train_keyword_models(tenant_id: str, min_positive: Optional[int]):
     model_version = getattr(tagger, "model_version", model_name)
 
     config_mgr = ConfigManager(session, tenant.id)
-    all_keywords = config_mgr.get_all_keywords()
+    all_keywords = config_mgr.get_all_keywords(include_people=True)
     keyword_to_category = {kw['keyword']: kw['category'] for kw in all_keywords}
 
     result = build_keyword_models(
@@ -808,6 +808,7 @@ def recompute_trained_tags(tenant_id: str, batch_size: int, limit: Optional[int]
                 model_version=model_version,
                 model_type=settings.tagging_model,
                 threshold=settings.trained_tag_threshold,
+                top_n=settings.trained_tag_top_n,
             )
             processed += 1
             if limit is not None and processed >= limit:

@@ -13,7 +13,12 @@ export class AppEventsStateController extends BaseStateController {
   handleQueueCommandComplete(event) {
     const detail = event?.detail;
     if (!detail) return;
+    const handledByAudit = this.host?._curateAuditState?.handleQueueCommandComplete?.(detail) === true;
     if (detail.type === 'bulk-permatags') {
+      if (handledByAudit) {
+        scheduleStatsRefresh(this.host);
+        return;
+      }
       const result = detail.result || {};
       const skipped = Number(result.skipped || 0);
       const errors = Array.isArray(result.errors) ? result.errors.length : 0;
@@ -39,12 +44,14 @@ export class AppEventsStateController extends BaseStateController {
   handleQueueCommandFailed(event) {
     const detail = event?.detail;
     if (!detail?.id) return;
+    const handledByAudit = this.host?._curateAuditState?.handleQueueCommandFailed?.(detail) === true;
     if (detail.type === 'bulk-permatags') {
+      if (handledByAudit) return;
       this._showQueueNotice(`Tag update failed: ${detail.error || 'unknown error'}`, 'error');
     }
   }
 
-  _showQueueNotice(message, level = 'warning') {
+  _showQueueNotice(message, level = 'warning', durationMs = 7000) {
     if (!message) return;
     if (this.host._queueNoticeTimer) {
       clearTimeout(this.host._queueNoticeTimer);
@@ -57,7 +64,7 @@ export class AppEventsStateController extends BaseStateController {
     this.host._queueNoticeTimer = setTimeout(() => {
       this.host.queueNotice = null;
       this.host._queueNoticeTimer = null;
-    }, 7000);
+    }, Math.max(1200, Number(durationMs) || 7000));
     this.requestUpdate();
   }
 

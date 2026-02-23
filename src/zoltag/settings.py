@@ -80,8 +80,12 @@ class Settings(BaseSettings):
     # Minimum confidence required to persist zero-shot tags.
     # Higher values reduce recall; lower values increase tag volume.
     zeroshot_tag_threshold: float = 0.25
+    # Maximum zero-shot tags to store per category per image (top-N by confidence). None = unlimited.
+    zeroshot_tag_top_n: Optional[int] = 5
     # Minimum confidence required to persist trained-model tags.
-    trained_tag_threshold: float = 0.25
+    trained_tag_threshold: float = 0.5
+    # Maximum trained tags to store per category per image (top-N by confidence). None = unlimited.
+    trained_tag_top_n: Optional[int] = 10
     # Minimum positive permatag examples required before training a keyword model.
     keyword_model_min_positive: int = 2
     # If true, generate embeddings during upload/ingest. If false, embeddings are generated later by batch jobs.
@@ -152,7 +156,9 @@ class Settings(BaseSettings):
         return {
             "tagging_model": self.tagging_model,
             "zeroshot_tag_threshold": self.zeroshot_tag_threshold,
+            "zeroshot_tag_top_n": self.zeroshot_tag_top_n,
             "trained_tag_threshold": self.trained_tag_threshold,
+            "trained_tag_top_n": self.trained_tag_top_n,
             "keyword_model_min_positive": self.keyword_model_min_positive,
             "upload_generate_embeddings": self.upload_generate_embeddings,
             "face_recognition_min_references": self.face_recognition_min_references,

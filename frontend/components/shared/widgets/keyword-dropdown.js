@@ -28,6 +28,9 @@ class KeywordDropdown extends LitElement {
     disabled: { type: Boolean },
     compact: { type: Boolean },
     prependOptions: { type: Array },
+    prependOptionsEmphasized: { type: Boolean },
+    selectedTone: { type: String },
+    searchable: { type: Boolean },
     open: { type: Boolean, state: true },
     searchQuery: { type: String, state: true },
   };
@@ -44,6 +47,9 @@ class KeywordDropdown extends LitElement {
     this.disabled = false;
     this.compact = false;
     this.prependOptions = [];
+    this.prependOptionsEmphasized = true;
+    this.selectedTone = 'yellow';
+    this.searchable = true;
     this.open = false;
     this.searchQuery = '';
     this._handleOutsideClick = this._handleOutsideClick.bind(this);
@@ -75,7 +81,7 @@ class KeywordDropdown extends LitElement {
       this.searchQuery = '';
     }
     this.open = !this.open;
-    if (this.open) {
+    if (this.open && this.searchable) {
       this._focusSearchInput();
     }
   }
@@ -151,6 +157,7 @@ class KeywordDropdown extends LitElement {
   }
 
   _setSearchQuery(event) {
+    if (!this.searchable) return;
     this.searchQuery = String(event?.target?.value || '');
   }
 
@@ -160,7 +167,7 @@ class KeywordDropdown extends LitElement {
 
   _getFilteredCategories() {
     const categories = this._getKeywordsByCategory();
-    const query = this._normalize(this.searchQuery);
+    const query = this.searchable ? this._normalize(this.searchQuery) : '';
     if (!query) return categories;
     return categories
       .map(([category, keywords]) => {
@@ -175,6 +182,7 @@ class KeywordDropdown extends LitElement {
 
   _showUntaggedInResults() {
     if (!this.includeUntagged) return false;
+    if (!this.searchable) return true;
     const query = this._normalize(this.searchQuery);
     if (!query) return true;
     return 'untagged'.includes(query);
@@ -182,7 +190,7 @@ class KeywordDropdown extends LitElement {
 
   _getFilteredPrependOptions() {
     const prepend = Array.isArray(this.prependOptions) ? this.prependOptions : [];
-    const query = this._normalize(this.searchQuery);
+    const query = this.searchable ? this._normalize(this.searchQuery) : '';
     if (!query) return prepend;
     return prepend.filter((opt) => this._normalize(opt?.label || opt?.value).includes(query));
   }
@@ -197,27 +205,31 @@ class KeywordDropdown extends LitElement {
 
     return html`
       <div class="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-50 min-w-[300px] max-w-[400px] max-h-[400px] overflow-y-auto">
-        <div class="sticky top-0 bg-white border-b border-gray-100 p-2">
-          <input
-            type="text"
-            data-role="keyword-search-input"
-            class="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-            placeholder="Search keywords..."
-            autofocus
-            .value=${this.searchQuery}
-            @input=${this._setSearchQuery}
-            @keydown=${(event) => {
-              if (event.key === 'Escape') {
-                event.stopPropagation();
-                this.open = false;
-                this.searchQuery = '';
-              }
-            }}
-          />
-        </div>
+        ${this.searchable ? html`
+          <div class="sticky top-0 bg-white border-b border-gray-100 p-2">
+            <input
+              type="text"
+              data-role="keyword-search-input"
+              class="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              placeholder="Search keywords..."
+              autofocus
+              .value=${this.searchQuery}
+              @input=${this._setSearchQuery}
+              @keydown=${(event) => {
+                if (event.key === 'Escape') {
+                  event.stopPropagation();
+                  this.open = false;
+                  this.searchQuery = '';
+                }
+              }}
+            />
+          </div>
+        ` : html``}
         ${prependOptions.map((opt, index) => html`
           <div
-            class="px-4 py-2 cursor-pointer ${index === prependOptions.length - 1 ? 'border-b border-gray-100' : 'border-b border-gray-50'} hover:bg-gray-100 transition-colors font-semibold text-gray-800"
+            class=${this.prependOptionsEmphasized
+              ? `px-4 py-2 cursor-pointer ${index === prependOptions.length - 1 ? 'border-b border-gray-100' : 'border-b border-gray-50'} hover:bg-gray-100 transition-colors font-semibold text-gray-800`
+              : `px-4 py-2 cursor-pointer ${index === prependOptions.length - 1 ? 'border-b border-gray-100' : 'border-b border-gray-50'} hover:bg-gray-100 transition-colors`}
             @click=${() => this._selectValue(String(opt?.value || ''))}
           >
             ${String(opt?.label || opt?.value || '').trim() || '--'}
@@ -255,12 +267,15 @@ class KeywordDropdown extends LitElement {
     const hasValue = Boolean(this.value);
     const label = this._getSelectedLabel();
     const paddingClass = this.compact ? 'px-3 py-2 text-sm' : 'px-4 py-3 text-lg';
+    const selectedClass = this.selectedTone === 'blue'
+      ? 'bg-blue-100 border-blue-300 text-blue-900'
+      : 'bg-yellow-100 border-yellow-200';
 
     return html`
       <div class="relative">
         <button
           type="button"
-          class="w-full ${paddingClass} border rounded-lg text-left flex items-center justify-between gap-2 ${hasValue ? 'bg-yellow-100 border-yellow-200' : 'bg-white'}"
+          class="w-full ${paddingClass} border rounded-lg text-left flex items-center justify-between gap-2 ${hasValue ? selectedClass : 'bg-white'}"
           @click=${this._toggleOpen}
           ?disabled=${this.disabled}
         >

@@ -1,10 +1,11 @@
 import { LitElement, html } from 'lit';
 import { enqueueCommand } from '../services/command-queue.js';
-import { getDropboxFolders } from '../services/api.js';
+import { getDropboxFolders, getLists, getListItems, createList } from '../services/api.js';
 import { migrateLocalStorageKey } from '../services/app-storage.js';
 import { createSelectionHandlers } from './shared/selection-handlers.js';
 import { renderResultsPagination } from './shared/pagination-controls.js';
 import { renderSelectableImageGrid } from './shared/selectable-image-grid.js';
+import { renderImageGrid } from './shared/image-grid.js';
 import { getKeywordsByCategory, getKeywordsByCategoryFromList } from './shared/keyword-utils.js';
 import {
   buildHotspotHistorySessionKey,
@@ -44,6 +45,7 @@ const LEGACY_AUDIT_HELP_VISIBILITY_STORAGE_KEYS = [
  * @fires audit-mode-changed - When audit mode changes (existing/missing)
  * @fires audit-ai-model-changed - When AI model selection changes
  * @fires audit-ai-ml-similarity-settings-changed - When ML similarity settings change
+ * @fires audit-save-and-load-more - When "Save and Load More" is clicked
  * @fires pagination-changed - When pagination changes
  * @fires image-clicked - When image is clicked
  * @fires selection-changed - When drag selection changes
@@ -95,10 +97,15 @@ export class CurateAuditTab extends LitElement {
     tagStatsBySource: { type: Object },
     activeCurateTagSource: { type: String },
     targets: { type: Array }, // Hotspot targets
+    lists: { type: Array },
     ratingEnabled: { type: Boolean },
     ratingCount: { type: Number },
 
     // Internal state properties
+    _lists: { type: Array, state: true },
+    _listsLoading: { type: Boolean, state: true },
+    _listItemsCache: { type: Object, state: true },
+    _listCreateState: { type: Object, state: true }, // { [targetId]: { draftTitle, error, saving } }
     _auditPressActive: { type: Boolean, state: true },
     _auditPressStart: { type: Object, state: true },
     _auditPressIndex: { type: Number, state: true },
@@ -155,6 +162,11 @@ export class CurateAuditTab extends LitElement {
     this.tagStatsBySource = {};
     this.activeCurateTagSource = '';
     this.targets = [{ id: '1', type: 'keyword', count: 0 }];
+    this.lists = [];
+    this._lists = [];
+    this._listsLoading = false;
+    this._listItemsCache = {}; // { [listId]: { items, loading, error } }
+    this._listCreateState = {}; // { [targetId]: { draftTitle, error, saving } }
     this.ratingEnabled = false;
     this.ratingCount = 0;
     this._auditDropboxFetchTimer = null;
@@ -261,6 +273,16 @@ export class CurateAuditTab extends LitElement {
   updated(changedProperties) {
     if (changedProperties.has('tenant')) {
       this._restoreAuditHistorySessionState();
+    }
+    if (changedProperties.has('targets') || changedProperties.has('tenant')) {
+      for (const t of (this.targets || [])) {
+        if (t.type === 'list') {
+          this._ensureListsLoaded();
+        }
+        if (t.listView && t.listId && !this._listItemsCache[t.listId]) {
+          this._fetchListItems(t.listId);
+        }
+      }
     }
     if (
       changedProperties.has('tenant')
@@ -438,6 +460,26 @@ export class CurateAuditTab extends LitElement {
       composed: true
     }));
   }
+
+  _handleSaveAndLoadMoreClick = (leftImages = []) => {
+    if (this.loading) return;
+    const imageIds = Array.isArray(leftImages)
+      ? Array.from(new Set(
+        leftImages
+          .map((image) => Number(image?.id))
+          .filter((id) => Number.isFinite(id) && id > 0)
+      ))
+      : [];
+    this.dispatchEvent(new CustomEvent('audit-save-and-load-more', {
+      detail: {
+        imageIds,
+        keyword: this.keyword || '',
+        category: this.keywordCategory || '',
+      },
+      bubbles: true,
+      composed: true,
+    }));
+  };
 
   _emitMlSimilaritySettings(settings = {}) {
     this.dispatchEvent(new CustomEvent('audit-ai-ml-similarity-settings-changed', {
@@ -768,6 +810,29 @@ export class CurateAuditTab extends LitElement {
     }));
   }
 
+  _handleHotspotListChange(event, targetId) {
+    this.dispatchEvent(new CustomEvent('hotspot-changed', {
+      detail: {
+        type: 'list-change',
+        targetId,
+        value: event.target.value
+      },
+      bubbles: true,
+      composed: true
+    }));
+  }
+
+  _handleHotspotViewList(targetId) {
+    this.dispatchEvent(new CustomEvent('hotspot-changed', {
+      detail: {
+        type: 'view-list',
+        targetId,
+      },
+      bubbles: true,
+      composed: true
+    }));
+  }
+
   _handleHotspotAddTarget = () => {
     this.dispatchEvent(new CustomEvent('hotspot-changed', {
       detail: { type: 'add-target' },
@@ -894,6 +959,81 @@ export class CurateAuditTab extends LitElement {
     } catch (error) {
       console.error('Error fetching Dropbox folders:', error);
       this.dropboxFolders = [];
+    }
+  }
+
+  _buildNewListTitle() {
+    const now = new Date();
+    const pad = (v) => String(v).padStart(2, '0');
+    return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}` +
+      `:${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())} new list`;
+  }
+
+  _startListCreate(targetId) {
+    this._listCreateState = {
+      ...this._listCreateState,
+      [targetId]: { draftTitle: this._buildNewListTitle(), error: '', saving: false },
+    };
+  }
+
+  _cancelListCreate(targetId) {
+    const next = { ...this._listCreateState };
+    delete next[targetId];
+    this._listCreateState = next;
+  }
+
+  async _saveListCreate(targetId) {
+    const state = this._listCreateState[targetId];
+    const trimmed = (state?.draftTitle || '').trim();
+    if (!trimmed) {
+      this._listCreateState = { ...this._listCreateState, [targetId]: { ...state, error: 'Name cannot be empty.' } };
+      return;
+    }
+    if ((this._lists || []).some((l) => (l.title || '').trim().toLowerCase() === trimmed.toLowerCase())) {
+      this._listCreateState = { ...this._listCreateState, [targetId]: { ...state, error: 'Name already exists.' } };
+      return;
+    }
+    this._listCreateState = { ...this._listCreateState, [targetId]: { ...state, saving: true, error: '' } };
+    try {
+      const newList = await createList(this.tenant, { title: trimmed, notebox: '' });
+      const newId = newList?.id ?? newList?.list_id ?? newList?.listId ?? null;
+      this._lists = [...(this._lists || []), { ...newList, id: newId, title: trimmed }];
+      const next = { ...this._listCreateState };
+      delete next[targetId];
+      this._listCreateState = next;
+      // Auto-select the new list on the target
+      this._handleHotspotListChange({ target: { value: String(newId) } }, targetId);
+    } catch {
+      this._listCreateState = { ...this._listCreateState, [targetId]: { ...state, saving: false, error: 'Failed to create list.' } };
+    }
+  }
+
+  async _fetchListItems(listId) {
+    if (!listId || !this.tenant) return;
+    const key = String(listId);
+    if (this._listItemsCache[key]?.loading) return;
+    this._listItemsCache = { ...this._listItemsCache, [key]: { items: [], loading: true, error: '' } };
+    try {
+      const items = await getListItems(this.tenant, listId);
+      this._listItemsCache = { ...this._listItemsCache, [key]: { items: items || [], loading: false, error: '' } };
+    } catch (error) {
+      console.error('Error fetching list items:', error);
+      this._listItemsCache = { ...this._listItemsCache, [key]: { items: [], loading: false, error: 'Failed to load.' } };
+    }
+  }
+
+  async _ensureListsLoaded({ force = false } = {}) {
+    if (!this.tenant) return;
+    if (this._listsLoading) return;
+    if (!force && this._lists.length) return;
+    this._listsLoading = true;
+    try {
+      this._lists = await getLists(this.tenant, { force });
+    } catch (error) {
+      console.error('Error fetching lists:', error);
+      this._lists = [];
+    } finally {
+      this._listsLoading = false;
     }
   }
 
@@ -1356,6 +1496,11 @@ export class CurateAuditTab extends LitElement {
         : `Images with "${this.keyword}"`)
       : 'Select a keyword';
     const selectedKeywordValue = this._getAuditKeywordDropdownValue();
+    const selectedModeValue = this.mode === 'existing' ? 'existing' : 'missing';
+    const modeOptions = [
+      { value: 'missing', label: 'Find Missing Tags' },
+      { value: 'existing', label: 'Verify Existing Tags' },
+    ];
     const activeAiModel = this._getActiveAiModel();
     const availableAiModels = this._getAvailableAiModels();
     const auditEmptyMessage = this._getAuditEmptyStateMessage();
@@ -1371,86 +1516,100 @@ export class CurateAuditTab extends LitElement {
     return html`
       <div>
         <div class="mb-4">
-          <div class="w-full max-w-xl mx-auto">
-            <keyword-dropdown
-              .value=${selectedKeywordValue}
-              .keywords=${this.keywords || []}
-              .tagStatsBySource=${this.tagStatsBySource || {}}
-              .activeCurateTagSource=${this.activeCurateTagSource || 'permatags'}
-              .includeUntagged=${false}
-              @keyword-selected=${this._handleAuditKeywordDropdownChange}
-              @change=${this._handleAuditKeywordDropdownChange}
-            ></keyword-dropdown>
-          </div>
-        </div>
+          ${!this.keyword ? html`
+            <div class="w-full max-w-xl mx-auto">
+              <keyword-dropdown
+                .value=${selectedKeywordValue}
+                .keywords=${this.keywords || []}
+                .tagStatsBySource=${this.tagStatsBySource || {}}
+                .activeCurateTagSource=${this.activeCurateTagSource || 'permatags'}
+                .includeUntagged=${false}
+                .selectedTone=${'blue'}
+                @keyword-selected=${this._handleAuditKeywordDropdownChange}
+                @change=${this._handleAuditKeywordDropdownChange}
+              ></keyword-dropdown>
+            </div>
+          ` : html`
+            <div class="bg-white rounded-lg shadow p-4">
+              <div class="grid grid-cols-1 gap-4 ${this.mode === 'missing' ? 'lg:grid-cols-[1fr_1fr_2fr]' : 'lg:grid-cols-2'}">
+                <div class="space-y-1">
+                  <div class="text-[11px] font-semibold uppercase tracking-wide text-gray-500 inline-flex items-center gap-2">
+                    <span class="inline-flex h-5 w-5 items-center justify-center rounded-full border border-blue-300 bg-blue-100 text-[10px] font-bold text-blue-700">1</span>
+                    <span>Select a Topic</span>
+                  </div>
+                  <keyword-dropdown
+                    .value=${selectedKeywordValue}
+                    .keywords=${this.keywords || []}
+                    .tagStatsBySource=${this.tagStatsBySource || {}}
+                    .activeCurateTagSource=${this.activeCurateTagSource || 'permatags'}
+                    .includeUntagged=${false}
+                    .compact=${true}
+                    .selectedTone=${'blue'}
+                    @keyword-selected=${this._handleAuditKeywordDropdownChange}
+                    @change=${this._handleAuditKeywordDropdownChange}
+                  ></keyword-dropdown>
+                </div>
 
-        ${this.keyword ? html`
-          <div class="bg-white rounded-lg shadow p-4 mb-4">
-            <div class="flex flex-wrap items-center justify-center gap-4">
-              <div>
-                <div class="flex flex-col items-center gap-1">
-                  <div class="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Mode</div>
-                  <div class="inline-flex flex-wrap items-center justify-center gap-2 rounded-xl border border-gray-300 bg-gray-50 p-2 shadow-sm">
+                <div class="space-y-1">
+                  <div class="text-[11px] font-semibold uppercase tracking-wide text-gray-500 inline-flex items-center gap-2">
+                    <span class="inline-flex h-5 w-5 items-center justify-center rounded-full border border-blue-300 bg-blue-100 text-[10px] font-bold text-blue-700">2</span>
+                    <span>Select a Mode</span>
+                  </div>
+                  <keyword-dropdown
+                    .value=${selectedModeValue}
+                    .placeholder=${'Select a mode...'}
+                    .keywords=${[]}
+                    .prependOptions=${modeOptions}
+                    .prependOptionsEmphasized=${false}
+                    .includeUntagged=${false}
+                    .compact=${true}
+                    .searchable=${false}
+                    .selectedTone=${'blue'}
+                    @keyword-selected=${(event) => this._handleModeChange(event.detail?.value || 'missing')}
+                  ></keyword-dropdown>
+                </div>
+
+                ${this.mode === 'missing' ? html`<div class="space-y-1">
+                  <div class="text-[11px] font-semibold uppercase tracking-wide text-gray-500 inline-flex items-center gap-2">
+                    <span class="inline-flex h-5 w-5 items-center justify-center rounded-full border border-blue-300 bg-blue-100 text-[10px] font-bold text-blue-700">3</span>
+                    <span>Select a Model</span>
                     <button
-                      class=${this.mode === 'missing'
-                        ? 'px-4 py-2 rounded-lg border border-blue-600 bg-blue-600 text-white text-sm font-semibold shadow-sm'
-                        : 'px-4 py-2 rounded-lg border border-gray-300 bg-white text-gray-700 text-sm font-semibold hover:bg-gray-100'}
-                      aria-pressed=${this.mode === 'missing' ? 'true' : 'false'}
-                      @click=${() => this._handleModeChange('missing')}
+                      type="button"
+                      class="inline-flex h-5 w-5 items-center justify-center rounded-full border border-gray-300 bg-white text-[10px] font-semibold text-gray-600 hover:bg-gray-100 normal-case"
+                      title=${this._showAiHelp ? 'Hide help' : 'Show help'}
+                      aria-label=${this._showAiHelp ? 'Hide help' : 'Show help'}
+                      @click=${this._toggleAiHelpVisibility}
                     >
-                      Find Missing Tags
-                    </button>
-                    <button
-                      class=${this.mode === 'existing'
-                        ? 'px-4 py-2 rounded-lg border border-blue-600 bg-blue-600 text-white text-sm font-semibold shadow-sm'
-                        : 'px-4 py-2 rounded-lg border border-gray-300 bg-white text-gray-700 text-sm font-semibold hover:bg-gray-100'}
-                      aria-pressed=${this.mode === 'existing' ? 'true' : 'false'}
-                      @click=${() => this._handleModeChange('existing')}
-                    >
-                      Verify Existing Tags
+                      ?
                     </button>
                   </div>
-                </div>
-              </div>
-              ${this.mode === 'missing' ? html`
-                <div class="w-full">
-                  <div class="space-y-3">
-                    <fieldset class="relative w-full max-w-2xl mx-auto rounded-md border border-gray-300 bg-gray-50 p-2">
-                      <legend class="px-2 inline-flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-gray-500">
-                        <span>Select a Model</span>
-                        <button
-                          type="button"
-                          class="inline-flex h-5 w-5 items-center justify-center rounded-full border border-gray-300 bg-white text-[10px] font-semibold text-gray-600 hover:bg-gray-100 normal-case"
-                          title=${this._showAiHelp ? 'Hide help' : 'Show help'}
-                          aria-label=${this._showAiHelp ? 'Hide help' : 'Show help'}
-                          @click=${this._toggleAiHelpVisibility}
-                        >
-                          ?
-                        </button>
-                      </legend>
-                      <div class="w-full text-xs text-gray-600">
-                        <div class="mx-auto flex w-fit flex-wrap items-center justify-center gap-2">
-                          ${availableAiModels.map((model) => html`
-                            <button
-                              class="px-2 py-1 rounded border text-xs ${activeAiModel === model.key ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-200'}"
-                              aria-pressed=${activeAiModel === model.key ? 'true' : 'false'}
-                              @click=${() => {
-                                if (!this.aiEnabled) {
-                                  this.dispatchEvent(new CustomEvent('audit-ai-enabled-changed', {
-                                    detail: { enabled: true },
-                                    bubbles: true,
-                                    composed: true,
-                                  }));
-                                }
-                                this._handleAiModelChange(model.key);
-                              }}
-                            >
-                              ${model.label}
-                            </button>
-                          `)}
-                        </div>
-                        ${activeAiModel === 'ml-similarity' ? html`
-                          <div class="w-full mt-2 flex flex-wrap items-center justify-center gap-3 text-xs text-gray-700">
+                  <div class="rounded-xl border border-gray-300 bg-gray-50 p-2 shadow-sm">
+                    <div class="w-full text-sm text-gray-600">
+                      <div class="mx-auto flex w-fit flex-wrap items-center justify-center gap-2">
+                        ${availableAiModels.map((model) => html`
+                          <button
+                            class=${activeAiModel === model.key
+                              ? 'px-4 py-2 rounded-lg border border-blue-600 bg-blue-600 text-white text-sm font-semibold shadow-sm'
+                              : 'px-4 py-2 rounded-lg border border-gray-300 bg-white text-gray-700 text-sm font-semibold hover:bg-gray-100'}
+                            aria-pressed=${activeAiModel === model.key ? 'true' : 'false'}
+                            @click=${() => {
+                              if (!this.aiEnabled) {
+                                this.dispatchEvent(new CustomEvent('audit-ai-enabled-changed', {
+                                  detail: { enabled: true },
+                                  bubbles: true,
+                                  composed: true,
+                                }));
+                              }
+                              this._handleAiModelChange(model.key);
+                            }}
+                          >
+                            ${model.label}
+                          </button>
+                        `)}
+                      </div>
+                      ${activeAiModel === 'ml-similarity' ? html`
+                        <div class="w-full mt-2 text-xs text-gray-700">
+                          <div class="flex items-center justify-center gap-3 whitespace-nowrap overflow-x-auto pb-1">
                             <label class="inline-flex items-center gap-1">
                               <span>Sample Size</span>
                               <input
@@ -1494,15 +1653,22 @@ export class CurateAuditTab extends LitElement {
                               <span>random</span>
                             </label>
                           </div>
-                        ` : html``}
-                      </div>
-                    </fieldset>
-                    ${this._showAiHelp ? this._renderAiModeDocumentationPanel() : html``}
+                        </div>
+                      ` : html``}
+                    </div>
                   </div>
+                </div>` : html``}
+              </div>
+              ${this.mode === 'missing' && this._showAiHelp ? html`
+                <div class="mt-3">
+                  ${this._renderAiModeDocumentationPanel()}
                 </div>
               ` : html``}
             </div>
-          </div>
+          `}
+        </div>
+
+        ${this.keyword ? html`
 
           <div class="curate-layout results-hotspot-layout" style="--curate-thumb-size: ${this.thumbSize}px;">
             <div class="curate-pane">
@@ -1630,6 +1796,8 @@ export class CurateAuditTab extends LitElement {
                 <div class="curate-utility-panel">
                   ${(this.targets || []).map((target) => {
                     const isPrimary = (this.targets?.[0]?.id === target.id);
+                    const isNotTarget = String(target?.auditRole || '').trim().toLowerCase() === 'not'
+                      || String(target?.id || '') === 'audit-hotspot-not';
                     const isRating = target.type === 'rating';
                     const optionMatch = target.keyword ? this._getOptionValueForKeyword(target.keyword) : null;
                     const fallbackCategory = target.category || this._resolveCategoryForKeyword(target.keyword) || 'Uncategorized';
@@ -1637,7 +1805,7 @@ export class CurateAuditTab extends LitElement {
                       ? (optionMatch?.value || `${encodeURIComponent(fallbackCategory)}::${encodeURIComponent(target.keyword)}`)
                       : '';
                     const keywordOptions = this._getKeywordsByCategory();
-                    let hasSelectedOption = false;
+                    const isAdd = target.action !== 'remove';
                     return html`
                       <div
                         class="curate-utility-box ${this._auditHotspotDragTarget === target.id ? 'active' : ''}"
@@ -1645,84 +1813,163 @@ export class CurateAuditTab extends LitElement {
                         @dragleave=${this._handleHotspotDragLeave}
                         @drop=${(event) => this._handleHotspotDrop(event, target.id)}
                       >
-                        <div class="curate-utility-controls">
-                          <select
-                            class="curate-utility-type-select"
-                            .value=${target.type || 'keyword'}
-                            ?disabled=${isPrimary}
-                            @change=${(event) => this._handleHotspotTypeChange(event, target.id)}
-                          >
-                            <option value="keyword">Keyword</option>
-                            <option value="rating">Rating</option>
-                          </select>
-                          ${isRating ? html`
-                            <select
-                              class="curate-utility-select"
-                              .value=${target.rating ?? ''}
-                              ?disabled=${isPrimary}
-                              @change=${(event) => this._handleHotspotRatingChange(event, target.id)}
-                            >
-                              <option value="">Select rating…</option>
-                              <option value="0">🗑️ Garbage</option>
-                              <option value="1">⭐ 1 Star</option>
-                              <option value="2">⭐⭐ 2 Stars</option>
-                              <option value="3">⭐⭐⭐ 3 Stars</option>
-                            </select>
-                          ` : html`
-                            <select
-                              class="curate-utility-select ${selectedValue ? 'selected' : ''}"
-                              .value=${selectedValue}
-                              ?disabled=${isPrimary}
-                              @change=${(event) => this._handleHotspotKeywordChange(event, target.id)}
-                            >
-                              <option value="" ?selected=${!selectedValue}>Select keyword…</option>
-                              ${keywordOptions.map(([category, keywords]) => html`
-                                <optgroup label="${category}">
-                                  ${keywords.map((kw) => html`
-                                    ${(() => {
+                        ${(isPrimary || isNotTarget) ? html`
+                          <!-- read-only header for primary and "not" targets -->
+                          <div class="hotspot-header">
+                            <span class="hotspot-signum ${isNotTarget ? 'hotspot-signum--remove' : 'hotspot-signum--add'}">
+                              ${isNotTarget ? '−' : '+'}
+                            </span>
+                            <span class="hotspot-keyword-select hotspot-keyword-select--set" style="display:flex;align-items:center;">
+                              ${target.keyword || '—'}
+                            </span>
+                          </div>
+                        ` : html`
+                          <!-- editable header for user-added targets -->
+                          <div class="hotspot-header">
+                            ${(!isRating && target.type !== 'list') ? html`
+                              <button
+                                type="button"
+                                class="hotspot-signum ${isAdd ? 'hotspot-signum--add' : 'hotspot-signum--remove'}"
+                                title="${isAdd ? 'Currently: Add — click to switch to Remove' : 'Currently: Remove — click to switch to Add'}"
+                                @click=${(e) => {
+                                  e.stopPropagation();
+                                  this._handleHotspotActionChange({ target: { value: isAdd ? 'remove' : 'add' } }, target.id);
+                                }}
+                              >${isAdd ? '+' : '−'}</button>
+                            ` : html``}
+                            ${isRating ? html`
+                              <select
+                                class="hotspot-keyword-select"
+                                .value=${target.rating ?? ''}
+                                @change=${(event) => this._handleHotspotRatingChange(event, target.id)}
+                              >
+                                <option value="">Select rating…</option>
+                                <option value="0">🗑️ Garbage</option>
+                                <option value="1">⭐ 1 Star</option>
+                                <option value="2">⭐⭐ 2 Stars</option>
+                                <option value="3">⭐⭐⭐ 3 Stars</option>
+                              </select>
+                            ` : target.type === 'list' ? html`
+                              <select
+                                class="hotspot-keyword-select ${target.listId ? 'hotspot-keyword-select--set' : ''}"
+                                .value=${target.listId || ''}
+                                @change=${(event) => {
+                                  if (event.target.value === '__new__') {
+                                    event.target.value = target.listId || '';
+                                    this._startListCreate(target.id);
+                                  } else {
+                                    this._handleHotspotListChange(event, target.id);
+                                  }
+                                }}
+                              >
+                                <option value="">Select list…</option>
+                                <option value="__new__">New list…</option>
+                                ${(this._lists || []).map((list) => html`
+                                  <option value=${String(list.id)} ?selected=${String(list.id) === String(target.listId)}>
+                                    ${list.title}
+                                  </option>
+                                `)}
+                              </select>
+                              <button
+                                class="list-target-tab ${target.listView ? 'active' : ''}"
+                                ?disabled=${!target.listId}
+                                @click=${() => this._handleHotspotViewList(target.id)}
+                              >${target.listView ? 'Back' : 'View'}</button>
+                            ` : html`
+                              <select
+                                class="hotspot-keyword-select ${selectedValue ? 'hotspot-keyword-select--set' : ''}"
+                                .value=${selectedValue}
+                                @change=${(event) => this._handleHotspotKeywordChange(event, target.id)}
+                              >
+                                <option value="">Select keyword…</option>
+                                ${keywordOptions.map(([category, keywords]) => html`
+                                  <optgroup label="${category}">
+                                    ${keywords.map((kw) => {
                                       const optionValue = `${encodeURIComponent(category)}::${encodeURIComponent(kw.keyword)}`;
-                                      const isSelected = optionValue === selectedValue;
-                                      if (isSelected) {
-                                        hasSelectedOption = true;
-                                      }
                                       return html`
-                                        <option value=${optionValue} ?selected=${isSelected}>
+                                        <option value=${optionValue} ?selected=${optionValue === selectedValue}>
                                           ${kw.keyword}
                                         </option>
                                       `;
-                                    })()}
-                                  `)}
-                                </optgroup>
-                              `)}
-                              ${(() => {
-                                if (!isPrimary || !target.keyword) return html``;
-                                if (hasSelectedOption) return html``;
-                                return html``;
-                              })()}
-                            </select>
+                                    })}
+                                  </optgroup>
+                                `)}
+                              </select>
+                            `}
                             <select
-                              class="curate-utility-action"
-                              .value=${target.action || 'add'}
-                              ?disabled=${isPrimary}
-                              @change=${(event) => this._handleHotspotActionChange(event, target.id)}
+                              class="hotspot-type-select"
+                              .value=${target.type || 'keyword'}
+                              @change=${(event) => this._handleHotspotTypeChange(event, target.id)}
                             >
-                              <option value="add">Add</option>
-                              <option value="remove">Remove</option>
+                              <option value="keyword">Keyword</option>
+                              <option value="rating">Rating</option>
+                              <option value="list">List</option>
                             </select>
-                          `}
-                        </div>
-                        ${!isPrimary ? html`
+                          </div>
                           <button
                             type="button"
-                            class="curate-utility-remove"
-                            title="Remove box"
+                            class="hotspot-remove"
+                            title="Remove"
                             @click=${() => this._handleHotspotRemoveTarget(target.id)}
-                          >
-                            ×
-                          </button>
-                        ` : html``}
-                        <div class="curate-utility-count">${target.count || 0}</div>
-                        <div class="curate-utility-drop-hint">Drop images here</div>
+                          >🗑</button>
+                          ${target.type === 'list' && this._listCreateState[target.id] ? html`
+                            <div class="hotspot-list-create">
+                              <input
+                                class="hotspot-list-create-input"
+                                .value=${this._listCreateState[target.id].draftTitle || ''}
+                                ?disabled=${this._listCreateState[target.id].saving}
+                                @input=${(e) => {
+                                  this._listCreateState = { ...this._listCreateState, [target.id]: { ...this._listCreateState[target.id], draftTitle: e.target.value, error: '' } };
+                                }}
+                                @keydown=${(e) => {
+                                  if (e.key === 'Enter') { e.preventDefault(); this._saveListCreate(target.id); }
+                                  if (e.key === 'Escape') this._cancelListCreate(target.id);
+                                }}
+                              >
+                              <button class="list-target-tab active" @click=${() => this._saveListCreate(target.id)} ?disabled=${this._listCreateState[target.id].saving}>Save</button>
+                              <button class="list-target-tab" @click=${() => this._cancelListCreate(target.id)}>Cancel</button>
+                              ${this._listCreateState[target.id].error ? html`<div class="text-xs text-red-500 w-full mt-1">${this._listCreateState[target.id].error}</div>` : ''}
+                            </div>
+                          ` : ''}
+                        `}
+                        ${(target.type === 'list' && target.listView) ? (() => {
+                          const cached = this._listItemsCache[String(target.listId)] || {};
+                          if (cached.loading) {
+                            return html`<div class="text-xs text-gray-500 p-2">Loading…</div>`;
+                          }
+                          if (cached.error) {
+                            return html`<div class="text-xs text-red-500 p-2">${cached.error}</div>`;
+                          }
+                          const items = cached.items || [];
+                          const images = items.map((item) => {
+                            const photo = item?.photo || item?.image || {};
+                            const imageId = Number(photo.id ?? item.photo_id ?? item.id);
+                            return Number.isFinite(imageId) ? { ...photo, id: imageId } : null;
+                          }).filter(Boolean);
+                          return html`
+                            <div class="list-target-grid" style="--curate-thumb-size: 100px;">
+                              ${renderImageGrid({
+                                images,
+                                selection: [],
+                                flashSelectionIds: new Set(),
+                                renderFunctions: {
+                                  renderCurateRatingWidget: this.renderCurateRatingWidget,
+                                  renderCurateRatingStatic: this.renderCurateRatingStatic,
+                                  renderCuratePermatagSummary: this.renderCuratePermatagSummary,
+                                  formatCurateDate: this.formatCurateDate,
+                                },
+                                eventHandlers: {
+                                  onImageClick: (event, image) => this.dispatchEvent(new CustomEvent('image-clicked', { detail: { event, image, imageSet: images }, bubbles: true, composed: true })),
+                                  onDragStart: (event) => event.preventDefault(),
+                                },
+                                options: { emptyMessage: 'No items in this list yet.', showPermatags: true },
+                              })}
+                            </div>
+                          `;
+                        })() : html`
+                          <div class="curate-utility-count">${target.count || 0}</div>
+                          <div class="curate-utility-drop-hint">Drop images here</div>
+                        `}
                       </div>
                     `;
                   })}

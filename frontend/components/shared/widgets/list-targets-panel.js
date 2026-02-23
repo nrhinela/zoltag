@@ -81,6 +81,13 @@ export class ListTargetsPanel extends LitElement {
             @dragleave=${(event) => this._handleDragLeave(event, target.id)}
             @drop=${(event) => this._handleDrop(event, target.id)}
           >
+            ${(this.listTargets || []).length > 1 ? html`
+              <button
+                class="hotspot-remove"
+                title="Remove list target"
+                @click=${() => this._emit('list-target-remove', { targetId: target.id })}
+              >🗑</button>
+            ` : html``}
             <div class="list-target-header">
               <select
                 class="list-target-select px-2 py-1 border rounded text-xs"
@@ -98,15 +105,6 @@ export class ListTargetsPanel extends LitElement {
                   </option>
                 `)}
               </select>
-              ${(this.listTargets || []).length > 1 ? html`
-                <button
-                  class="text-xs text-gray-500 hover:text-gray-700"
-                  title="Remove list target"
-                  @click=${() => this._emit('list-target-remove', { targetId: target.id })}
-                >
-                  ×
-                </button>
-              ` : html``}
               <button
                 class="list-target-tab ${target.mode === 'view' ? 'active' : ''}"
                 @click=${() => this._emit('list-target-mode', { targetId: target.id, mode: 'view' })}

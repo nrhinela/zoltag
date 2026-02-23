@@ -80,7 +80,7 @@ class TrainKeywordModelsCommand(CliCommand):
         model_version = getattr(tagger, "model_version", model_name)
 
         config_mgr = ConfigManager(self.db, self.tenant.id)
-        all_keywords = config_mgr.get_all_keywords()
+        all_keywords = config_mgr.get_all_keywords(include_people=True)
         keyword_to_category = {kw['keyword']: kw['category'] for kw in all_keywords}
 
         result = build_keyword_models(
@@ -262,7 +262,8 @@ class RecomputeTrainedTagsCommand(CliCommand):
                             model_type=settings.tagging_model,
                             threshold=settings.trained_tag_threshold,
                             embedding=embedding_row.embedding,
-                            keyword_id_map=keyword_id_map
+                            keyword_id_map=keyword_id_map,
+                            top_n=settings.trained_tag_top_n,
                         )
                     else:
                         blob = thumbnail_bucket.blob(thumbnail_key)
@@ -283,7 +284,8 @@ class RecomputeTrainedTagsCommand(CliCommand):
                             model_version=model_version,
                             model_type=settings.tagging_model,
                             threshold=settings.trained_tag_threshold,
-                            keyword_id_map=keyword_id_map
+                            keyword_id_map=keyword_id_map,
+                            top_n=settings.trained_tag_top_n,
                         )
                     processed += 1
                     bar.update(1)

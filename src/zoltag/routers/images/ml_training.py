@@ -222,6 +222,7 @@ async def list_ml_training_images(
                     model_version=model_version,
                     model_type=settings.tagging_model,
                     threshold=settings.trained_tag_threshold,
+                    top_n=settings.trained_tag_top_n,
                 )
                 trained_by_image[image.id] = trained_tags
 

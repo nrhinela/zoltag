@@ -2905,9 +2905,11 @@ export class SearchTab extends LitElement {
             mode="tags"
             .targets=${this.searchHotspotTargets}
             .keywordsByCategory=${this._getSearchKeywordsByCategory()}
+            .lists=${this._lists || []}
             .dragTargetId=${this._searchHotspotDragTarget}
             @hotspot-keyword-change=${(event) => this._searchHotspotHandlers.handleKeywordChange({ target: { value: event.detail.value } }, event.detail.targetId)}
             @hotspot-action-change=${(event) => this._searchHotspotHandlers.handleActionChange({ target: { value: event.detail.value } }, event.detail.targetId)}
+            @hotspot-type-change=${(event) => this._searchHotspotHandlers.handleTypeChange({ target: { value: event.detail.value } }, event.detail.targetId)}
             @hotspot-add=${() => this._searchHotspotHandlers.handleAddTarget()}
             @hotspot-remove=${(event) => this._searchHotspotHandlers.handleRemoveTarget(event.detail.targetId)}
             @hotspot-dragover=${(event) => this._searchHotspotHandlers.handleDragOver(event.detail.event, event.detail.targetId)}

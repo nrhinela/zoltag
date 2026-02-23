@@ -175,6 +175,7 @@ def recompute_trained_tags_for_image(
     embedding: Optional[List[float]] = None,
     keyword_id_map: Optional[Dict[str, int]] = None,
     asset_id=None,
+    top_n: Optional[int] = None,
 ) -> List[dict]:
     """Compute and persist trained tags for a single image."""
     if not keyword_models:
@@ -205,6 +206,14 @@ def recompute_trained_tags_for_image(
         if score >= threshold
     ]
     trained_tags.sort(key=lambda x: x["confidence"], reverse=True)
+    if top_n is not None:
+        by_category: Dict[str, list] = {}
+        for tag in trained_tags:
+            cat = tag["category"] or ""
+            by_category.setdefault(cat, []).append(tag)
+        trained_tags = []
+        for cat_tags in by_category.values():
+            trained_tags.extend(cat_tags[:top_n])
 
     db.query(MachineTag).filter(
         tenant_column_filter_for_values(MachineTag, tenant_id),
@@ -254,6 +263,7 @@ def score_keywords_for_categories(
     keywords_by_category: Dict[str, List[dict]],
     model_type: str,
     threshold: float,
+    top_n: Optional[int] = None,
 ) -> List[Tuple[str, float]]:
     """Compute keyword scores per category from the active zero-shot model."""
     tagger = get_tagger(model_type=model_type)
@@ -268,9 +278,10 @@ def score_keywords_for_categories(
         if not eligible_keywords:
             continue
         prompt_scores = tagger.tag_image(image_data, eligible_keywords, threshold=0.0)
-        for keyword, score in prompt_scores:
-            if score >= threshold:
-                all_tags.append((keyword, score))
+        category_tags = [(kw, score) for kw, score in prompt_scores if score >= threshold]
+        if top_n is not None:
+            category_tags = category_tags[:top_n]
+        all_tags.extend(category_tags)
 
     all_tags.sort(key=lambda x: x[1], reverse=True)
     return all_tags

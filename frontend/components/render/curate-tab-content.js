@@ -249,6 +249,7 @@ export function renderCurateTabContent(host, { formatCurateDate }) {
             @audit-ai-enabled-changed=${(e) => host._handleCurateAuditAiEnabledChange({ target: { checked: e.detail.enabled } })}
             @audit-ai-model-changed=${(e) => host._handleCurateAuditAiModelChange(e.detail.model)}
             @audit-ai-ml-similarity-settings-changed=${(e) => host._handleCurateAuditMlSimilaritySettingsChange(e.detail)}
+            @audit-save-and-load-more=${(e) => host._handleCurateAuditSaveAndLoadMore(e.detail)}
             @pagination-changed=${(e) => {
               host.curateAuditPageOffset = e.detail.offset;
               host.curateAuditLimit = e.detail.limit;
