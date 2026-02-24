@@ -12,6 +12,7 @@ import {
   createTenantRole,
   updateTenantRole,
   deleteTenantRole,
+  getTenantsPublic,
 } from '../services/api.js';
 
 class TenantUsersAdmin extends LitElement {
@@ -46,6 +47,7 @@ class TenantUsersAdmin extends LitElement {
     roleFormPermissions: { type: Array },
     roleSubmitting: { type: Boolean },
     roleDeleting: { type: Boolean },
+    resolvedTenantName: { type: String },
   };
 
   static styles = [
@@ -467,16 +469,22 @@ class TenantUsersAdmin extends LitElement {
     this.roleFormPermissions = [];
     this.roleSubmitting = false;
     this.roleDeleting = false;
+    this.resolvedTenantName = '';
+    this._tenantNameLookupToken = 0;
   }
 
   connectedCallback() {
     super.connectedCallback();
     this._loadData();
+    this._resolveTenantName();
   }
 
   updated(changedProperties) {
     if (changedProperties.has('tenant') || changedProperties.has('canManage') || changedProperties.has('canView')) {
       this._loadData();
+    }
+    if (changedProperties.has('tenant') || changedProperties.has('tenantName')) {
+      this._resolveTenantName();
     }
   }
 
@@ -486,6 +494,39 @@ class TenantUsersAdmin extends LitElement {
       this._loadInvitations(),
       this._loadRoles(),
     ]);
+  }
+
+  _looksLikeUuid(value) {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || '').trim());
+  }
+
+  async _resolveTenantName() {
+    const tenantId = String(this.tenant || '').trim();
+    const providedName = String(this.tenantName || '').trim();
+    if (!tenantId) {
+      this.resolvedTenantName = providedName;
+      return;
+    }
+    const needsLookup = !providedName || providedName === tenantId || this._looksLikeUuid(providedName);
+    if (!needsLookup) {
+      this.resolvedTenantName = providedName;
+      return;
+    }
+
+    const lookupToken = this._tenantNameLookupToken + 1;
+    this._tenantNameLookupToken = lookupToken;
+    try {
+      const tenants = await getTenantsPublic();
+      if (this._tenantNameLookupToken !== lookupToken) return;
+      const match = Array.isArray(tenants)
+        ? tenants.find((item) => String(item?.id || '').trim() === tenantId)
+        : null;
+      const matchedName = String(match?.name || '').trim();
+      this.resolvedTenantName = matchedName || providedName || tenantId;
+    } catch (_error) {
+      if (this._tenantNameLookupToken !== lookupToken) return;
+      this.resolvedTenantName = providedName || tenantId;
+    }
   }
 
   _isAdminProtected(user) {
@@ -1015,7 +1056,7 @@ class TenantUsersAdmin extends LitElement {
         <div class="card-header">
           <div>
             <h2 class="card-title">Tenant Users</h2>
-            <p class="card-subtitle">Manage users assigned to tenant <strong>${this.tenantName || this.tenant}</strong>.</p>
+            <p class="card-subtitle">Manage users assigned to tenant <strong>${this.resolvedTenantName || this.tenantName || this.tenant}</strong>.</p>
           </div>
           <div class="header-actions">
             ${this.canManage ? html`

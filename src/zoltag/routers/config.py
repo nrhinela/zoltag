@@ -24,6 +24,8 @@ async def get_system_config():
         "version": "0.1.0",
         "api_url": settings.api_url if hasattr(settings, 'api_url') else "/api",
         "debug": settings.debug,
+        "local_mode": settings.local_mode,
+        "local_tenant_id": settings.local_tenant_id if settings.local_mode else None,
         "zeroshot_tag_threshold": settings.zeroshot_tag_threshold,
         "trained_tag_threshold": settings.trained_tag_threshold,
         "gcp_project_id": settings.gcp_project_id,

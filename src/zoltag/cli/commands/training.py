@@ -205,34 +205,29 @@ class RecomputeTrainedTagsCommand(CliCommand):
             f"{', limit ' + str(self.limit) if self.limit is not None else ''})"
         )
 
-        with click.progressbar(
-            length=total_remaining,
-            label="Recomputing trained tags",
-            show_eta=True,
-            show_pos=True
-        ) as bar:
-            while True:
-                batch = base_query.offset(current_offset).limit(self.batch_size).all()
-                if not batch:
-                    break
-                assets_by_id = load_assets_for_images(self.db, batch)
+        _PROGRESS_INTERVAL = 25
+        while True:
+            batch = base_query.offset(current_offset).limit(self.batch_size).all()
+            if not batch:
+                break
+            assets_by_id = load_assets_for_images(self.db, batch)
 
-                reached_limit = False
-                for image in batch:
-                    if self.limit is not None and processed >= self.limit:
-                        reached_limit = True
-                        break
-                    storage_info = resolve_image_storage(
-                        image=image,
-                        tenant=self.tenant,
-                        db=None,
-                        assets_by_id=assets_by_id,
-                        strict=False,
-                    )
-                    thumbnail_key = storage_info.thumbnail_key
-                    if not thumbnail_key:
-                        skipped += 1
-                        continue
+            reached_limit = False
+            for image in batch:
+                if self.limit is not None and processed >= self.limit:
+                    reached_limit = True
+                    break
+                storage_info = resolve_image_storage(
+                    image=image,
+                    tenant=self.tenant,
+                    db=None,
+                    assets_by_id=assets_by_id,
+                    strict=False,
+                )
+                thumbnail_key = storage_info.thumbnail_key
+                if not thumbnail_key:
+                    skipped += 1
+                else:
                     if not self.replace:
                         existing = self.db.query(MachineTag.id).filter(
                             self.tenant_filter(MachineTag),
@@ -242,6 +237,9 @@ class RecomputeTrainedTagsCommand(CliCommand):
                         ).first()
                         if existing:
                             skipped += 1
+                            done = processed + skipped
+                            if done % _PROGRESS_INTERVAL == 0:
+                                print(f"  progress: {done}/{total_remaining} processed={processed} skipped={skipped}", flush=True)
                             continue
                     embedding_row = self.db.query(ImageEmbedding).filter(
                         self.tenant_filter(ImageEmbedding),
@@ -269,6 +267,9 @@ class RecomputeTrainedTagsCommand(CliCommand):
                         blob = thumbnail_bucket.blob(thumbnail_key)
                         if not blob.exists():
                             skipped += 1
+                            done = processed + skipped
+                            if done % _PROGRESS_INTERVAL == 0:
+                                print(f"  progress: {done}/{total_remaining} processed={processed} skipped={skipped}", flush=True)
                             continue
                         image_data = blob.download_as_bytes()
                         recompute_trained_tags_for_image(
@@ -288,16 +289,20 @@ class RecomputeTrainedTagsCommand(CliCommand):
                             top_n=settings.trained_tag_top_n,
                         )
                     processed += 1
-                    bar.update(1)
                     if self.limit is not None and processed >= self.limit:
                         reached_limit = True
                         break
 
-                self.db.commit()
+                done = processed + skipped
+                if done % _PROGRESS_INTERVAL == 0:
+                    print(f"  progress: {done}/{total_remaining} processed={processed} skipped={skipped}", flush=True)
 
-                if reached_limit:
-                    break
+            self.db.commit()
 
-                current_offset += len(batch)
+            if reached_limit:
+                break
 
+            current_offset += len(batch)
+
+        print(f"  progress: {processed + skipped}/{total_remaining} processed={processed} skipped={skipped}", flush=True)
         click.echo(f"✓ Trained tags recomputed: {processed} · Skipped: {skipped} · Total: {total}")

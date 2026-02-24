@@ -315,6 +315,7 @@ class ListEditor extends LitElement {
     listItems: { type: Array },
     editingSelectedList: { type: Boolean },
     isDownloading: { type: Boolean },
+    isExportingPptx: { type: Boolean },
     downloadIncludeVariants: { type: Boolean },
     isLoadingItems: { type: Boolean },
     isLoadingLists: { type: Boolean },
@@ -348,6 +349,7 @@ class ListEditor extends LitElement {
     this.listItems = [];
     this.editingSelectedList = false;
     this.isDownloading = false;
+    this.isExportingPptx = false;
     this.downloadIncludeVariants = true;
     this.isLoadingItems = false;
     this.isLoadingLists = false;
@@ -715,12 +717,10 @@ class ListEditor extends LitElement {
   }
 
   _handleListItemImageSelected(event, image) {
-    event.stopPropagation();
+    event?.stopPropagation?.();
     const selectedImage = event?.detail?.image || image;
     if (!selectedImage) return;
-    const imageSet = (this.listItems || [])
-      .map((item) => item?.image)
-      .filter(Boolean);
+    const { images: imageSet } = this._getListImagesForView();
     this.dispatchEvent(new CustomEvent('image-selected', {
       detail: { image: selectedImage, imageSet },
       bubbles: true,
@@ -1295,6 +1295,58 @@ class ListEditor extends LitElement {
     }
   }
 
+  _extractFilenameFromContentDisposition(contentDisposition, fallback = 'list-export.pptx') {
+    const raw = String(contentDisposition || '');
+    if (!raw) return fallback;
+    const utf8Match = raw.match(/filename\*=UTF-8''([^;]+)/i);
+    if (utf8Match?.[1]) {
+      try {
+        return decodeURIComponent(utf8Match[1].trim());
+      } catch (_error) {
+        // Fall through to filename parsing.
+      }
+    }
+    const filenameMatch = raw.match(/filename=\"?([^\";]+)\"?/i);
+    if (filenameMatch?.[1]) {
+      return filenameMatch[1].trim();
+    }
+    return fallback;
+  }
+
+  async _exportListPptx() {
+    if (!this.selectedList?.id || this.isExportingPptx) return;
+
+    this.isExportingPptx = true;
+    try {
+      const response = await fetchWithAuth(`/lists/${this.selectedList.id}/export/pptx`, {
+        tenantId: this.tenant,
+        responseType: 'blob-with-headers',
+      });
+      const blob = response?.blob;
+      if (!(blob instanceof Blob)) {
+        throw new Error('Export failed: invalid response payload.');
+      }
+      const fallbackName = `${this.selectedList.title || 'list'}_presentation.pptx`;
+      const filename = this._extractFilenameFromContentDisposition(
+        response?.headers?.get('Content-Disposition'),
+        fallbackName,
+      );
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = objectUrl;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(objectUrl);
+    } catch (error) {
+      console.error('Error exporting list presentation:', error);
+      alert(error?.message || 'Failed to export PPTX. Please try again.');
+    } finally {
+      this.isExportingPptx = false;
+    }
+  }
+
   _handleListSort(key) {
     if (!key) return;
     if (this.listSortKey === key) {
@@ -1845,6 +1897,14 @@ class ListEditor extends LitElement {
                     ${this.isDownloading ? html`<span class="inline-block w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></span>` : ''}
                     Download
                   </button>
+                  <button
+                    @click=${this._exportListPptx}
+                    ?disabled=${this.isExportingPptx}
+                    class="bg-indigo-600 text-white px-3 py-1 rounded text-sm hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                  >
+                    ${this.isExportingPptx ? html`<span class="inline-block w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></span>` : ''}
+                    Export PPTX
+                  </button>
                   ${this.selectedList.can_edit ? html`
                     <button @click=${() => { this.shareModalActive = true; }} style="background: #4f46e5; color: white; padding: 0.25rem 0.75rem; border-radius: 0.25rem; font-size: 0.875rem; border: none; cursor: pointer;" onmouseover="this.style.background='#4338ca'" onmouseout="this.style.background='#4f46e5'">Share</button>
                     <button @click=${this._startEditingSelectedList} class="bg-green-600 text-white px-3 py-1 rounded text-sm hover:bg-green-700">Edit</button>
@@ -1864,6 +1924,16 @@ class ListEditor extends LitElement {
                   >
                     <span aria-hidden="true">▦</span>
                     <span>Thumb</span>
+                  </button>
+                  <button
+                    type="button"
+                    class="inline-flex items-center gap-1 border-l border-gray-200 px-3 py-1.5 text-xs font-semibold ${this.listViewMode === 'slideshow' ? 'bg-blue-50 text-blue-700' : 'text-gray-600 hover:bg-gray-50'}"
+                    @click=${() => this._setListViewMode('slideshow')}
+                    title="Slideshow view"
+                    aria-selected=${this.listViewMode === 'slideshow' ? 'true' : 'false'}
+                  >
+                    <span aria-hidden="true">▭</span>
+                    <span>Slide</span>
                   </button>
                 </div>
               </div>

@@ -7,7 +7,7 @@ import threading
 import time
 from typing import Dict, List, Optional, Tuple
 from uuid import UUID
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from sqlalchemy import func, distinct, and_, case, cast, Text, literal, or_, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, load_only
@@ -3155,4 +3155,125 @@ async def delete_image(
         "asset_id": str(asset_id) if asset_id is not None else None,
         "deleted_storage_objects": deleted_objects,
         "storage_delete_errors": storage_delete_errors,
+    }
+
+
+@router.post("/images/batch-delete", response_model=dict, operation_id="batch_delete_images")
+async def batch_delete_images(
+    image_ids: List[int] = Body(..., embed=True, description="List of image IDs to delete"),
+    _current_user: UserProfile = Depends(require_tenant_permission_from_header("tenant.settings.manage")),
+    tenant: Tenant = Depends(get_tenant),
+    db: Session = Depends(get_db),
+):
+    """Delete multiple images by ID. Skips IDs not found for the tenant. Returns per-item results."""
+    if not image_ids:
+        return {"status": "ok", "deleted": [], "not_found": [], "errors": []}
+    if len(image_ids) > 200:
+        raise HTTPException(status_code=400, detail="Cannot delete more than 200 images at once.")
+
+    deleted = []
+    not_found = []
+    errors = []
+
+    try:
+        storage_client = storage.Client(project=settings.gcp_project_id)
+    except Exception as exc:
+        storage_client = None
+        errors.append(f"storage client init failed: {exc}")
+
+    for image_id in image_ids:
+        image = db.query(ImageMetadata).filter(
+            ImageMetadata.id == image_id,
+            tenant_column_filter(ImageMetadata, tenant),
+        ).first()
+        if not image:
+            not_found.append(image_id)
+            continue
+
+        asset_id = image.asset_id
+        asset = None
+        derivative_keys = []
+        source_provider = None
+        source_key = None
+        thumbnail_key = None
+
+        if asset_id is not None:
+            asset = db.query(Asset).filter(
+                Asset.id == asset_id,
+                tenant_column_filter(Asset, tenant),
+            ).first()
+            if asset:
+                source_provider = (asset.source_provider or "").strip().lower() or None
+                source_key = (asset.source_key or "").strip() or None
+                thumbnail_key = (asset.thumbnail_key or "").strip() or None
+
+            derivative_rows = db.query(AssetDerivative).filter(
+                AssetDerivative.asset_id == asset_id
+            ).all()
+            derivative_keys = [
+                (row.storage_key or "").strip()
+                for row in derivative_rows
+                if (row.storage_key or "").strip()
+            ]
+
+            db.query(Permatag).filter(
+                tenant_column_filter(Permatag, tenant),
+                Permatag.asset_id == asset_id,
+            ).delete(synchronize_session=False)
+            db.query(MachineTag).filter(
+                tenant_column_filter(MachineTag, tenant),
+                MachineTag.asset_id == asset_id,
+            ).delete(synchronize_session=False)
+            db.query(ImageEmbedding).filter(
+                tenant_column_filter(ImageEmbedding, tenant),
+                ImageEmbedding.asset_id == asset_id,
+            ).delete(synchronize_session=False)
+            db.query(PhotoListItem).filter(
+                PhotoListItem.asset_id == asset_id
+            ).delete(synchronize_session=False)
+            db.query(AssetDerivative).filter(
+                AssetDerivative.asset_id == asset_id
+            ).delete(synchronize_session=False)
+
+        db.query(ImageMetadata).filter(
+            ImageMetadata.id == image_id,
+            tenant_column_filter(ImageMetadata, tenant),
+        ).delete(synchronize_session=False)
+        if asset is not None:
+            db.query(Asset).filter(
+                Asset.id == asset_id,
+                tenant_column_filter(Asset, tenant),
+            ).delete(synchronize_session=False)
+
+        try:
+            db.commit()
+        except Exception as exc:
+            db.rollback()
+            errors.append(f"image {image_id}: db commit failed: {exc}")
+            continue
+
+        if storage_client is not None:
+            def _delete_blob(bucket_name: str, key: Optional[str]) -> None:
+                normalized_key = (key or "").strip()
+                if not bucket_name or not normalized_key:
+                    return
+                try:
+                    bucket = storage_client.bucket(bucket_name)
+                    bucket.blob(normalized_key).delete()
+                except Exception:
+                    pass
+
+            if source_provider in ("managed", "gcs", "google_cloud_storage"):
+                _delete_blob(tenant.get_storage_bucket(settings), source_key)
+            _delete_blob(tenant.get_thumbnail_bucket(settings), thumbnail_key)
+            for derivative_key in derivative_keys:
+                _delete_blob(tenant.get_storage_bucket(settings), derivative_key)
+
+        deleted.append(image_id)
+
+    return {
+        "status": "ok",
+        "deleted": deleted,
+        "not_found": not_found,
+        "errors": errors,
     }

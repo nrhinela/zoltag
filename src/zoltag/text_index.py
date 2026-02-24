@@ -134,7 +134,7 @@ def build_asset_text_document(
     asset_uuid = _normalize_uuid(asset_id, field_name="asset_id")
 
     image_row = (
-        db.query(ImageMetadata.filename)
+        db.query(ImageMetadata.filename, ImageMetadata.id)
         .filter(
             tenant_column_filter_for_values(ImageMetadata, str(tenant_uuid)),
             ImageMetadata.asset_id == asset_uuid,
@@ -154,6 +154,7 @@ def build_asset_text_document(
         str((image_row[0] if image_row else "") or "").strip()
         or str((asset_row[0] if asset_row else "") or "").strip()
     )
+    image_metadata_id = int(image_row[1]) if image_row and image_row[1] is not None else None
     source_key = str((asset_row[1] if asset_row else "") or "").strip()
     source_filename = source_key.rsplit("/", 1)[-1].strip() if source_key else ""
     source_filename_stem = source_filename.rsplit(".", 1)[0].strip() if "." in source_filename else source_filename
@@ -210,6 +211,8 @@ def build_asset_text_document(
     shared_list_names = _dedupe_non_empty(row.title for row in shared_list_rows)
 
     chunks: list[str] = []
+    if image_metadata_id is not None:
+        chunks.append(f"image {image_metadata_id}")
     if filename:
         chunks.append(f"asset {filename}")
     if source_key:
@@ -237,6 +240,7 @@ def build_asset_text_document(
         tenant_id=tenant_uuid,
         search_text=search_text,
         components={
+            "image_metadata_id": image_metadata_id,
             "filename": filename,
             "source_key": source_key,
             "source_filename": source_filename,
@@ -328,10 +332,13 @@ def rebuild_asset_text_index(
                 )
                 .exists()
             )
-            # Auto-refresh legacy rows created before source-key indexing was added.
+            # Auto-refresh legacy rows missing source-key or image-id indexing.
             missing_source_key_coverage = ~sa.func.lower(
                 sa.func.coalesce(AssetTextIndex.search_text, "")
             ).contains("source key ")
+            missing_image_id_coverage = ~sa.func.lower(
+                sa.func.coalesce(AssetTextIndex.search_text, "")
+            ).contains("image ")
             query = query.outerjoin(
                 AssetTextIndex,
                 and_(
@@ -343,6 +350,7 @@ def rebuild_asset_text_index(
                     AssetTextIndex.asset_id.is_(None),
                     positive_keyword_update_exists,
                     missing_source_key_coverage,
+                    missing_image_id_coverage,
                 )
             )
         query = query.group_by(ImageMetadata.asset_id).order_by(ImageMetadata.asset_id.asc()).offset(safe_offset)
@@ -353,6 +361,8 @@ def rebuild_asset_text_index(
     processed = 0
     failed = 0
     errors: list[str] = []
+    total = len(asset_ids)
+    _PROGRESS_INTERVAL = 25
     for row_asset_id in asset_ids:
         try:
             document = build_asset_text_document(
@@ -368,6 +378,9 @@ def rebuild_asset_text_index(
             db.rollback()
             failed += 1
             errors.append(f"{row_asset_id}: {exc}")
+        done = processed + failed
+        if done % _PROGRESS_INTERVAL == 0 or done == total:
+            print(f"  progress: {done}/{total} processed={processed} failed={failed}", flush=True)
 
     return {
         "tenant_id": str(tenant_uuid),

@@ -83,6 +83,10 @@ def bulk_preload_thumbnail_urls(
         thumbnail_key = (asset.thumbnail_key if asset else None) or legacy_thumbnail
         keys_by_image_id[image.id] = thumbnail_key
 
+    # In local mode return backend-served URLs; skip GCS signing entirely.
+    if settings.local_mode:
+        return {image.id: f"/api/v1/images/{image.id}/thumbnail" for image in images}
+
     unique_keys = [k for k in set(keys_by_image_id.values()) if k]
     signed = tenant.bulk_sign_thumbnail_urls(settings, unique_keys)
 

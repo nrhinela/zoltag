@@ -654,6 +654,12 @@ def create_storage_provider(
             project_id=settings.gcp_project_id,
         )
 
+    if normalized == "local":
+        from pathlib import Path
+        from zoltag.storage.local_provider import LocalFilesystemProvider
+        thumbnail_dir = Path(settings.local_data_dir) / "thumbnails"
+        return LocalFilesystemProvider(thumbnail_dir=thumbnail_dir)
+
     raise ValueError(f"Unsupported storage provider: {provider_name}")
 
 def _parse_iso_datetime(value: Optional[str]) -> Optional[datetime]:

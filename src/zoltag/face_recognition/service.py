@@ -276,10 +276,12 @@ def recompute_face_recognition_tags(
     images_considered = 0
     tags_written = 0
 
+    total_keywords = len(keywords)
     for keyword in keywords:
         if keyword.person_id is None:
             continue
         keywords_considered += 1
+        print(f"  keyword {keywords_considered}/{total_keywords}: {keyword.keyword}", flush=True)
 
         refs = db.query(PersonReferenceImage).filter(
             tenant_column_filter_for_values(PersonReferenceImage, tenant_id),
@@ -408,6 +410,8 @@ def recompute_face_recognition_tags(
 
             db.commit()
             batch_offset += len(images)
+
+        print(f"    -> images={images_considered} tags_written={tags_written}", flush=True)
 
         if limit is not None and images_considered >= limit:
             break

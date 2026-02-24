@@ -22,6 +22,7 @@ from zoltag.asset_helpers import bulk_preload_thumbnail_urls, load_assets_for_im
 from zoltag.auth.models import UserProfile
 from zoltag.auth.jwt import verify_supabase_jwt
 from zoltag.dependencies import get_db, get_secret
+from zoltag.image import ImageProcessor
 from zoltag.integrations import TenantIntegrationRepository
 from zoltag.models.config import PhotoList, PhotoListItem
 from zoltag.models.sharing import ListShare, MemberComment, MemberRating
@@ -39,6 +40,18 @@ router = APIRouter(
     prefix="/api/v1/guest",
     tags=["guest"],
 )
+
+
+def _convert_heic_bytes_to_jpeg(file_bytes: bytes) -> bytes:
+    """Blocking HEIC/HEIF decode+encode helper (run in threadpool)."""
+    import io
+
+    processor = ImageProcessor()
+    pil_image = processor.load_image(file_bytes)
+    pil_image_rgb = pil_image.convert("RGB") if pil_image.mode != "RGB" else pil_image
+    buffer = io.BytesIO()
+    pil_image_rgb.save(buffer, format="JPEG", quality=95, optimize=False)
+    return buffer.getvalue()
 
 
 # ---------------------------------------------------------------------------
@@ -425,6 +438,17 @@ async def get_guest_asset_full(
     filename = image.filename or "image"
     content_type, _ = mimetypes.guess_type(filename or source_ref)
     media_type = content_type or "application/octet-stream"
+
+    # Convert HEIC/HEIF to JPEG for browser compatibility in guest flow,
+    # mirroring the primary app full-image endpoint behavior.
+    if filename.lower().endswith((".heic", ".heif")):
+        try:
+            file_bytes = await run_in_threadpool(_convert_heic_bytes_to_jpeg, file_bytes)
+            filename = filename.rsplit(".", 1)[0] + ".jpg"
+            media_type = "image/jpeg"
+        except Exception as exc:
+            logger.warning("Guest HEIC conversion failed for %s: %s", filename, exc)
+
     return StreamingResponse(
         iter([file_bytes]),
         media_type=media_type,

@@ -2,12 +2,13 @@
 
 import logging
 from pathlib import Path
-from fastapi import FastAPI, Depends, HTTPException, Header
+from fastapi import FastAPI, Depends, HTTPException, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
+from starlette.middleware.base import BaseHTTPMiddleware
 from typing import Optional
 
 from zoltag.database import SessionLocal
@@ -20,6 +21,9 @@ from zoltag.auth.models import UserProfile
 from zoltag.ratelimit import limiter
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
+
+# Import local router (only registered in local mode, harmless to import always)
+from zoltag.routers import local as local_router
 
 # Import all routers
 from zoltag.routers import (
@@ -55,9 +59,31 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 
+class LocalTenantMiddleware(BaseHTTPMiddleware):
+    """In local mode, auto-inject X-Tenant-ID so all existing routes work unchanged."""
+
+    def __init__(self, app, tenant_id: str):
+        super().__init__(app)
+        self._tenant_id = tenant_id
+
+    async def dispatch(self, request: Request, call_next):
+        existing_names = {name for name, _ in request.scope.get("headers", [])}
+        if b"x-tenant-id" not in existing_names:
+            new_headers = list(request.scope.get("headers", []))
+            new_headers.append((b"x-tenant-id", self._tenant_id.encode()))
+            request.scope["headers"] = new_headers
+        return await call_next(request)
+
+
+if settings.local_mode and settings.local_tenant_id:
+    app.add_middleware(LocalTenantMiddleware, tenant_id=settings.local_tenant_id)
+
+
 @app.on_event("startup")
 async def warm_jwks_cache():
     """Pre-fetch JWKS on startup so the first real request isn't blocked."""
+    if settings.local_mode:
+        return  # No Supabase in local mode
     try:
         from zoltag.auth.jwt import get_jwks
         await get_jwks()
@@ -87,8 +113,8 @@ async def audit_model_config_startup():
 
 @app.on_event("startup")
 async def start_worker_mode():
-    """Start background queue worker when service runs in worker mode."""
-    if not settings.worker_mode:
+    """Start background queue worker when running in worker mode or local mode."""
+    if not settings.worker_mode and not settings.local_mode:
         return
     try:
         from zoltag.worker import start_background_worker_thread
@@ -102,7 +128,7 @@ async def start_worker_mode():
 @app.on_event("shutdown")
 async def stop_worker_mode():
     """Stop background queue worker when service shuts down."""
-    if not settings.worker_mode:
+    if not settings.worker_mode and not settings.local_mode:
         return
     try:
         from zoltag.worker import stop_background_worker_thread
@@ -156,6 +182,9 @@ app.include_router(nl_search.router)
 app.include_router(jobs.router)
 app.include_router(sharing.router)
 app.include_router(guest.router)
+
+if settings.local_mode:
+    app.include_router(local_router.router)
 
 # Static file paths
 static_dir = Path(__file__).parent / "static"

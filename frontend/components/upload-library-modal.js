@@ -1,6 +1,7 @@
 import { LitElement, html, css } from 'lit';
 import { tailwind } from './tailwind-lit.js';
 import { getAccessToken } from '../services/supabase.js';
+import { isLocalMode } from '../services/local-mode.js';
 
 class UploadLibraryModal extends LitElement {
   static properties = {
@@ -9,6 +10,7 @@ class UploadLibraryModal extends LitElement {
     items: { type: Array },
     isUploading: { type: Boolean },
     dedupPolicy: { type: String },
+    storeOriginals: { type: Boolean },
     error: { type: String },
   };
 
@@ -92,7 +94,8 @@ class UploadLibraryModal extends LitElement {
     this.tenant = '';
     this.items = [];
     this.isUploading = false;
-    this.dedupPolicy = 'keep_both';
+    this.dedupPolicy = 'skip_duplicate';
+    this.storeOriginals = false;
     this.error = '';
     this._activeXhrs = new Map();
   }
@@ -125,6 +128,15 @@ class UploadLibraryModal extends LitElement {
                 <option value="skip_duplicate">Skip duplicate</option>
               </select>
             </div>
+            <label class="flex items-center gap-2 text-sm text-gray-700 cursor-pointer pb-2">
+              <input
+                type="checkbox"
+                .checked=${this.storeOriginals}
+                ?disabled=${this.isUploading}
+                @change=${(e) => { this.storeOriginals = e.target.checked; }}
+              >
+              Store originals
+            </label>
             <input
               id="library-file-input"
               type="file"
@@ -133,12 +145,28 @@ class UploadLibraryModal extends LitElement {
               class="hidden"
               @change=${this._handleFileSelect}
             />
+            <input
+              id="library-folder-input"
+              type="file"
+              webkitdirectory
+              multiple
+              accept="image/*"
+              class="hidden"
+              @change=${this._handleFolderSelect}
+            />
             <button
               class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 disabled:opacity-60"
               @click=${() => this.renderRoot?.querySelector('#library-file-input')?.click()}
               ?disabled=${this.isUploading}
             >
               Select Files
+            </button>
+            <button
+              class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 disabled:opacity-60"
+              @click=${() => this.renderRoot?.querySelector('#library-folder-input')?.click()}
+              ?disabled=${this.isUploading}
+            >
+              Select Folder
             </button>
             <button
               class="bg-emerald-600 text-white px-4 py-2 rounded hover:bg-emerald-700 disabled:opacity-60"
@@ -217,6 +245,24 @@ class UploadLibraryModal extends LitElement {
       id: `${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
       file,
       name: file.name,
+      relativePath: null,
+      size: file.size,
+      status: 'queued',
+      progress: 0,
+      message: '',
+    }));
+    this.items = [...this.items, ...additions];
+    event.target.value = '';
+  }
+
+  _handleFolderSelect(event) {
+    const files = Array.from(event.target.files || []);
+    if (!files.length) return;
+    const additions = files.map((file, index) => ({
+      id: `${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
+      file,
+      name: file.webkitRelativePath || file.name,
+      relativePath: file.webkitRelativePath || null,
       size: file.size,
       status: 'queued',
       progress: 0,
@@ -234,7 +280,8 @@ class UploadLibraryModal extends LitElement {
     const queued = this.items.filter((item) => item.status === 'queued');
     if (!queued.length || this.isUploading) return;
 
-    const token = await getAccessToken();
+    const localMode = await isLocalMode();
+    const token = localMode ? 'local' : await getAccessToken();
     if (!token) {
       this.error = 'Missing auth token. Please re-authenticate and try again.';
       return;
@@ -280,7 +327,10 @@ class UploadLibraryModal extends LitElement {
 
     this._updateItem(itemId, { status: 'uploading', progress: 2, message: 'Uploading...' });
 
-    const url = `/api/v1/images/upload-and-ingest?dedup_policy=${encodeURIComponent(this.dedupPolicy)}`;
+    const params = new URLSearchParams({ dedup_policy: this.dedupPolicy });
+    if (item.relativePath) params.set('relative_path', item.relativePath);
+    if (!this.storeOriginals) params.set('store_original', 'false');
+    const url = `/api/v1/images/upload-and-ingest?${params}`;
     const formData = new FormData();
     formData.append('file', item.file);
 

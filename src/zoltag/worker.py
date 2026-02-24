@@ -44,6 +44,7 @@ _DEFAULT_LOG_FLUSH_SECONDS = 2.0
 _DEFAULT_CANCEL_CHECK_SECONDS = 1.0
 _DEFAULT_WORKFLOW_RECONCILE_SECONDS = 60.0
 _DEFAULT_SCHEDULE_TICK_SECONDS = 60.0
+_DEFAULT_LEASE_RECLAIM_SECONDS = 120.0
 
 _worker_thread: Optional[Thread] = None
 _worker_stop_event: Optional[Event] = None
@@ -100,6 +101,9 @@ def _append_tail(existing: Optional[str], chunk: Any) -> Optional[str]:
         text = str(chunk)
     if not text:
         return existing
+    # Normalise \r-only progress lines to \n so captured logs are readable.
+    # \r\n is collapsed to \n first to avoid double newlines on Windows-style output.
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
     merged = f"{existing or ''}{text}"
     return merged[-_MAX_LOG_TAIL_CHARS:]
 
@@ -298,12 +302,20 @@ def _execute_claimed_job(
             try:
                 if stream is None:
                     return
+                buf = []
                 while True:
-                    chunk = stream.readline()
-                    if chunk == "":
+                    ch = stream.read(1)
+                    if ch == "":
+                        # EOF — flush remainder
+                        if buf:
+                            with state_lock:
+                                log_state[key] = _append_tail(log_state.get(key), "".join(buf))
                         break
-                    with state_lock:
-                        log_state[key] = _append_tail(log_state.get(key), chunk)
+                    buf.append(ch)
+                    if ch in ("\n", "\r"):
+                        with state_lock:
+                            log_state[key] = _append_tail(log_state.get(key), "".join(buf))
+                        buf = []
             finally:
                 if stream is not None:
                     try:
@@ -643,6 +655,67 @@ def _build_worker_id() -> str:
     return f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
 
 
+def _reclaim_stale_leases() -> None:
+    """Reset jobs whose lease has expired back to queued so they can be retried."""
+    db = SessionLocal()
+    try:
+        now = _now_utc()
+        stale = (
+            db.query(Job)
+            .filter(
+                Job.status == "running",
+                Job.lease_expires_at.isnot(None),
+                Job.lease_expires_at < now,
+            )
+            .all()
+        )
+        if not stale:
+            return
+        stale_job_ids = [job.id for job in stale]
+        open_attempts = (
+            db.query(JobAttempt)
+            .filter(
+                JobAttempt.job_id.in_(stale_job_ids),
+                JobAttempt.status == "running",
+            )
+            .all()
+        )
+        for attempt in open_attempts:
+            attempt.status = "failed"
+            attempt.finished_at = now
+            attempt.error_text = "Lease expired; worker presumed dead"
+
+        for job in stale:
+            attempts_used = int(job.attempt_count or 0)
+            if attempts_used >= int(job.max_attempts or 1):
+                job.status = "dead_letter"
+                job.finished_at = now
+                job.last_error = f"Lease expired after {attempts_used} attempt(s); no retries remaining"
+                logger.warning(
+                    "Job %s lease expired, moved to dead_letter (attempt %s/%s)",
+                    job.id, attempts_used, job.max_attempts,
+                )
+            else:
+                delay_seconds = min(300 * (2 ** max(attempts_used - 1, 0)), 3600)
+                job.status = "queued"
+                job.scheduled_for = now + timedelta(seconds=delay_seconds)
+                job.started_at = None
+                job.finished_at = None
+                job.last_error = f"Lease expired; requeued (attempt {attempts_used}/{job.max_attempts})"
+                logger.warning(
+                    "Job %s lease expired, requeued in %ss (attempt %s/%s)",
+                    job.id, delay_seconds, attempts_used, job.max_attempts,
+                )
+            job.lease_expires_at = None
+            job.claimed_by_worker = None
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("Stale lease reclaim failed")
+    finally:
+        db.close()
+
+
 def _reconcile_workflows_once(*, limit_runs: int = 25) -> None:
     db = SessionLocal()
     try:
@@ -779,14 +852,20 @@ def run_loop(
     schedule_tick_interval = float(
         os.getenv("JOB_SCHEDULE_TICK_SECONDS") or _DEFAULT_SCHEDULE_TICK_SECONDS
     )
+    lease_reclaim_interval = float(os.getenv("JOB_LEASE_RECLAIM_SECONDS") or _DEFAULT_LEASE_RECLAIM_SECONDS)
     last_idle_heartbeat_at = 0.0
     last_workflow_reconcile_at = 0.0
     last_schedule_tick_at = 0.0
+    last_lease_reclaim_at = 0.0
 
     logger.info("Job worker started: worker_id=%s lease_seconds=%s", worker_id, lease_seconds)
 
     while not stop.is_set():
         now_monotonic = time.monotonic()
+        if now_monotonic - last_lease_reclaim_at >= lease_reclaim_interval:
+            last_lease_reclaim_at = now_monotonic
+            _reclaim_stale_leases()
+
         if now_monotonic - last_workflow_reconcile_at >= workflow_reconcile_interval:
             last_workflow_reconcile_at = now_monotonic
             _reconcile_workflows_once(limit_runs=workflow_reconcile_limit)

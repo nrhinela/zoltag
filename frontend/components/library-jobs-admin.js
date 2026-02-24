@@ -106,6 +106,8 @@ export class LibraryJobsAdmin extends LitElement {
     definitionTimeoutSeconds: { type: String },
     definitionMaxAttempts: { type: String },
     definitionActive: { type: Boolean },
+    _expandedDefinitions: { type: Object },
+    _expandedWorkflowRuns: { type: Object },
   };
 
   static styles = [
@@ -356,6 +358,7 @@ export class LibraryJobsAdmin extends LitElement {
       .status-succeeded { background: #dcfce7; color: #166534; }
       .status-failed { background: #fee2e2; color: #991b1b; }
       .status-canceled { background: #e5e7eb; color: #374151; }
+      .status-stalled { background: #fde8d8; color: #9a3412; }
       .status-dead_letter { background: #f5d0fe; color: #6b21a8; }
 
       .muted {
@@ -389,6 +392,35 @@ export class LibraryJobsAdmin extends LitElement {
         line-height: 1.4;
         white-space: pre-wrap;
         word-break: break-word;
+      }
+
+      .subtabs {
+        display: flex;
+        gap: 4px;
+        margin-top: 14px;
+        border-bottom: 2px solid #e5e7eb;
+      }
+
+      .subtab {
+        padding: 7px 14px;
+        font-size: 13px;
+        font-weight: 600;
+        border: none;
+        background: none;
+        cursor: pointer;
+        color: #6b7280;
+        border-bottom: 2px solid transparent;
+        margin-bottom: -2px;
+      }
+
+      .subtab-active {
+        color: #2563eb;
+        border-bottom-color: #2563eb;
+      }
+
+      .expand-row td {
+        background: #f8fafc;
+        border-bottom: 1px solid #e2e8f0;
       }
     `,
   ];
@@ -444,6 +476,8 @@ export class LibraryJobsAdmin extends LitElement {
     this.definitionTimeoutSeconds = '3600';
     this.definitionMaxAttempts = '3';
     this.definitionActive = true;
+    this._expandedDefinitions = {};
+    this._expandedWorkflowRuns = {};
 
     this._pollTimer = null;
     this._attemptsPollTimer = null;
@@ -471,7 +505,7 @@ export class LibraryJobsAdmin extends LitElement {
   _startPolling() {
     this._stopPolling();
     this._pollTimer = window.setInterval(() => {
-      if (this.activeTab === 'queue') {
+      if (this.activeTab === 'queue' || this.activeTab === 'workflows') {
         this._refreshQueueOnly();
       }
     }, 10000);
@@ -660,7 +694,12 @@ export class LibraryJobsAdmin extends LitElement {
     if (!keepLoading) this.loading = true;
     try {
       const result = await getWorkflowRuns(tenantId, { limit: 20, offset: 0, includeSteps: false });
-      this.workflowRuns = Array.isArray(result?.runs) ? result.runs : [];
+      const freshRuns = Array.isArray(result?.runs) ? result.runs : [];
+      const existingById = Object.fromEntries((this.workflowRuns || []).map((r) => [String(r?.id || ''), r]));
+      this.workflowRuns = freshRuns.map((r) => {
+        const existing = existingById[String(r?.id || '')];
+        return existing && Array.isArray(existing.steps) ? { ...r, steps: existing.steps } : r;
+      });
       this.workflowTotalRuns = Number(result?.total || 0);
     } catch (error) {
       if (!silentErrors) {
@@ -1076,6 +1115,22 @@ export class LibraryJobsAdmin extends LitElement {
     }
   }
 
+  async _fetchStepsForRun(runId) {
+    const tenantId = normalizeTenantId(this.tenant);
+    if (!tenantId || !runId) return;
+    try {
+      const result = await getWorkflowRuns(tenantId, { limit: 100, offset: 0, includeSteps: true });
+      const runs = Array.isArray(result?.runs) ? result.runs : [];
+      const run = runs.find((r) => String(r?.id || '') === String(runId));
+      if (!run) return;
+      this.workflowRuns = (this.workflowRuns || []).map((r) =>
+        String(r?.id || '') === String(runId) ? { ...r, steps: run.steps || [] } : r
+      );
+    } catch (_error) {
+      // no-op — steps just won't show
+    }
+  }
+
   _pruneJobDetailState(jobs) {
     const validJobIds = new Set((jobs || []).map((job) => String(job?.id || '')).filter(Boolean));
 
@@ -1103,6 +1158,18 @@ export class LibraryJobsAdmin extends LitElement {
 
   _getAttemptsForJob(jobId) {
     return Array.isArray(this.attemptsByJob?.[String(jobId || '')]) ? this.attemptsByJob[String(jobId || '')] : [];
+  }
+
+  _getDisplayStatus(job) {
+    const status = String(job?.status || '').toLowerCase();
+    if (status !== 'running') return status;
+    const jobId = String(job?.id || '');
+    const attemptsKey = String(jobId);
+    const attemptsLoaded = Array.isArray(this.attemptsByJob?.[attemptsKey]);
+    if (!attemptsLoaded) return status;
+    const attempts = this.attemptsByJob[attemptsKey];
+    const hasRunningAttempt = attempts.some((a) => String(a?.status || '').toLowerCase() === 'running');
+    return hasRunningAttempt ? 'running' : 'stalled';
   }
 
   async _loadAttemptsForJob(jobId, { markLoading = false, silentErrors = false } = {}) {
@@ -1374,82 +1441,44 @@ export class LibraryJobsAdmin extends LitElement {
     const selectedTaskDescription = String(selectedTask?.description || '').trim();
     return html`
       <div class="section">
-        <div class="muted">
-          Global job configuration (definitions and triggers) is managed in
-          <strong>System Administration - Jobs</strong>.
-          This view shows the queue for the current tenant.
-        </div>
-      </div>
-
-      <div class="section">
         <div class="row-between" style="margin-bottom: 8px;">
-          <h4 class="section-title" style="margin: 0;">Queue Controls</h4>
-          <button
-            class="btn btn-secondary btn-sm"
-            @click=${() => {
-              this.enqueuePanelOpen = !this.enqueuePanelOpen;
-            }}
-          >
-            New Job ${this.enqueuePanelOpen ? '▲' : '▼'}
+          <h4 class="section-title" style="margin: 0;">Enqueue</h4>
+          <button class="btn btn-secondary btn-sm"
+            @click=${() => { this.enqueuePanelOpen = !this.enqueuePanelOpen; }}>
+            ${this.enqueuePanelOpen ? 'Close ▲' : '+ Enqueue ▼'}
           </button>
         </div>
         ${this.enqueuePanelOpen ? html`
           <div class="row">
             <div class="field">
-              <select
-                class="select"
-                .value=${this.enqueueTaskKey}
-                @change=${(event) => {
-                  this._handleTaskSelectionChange(event.target.value || '');
-                }}
-              >
+              <select class="select" .value=${this.enqueueTaskKey}
+                @change=${(event) => { this._handleTaskSelectionChange(event.target.value || ''); }}>
                 ${taskCatalog.map((task) => html`
                   <option value=${task.value}>${task.type === 'workflow' ? 'Workflow' : 'Command'}: ${task.key}</option>
                 `)}
               </select>
             </div>
-            <input
-              class="input field"
-              type="number"
-              min="0"
-              placeholder="priority"
+            <input class="input field" type="number" min="0" placeholder="priority"
               .value=${this.enqueuePriority}
-              @input=${(event) => {
-                this.enqueuePriority = event.target.value || '';
-              }}
-            />
+              @input=${(event) => { this.enqueuePriority = event.target.value || ''; }} />
             ${selectedTaskType === 'job' ? html`
-              <input
-                class="input field"
-                type="number"
-                min="1"
-                placeholder="max attempts (optional)"
+              <input class="input field" type="number" min="1" placeholder="max attempts (optional)"
                 .value=${this.enqueueMaxAttempts}
-                @input=${(event) => {
-                  this.enqueueMaxAttempts = event.target.value || '';
-                }}
-              />
-              <input
-                class="input field"
-                type="datetime-local"
+                @input=${(event) => { this.enqueueMaxAttempts = event.target.value || ''; }} />
+              <input class="input field" type="datetime-local"
                 .value=${this.enqueueScheduledFor}
-                @input=${(event) => {
-                  this.enqueueScheduledFor = event.target.value || '';
-                }}
-              />
-            ` : html``}
+                @input=${(event) => { this.enqueueScheduledFor = event.target.value || ''; }} />
+            ` : ''}
             <button class="btn btn-primary" ?disabled=${this.actionLoading} @click=${this._handleEnqueue}>
-              Queue Job
+              Queue
             </button>
           </div>
           ${selectedTaskDescription ? html`
             <div class="definition-description">
-              <strong>${selectedTaskType === 'workflow' ? 'Workflow' : 'Command'}:</strong>
-              ${selectedTask?.key || '—'}
-              <br />
-              <strong>Description:</strong> ${selectedTaskDescription}
+              <strong>${selectedTaskType === 'workflow' ? 'Workflow' : 'Command'}:</strong> ${selectedTask?.key || '—'}
+              &nbsp;·&nbsp; ${selectedTaskDescription}
             </div>
-          ` : html``}
+          ` : ''}
           <div class="row" style="margin-top: 8px;">
             <div class="field-wide">
               ${selectedTaskType === 'job' && this._getSelectedQueueParams().length ? html`
@@ -1463,157 +1492,59 @@ export class LibraryJobsAdmin extends LitElement {
                       return html`
                         <div class="arg-field">
                           <label class="arg-label">
-                            <input
-                              type="checkbox"
-                              .checked=${!!value}
-                              @change=${(event) => {
-                                this._setEnqueueArgumentValue(paramName, !!event.target.checked);
-                              }}
-                            />
+                            <input type="checkbox" .checked=${!!value}
+                              @change=${(event) => { this._setEnqueueArgumentValue(paramName, !!event.target.checked); }} />
                             ${label}
                           </label>
-                          ${helpText ? html`<div class="arg-help">${helpText}</div>` : html``}
-                        </div>
-                      `;
+                          ${helpText ? html`<div class="arg-help">${helpText}</div>` : ''}
+                        </div>`;
                     }
-
                     if (param?.input_type === 'choice' && Array.isArray(param?.choices)) {
                       return html`
                         <div class="arg-field">
                           <label class="arg-label">${label}</label>
-                          <select
-                            class="select"
-                            .value=${value ?? ''}
-                            @change=${(event) => {
-                              this._setEnqueueArgumentValue(paramName, event.target.value || '');
-                            }}
-                          >
+                          <select class="select" .value=${value ?? ''}
+                            @change=${(event) => { this._setEnqueueArgumentValue(paramName, event.target.value || ''); }}>
                             <option value="">${param?.required ? 'Select...' : 'Default'}</option>
                             ${param.choices.map((choice) => html`<option value=${choice}>${choice}</option>`)}
                           </select>
-                          ${helpText ? html`<div class="arg-help">${helpText}</div>` : html``}
-                        </div>
-                      `;
+                          ${helpText ? html`<div class="arg-help">${helpText}</div>` : ''}
+                        </div>`;
                     }
-
-                    const inputType = (param?.input_type === 'integer' || param?.input_type === 'number')
-                      ? 'number'
+                    const inputType = (param?.input_type === 'integer' || param?.input_type === 'number') ? 'number'
                       : (param?.input_type === 'datetime' ? 'datetime-local' : 'text');
                     const stepValue = param?.input_type === 'integer' ? '1' : 'any';
                     return html`
                       <div class="arg-field">
                         <label class="arg-label">${label}</label>
-                        <input
-                          class="input"
-                          type=${inputType}
+                        <input class="input" type=${inputType}
                           step=${inputType === 'number' ? stepValue : nothing}
                           placeholder=${param?.required ? '' : 'Default'}
                           .value=${value ?? ''}
-                          @input=${(event) => {
-                            this._setEnqueueArgumentValue(paramName, event.target.value || '');
-                          }}
-                        />
-                        ${helpText ? html`<div class="arg-help">${helpText}</div>` : html``}
-                      </div>
-                    `;
+                          @input=${(event) => { this._setEnqueueArgumentValue(paramName, event.target.value || ''); }} />
+                        ${helpText ? html`<div class="arg-help">${helpText}</div>` : ''}
+                      </div>`;
                   })}
                 </div>
-              ` : selectedTaskType === 'workflow' ? html`
-                <div class="muted">No additional parameters for this workflow run.</div>
-              ` : html`
-                <div class="muted">This command does not expose additional queue arguments.</div>
-              `}
+              ` : ''}
             </div>
           </div>
-        ` : html``}
+        ` : ''}
       </div>
 
       <div class="section">
-        <h4 class="section-title" style="margin-bottom: 8px;">Workflow Runs (${this.workflowTotalRuns})</h4>
-        <div class="table-wrap" style="margin-top: 10px;">
-          <table>
-            <thead>
-              <tr>
-                <th>Queued</th>
-                <th>Workflow</th>
-                <th>Status</th>
-                <th>Policy</th>
-                <th>Parallel</th>
-                <th>Error</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${(this.workflowRuns || []).map((run) => html`
-                <tr>
-                  <td>${formatDateTime(run.queued_at)}</td>
-                  <td class="mono">${run.workflow_key || run.workflow_definition_id}</td>
-                  <td><span class="status-pill status-${run.status}">${run.status}</span></td>
-                  <td>${run.failure_policy || 'fail_fast'}</td>
-                  <td>${Number(run.max_parallel_steps || 1)}</td>
-                  <td>${run.last_error || '—'}</td>
-                  <td>
-                    ${String(run.status || '').toLowerCase() === 'running' ? html`
-                      <button
-                        class="btn btn-danger btn-sm"
-                        ?disabled=${this.actionLoading}
-                        @click=${() => this._handleCancelWorkflowRun(run)}
-                      >
-                        Cancel
-                      </button>
-                    ` : html`
-                      <button
-                        class="btn btn-danger btn-sm"
-                        ?disabled=${this.actionLoading}
-                        @click=${() => this._handleDeleteWorkflowRun(run)}
-                      >
-                        Delete
-                      </button>
-                    `}
-                  </td>
-                </tr>
-              `)}
-              ${!(this.workflowRuns || []).length ? html`
-                <tr>
-                  <td colspan="7" class="muted">No workflow runs yet.</td>
-                </tr>
-              ` : html``}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <div class="section">
-        <div class="row-between">
-          <h4 class="section-title" style="margin-bottom: 0;">Jobs (${this.totalJobs})</h4>
+        <div class="row-between" style="margin-bottom: 8px;">
+          <h4 class="section-title" style="margin: 0;">Jobs (${this.totalJobs})</h4>
           <div class="row">
-            <select
-              class="select"
-              .value=${this.statusFilter}
-              @change=${async (event) => {
-                this.statusFilter = event.target.value || '';
-                await this._loadQueue({ keepLoading: true });
-              }}
-            >
-              ${STATUS_OPTIONS.map((value) => html`
-                <option value=${value}>${value || 'all statuses'}</option>
-              `)}
+            <select class="select" .value=${this.statusFilter}
+              @change=${async (event) => { this.statusFilter = event.target.value || ''; await this._loadQueue({ keepLoading: true }); }}>
+              ${STATUS_OPTIONS.map((value) => html`<option value=${value}>${value || 'all statuses'}</option>`)}
             </select>
-            <select
-              class="select"
-              .value=${this.sourceFilter}
-              @change=${async (event) => {
-                this.sourceFilter = event.target.value || '';
-                await this._loadQueue({ keepLoading: true });
-              }}
-            >
-              ${SOURCE_OPTIONS.map((value) => html`
-                <option value=${value}>${value || 'all sources'}</option>
-              `)}
+            <select class="select" .value=${this.sourceFilter}
+              @change=${async (event) => { this.sourceFilter = event.target.value || ''; await this._loadQueue({ keepLoading: true }); }}>
+              ${SOURCE_OPTIONS.map((value) => html`<option value=${value}>${value || 'all sources'}</option>`)}
             </select>
-            <button class="btn btn-secondary btn-sm" @click=${() => this._loadQueue({ keepLoading: true })}>
-              Refresh
-            </button>
+            <button class="btn btn-secondary btn-sm" @click=${() => this._loadQueue({ keepLoading: true })}>Refresh</button>
           </div>
         </div>
         <div class="table-wrap">
@@ -1625,8 +1556,7 @@ export class LibraryJobsAdmin extends LitElement {
                 <th>Status</th>
                 <th>Attempts</th>
                 <th>Source</th>
-                <th>Worker</th>
-                <th>Actions</th>
+                <th></th>
               </tr>
             </thead>
             <tbody>
@@ -1639,105 +1569,85 @@ export class LibraryJobsAdmin extends LitElement {
                   <tr>
                     <td>${formatDateTime(job.queued_at)}</td>
                     <td class="mono">${job.definition_key || job.definition_id}</td>
-                    <td>
-                      <span class="status-pill status-${job.status}">${job.status}</span>
-                    </td>
+                    <td><span class="status-pill status-${this._getDisplayStatus(job)}">${this._getDisplayStatus(job)}</span></td>
                     <td>${Number(job.attempt_count || 0)} / ${Number(job.max_attempts || 0)}</td>
                     <td>${job.source || '—'}</td>
-                    <td class="mono">${job.claimed_by_worker || '—'}</td>
                     <td>
                       <div class="row">
                         <button class="btn btn-secondary btn-sm" @click=${() => this._toggleJobAttempts(job)}>
-                          ${attemptsExpanded ? 'Hide Attempts' : 'Show Attempts'}
+                          ${attemptsExpanded ? 'Close' : 'Open'}
                         </button>
                         ${job.status === 'queued' || job.status === 'running' ? html`
-                          <button class="btn btn-danger btn-sm" ?disabled=${this.actionLoading} @click=${() => this._handleCancel(job)}>
-                            Cancel
-                          </button>
-                        ` : html``}
+                          <button class="btn btn-danger btn-sm" ?disabled=${this.actionLoading} @click=${() => this._handleCancel(job)}>Cancel</button>
+                        ` : ''}
                         ${RETRYABLE_STATUSES.has(String(job.status || '')) ? html`
-                          <button class="btn btn-primary btn-sm" ?disabled=${this.actionLoading} @click=${() => this._handleRetry(job)}>
-                            Retry
-                          </button>
-                        ` : html``}
+                          <button class="btn btn-primary btn-sm" ?disabled=${this.actionLoading} @click=${() => this._handleRetry(job)}>Retry</button>
+                        ` : ''}
                         ${String(job.status || '').toLowerCase() !== 'running' ? html`
-                          <button class="btn btn-danger btn-sm" ?disabled=${this.actionLoading} @click=${() => this._handleDelete(job)}>
-                            Delete
-                          </button>
-                        ` : html``}
+                          <button class="btn btn-danger btn-sm" ?disabled=${this.actionLoading} @click=${() => this._handleDelete(job)}>Delete</button>
+                        ` : ''}
                       </div>
                     </td>
                   </tr>
                   ${attemptsExpanded ? html`
-                    <tr>
-                      <td colspan="7" class="attempt-log-cell">
-                        ${attemptsLoading ? html`<div class="muted">Loading attempts...</div>` : html`
-                          <div class="table-wrap">
-                            <table>
-                              <thead>
-                                <tr>
-                                  <th>#</th>
-                                  <th>Status</th>
-                                  <th>Worker</th>
-                                  <th>Started</th>
-                                  <th>Finished</th>
-                                  <th>Exit</th>
-                                  <th>Error</th>
-                                  <th>Logs</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                ${attempts.map((attempt) => html`
-                                  <tr>
-                                    <td>${attempt.attempt_no}</td>
-                                    <td><span class="status-pill status-${attempt.status}">${attempt.status}</span></td>
-                                    <td class="mono">${attempt.worker_id || '—'}</td>
-                                    <td>${formatDateTime(attempt.started_at)}</td>
-                                    <td>${formatDateTime(attempt.finished_at)}</td>
-                                    <td>${attempt.exit_code ?? '—'}</td>
-                                    <td>${attempt.error_text || '—'}</td>
-                                    <td>
-                                      ${this._attemptHasLogs(attempt) ? html`
-                                        <button class="btn btn-secondary btn-sm" @click=${() => this._toggleAttemptLogs(jobId, attempt)}>
-                                          ${this._isAttemptExpanded(jobId, attempt) ? 'Hide Logs' : 'View Logs'}
-                                        </button>
-                                      ` : html`<span class="muted">—</span>`}
-                                    </td>
-                                  </tr>
-                                  ${this._isAttemptExpanded(jobId, attempt) ? html`
+                    <tr class="expand-row">
+                      <td colspan="6">
+                        ${attemptsLoading ? html`<div class="muted" style="padding: 8px;">Loading attempts...</div>` : html`
+                          <div style="padding: 6px 4px;">
+                            <div class="row" style="margin-bottom: 6px; flex-wrap: wrap; gap: 16px;">
+                              <div><div class="muted" style="margin-bottom: 2px;">Job ID</div><div class="mono">${jobId}</div></div>
+                              <div><div class="muted" style="margin-bottom: 2px;">Worker</div><div class="mono">${job.claimed_by_worker || '—'}</div></div>
+                            </div>
+                            <div class="table-wrap">
+                              <table>
+                                <thead>
+                                  <tr><th>#</th><th>Status</th><th>Worker</th><th>Started</th><th>Finished</th><th>Exit</th><th>Error</th><th>Logs</th></tr>
+                                </thead>
+                                <tbody>
+                                  ${attempts.map((attempt) => html`
                                     <tr>
-                                      <td colspan="8" class="attempt-log-cell">
-                                        ${String(attempt.stdout_tail || '').trim() ? html`
-                                          <div class="attempt-log-title">stdout</div>
-                                          <pre class="attempt-log-block mono">${attempt.stdout_tail}</pre>
-                                        ` : html``}
-                                        ${String(attempt.stderr_tail || '').trim() ? html`
-                                          <div class="attempt-log-title">stderr</div>
-                                          <pre class="attempt-log-block mono">${attempt.stderr_tail}</pre>
-                                        ` : html``}
+                                      <td>${attempt.attempt_no}</td>
+                                      <td><span class="status-pill status-${attempt.status}">${attempt.status}</span></td>
+                                      <td class="mono">${attempt.worker_id || '—'}</td>
+                                      <td>${formatDateTime(attempt.started_at)}</td>
+                                      <td>${formatDateTime(attempt.finished_at)}</td>
+                                      <td>${attempt.exit_code ?? '—'}</td>
+                                      <td>${attempt.error_text || '—'}</td>
+                                      <td>
+                                        ${this._attemptHasLogs(attempt) ? html`
+                                          <button class="btn btn-secondary btn-sm" @click=${() => this._toggleAttemptLogs(jobId, attempt)}>
+                                            ${this._isAttemptExpanded(jobId, attempt) ? 'Hide' : 'Logs'}
+                                          </button>
+                                        ` : html`<span class="muted">—</span>`}
                                       </td>
                                     </tr>
-                                  ` : html``}
-                                `)}
-                                ${!attempts.length ? html`
-                                  <tr>
-                                    <td colspan="8" class="muted">No attempts.</td>
-                                  </tr>
-                                ` : html``}
-                              </tbody>
-                            </table>
+                                    ${this._isAttemptExpanded(jobId, attempt) ? html`
+                                      <tr>
+                                        <td colspan="8" class="attempt-log-cell">
+                                          ${String(attempt.stdout_tail || '').trim() ? html`
+                                            <div class="attempt-log-title">stdout</div>
+                                            <pre class="attempt-log-block mono">${attempt.stdout_tail}</pre>
+                                          ` : ''}
+                                          ${String(attempt.stderr_tail || '').trim() ? html`
+                                            <div class="attempt-log-title">stderr</div>
+                                            <pre class="attempt-log-block mono">${attempt.stderr_tail}</pre>
+                                          ` : ''}
+                                        </td>
+                                      </tr>
+                                    ` : ''}
+                                  `)}
+                                  ${!attempts.length ? html`<tr><td colspan="8" class="muted">No attempts.</td></tr>` : ''}
+                                </tbody>
+                              </table>
+                            </div>
                           </div>
                         `}
                       </td>
                     </tr>
-                  ` : html``}
+                  ` : ''}
                 `;
               })}
-              ${!this.jobs.length ? html`
-                <tr>
-                  <td colspan="7" class="muted">No jobs found.</td>
-                </tr>
-              ` : html``}
+              ${!this.jobs.length ? html`<tr><td colspan="6" class="muted">No jobs found.</td></tr>` : ''}
             </tbody>
           </table>
         </div>
@@ -1917,84 +1827,146 @@ export class LibraryJobsAdmin extends LitElement {
     `;
   }
 
-  _renderDefinitionsTab() {
+  _renderWorkflowsTab() {
     return html`
-      ${!this.isSuperAdmin ? html`
-        <div class="section">
-          <div class="muted">Definitions are only editable by super admins.</div>
-        </div>
-      ` : html`
-        <div class="section">
-          <h4 class="section-title">Create Definition</h4>
+      <div class="section">
+        <div class="row-between" style="margin-bottom: 10px;">
+          <h4 class="section-title" style="margin: 0;">Workflow Runs (${this.workflowTotalRuns})</h4>
           <div class="row">
-              <input
-                class="input field"
-                type="text"
-                placeholder="key (e.g. sync-dropbox)"
-                .value=${this.definitionKey}
-                @input=${(event) => {
-                  this.definitionKey = event.target.value || '';
-                }}
-            />
-            <input
-              class="input field"
-              type="text"
-              placeholder="description"
-              .value=${this.definitionDescription}
-              @input=${(event) => {
-                this.definitionDescription = event.target.value || '';
-              }}
-            />
-            <input
-              class="input field"
-              type="number"
-              min="1"
-              placeholder="timeout seconds"
-              .value=${this.definitionTimeoutSeconds}
-              @input=${(event) => {
-                this.definitionTimeoutSeconds = event.target.value || '';
-              }}
-            />
-            <input
-              class="input field"
-              type="number"
-              min="1"
-              placeholder="max attempts"
-              .value=${this.definitionMaxAttempts}
-              @input=${(event) => {
-                this.definitionMaxAttempts = event.target.value || '';
-              }}
-            />
-            <label class="row muted">
-              <input
-                type="checkbox"
-                .checked=${this.definitionActive}
-                @change=${(event) => {
-                  this.definitionActive = !!event.target.checked;
-                }}
-              />
-              active
-            </label>
-            <button class="btn btn-primary" ?disabled=${this.actionLoading} @click=${this._handleCreateDefinition}>
-              Create Definition
+            <button class="btn btn-primary btn-sm" ?disabled=${this.actionLoading} @click=${() => {
+              const firstWorkflow = (this.workflowDefinitions || [])[0];
+              if (!firstWorkflow) { this._setError('No workflows available'); return; }
+              this.enqueueTaskKey = `workflow:${firstWorkflow.key}`;
+              this.enqueueWorkflowKey = firstWorkflow.key;
+              this._handleEnqueue();
+            }}>
+              + Run Workflow
+            </button>
+            <button class="btn btn-secondary btn-sm" @click=${() => this._loadWorkflowRuns({ keepLoading: true })}>
+              Refresh
             </button>
           </div>
-          <div class="row" style="margin-top: 8px;">
-            <textarea
-              class="textarea field-wide mono"
-              placeholder='arg_schema JSON'
-              .value=${this.definitionArgSchema}
-              @input=${(event) => {
-                this.definitionArgSchema = event.target.value || '';
-              }}
-            ></textarea>
-          </div>
         </div>
-      `}
+        ${this.workflowDefinitions.length > 1 ? html`
+          <div class="row" style="margin-bottom: 10px;">
+            <select class="select" .value=${this.enqueueWorkflowKey}
+              @change=${(e) => {
+                this.enqueueWorkflowKey = e.target.value || '';
+                this.enqueueTaskKey = `workflow:${e.target.value}`;
+              }}>
+              ${this.workflowDefinitions.map((w) => html`
+                <option value=${w.key} ?selected=${this.enqueueWorkflowKey === w.key}>${w.key}</option>
+              `)}
+            </select>
+            <span class="muted">Select workflow to run above</span>
+          </div>
+        ` : ''}
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Queued</th>
+                <th>Workflow</th>
+                <th>Status</th>
+                <th>Policy</th>
+                <th>Error</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              ${(this.workflowRuns || []).map((run) => {
+                const runId = String(run?.id || '');
+                const isOpen = !!this._expandedWorkflowRuns?.[runId];
+                return html`
+                  <tr>
+                    <td>${formatDateTime(run.queued_at)}</td>
+                    <td class="mono">${run.workflow_key || run.workflow_definition_id}</td>
+                    <td><span class="status-pill status-${run.status}">${run.status}</span></td>
+                    <td>${run.failure_policy || 'fail_fast'}</td>
+                    <td class="muted">${run.last_error || '—'}</td>
+                    <td>
+                      <div class="row">
+                        <button class="btn btn-secondary btn-sm"
+                          @click=${() => {
+                            const opening = !isOpen;
+                            this._expandedWorkflowRuns = {
+                              ...(this._expandedWorkflowRuns || {}),
+                              [runId]: opening,
+                            };
+                            if (opening && !Array.isArray(run.steps)) {
+                              this._fetchStepsForRun(runId);
+                            }
+                          }}
+                        >${isOpen ? 'Close' : 'Open'}</button>
+                        ${String(run.status || '').toLowerCase() === 'running' ? html`
+                          <button class="btn btn-danger btn-sm" ?disabled=${this.actionLoading}
+                            @click=${() => this._handleCancelWorkflowRun(run)}>Cancel</button>
+                        ` : html`
+                          <button class="btn btn-danger btn-sm" ?disabled=${this.actionLoading}
+                            @click=${() => this._handleDeleteWorkflowRun(run)}>Delete</button>
+                        `}
+                      </div>
+                    </td>
+                  </tr>
+                  ${isOpen ? html`
+                    <tr class="expand-row">
+                      <td colspan="6">
+                        <div style="padding: 10px 4px;">
+                          <div class="row" style="margin-bottom: 8px; flex-wrap: wrap; gap: 16px;">
+                            <div><div class="muted" style="margin-bottom: 2px;">Run ID</div><div class="mono">${run.id}</div></div>
+                            <div><div class="muted" style="margin-bottom: 2px;">Max parallel</div><div>${run.max_parallel_steps || 1}</div></div>
+                            <div><div class="muted" style="margin-bottom: 2px;">Started</div><div>${formatDateTime(run.started_at)}</div></div>
+                            <div><div class="muted" style="margin-bottom: 2px;">Finished</div><div>${formatDateTime(run.finished_at)}</div></div>
+                          </div>
+                          ${run.last_error ? html`
+                            <div style="margin-bottom: 8px;">
+                              <div class="muted" style="margin-bottom: 2px;">Error</div>
+                              <div style="color: #991b1b;">${run.last_error}</div>
+                            </div>
+                          ` : ''}
+                          ${Array.isArray(run.steps) && run.steps.length ? html`
+                            <div>
+                              <div class="muted" style="margin-bottom: 4px;">Steps</div>
+                              <table style="width: 100%;">
+                                <thead>
+                                  <tr><th>Step</th><th>Definition</th><th>Status</th><th>Started</th><th>Finished</th><th>Error</th></tr>
+                                </thead>
+                                <tbody>
+                                  ${run.steps.map((step) => html`
+                                    <tr>
+                                      <td class="mono">${step.step_key}</td>
+                                      <td class="mono">${step.definition_key || '—'}</td>
+                                      <td><span class="status-pill status-${step.status}">${step.status}</span></td>
+                                      <td>${formatDateTime(step.started_at)}</td>
+                                      <td>${formatDateTime(step.finished_at)}</td>
+                                      <td class="muted">${step.error_text || '—'}</td>
+                                    </tr>
+                                  `)}
+                                </tbody>
+                              </table>
+                            </div>
+                          ` : html`<div class="muted">No step data available. Steps are loaded when a run is expanded — try refreshing.</div>`}
+                        </div>
+                      </td>
+                    </tr>
+                  ` : ''}
+                `;
+              })}
+              ${!(this.workflowRuns || []).length ? html`
+                <tr><td colspan="6" class="muted">No workflow runs yet.</td></tr>
+              ` : ''}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  }
 
+  _renderDefinitionsTab() {
+    return html`
       <div class="section">
-        <div class="row-between">
-          <h4 class="section-title" style="margin-bottom: 0;">Definitions (${this.definitions.length})</h4>
+        <div class="row-between" style="margin-bottom: 10px;">
+          <h4 class="section-title" style="margin: 0;">Job Definitions (${this.definitions.length})</h4>
           <div class="row">
             <label class="row muted">
               <input
@@ -2002,15 +1974,19 @@ export class LibraryJobsAdmin extends LitElement {
                 .checked=${this.includeInactiveDefinitions}
                 @change=${async (event) => {
                   this.includeInactiveDefinitions = !!event.target.checked;
-                  await this._loadDefinitions({ keepLoading: true });
+                  await this._loadCatalog({ keepLoading: true });
                 }}
               />
               include inactive
             </label>
-            <button class="btn btn-secondary btn-sm" @click=${() => this._loadDefinitions({ keepLoading: true })}>
+            <button class="btn btn-secondary btn-sm" @click=${() => this._loadCatalog({ keepLoading: true })}>
               Refresh
             </button>
           </div>
+        </div>
+        <div class="muted" style="margin-bottom: 10px;">
+          Job definitions are managed in <strong>System Administration → Jobs</strong>.
+          Use the queue tab to enqueue jobs manually.
         </div>
         <div class="table-wrap">
           <table>
@@ -2018,33 +1994,97 @@ export class LibraryJobsAdmin extends LitElement {
               <tr>
                 <th>Key</th>
                 <th>Description</th>
-                <th>Timeout</th>
+                <th>Timeout (s)</th>
                 <th>Max Attempts</th>
                 <th>Active</th>
+                <th></th>
               </tr>
             </thead>
             <tbody>
-              ${this.definitions.map((definition) => html`
-                <tr>
-                  <td class="mono">${definition.key}</td>
-                  <td>${definition.description || '—'}</td>
-                  <td>${definition.timeout_seconds}</td>
-                  <td>${definition.max_attempts}</td>
-                  <td>
-                    <input
-                      type="checkbox"
-                      .checked=${!!definition.is_active}
-                      ?disabled=${this.actionLoading || !this.isSuperAdmin}
-                      @change=${(event) => this._toggleDefinition(definition, !!event.target.checked)}
-                    />
-                  </td>
-                </tr>
-              `)}
+              ${this.definitions.map((definition) => {
+                const defId = String(definition?.id || definition?.key || '');
+                const isOpen = !!this._expandedDefinitions?.[defId];
+                return html`
+                  <tr>
+                    <td class="mono">${definition.key}</td>
+                    <td>${definition.description || '—'}</td>
+                    <td>${definition.timeout_seconds}</td>
+                    <td>${definition.max_attempts}</td>
+                    <td>${definition.is_active ? '✓' : '—'}</td>
+                    <td>
+                      <button
+                        class="btn btn-secondary btn-sm"
+                        @click=${() => {
+                          this._expandedDefinitions = {
+                            ...(this._expandedDefinitions || {}),
+                            [defId]: !isOpen,
+                          };
+                        }}
+                      >
+                        ${isOpen ? 'Close' : 'Open'}
+                      </button>
+                    </td>
+                  </tr>
+                  ${isOpen ? html`
+                    <tr class="expand-row">
+                      <td colspan="6">
+                        <div style="padding: 10px 4px;">
+                          <div class="row" style="margin-bottom: 8px; flex-wrap: wrap; gap: 16px;">
+                            <div>
+                              <div class="muted" style="margin-bottom: 2px;">Key</div>
+                              <div class="mono">${definition.key}</div>
+                            </div>
+                            <div>
+                              <div class="muted" style="margin-bottom: 2px;">Timeout</div>
+                              <div>${definition.timeout_seconds}s</div>
+                            </div>
+                            <div>
+                              <div class="muted" style="margin-bottom: 2px;">Max Attempts</div>
+                              <div>${definition.max_attempts}</div>
+                            </div>
+                            <div>
+                              <div class="muted" style="margin-bottom: 2px;">Active</div>
+                              <div>${definition.is_active ? 'Yes' : 'No'}</div>
+                            </div>
+                          </div>
+                          ${definition.description ? html`
+                            <div style="margin-bottom: 8px;">
+                              <div class="muted" style="margin-bottom: 2px;">Description</div>
+                              <div>${definition.description}</div>
+                            </div>
+                          ` : ''}
+                          ${definition.cli_command?.queue_params?.length ? html`
+                            <div>
+                              <div class="muted" style="margin-bottom: 4px;">Queue Parameters</div>
+                              <table style="width: auto;">
+                                <thead>
+                                  <tr><th>Name</th><th>Type</th><th>Default</th><th>Required</th><th>Help</th></tr>
+                                </thead>
+                                <tbody>
+                                  ${definition.cli_command.queue_params
+                                    .filter((p) => p.name !== 'tenant_id')
+                                    .map((p) => html`
+                                    <tr>
+                                      <td class="mono">${p.name}</td>
+                                      <td>${p.choices ? p.choices.join(' | ') : (p.input_type || '—')}</td>
+                                      <td>${p.default !== null && p.default !== undefined ? String(p.default) : '—'}</td>
+                                      <td>${p.required ? 'Yes' : '—'}</td>
+                                      <td class="muted">${p.help || '—'}</td>
+                                    </tr>
+                                  `)}
+                                </tbody>
+                              </table>
+                            </div>
+                          ` : ''}
+                        </div>
+                      </td>
+                    </tr>
+                  ` : ''}
+                `;
+              })}
               ${!this.definitions.length ? html`
-                <tr>
-                  <td colspan="5" class="muted">No definitions found.</td>
-                </tr>
-              ` : html``}
+                <tr><td colspan="6" class="muted">No definitions found.</td></tr>
+              ` : ''}
             </tbody>
           </table>
         </div>
@@ -2070,7 +2110,20 @@ export class LibraryJobsAdmin extends LitElement {
 
         ${this._renderSummary()}
 
-        ${this._renderQueueTab()}
+        <div class="subtabs">
+          ${['queue', 'workflows', 'jobs'].map((tab) => html`
+            <button
+              class="subtab ${this.activeTab === tab ? 'subtab-active' : ''}"
+              @click=${() => { this.activeTab = tab; }}
+            >
+              ${tab.charAt(0).toUpperCase() + tab.slice(1)}
+            </button>
+          `)}
+        </div>
+
+        ${this.activeTab === 'queue' ? this._renderQueueTab() : ''}
+        ${this.activeTab === 'workflows' ? this._renderWorkflowsTab() : ''}
+        ${this.activeTab === 'jobs' ? this._renderDefinitionsTab() : ''}
       </div>
     `;
   }

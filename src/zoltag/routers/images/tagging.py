@@ -5,7 +5,7 @@ import hashlib
 import mimetypes
 import traceback
 from datetime import datetime
-from typing import List
+from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, File, UploadFile, Query
 from sqlalchemy.orm import Session
 from google.cloud import storage
@@ -190,6 +190,8 @@ def _enqueue_build_embeddings(db: Session, tenant: Tenant) -> None:
 async def upload_and_ingest_image(
     file: UploadFile = File(...),
     dedup_policy: str = Query("keep_both", description="Dedup policy: keep_both or skip_duplicate"),
+    relative_path: Optional[str] = Query(None, description="Relative path within uploaded folder (e.g. vacation/2024/img.jpg)"),
+    store_original: bool = Query(True, description="When false, only the thumbnail is stored; the original file bytes are discarded after processing"),
     tenant: Tenant = Depends(get_tenant),
     db: Session = Depends(get_db),
     current_user: UserProfile = Depends(require_tenant_permission_from_header("image.variant.manage")),
@@ -202,7 +204,8 @@ async def upload_and_ingest_image(
             detail=f"Unsupported dedup policy '{dedup_policy}'. Allowed: keep_both, skip_duplicate.",
         )
 
-    filename = (file.filename or "").strip()
+    # Use relative_path (from folder upload) as the display filename when provided.
+    filename = (relative_path or file.filename or "").strip()
     if not filename:
         raise HTTPException(status_code=400, detail="Missing filename.")
 
@@ -249,21 +252,31 @@ async def upload_and_ingest_image(
     guessed_content_type = mimetypes.guess_type(filename)[0]
     content_type = (file.content_type or guessed_content_type or "application/octet-stream").strip()
 
-    storage_client = storage.Client(project=settings.gcp_project_id)
-    storage_bucket = storage_client.bucket(tenant.get_storage_bucket(settings))
-    thumbnail_bucket = storage_client.bucket(tenant.get_thumbnail_bucket(settings))
-
     asset_id = uuid4()
-    source_key = tenant.get_asset_source_key(str(asset_id), filename)
+    source_key = tenant.get_asset_source_key(str(asset_id), filename) if store_original else f"managed-thumbnail-only/{asset_id}"
     thumbnail_key = tenant.get_asset_thumbnail_key(str(asset_id), "default-256.jpg")
-    source_blob = storage_bucket.blob(source_key)
-    thumbnail_blob = thumbnail_bucket.blob(thumbnail_key)
+
+    if settings.local_mode:
+        from zoltag.routers.local import _LocalThumbnailBucket
+        from pathlib import Path
+        _local_thumb_dir = Path(settings.local_data_dir) / "thumbnails"
+        storage_bucket = None
+        thumbnail_bucket = _LocalThumbnailBucket(_local_thumb_dir)
+        source_blob = None
+        thumbnail_blob = thumbnail_bucket.blob(thumbnail_key)
+    else:
+        storage_client = storage.Client(project=settings.gcp_project_id)
+        storage_bucket = storage_client.bucket(tenant.get_storage_bucket(settings)) if store_original else None
+        thumbnail_bucket = storage_client.bucket(tenant.get_thumbnail_bucket(settings))
+        source_blob = storage_bucket.blob(source_key) if store_original else None
+        thumbnail_blob = thumbnail_bucket.blob(thumbnail_key)
 
     source_uploaded = False
     thumbnail_uploaded = False
     try:
-        source_blob.upload_from_string(file_bytes, content_type=content_type)
-        source_uploaded = True
+        if store_original and source_blob is not None:
+            source_blob.upload_from_string(file_bytes, content_type=content_type)
+            source_uploaded = True
 
         features = processor.extract_features(file_bytes)
         model_name = settings.tagging_model
@@ -298,7 +311,7 @@ async def upload_and_ingest_image(
             filename=filename,
             source_provider="managed",
             source_key=source_key,
-            source_rev=str(source_blob.generation) if source_blob.generation is not None else None,
+            source_rev=str(source_blob.generation) if (store_original and source_blob is not None and getattr(source_blob, 'generation', None) is not None) else None,
             thumbnail_key=thumbnail_key,
             mime_type=mime_type,
             width=features.get("width"),
@@ -367,7 +380,7 @@ async def upload_and_ingest_image(
                 thumbnail_blob.delete()
             except Exception:
                 pass
-        if source_uploaded:
+        if source_uploaded and source_blob is not None:
             try:
                 source_blob.delete()
             except Exception:

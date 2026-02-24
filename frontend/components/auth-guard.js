@@ -195,6 +195,22 @@ export class AuthGuard extends LitElement {
   async connectedCallback() {
     super.connectedCallback();
 
+    // Check for local desktop mode — bypass all auth.
+    try {
+      const resp = await fetch('/api/v1/config/system');
+      if (resp.ok) {
+        const cfg = await resp.json();
+        if (cfg.local_mode) {
+          this.authenticated = true;
+          this.verified = true;
+          this.loading = false;
+          return;
+        }
+      }
+    } catch (_e) {
+      // Non-fatal — fall through to normal auth flow.
+    }
+
     // Check initial authentication state
     const session = await getSession();
     this.authenticated = !!session;

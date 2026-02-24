@@ -1,9 +1,54 @@
 """Database configuration and session management."""
 
-from sqlalchemy import create_engine
+import uuid as _uuid
+
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
 from zoltag.settings import settings
+
+
+def _patch_uuid_for_sqlite():
+    """
+    Monkey-patch SQLAlchemy's PostgreSQL UUID type so it stores as TEXT on SQLite.
+
+    UUID(as_uuid=True) normally calls value.hex in its bind_processor, which
+    fails on SQLite (where the column is stored as TEXT). We override
+    bind_processor and result_processor for the sqlite dialect.
+    """
+    from sqlalchemy.dialects.postgresql import UUID as PgUUID
+
+    _original_bind = PgUUID.bind_processor
+
+    def _patched_bind(self, dialect):
+        if dialect.name == "sqlite":
+            def process(value):
+                if value is None:
+                    return None
+                if isinstance(value, _uuid.UUID):
+                    return str(value)
+                return str(value) if value else None
+            return process
+        return _original_bind(self, dialect)
+
+    _original_result = PgUUID.result_processor
+
+    def _patched_result(self, dialect, coltype):
+        if dialect.name == "sqlite":
+            def process(value):
+                if value is None:
+                    return None
+                if isinstance(value, _uuid.UUID):
+                    return value
+                try:
+                    return _uuid.UUID(str(value))
+                except (ValueError, AttributeError):
+                    return value
+            return process
+        return _original_result(self, dialect, coltype)
+
+    PgUUID.bind_processor = _patched_bind
+    PgUUID.result_processor = _patched_result
 
 
 def _worker_postgres_options() -> str:
@@ -60,6 +105,10 @@ def build_engine():
 
 # Create database engine
 engine = build_engine()
+
+# Register SQLite compatibility shims when running in local/desktop mode.
+if settings.database_url.startswith("sqlite"):
+    _patch_uuid_for_sqlite()
 
 # Create session factory
 SessionLocal = sessionmaker(bind=engine)

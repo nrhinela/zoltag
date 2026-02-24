@@ -1,7 +1,7 @@
 import { LitElement, html, css } from 'lit';
 import { tailwind } from './tailwind-lit.js';
 import { renderPaginationControls } from './shared/pagination-controls.js';
-import { deleteImage, getDuplicateImages, getImages } from '../services/api.js';
+import { deleteImage, deleteImageBatch, getDuplicateImages, getImages } from '../services/api.js';
 
 class AssetsAdmin extends LitElement {
   static styles = [tailwind, css`
@@ -59,6 +59,8 @@ class AssetsAdmin extends LitElement {
     assetView: { type: String },
     filenameFilter: { type: String },
     filenameInput: { type: String },
+    selectedIds: { type: Array },
+    batchDeleting: { type: Boolean },
   };
 
   constructor() {
@@ -78,6 +80,8 @@ class AssetsAdmin extends LitElement {
     this.assetView = 'recent';
     this.filenameFilter = '';
     this.filenameInput = '';
+    this.selectedIds = [];
+    this.batchDeleting = false;
   }
 
   connectedCallback() {
@@ -117,6 +121,7 @@ class AssetsAdmin extends LitElement {
     if (reset) {
       this.assets = [];
       this.total = 0;
+      this.selectedIds = [];
     }
     try {
       const response = this.assetView === 'dupes'
@@ -242,6 +247,48 @@ class AssetsAdmin extends LitElement {
     }
   }
 
+  _toggleSelect(imageId) {
+    if (this.selectedIds.includes(imageId)) {
+      this.selectedIds = this.selectedIds.filter((id) => id !== imageId);
+    } else {
+      this.selectedIds = [...this.selectedIds, imageId];
+    }
+  }
+
+  _toggleSelectAll() {
+    const allIds = (this.assets || []).map((a) => a.id).filter(Boolean);
+    if (allIds.length > 0 && allIds.every((id) => this.selectedIds.includes(id))) {
+      this.selectedIds = [];
+    } else {
+      this.selectedIds = allIds;
+    }
+  }
+
+  async _handleBatchDelete() {
+    if (!this.canDelete || !this.selectedIds.length || this.batchDeleting) return;
+    const count = this.selectedIds.length;
+    const confirmed = window.confirm(`Delete ${count} selected asset${count === 1 ? '' : 's'}? This cannot be undone.`);
+    if (!confirmed) return;
+
+    this.error = '';
+    this.batchDeleting = true;
+    try {
+      const result = await deleteImageBatch(this.tenant, this.selectedIds);
+      this.selectedIds = [];
+      if (result?.errors?.length) {
+        this.error = `Deleted ${result.deleted?.length || 0} asset(s) with ${result.errors.length} error(s): ${result.errors[0]}`;
+      }
+      const shouldMoveBack = this.assets.length <= count && this.offset > 0;
+      const nextOffset = shouldMoveBack ? Math.max(0, this.offset - this.limit) : this.offset;
+      await this._loadAssets({ offset: nextOffset, limit: this.limit });
+    } catch (error) {
+      console.error('Failed to batch delete assets:', error);
+      this.error = error?.message || 'Failed to delete selected assets.';
+    } finally {
+      this.batchDeleting = false;
+    }
+  }
+
   _handlePagePrev() {
     if (this.loading) return;
     const nextOffset = Math.max(0, this.offset - this.limit);
@@ -299,6 +346,9 @@ class AssetsAdmin extends LitElement {
 
   render() {
     const rows = this.assets || [];
+    const allIds = rows.map((a) => a.id).filter(Boolean);
+    const allSelected = allIds.length > 0 && allIds.every((id) => this.selectedIds.includes(id));
+    const someSelected = this.selectedIds.length > 0;
     return html`
       <div class="w-full">
         <div class="bg-white rounded-lg border border-gray-200 p-6">
@@ -324,6 +374,25 @@ class AssetsAdmin extends LitElement {
               </button>
             </div>
           </div>
+          ${someSelected ? html`
+            <div class="flex items-center gap-3 mb-4 px-3 py-2 bg-red-50 border border-red-200 rounded-lg">
+              <span class="text-sm text-red-700 font-medium">${this.selectedIds.length} selected</span>
+              <button
+                class="px-3 py-1.5 bg-red-600 text-white text-sm rounded hover:bg-red-700 disabled:opacity-60"
+                ?disabled=${!this.canDelete || this.batchDeleting}
+                @click=${() => this._handleBatchDelete()}
+              >
+                ${this.batchDeleting ? 'Deleting...' : 'Delete Selected'}
+              </button>
+              <button
+                class="px-3 py-1.5 bg-gray-100 text-gray-700 text-sm rounded hover:bg-gray-200"
+                ?disabled=${this.batchDeleting}
+                @click=${() => { this.selectedIds = []; }}
+              >
+                Clear Selection
+              </button>
+            </div>
+          ` : html``}
           <div class="admin-subtabs mb-4">
             <button
               class="admin-subtab ${this.assetView === 'recent' ? 'active' : ''}"
@@ -378,6 +447,15 @@ class AssetsAdmin extends LitElement {
               <table class="min-w-full text-sm">
                 <thead class="bg-gray-50 text-gray-600">
                   <tr>
+                    <th class="px-3 py-2 w-8">
+                      <input
+                        type="checkbox"
+                        .checked=${allSelected}
+                        ?disabled=${rows.length === 0 || this.batchDeleting}
+                        @change=${() => this._toggleSelectAll()}
+                        title="Select all on this page"
+                      >
+                    </th>
                     <th class="px-3 py-2 text-left font-semibold">Filename</th>
                     <th class="px-3 py-2 text-left font-semibold">Date Created</th>
                     <th class="px-3 py-2 text-left font-semibold">Source</th>
@@ -403,12 +481,20 @@ class AssetsAdmin extends LitElement {
                     return html`
                       ${showDuplicateDivider ? html`
                         <tr class="bg-blue-50">
-                          <td class="px-3 py-2 text-xs font-semibold text-blue-700 uppercase tracking-wide" colspan="7">
+                          <td class="px-3 py-2 text-xs font-semibold text-blue-700 uppercase tracking-wide" colspan="8">
                             Duplicate set (${asset?.duplicate_count || 0} items)
                           </td>
                         </tr>
                       ` : html``}
-                      <tr>
+                      <tr class="${this.selectedIds.includes(imageId) ? 'bg-red-50' : ''}">
+                        <td class="px-3 py-2">
+                          <input
+                            type="checkbox"
+                            .checked=${this.selectedIds.includes(imageId)}
+                            ?disabled=${this.batchDeleting}
+                            @change=${() => this._toggleSelect(imageId)}
+                          >
+                        </td>
                         <td class="px-3 py-2 text-gray-800">${displayFilename}</td>
                         <td class="px-3 py-2 text-gray-700">${this._formatCreatedAt(asset)}</td>
                         <td class="px-3 py-2 text-gray-700">${this._formatSource(asset)}</td>
@@ -454,7 +540,7 @@ class AssetsAdmin extends LitElement {
                   })}
                   ${!this.loading && rows.length === 0 ? html`
                     <tr>
-                      <td class="px-3 py-6 text-gray-500 text-center" colspan="7">
+                      <td class="px-3 py-6 text-gray-500 text-center" colspan="8">
                         ${this.assetView === 'dupes' ? 'No embedding duplicates found.' : 'No assets found.'}
                       </td>
                     </tr>

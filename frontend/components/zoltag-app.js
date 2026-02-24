@@ -43,6 +43,7 @@ import { propertyGridStyles } from './shared/widgets/property-grid.js';
 import { getTenants, getSystemSettings } from '../services/api.js';
 import './library-integrations-admin.js';
 import './library-jobs-admin.js';
+import './presentation-templates-admin.js';
 import './share-list-modal.js';
 import './admin-reviews-panel.js';
 import { getStoredAppTenant } from '../services/app-storage.js';
@@ -212,8 +213,23 @@ class ZoltagApp extends LitElement {
   connectedCallback() {
       super.connectedCallback();
       this._syncTenantFromStorage();
+      this._maybeSetLocalTenant();
       this._appNavigationState.connect();
       this._appEventsState.connect();
+  }
+
+  async _maybeSetLocalTenant() {
+      if (this.tenant) return; // already set from localStorage
+      try {
+          const resp = await fetch('/api/v1/config/system');
+          if (!resp.ok) return;
+          const cfg = await resp.json();
+          if (cfg.local_mode && cfg.local_tenant_id) {
+              this._handleTenantChange({ detail: cfg.local_tenant_id });
+          }
+      } catch (_e) {
+          // non-fatal
+      }
   }
 
   disconnectedCallback() {

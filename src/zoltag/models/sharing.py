@@ -94,3 +94,25 @@ class MemberRating(Base):
         Index("idx_member_ratings_user", "user_uid"),
         Index("idx_member_ratings_share", "share_id"),
     )
+
+
+class PresentationTemplate(Base):
+    """Tenant-scoped PPTX template uploaded by a user."""
+
+    __tablename__ = "presentation_templates"
+
+    id = Column(sa.UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(sa.UUID(as_uuid=True), nullable=False, index=True)
+    name = Column(String(255), nullable=False)
+    storage_key = Column(Text, nullable=False)
+    original_filename = Column(String(255), nullable=False)
+    visibility = Column(String(20), nullable=False, server_default="private")
+    created_by_uid = Column(sa.UUID(as_uuid=True), nullable=False, index=True)
+    created_at = Column(sa.DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(sa.DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        sa.CheckConstraint("visibility IN ('shared', 'private')", name="chk_presentation_templates_visibility"),
+        Index("idx_presentation_templates_tenant_visibility", "tenant_id", "visibility"),
+        Index("idx_presentation_templates_tenant_creator", "tenant_id", "created_by_uid"),
+    )

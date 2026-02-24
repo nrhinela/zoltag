@@ -43,7 +43,7 @@ function shouldRedirectToLoginOnUnauthorized() {
  *
  * @param {string} url - API endpoint URL (relative to /api/v1)
  * @param {Object} options - Fetch options (method, body, headers, tenantId, etc.)
- * @returns {Promise<Object>} Parsed JSON response or blob for image downloads
+ * @returns {Promise<Object>} Parsed JSON response, blob, or blob+headers
  * @throws {Error} If request fails
  */
 export async function fetchWithAuth(url, options = {}) {
@@ -116,6 +116,12 @@ export async function fetchWithAuth(url, options = {}) {
   // Return blob for image downloads
   if (responseType === 'blob') {
     return response.blob();
+  }
+  if (responseType === 'blob-with-headers') {
+    return {
+      blob: await response.blob(),
+      headers: response.headers,
+    };
   }
 
   // Handle 204 No Content - don't try to parse empty body
@@ -343,6 +349,14 @@ export async function deleteImage(tenantId, imageId) {
     return fetchWithAuth(`/images/${imageId}`, {
         method: 'DELETE',
         tenantId,
+    });
+}
+
+export async function deleteImageBatch(tenantId, imageIds) {
+    return fetchWithAuth('/images/batch-delete', {
+        method: 'POST',
+        tenantId,
+        body: JSON.stringify({ image_ids: imageIds }),
     });
 }
 
@@ -603,6 +617,58 @@ export async function getListItems(tenantId, listId, { idsOnly = false } = {}) {
   const url = `/lists/${listId}/items${params.toString() ? '?' + params.toString() : ''}`;
   const data = await fetchWithAuth(url, { tenantId });
   return data || [];
+}
+
+export async function getPresentationTemplates(tenantId) {
+  const data = await fetchWithAuth('/lists/presentation-templates', { tenantId });
+  return Array.isArray(data) ? data : [];
+}
+
+export async function uploadPresentationTemplate(
+  tenantId,
+  { file, name = '', visibility = 'private' } = {}
+) {
+  const formData = new FormData();
+  if (file) {
+    formData.append('file', file);
+  }
+  if (name !== undefined && name !== null) {
+    formData.append('name', String(name));
+  }
+  formData.append('visibility', String(visibility || 'private'));
+  return fetchWithAuth('/lists/presentation-templates', {
+    method: 'POST',
+    tenantId,
+    body: formData,
+    headers: {},
+  });
+}
+
+export async function updatePresentationTemplate(tenantId, templateId, payload = {}) {
+  return fetchWithAuth(`/lists/presentation-templates/${templateId}`, {
+    method: 'PATCH',
+    tenantId,
+    body: JSON.stringify(payload || {}),
+  });
+}
+
+export async function deletePresentationTemplate(tenantId, templateId) {
+  return fetchWithAuth(`/lists/presentation-templates/${templateId}`, {
+    method: 'DELETE',
+    tenantId,
+  });
+}
+
+export async function exportListPptx(tenantId, listId, { templateId = '' } = {}) {
+  const params = new URLSearchParams();
+  if (templateId) {
+    params.set('template_id', String(templateId));
+  }
+  const suffix = params.toString() ? `?${params.toString()}` : '';
+  return fetchWithAuth(`/lists/${listId}/export/pptx${suffix}`, {
+    tenantId,
+    responseType: 'blob-with-headers',
+  });
 }
 
 export async function deleteListItem(tenantId, itemId) {

@@ -86,6 +86,12 @@ const GUEST_REVIEW_MODAL_CSS = `
     object-fit: contain;
     display: block;
   }
+  .guest-review-image-wrap video {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    display: block;
+  }
   .guest-full-image-loading {
     position: absolute;
     bottom: 12px;
@@ -375,6 +381,7 @@ export class GuestAnnotationDrawer extends LitElement {
     commentSortDesc: { type: Boolean },
     fullImageUrl: { type: String },
     fullImageLoading: { type: Boolean },
+    fullImageMimeType: { type: String },
   };
 
   constructor() {
@@ -390,6 +397,7 @@ export class GuestAnnotationDrawer extends LitElement {
     this.commentSortDesc = true;
     this.fullImageUrl = '';
     this.fullImageLoading = false;
+    this.fullImageMimeType = '';
     this._fullImageObjectUrl = null;
   }
 
@@ -431,6 +439,7 @@ export class GuestAnnotationDrawer extends LitElement {
     if (!this.image?.id || !this.listId || !this.tenantId) {
       this._revokeFullImageObjectUrl();
       this.fullImageUrl = '';
+      this.fullImageMimeType = '';
       return;
     }
 
@@ -447,14 +456,27 @@ export class GuestAnnotationDrawer extends LitElement {
       const objectUrl = URL.createObjectURL(blob);
       this._fullImageObjectUrl = objectUrl;
       this.fullImageUrl = objectUrl;
+      this.fullImageMimeType = String(blob?.type || '').toLowerCase();
     } catch (err) {
       console.warn('Failed to load full image for guest detail; falling back to thumbnail.', err);
       this._revokeFullImageObjectUrl();
       this.fullImageUrl = '';
+      this.fullImageMimeType = '';
     } finally {
       this.fullImageLoading = false;
       this.requestUpdate();
     }
+  }
+
+  _inferMediaType() {
+    const blobType = String(this.fullImageMimeType || '').toLowerCase();
+    if (blobType.startsWith('video/')) return 'video';
+    if (blobType.startsWith('image/')) return 'image';
+    const filename = String(this.image?.filename || '').toLowerCase();
+    if (filename.endsWith('.mp4') || filename.endsWith('.mov') || filename.endsWith('.m4v') || filename.endsWith('.webm')) {
+      return 'video';
+    }
+    return 'image';
   }
 
   async _loadMyReactions() {
@@ -592,6 +614,9 @@ export class GuestAnnotationDrawer extends LitElement {
 
   render() {
     if (!this.image) return html``;
+    const mediaType = this._inferMediaType();
+    const fallbackImageSrc = this.image.thumbnail_url || (this.image.image_id ? `/api/v1/images/${this.image.image_id}/thumbnail` : '');
+    const selectedSrc = this.fullImageUrl || fallbackImageSrc;
 
     return html`
       <style>${GUEST_REVIEW_MODAL_CSS}</style>
@@ -605,10 +630,18 @@ export class GuestAnnotationDrawer extends LitElement {
           <div class="panel-body">
             <section class="guest-review-left">
               <div class="guest-review-image-wrap">
-                <img
-                  src=${this.fullImageUrl || this.image.thumbnail_url || (this.image.image_id ? `/api/v1/images/${this.image.image_id}/thumbnail` : '')}
-                  alt=${this.image.filename || 'Image'}
-                />
+                ${mediaType === 'video' && this.fullImageUrl ? html`
+                  <video
+                    src=${selectedSrc}
+                    controls
+                    playsinline
+                  ></video>
+                ` : html`
+                  <img
+                    src=${selectedSrc}
+                    alt=${this.image.filename || 'Image'}
+                  />
+                `}
                 ${this.fullImageLoading ? html`
                   <div class="guest-full-image-loading-center" aria-hidden="true">
                     <span class="guest-full-image-loading-center-icon"></span>

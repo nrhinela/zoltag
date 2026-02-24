@@ -119,6 +119,11 @@ class Settings(BaseSettings):
     email_resend_api_key: Optional[str] = None
     email_from_address: str = "Zoltag <info@zoltag.com>"
 
+    # Local / Desktop mode
+    local_mode: bool = False
+    local_data_dir: str = str(Path.home() / ".zoltag")
+    local_tenant_id: Optional[str] = None
+
     @property
     def thumbnail_bucket(self) -> str:
         """Get thumbnail bucket name (defaults to main bucket)."""

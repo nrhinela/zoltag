@@ -81,27 +81,36 @@ class BuildEmbeddingsCommand(CliCommand):
             return
         assets_by_id = load_assets_for_images(self.db, images)
 
-        click.echo(f"Computing embeddings for {len(images)} images...")
-        with click.progressbar(images, label='Embedding images') as bar:
-            for image in bar:
-                storage_info = resolve_image_storage(
-                    image=image,
-                    tenant=self.tenant,
-                    db=None,
-                    assets_by_id=assets_by_id,
-                    strict=False,
-                )
-                thumbnail_key = storage_info.thumbnail_key
-                if not thumbnail_key:
-                    continue
+        total = len(images)
+        click.echo(f"Computing embeddings for {total} images...")
+        processed = 0
+        skipped = 0
+        _PROGRESS_INTERVAL = 25
+        for image in images:
+            storage_info = resolve_image_storage(
+                image=image,
+                tenant=self.tenant,
+                db=None,
+                assets_by_id=assets_by_id,
+                strict=False,
+            )
+            thumbnail_key = storage_info.thumbnail_key
+            if not thumbnail_key:
+                skipped += 1
+            else:
                 blob = thumbnail_bucket.blob(thumbnail_key)
                 if not blob.exists():
-                    continue
-                image_data = blob.download_as_bytes()
-                ensure_image_embedding(
-                    self.db, self.tenant.id, image.id, image_data,
-                    model_name, model_version, asset_id=image.asset_id
-                )
+                    skipped += 1
+                else:
+                    image_data = blob.download_as_bytes()
+                    ensure_image_embedding(
+                        self.db, self.tenant.id, image.id, image_data,
+                        model_name, model_version, asset_id=image.asset_id
+                    )
+                    processed += 1
+            done = processed + skipped
+            if done % _PROGRESS_INTERVAL == 0 or done == total:
+                print(f"  progress: {done}/{total} processed={processed} skipped={skipped}", flush=True)
 
         self.db.commit()
-        click.echo("✓ Embeddings stored")
+        click.echo(f"✓ Embeddings stored: processed={processed} skipped={skipped}")

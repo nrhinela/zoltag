@@ -58,29 +58,37 @@ if (path === '/' && hasAuthTokens && isGuestAuthType && hasGuestTenantHint) {
 // Get the app container
 const appContainer = document.getElementById('app');
 
-// Route based on path
-if (path === '/login') {
-  appContainer.innerHTML = '<login-page></login-page>';
-} else if (path === '/signup') {
-  appContainer.innerHTML = '<signup-page></signup-page>';
-} else if (path === '/auth/callback') {
-  appContainer.innerHTML = '<auth-callback></auth-callback>';
-} else if (path === '/guest') {
-  // Guest collaboration view (requires guest auth)
-  appContainer.innerHTML = '<guest-app></guest-app>';
-} else if (path === '/' || path === '/story') {
-  appContainer.innerHTML = '<public-story-page></public-story-page>';
-} else if (path === '/app') {
-  appContainer.innerHTML = `
-    <auth-guard>
-      <zoltag-app></zoltag-app>
-    </auth-guard>
-  `;
-} else {
-  // All other routes require authentication
-  appContainer.innerHTML = `
-    <auth-guard>
-      <zoltag-app></zoltag-app>
-    </auth-guard>
-  `;
+// Detect local desktop mode, then route.
+async function route() {
+  let localMode = false;
+  try {
+    const resp = await fetch('/api/v1/config/system');
+    if (resp.ok) {
+      const cfg = await resp.json();
+      localMode = !!cfg.local_mode;
+    }
+  } catch (_e) {
+    // Non-fatal — assume cloud mode.
+  }
+
+  if (path === '/login') {
+    appContainer.innerHTML = '<login-page></login-page>';
+  } else if (path === '/signup') {
+    appContainer.innerHTML = '<signup-page></signup-page>';
+  } else if (path === '/auth/callback') {
+    appContainer.innerHTML = '<auth-callback></auth-callback>';
+  } else if (path === '/guest') {
+    appContainer.innerHTML = '<guest-app></guest-app>';
+  } else if ((path === '/' || path === '/story') && !localMode) {
+    appContainer.innerHTML = '<public-story-page></public-story-page>';
+  } else {
+    // In local mode, / goes straight to the app. All other routes also go to the app.
+    appContainer.innerHTML = `
+      <auth-guard>
+        <zoltag-app></zoltag-app>
+      </auth-guard>
+    `;
+  }
 }
+
+route();

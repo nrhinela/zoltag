@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
@@ -347,15 +348,25 @@ def build_keyword_models(
             skipped += 1
             continue
 
+        explicit_neg_ids = list(negative_ids.get(keyword, []))
+        implicit_neg_ids = [nid for nid in neg_ids if nid not in set(explicit_neg_ids)]
+
         pos_embeddings = _fetch_embeddings(db, tenant_id, pos_ids)
-        neg_embeddings = _fetch_embeddings(db, tenant_id, neg_ids) if neg_ids else []
+        explicit_neg_embeddings = _fetch_embeddings(db, tenant_id, explicit_neg_ids) if explicit_neg_ids else []
+        implicit_neg_embeddings = _fetch_embeddings(db, tenant_id, implicit_neg_ids) if implicit_neg_ids else []
 
         if not pos_embeddings:
             skipped += 1
             continue
 
         pos_centroid = np.mean(np.array(pos_embeddings), axis=0).tolist()
-        neg_centroid = np.mean(np.array(neg_embeddings), axis=0).tolist() if neg_embeddings else None
+
+        # Explicit human negatives are weighted Nx relative to implicit sibling negatives
+        # so that a small number of deliberate labels can meaningfully anchor the centroid.
+        # Configurable via KEYWORD_MODEL_EXPLICIT_NEG_WEIGHT (default 8).
+        _EXPLICIT_NEG_WEIGHT = int(os.getenv("KEYWORD_MODEL_EXPLICIT_NEG_WEIGHT") or 8)
+        weighted_neg_embeddings = (explicit_neg_embeddings * _EXPLICIT_NEG_WEIGHT) + implicit_neg_embeddings
+        neg_centroid = np.mean(np.array(weighted_neg_embeddings), axis=0).tolist() if weighted_neg_embeddings else None
 
         # Look up keyword_id for this keyword name
         keyword_obj = db.query(Keyword).filter(

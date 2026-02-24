@@ -112,6 +112,12 @@ export function renderAuxTabContent(host, { formatCurateDate }) {
     'tenant.jobs.view',
     ['admin'],
   );
+  const canManageTemplates = allowByPermissionOrRole(
+    host.currentUser,
+    selectedTenant,
+    'list.edit.shared',
+    ['admin', 'editor'],
+  );
   const canManageShares = allowByPermissionOrRole(
     host.currentUser,
     selectedTenant,
@@ -124,6 +130,7 @@ export function renderAuxTabContent(host, { formatCurateDate }) {
     !canViewAudit ? 'Audit' : null,
     !canManageProviders ? 'Providers' : null,
     !canManageJobs ? 'Jobs' : null,
+    !canManageTemplates ? 'Templates' : null,
     !canManageShares ? 'Shares' : null,
   ].filter(Boolean);
   const libraryTabActive = host.activeTab === 'library';
@@ -135,6 +142,7 @@ export function renderAuxTabContent(host, { formatCurateDate }) {
     || (rawLibrarySubTab === 'audit' && canViewAudit)
     || (rawLibrarySubTab === 'providers' && canManageProviders)
     || (rawLibrarySubTab === 'jobs' && canManageJobs)
+    || (rawLibrarySubTab === 'templates' && canManageTemplates)
     || (rawLibrarySubTab === 'shares' && canManageShares))
     ? rawLibrarySubTab
     : defaultLibrarySubTab;
@@ -189,6 +197,14 @@ export function renderAuxTabContent(host, { formatCurateDate }) {
               @click=${() => host.activeLibrarySubTab = 'jobs'}
             >
               Jobs
+            </button>
+            <button
+              class="admin-subtab ${librarySubTab === 'templates' ? 'active' : ''}"
+              ?disabled=${!canManageTemplates}
+              title=${canManageTemplates ? 'Manage presentation templates' : 'Requires list.edit.shared permission'}
+              @click=${() => host.activeLibrarySubTab = 'templates'}
+            >
+              Templates
             </button>
             <button
               class="admin-subtab ${librarySubTab === 'shares' ? 'active' : ''}"
@@ -281,6 +297,13 @@ export function renderAuxTabContent(host, { formatCurateDate }) {
               .tenant=${host.tenant}
               .isSuperAdmin=${isSuperAdmin}
             ></library-jobs-admin>
+          </div>
+        ` : html``}
+        ${librarySubTab === 'templates' ? html`
+          <div class="mt-2">
+            <presentation-templates-admin
+              .tenant=${host.tenant}
+            ></presentation-templates-admin>
           </div>
         ` : html``}
         ${librarySubTab === 'shares' ? html`

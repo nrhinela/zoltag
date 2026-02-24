@@ -272,6 +272,16 @@ class Tenant:
         safe_name = self._sanitize_storage_filename(filename, fallback="reference")
         return f"tenants/{self.secret_scope}/person-references/{int(person_id)}/{reference_id}/{safe_name}"
 
+    def get_presentation_template_key(self, template_id: str, filename: str) -> str:
+        """
+        Build a storage key for uploaded PPTX templates.
+
+        Format:
+        tenants/{tenant_key_prefix}/presentation-templates/{template_id}/{filename}
+        """
+        safe_name = self._sanitize_storage_filename(filename, fallback="template.pptx")
+        return f"tenants/{self.secret_scope}/presentation-templates/{template_id}/{safe_name}"
+
     def get_person_reference_bucket(self, settings) -> str:
         """Get dedicated bucket for person reference photos."""
         return str(getattr(settings, "person_reference_bucket", "") or self.get_storage_bucket(settings)).strip()

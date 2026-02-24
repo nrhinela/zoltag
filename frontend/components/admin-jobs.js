@@ -93,10 +93,6 @@ export class AdminJobs extends LitElement {
     triggerDedupeWindow: { type: String },
     // trigger inline edits keyed by id
     triggerEdits: { type: Object },
-    // add-form visibility
-    showAddTrigger: { type: Boolean },
-    showAddWorkflow: { type: Boolean },
-    showAddDefinition: { type: Boolean },
     // new definition form
     definitionKey: { type: String },
     definitionDescription: { type: String },
@@ -116,6 +112,10 @@ export class AdminJobs extends LitElement {
     definitionDocsOpen: { type: Object },
     allWorkflowRuns: { type: Array },
     allWorkflowRunsLoading: { type: Boolean },
+    // in-page CRUD navigation: null=list, '__new__'=new form, '<id>'=edit form
+    _jobEditingId: { type: String },
+    _workflowEditingId: { type: String },
+    _triggerEditingId: { type: String },
   };
 
   static styles = [
@@ -178,7 +178,6 @@ export class AdminJobs extends LitElement {
       .row-number-input { width: 110px; }
       .row-key-input { min-width: 320px; }
       .row-description-input { width: 100%; }
-      .trigger-edit-row td { background: #f9fafb; }
     `,
   ];
 
@@ -208,9 +207,6 @@ export class AdminJobs extends LitElement {
     this.triggerPayloadTemplate = '{}';
     this.triggerDedupeWindow = '3600';
     this.triggerEdits = {};
-    this.showAddTrigger = false;
-    this.showAddWorkflow = false;
-    this.showAddDefinition = false;
 
     this.definitionKey = '';
     this.definitionDescription = '';
@@ -234,6 +230,9 @@ export class AdminJobs extends LitElement {
     this.definitionDocsOpen = {};
     this.allWorkflowRuns = [];
     this.allWorkflowRunsLoading = false;
+    this._jobEditingId = null;
+    this._workflowEditingId = null;
+    this._triggerEditingId = null;
   }
 
   connectedCallback() {
@@ -305,7 +304,7 @@ export class AdminJobs extends LitElement {
         is_active: !!this.definitionActive,
       });
       this._setSuccess('Job created');
-      this.showAddDefinition = false;
+      this._stopJobEdit();
       this.definitionKey = '';
       this.definitionDescription = '';
       await this._loadConfig();
@@ -337,6 +336,7 @@ export class AdminJobs extends LitElement {
     try {
       await deleteGlobalJobDefinition(definition.id);
       this._setSuccess('Definition deleted');
+      this._stopJobEdit();
       await this._loadConfig();
     } catch (error) {
       this._setError(error?.message || 'Failed to delete definition');
@@ -403,6 +403,7 @@ export class AdminJobs extends LitElement {
         key, description: this._getDefinitionEdit(definition, 'description').trim(), timeout_seconds: timeoutSeconds, max_attempts: maxAttempts,
       });
       this._setSuccess(`Updated ${updated?.key || key}`);
+      this._stopJobEdit();
       await this._loadConfig();
     } catch (error) {
       this._setError(error?.message || 'Failed to update definition');
@@ -477,6 +478,7 @@ export class AdminJobs extends LitElement {
     try {
       await updateGlobalJobTrigger(trigger.id, body);
       this._setSuccess(`Updated trigger "${label}"`);
+      this._stopTriggerEdit();
       await this._loadConfig();
     } catch (error) {
       this._setError(error?.message || 'Failed to update trigger');
@@ -521,7 +523,7 @@ export class AdminJobs extends LitElement {
     try {
       await createGlobalJobTrigger(body);
       this._setSuccess('Trigger created');
-      this.showAddTrigger = false;
+      this._stopTriggerEdit();
       this.triggerLabel = '';
       this.triggerEventName = '';
       await this._loadConfig();
@@ -548,6 +550,7 @@ export class AdminJobs extends LitElement {
     try {
       await deleteGlobalJobTrigger(trigger.id);
       this._setSuccess('Trigger deleted');
+      this._stopTriggerEdit();
       await this._loadConfig();
     } catch (error) {
       this._setError(error?.message || 'Failed to delete trigger');
@@ -573,7 +576,7 @@ export class AdminJobs extends LitElement {
         is_active: !!this.workflowActive,
       });
       this._setSuccess('Workflow created');
-      this.showAddWorkflow = false;
+      this._stopWorkflowEdit();
       this.workflowKey = '';
       this.workflowDescription = '';
       await this._loadConfig();
@@ -657,6 +660,7 @@ export class AdminJobs extends LitElement {
         is_active: !!this._getWorkflowEdit(workflow, 'is_active'),
       });
       this._setSuccess(`Updated workflow ${updated?.key || key}`);
+      this._stopWorkflowEdit();
       await this._loadConfig();
     } catch (error) {
       this._setError(error?.message || 'Failed to update workflow');
@@ -670,11 +674,21 @@ export class AdminJobs extends LitElement {
     try {
       await deleteGlobalWorkflowDefinition(workflow.id);
       this._setSuccess('Workflow deleted');
+      this._stopWorkflowEdit();
       await this._loadConfig();
     } catch (error) {
       this._setError(error?.message || 'Failed to delete workflow');
     } finally { this.saving = false; }
   }
+
+  // ── CRUD navigation helpers ─────────────────────────────────────────────────
+
+  _startJobEdit(id) { this._jobEditingId = id; }
+  _stopJobEdit() { this._jobEditingId = null; }
+  _startWorkflowEdit(id) { this._workflowEditingId = id; }
+  _stopWorkflowEdit() { this._workflowEditingId = null; }
+  _startTriggerEdit(id) { this._triggerEditingId = id; }
+  _stopTriggerEdit() { this._triggerEditingId = null; }
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
@@ -706,6 +720,16 @@ export class AdminJobs extends LitElement {
   }
 
   _renderTriggers() {
+    if (this._triggerEditingId !== null) {
+      const trigger = this._triggerEditingId === '__new__'
+        ? null
+        : this.triggers.find((t) => String(t.id) === String(this._triggerEditingId));
+      return this._renderTriggerEdit(trigger);
+    }
+    return this._renderTriggerList();
+  }
+
+  _renderTriggerList() {
     return html`
       <div class="section">
         <div class="row" style="margin-bottom:10px;">
@@ -714,116 +738,173 @@ export class AdminJobs extends LitElement {
             <input type="checkbox" .checked=${this.includeDisabledTriggers} @change=${async (e) => { this.includeDisabledTriggers = !!e.target.checked; await this._loadConfig(); }} />
             include disabled
           </label>
+          <button class="btn btn-secondary btn-sm" @click=${() => {
+            this.triggerLabel = '';
+            this.triggerType = 'schedule';
+            this.triggerEventName = '';
+            this.triggerCronExpr = '0 2 * * *';
+            this.triggerTimezone = 'UTC';
+            this.triggerDefinitionKey = String(this.definitions[0]?.key || '');
+            this.triggerWorkflowKey = String(this.workflows[0]?.key || '');
+            this.triggerPayloadTemplate = '{}';
+            this.triggerDedupeWindow = '3600';
+            this._startTriggerEdit('__new__');
+          }}>+ New</button>
         </div>
-        <div style="margin-bottom:10px;">
-          <button class="btn btn-secondary btn-sm" @click=${() => { this.showAddTrigger = !this.showAddTrigger; }}>
-            ${this.showAddTrigger ? 'Cancel' : '+ Add'}
-          </button>
-        </div>
-        ${this.showAddTrigger ? html`
-          <div class="add-form">
-            <div class="row">
-              <input class="input field" type="text" placeholder="label" .value=${this.triggerLabel} @input=${(e) => { this.triggerLabel = e.target.value || ''; }} />
-              <select class="select field" .value=${this.triggerType} @change=${(e) => { this.triggerType = e.target.value || 'schedule'; }}>
-                <option value="schedule">schedule</option>
-                <option value="event">event</option>
-              </select>
-              <input class="input field" type="number" min="0" placeholder="dedupe seconds" .value=${this.triggerDedupeWindow} @input=${(e) => { this.triggerDedupeWindow = e.target.value || ''; }} />
-            </div>
-            <div class="row" style="margin-top:8px;">
-              ${this.triggerType === 'schedule' ? html`
-                <input class="input field" type="text" placeholder="cron_expr e.g. 0 2 * * *" .value=${this.triggerCronExpr} @input=${(e) => { this.triggerCronExpr = e.target.value || ''; }} />
-                <select class="select field" .value=${this.triggerTimezone} @change=${(e) => { this.triggerTimezone = e.target.value || 'UTC'; }}>
-                ${_TIMEZONES.map((tz) => html`<option value=${tz}>${tz}</option>`)}
-              </select>
-                <select class="select field" .value=${this.triggerWorkflowKey} @change=${(e) => { this.triggerWorkflowKey = e.target.value || ''; }}>
-                  <option value="">— workflow —</option>
-                  ${this.workflows.map((w) => html`<option value=${w.key}>${w.key}</option>`)}
-                </select>
-              ` : html`
-                <input class="input field" type="text" placeholder="event_name" .value=${this.triggerEventName} @input=${(e) => { this.triggerEventName = e.target.value || ''; }} />
-                <select class="select field" .value=${this.triggerDefinitionKey} @change=${(e) => { this.triggerDefinitionKey = e.target.value || ''; }}>
-                  <option value="">— definition —</option>
-                  ${this.definitions.map((d) => html`<option value=${d.key}>${d.key}</option>`)}
-                </select>
-              `}
-              <button class="btn btn-primary" ?disabled=${this.saving} @click=${this._createTrigger}>Create</button>
-            </div>
-            <div class="row" style="margin-top:8px;">
-              <textarea class="textarea field-wide mono" placeholder="payload_template JSON" .value=${this.triggerPayloadTemplate} @input=${(e) => { this.triggerPayloadTemplate = e.target.value || ''; }}></textarea>
-            </div>
-          </div>
-        ` : ''}
         <div class="table-wrap">
           <table>
             <thead>
-              <tr><th>Enabled</th><th>Type</th><th>Target</th><th>Workflow / Definition</th><th>Dedupe (s)</th><th>Actions</th></tr>
+              <tr><th>Enabled</th><th>Label</th><th>Type</th><th>Workflow / Definition</th><th>Dedupe (s)</th><th></th></tr>
             </thead>
             <tbody>
               ${this.triggers.map((trigger) => html`
                 <tr>
                   <td><input type="checkbox" .checked=${!!trigger.is_enabled} ?disabled=${this.saving} @change=${(e) => this._toggleTrigger(trigger, !!e.target.checked)} /></td>
+                  <td>${trigger.label || '—'}</td>
                   <td class="muted">${trigger.trigger_type}</td>
-                  <td>
-                    ${trigger.trigger_type === 'schedule' ? html`
-                      <div style="display:flex;gap:6px;flex-wrap:wrap;">
-                        <input class="input mono" style="width:130px;" type="text" placeholder="cron"
-                          .value=${this._getTriggerEdit(trigger, 'cron_expr')}
-                          ?disabled=${this.saving}
-                          @input=${(e) => this._setTriggerEdit(trigger.id, 'cron_expr', e.target.value || '')} />
-                        <select class="select" style="width:180px;"
-                          ?disabled=${this.saving}
-                          @change=${(e) => this._setTriggerEdit(trigger.id, 'timezone', e.target.value || 'UTC')}>
-                          ${_TIMEZONES.map((tz) => html`<option value=${tz} ?selected=${this._getTriggerEdit(trigger, 'timezone') === tz}>${tz}</option>`)}
-                        </select>
-                      </div>
-                    ` : html`
-                      <input class="input mono" style="width:200px;" type="text" placeholder="event_name"
-                        .value=${this._getTriggerEdit(trigger, 'event_name')}
-                        ?disabled=${this.saving}
-                        @input=${(e) => this._setTriggerEdit(trigger.id, 'event_name', e.target.value || '')} />
-                    `}
-                  </td>
                   <td class="mono muted">
                     ${trigger.trigger_type === 'schedule'
                       ? (trigger.workflow_definition_key || trigger.workflow_definition_id || '—')
                       : (trigger.definition_key || trigger.definition_id || '—')}
                   </td>
+                  <td>${trigger.dedupe_window_seconds ?? '—'}</td>
                   <td>
-                    <input class="input row-number-input" type="number" min="0"
-                      .value=${this._getTriggerEdit(trigger, 'dedupe_window_seconds')}
-                      ?disabled=${this.saving}
-                      @input=${(e) => this._setTriggerEdit(trigger.id, 'dedupe_window_seconds', e.target.value || '')} />
-                  </td>
-                  <td>
-                    <div class="row">
-                      <button class="btn btn-primary btn-sm" ?disabled=${this.saving || !this._hasTriggerChanged(trigger)} @click=${() => this._saveTrigger(trigger)}>Save</button>
-                      <button class="btn btn-danger btn-sm" ?disabled=${this.saving} @click=${() => this._deleteTrigger(trigger)}>Delete</button>
-                    </div>
-                  </td>
-                </tr>
-                <tr class="trigger-edit-row">
-                  <td colspan="6">
-                    <div class="muted" style="margin-bottom:4px;">label</div>
-                    <input class="input" style="width:100%;" type="text"
-                      .value=${this._getTriggerEdit(trigger, 'label')}
-                      ?disabled=${this.saving}
-                      @input=${(e) => this._setTriggerEdit(trigger.id, 'label', e.target.value || '')} />
-                  </td>
-                </tr>
-                <tr class="trigger-edit-row">
-                  <td colspan="6">
-                    <div class="muted" style="margin-bottom:4px;">payload_template</div>
-                    <textarea class="textarea mono" style="min-height:60px;"
-                      .value=${this._getTriggerEdit(trigger, 'payload_template')}
-                      ?disabled=${this.saving}
-                      @input=${(e) => this._setTriggerEdit(trigger.id, 'payload_template', e.target.value || '{}')}></textarea>
+                    <button class="btn btn-secondary btn-sm" @click=${() => this._startTriggerEdit(String(trigger.id))}>Edit</button>
                   </td>
                 </tr>
               `)}
               ${!this.triggers.length ? html`<tr><td colspan="6" class="muted">${this.loading ? 'Loading…' : 'No triggers found.'}</td></tr>` : ''}
             </tbody>
           </table>
+        </div>
+      </div>
+    `;
+  }
+
+  _renderTriggerEdit(trigger) {
+    const isNew = !trigger;
+    const get = (field) => isNew
+      ? (field === 'label' ? this.triggerLabel
+        : field === 'trigger_type' ? this.triggerType
+        : field === 'event_name' ? this.triggerEventName
+        : field === 'cron_expr' ? this.triggerCronExpr
+        : field === 'timezone' ? this.triggerTimezone
+        : field === 'dedupe_window_seconds' ? this.triggerDedupeWindow
+        : field === 'payload_template' ? this.triggerPayloadTemplate
+        : '')
+      : this._getTriggerEdit(trigger, field);
+    const set = (field, value) => {
+      if (isNew) {
+        if (field === 'label') this.triggerLabel = value;
+        else if (field === 'event_name') this.triggerEventName = value;
+        else if (field === 'cron_expr') this.triggerCronExpr = value;
+        else if (field === 'timezone') this.triggerTimezone = value;
+        else if (field === 'dedupe_window_seconds') this.triggerDedupeWindow = value;
+        else if (field === 'payload_template') this.triggerPayloadTemplate = value;
+      } else {
+        this._setTriggerEdit(trigger.id, field, value);
+      }
+    };
+    const triggerType = isNew ? this.triggerType : trigger.trigger_type;
+    return html`
+      <div class="section">
+        <div class="row" style="margin-bottom:14px;">
+          <button class="btn btn-secondary btn-sm" @click=${() => this._stopTriggerEdit()}>← Back</button>
+          <h3 class="section-title" style="margin:0;">${isNew ? 'New Trigger' : `Edit Trigger: ${trigger.label || trigger.id}`}</h3>
+        </div>
+        <div class="add-form">
+          <div class="row">
+            <label class="muted" style="min-width:120px;">Label</label>
+            <input class="input field" type="text" placeholder="label"
+              .value=${get('label')}
+              ?disabled=${this.saving}
+              @input=${(e) => set('label', e.target.value || '')} />
+          </div>
+          <div class="row" style="margin-top:8px;">
+            <label class="muted" style="min-width:120px;">Type</label>
+            ${isNew ? html`
+              <select class="select field"
+                @change=${(e) => { this.triggerType = e.target.value || 'schedule'; }}>
+                <option value="schedule" ?selected=${this.triggerType === 'schedule'}>schedule</option>
+                <option value="event" ?selected=${this.triggerType === 'event'}>event</option>
+              </select>
+            ` : html`
+              <span class="muted mono">${trigger.trigger_type}</span>
+            `}
+          </div>
+          ${!isNew ? html`
+            <div class="row" style="margin-top:8px;">
+              <label class="muted" style="min-width:120px;">Enabled</label>
+              <input type="checkbox" .checked=${!!trigger.is_enabled} ?disabled=${this.saving}
+                @change=${(e) => this._toggleTrigger(trigger, !!e.target.checked)} />
+            </div>
+          ` : ''}
+          ${triggerType === 'schedule' ? html`
+            <div class="row" style="margin-top:8px;">
+              <label class="muted" style="min-width:120px;">Cron expr</label>
+              <input class="input field mono" type="text" placeholder="0 2 * * *"
+                .value=${get('cron_expr')}
+                ?disabled=${this.saving}
+                @input=${(e) => set('cron_expr', e.target.value || '')} />
+            </div>
+            <div class="row" style="margin-top:8px;">
+              <label class="muted" style="min-width:120px;">Timezone</label>
+              <select class="select field" ?disabled=${this.saving}
+                @change=${(e) => set('timezone', e.target.value || 'UTC')}>
+                ${_TIMEZONES.map((tz) => html`<option value=${tz} ?selected=${get('timezone') === tz}>${tz}</option>`)}
+              </select>
+            </div>
+            <div class="row" style="margin-top:8px;">
+              <label class="muted" style="min-width:120px;">Workflow</label>
+              <select class="select field" ?disabled=${this.saving}
+                @change=${(e) => { if (isNew) this.triggerWorkflowKey = e.target.value || ''; else this._setTriggerEdit(trigger.id, 'workflow_key', e.target.value || ''); }}>
+                <option value="">— workflow —</option>
+                ${this.workflows.map((w) => html`
+                  <option value=${w.key} ?selected=${isNew ? this.triggerWorkflowKey === w.key : (trigger.workflow_definition_key === w.key)}>${w.key}</option>
+                `)}
+              </select>
+            </div>
+          ` : html`
+            <div class="row" style="margin-top:8px;">
+              <label class="muted" style="min-width:120px;">Event name</label>
+              <input class="input field mono" type="text" placeholder="event_name"
+                .value=${get('event_name')}
+                ?disabled=${this.saving}
+                @input=${(e) => set('event_name', e.target.value || '')} />
+            </div>
+            <div class="row" style="margin-top:8px;">
+              <label class="muted" style="min-width:120px;">Definition</label>
+              <select class="select field" ?disabled=${this.saving}
+                @change=${(e) => { if (isNew) this.triggerDefinitionKey = e.target.value || ''; else this._setTriggerEdit(trigger.id, 'definition_key', e.target.value || ''); }}>
+                <option value="">— definition —</option>
+                ${this.definitions.map((d) => html`
+                  <option value=${d.key} ?selected=${isNew ? this.triggerDefinitionKey === d.key : (trigger.definition_key === d.key)}>${d.key}</option>
+                `)}
+              </select>
+            </div>
+          `}
+          <div class="row" style="margin-top:8px;">
+            <label class="muted" style="min-width:120px;">Dedupe (s)</label>
+            <input class="input field" type="number" min="0"
+              .value=${get('dedupe_window_seconds')}
+              ?disabled=${this.saving}
+              @input=${(e) => set('dedupe_window_seconds', e.target.value || '')} />
+          </div>
+          <div class="row" style="margin-top:8px;align-items:flex-start;">
+            <label class="muted" style="min-width:120px;padding-top:6px;">Payload template</label>
+            <textarea class="textarea field-wide mono" style="min-height:60px;"
+              .value=${get('payload_template')}
+              ?disabled=${this.saving}
+              @input=${(e) => set('payload_template', e.target.value || '{}')}></textarea>
+          </div>
+          <div class="row" style="margin-top:14px;gap:8px;">
+            ${isNew ? html`
+              <button class="btn btn-primary" ?disabled=${this.saving} @click=${this._createTrigger}>Create</button>
+            ` : html`
+              <button class="btn btn-primary" ?disabled=${this.saving || !this._hasTriggerChanged(trigger)} @click=${() => this._saveTrigger(trigger)}>Save</button>
+              <button class="btn btn-danger" ?disabled=${this.saving} @click=${() => this._deleteTrigger(trigger)}>Delete</button>
+            `}
+          </div>
         </div>
       </div>
     `;
@@ -984,6 +1065,16 @@ export class AdminJobs extends LitElement {
   }
 
   _renderWorkflows() {
+    if (this._workflowEditingId !== null) {
+      const workflow = this._workflowEditingId === '__new__'
+        ? null
+        : this.workflows.find((w) => String(w.id) === String(this._workflowEditingId));
+      return this._renderWorkflowEdit(workflow);
+    }
+    return this._renderWorkflowList();
+  }
+
+  _renderWorkflowList() {
     return html`
       <div class="section">
         <div class="row" style="margin-bottom:10px;">
@@ -993,113 +1084,124 @@ export class AdminJobs extends LitElement {
               @change=${async (e) => { this.includeInactiveWorkflows = !!e.target.checked; await this._loadConfig(); }} />
             include inactive
           </label>
-        </div>
-        <div style="margin-bottom:10px;">
           <button class="btn btn-secondary btn-sm" @click=${() => {
-            this.showAddWorkflow = !this.showAddWorkflow;
-            if (this.showAddWorkflow) this.workflowStepsRows = [{ step_key: '', definition_key: '', depends_on: [], payload: {} }];
-          }}>
-            ${this.showAddWorkflow ? 'Cancel' : '+ Add'}
-          </button>
+            this.workflowKey = '';
+            this.workflowDescription = '';
+            this.workflowMaxParallelSteps = '2';
+            this.workflowFailurePolicy = 'fail_fast';
+            this.workflowActive = true;
+            this.workflowStepsRows = [{ step_key: '', definition_key: '', depends_on: [], payload: {} }];
+            this._startWorkflowEdit('__new__');
+          }}>+ New</button>
         </div>
-        ${this.showAddWorkflow ? html`
-          <div class="add-form">
-            <div class="row">
-              <input class="input field" type="text" placeholder="key e.g. daily"
-                .value=${this.workflowKey}
-                @input=${(e) => { this.workflowKey = e.target.value || ''; }} />
-              <input class="input field" type="number" min="1" max="64" placeholder="max parallel steps"
-                .value=${this.workflowMaxParallelSteps}
-                @input=${(e) => { this.workflowMaxParallelSteps = e.target.value || ''; }} />
-              <select class="select field"
-                @change=${(e) => { this.workflowFailurePolicy = e.target.value || 'fail_fast'; }}>
-                <option value="fail_fast" ?selected=${this.workflowFailurePolicy === 'fail_fast'}>fail_fast</option>
-                <option value="continue" ?selected=${this.workflowFailurePolicy === 'continue'}>continue</option>
-              </select>
-              <label class="row muted">
-                <input type="checkbox" .checked=${this.workflowActive}
-                  @change=${(e) => { this.workflowActive = !!e.target.checked; }} /> active
-              </label>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Key</th><th>Parallel</th><th>Policy</th><th>Active</th><th></th></tr>
+            </thead>
+            <tbody>
+              ${this.workflows.map((workflow) => html`
+                <tr>
+                  <td class="mono">${workflow.key}</td>
+                  <td>${workflow.max_parallel_steps}</td>
+                  <td class="muted">${workflow.failure_policy}</td>
+                  <td>${workflow.is_active ? '✓' : '—'}</td>
+                  <td>
+                    <button class="btn btn-secondary btn-sm" @click=${() => this._startWorkflowEdit(String(workflow.id))}>Edit</button>
+                  </td>
+                </tr>
+              `)}
+              ${!this.workflows.length ? html`<tr><td colspan="5" class="muted">${this.loading ? 'Loading…' : 'No workflows found.'}</td></tr>` : ''}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  }
+
+  _renderWorkflowEdit(workflow) {
+    const isNew = !workflow;
+    const get = (field) => isNew
+      ? (field === 'key' ? this.workflowKey
+        : field === 'description' ? this.workflowDescription
+        : field === 'max_parallel_steps' ? this.workflowMaxParallelSteps
+        : field === 'failure_policy' ? this.workflowFailurePolicy
+        : field === 'is_active' ? this.workflowActive
+        : '')
+      : this._getWorkflowEdit(workflow, field);
+    const set = (field, value) => {
+      if (isNew) {
+        if (field === 'key') this.workflowKey = value;
+        else if (field === 'description') this.workflowDescription = value;
+        else if (field === 'max_parallel_steps') this.workflowMaxParallelSteps = value;
+        else if (field === 'failure_policy') this.workflowFailurePolicy = value;
+        else if (field === 'is_active') this.workflowActive = !!value;
+      } else {
+        this._setWorkflowEdit(workflow.id, field, value);
+      }
+    };
+    const steps = isNew
+      ? this.workflowStepsRows
+      : this._parseSteps(this._getWorkflowEdit(workflow, 'steps'));
+    const onStepsChange = isNew
+      ? (rows) => { this.workflowStepsRows = rows; }
+      : (newSteps) => this._setWorkflowEdit(workflow.id, 'steps', JSON.stringify(newSteps));
+    return html`
+      <div class="section">
+        <div class="row" style="margin-bottom:14px;">
+          <button class="btn btn-secondary btn-sm" @click=${() => this._stopWorkflowEdit()}>← Back</button>
+          <h3 class="section-title" style="margin:0;">${isNew ? 'New Workflow' : `Edit Workflow: ${workflow.key}`}</h3>
+        </div>
+        <div class="add-form">
+          <div class="row">
+            <label class="muted" style="min-width:120px;">Key</label>
+            <input class="input field" type="text" placeholder="key e.g. daily"
+              .value=${get('key')}
+              ?disabled=${this.saving}
+              @input=${(e) => set('key', e.target.value || '')} />
+          </div>
+          <div class="row" style="margin-top:8px;">
+            <label class="muted" style="min-width:120px;">Description</label>
+            <input class="input field-wide" type="text" placeholder="description"
+              .value=${get('description')}
+              ?disabled=${this.saving}
+              @input=${(e) => set('description', e.target.value || '')} />
+          </div>
+          <div class="row" style="margin-top:8px;">
+            <label class="muted" style="min-width:120px;">Max parallel</label>
+            <input class="input field" type="number" min="1" max="64"
+              .value=${get('max_parallel_steps')}
+              ?disabled=${this.saving}
+              @input=${(e) => set('max_parallel_steps', e.target.value || '')} />
+            <label class="muted" style="min-width:90px;">Failure policy</label>
+            <select class="select field" ?disabled=${this.saving}
+              @change=${(e) => set('failure_policy', e.target.value || 'fail_fast')}>
+              <option value="fail_fast" ?selected=${get('failure_policy') === 'fail_fast'}>fail_fast</option>
+              <option value="continue" ?selected=${get('failure_policy') === 'continue'}>continue</option>
+            </select>
+          </div>
+          <div class="row" style="margin-top:8px;">
+            <label class="muted" style="min-width:120px;">Active</label>
+            <input type="checkbox"
+              .checked=${!!get('is_active')}
+              ?disabled=${this.saving}
+              @change=${(e) => set('is_active', !!e.target.checked)} />
+          </div>
+          <div style="margin-top:12px;">
+            <div class="muted" style="margin-bottom:4px;">Steps</div>
+            ${this._renderStepBuilder(steps, onStepsChange)}
+          </div>
+          <div class="row" style="margin-top:14px;gap:8px;">
+            ${isNew ? html`
               <button class="btn btn-primary" ?disabled=${this.saving} @click=${() => {
                 this.workflowSteps = JSON.stringify(this.workflowStepsRows);
                 this._createWorkflow();
               }}>Create</button>
-            </div>
-            <div class="row" style="margin-top:8px;">
-              <input class="input field-wide" type="text" placeholder="description"
-                .value=${this.workflowDescription}
-                @input=${(e) => { this.workflowDescription = e.target.value || ''; }} />
-            </div>
-            <div style="margin-top:8px;">
-              ${this._renderStepBuilder(
-                this.workflowStepsRows,
-                (rows) => { this.workflowStepsRows = rows; }
-              )}
-            </div>
+            ` : html`
+              <button class="btn btn-primary" ?disabled=${this.saving || !this._hasWorkflowChanged(workflow)} @click=${() => this._saveWorkflow(workflow)}>Save</button>
+              <button class="btn btn-danger" ?disabled=${this.saving} @click=${() => this._deleteWorkflow(workflow)}>Delete</button>
+            `}
           </div>
-        ` : ''}
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr><th>Key</th><th>Parallel</th><th>Policy</th><th>Active</th><th>Actions</th></tr>
-            </thead>
-            <tbody>
-              ${this.workflows.map((workflow) => {
-                const steps = this._parseSteps(this._getWorkflowEdit(workflow, 'steps'));
-                return html`
-                  <tr>
-                    <td><input class="input mono row-key-input" type="text"
-                      .value=${this._getWorkflowEdit(workflow, 'key')}
-                      ?disabled=${this.saving}
-                      @input=${(e) => this._setWorkflowEdit(workflow.id, 'key', e.target.value || '')} /></td>
-                    <td><input class="input row-number-input" type="number" min="1" max="64"
-                      .value=${this._getWorkflowEdit(workflow, 'max_parallel_steps')}
-                      ?disabled=${this.saving}
-                      @input=${(e) => this._setWorkflowEdit(workflow.id, 'max_parallel_steps', e.target.value || '')} /></td>
-                    <td>
-                      <select class="select" ?disabled=${this.saving}
-                        @change=${(e) => this._setWorkflowEdit(workflow.id, 'failure_policy', e.target.value || 'fail_fast')}>
-                        <option value="fail_fast" ?selected=${this._getWorkflowEdit(workflow, 'failure_policy') === 'fail_fast'}>fail_fast</option>
-                        <option value="continue" ?selected=${this._getWorkflowEdit(workflow, 'failure_policy') === 'continue'}>continue</option>
-                      </select>
-                    </td>
-                    <td><input type="checkbox"
-                      .checked=${!!this._getWorkflowEdit(workflow, 'is_active')}
-                      ?disabled=${this.saving}
-                      @change=${(e) => this._setWorkflowEdit(workflow.id, 'is_active', !!e.target.checked)} /></td>
-                    <td>
-                      <div class="row">
-                        <button class="btn btn-primary btn-sm"
-                          ?disabled=${this.saving || !this._hasWorkflowChanged(workflow)}
-                          @click=${() => this._saveWorkflow(workflow)}>Save</button>
-                        <button class="btn btn-danger btn-sm" ?disabled=${this.saving}
-                          @click=${() => this._deleteWorkflow(workflow)}>Delete</button>
-                      </div>
-                    </td>
-                  </tr>
-                  <tr>
-                    <td colspan="5">
-                      <input class="input" style="width:100%;" type="text"
-                        placeholder="description"
-                        .value=${this._getWorkflowEdit(workflow, 'description')}
-                        ?disabled=${this.saving}
-                        @input=${(e) => this._setWorkflowEdit(workflow.id, 'description', e.target.value || '')} />
-                    </td>
-                  </tr>
-                  <tr>
-                    <td colspan="5">
-                      <div class="muted" style="margin-bottom:4px;">steps</div>
-                      ${this._renderStepBuilder(
-                        steps,
-                        (newSteps) => this._setWorkflowEdit(workflow.id, 'steps', JSON.stringify(newSteps))
-                      )}
-                    </td>
-                  </tr>
-                `;
-              })}
-              ${!this.workflows.length ? html`<tr><td colspan="5" class="muted">${this.loading ? 'Loading…' : 'No workflows found.'}</td></tr>` : ''}
-            </tbody>
-          </table>
         </div>
       </div>
     `;
@@ -1141,6 +1243,16 @@ export class AdminJobs extends LitElement {
   }
 
   _renderDefinitions() {
+    if (this._jobEditingId !== null) {
+      const definition = this._jobEditingId === '__new__'
+        ? null
+        : this.definitions.find((d) => String(d.id) === String(this._jobEditingId));
+      return this._renderDefinitionEdit(definition);
+    }
+    return this._renderDefinitionList();
+  }
+
+  _renderDefinitionList() {
     return html`
       <div class="section">
         <div class="row" style="margin-bottom:10px;">
@@ -1149,63 +1261,121 @@ export class AdminJobs extends LitElement {
             <input type="checkbox" .checked=${this.includeInactiveDefinitions} @change=${async (e) => { this.includeInactiveDefinitions = !!e.target.checked; await this._loadConfig(); }} />
             include inactive
           </label>
+          <button class="btn btn-secondary btn-sm" @click=${() => {
+            this.definitionKey = '';
+            this.definitionDescription = '';
+            this.definitionTimeoutSeconds = '3600';
+            this.definitionMaxAttempts = '3';
+            this.definitionActive = true;
+            this._startJobEdit('__new__');
+          }}>+ New</button>
         </div>
-        <div style="margin-bottom:10px;">
-          <button class="btn btn-secondary btn-sm" @click=${() => { this.showAddDefinition = !this.showAddDefinition; }}>
-            ${this.showAddDefinition ? 'Cancel' : '+ Add'}
-          </button>
-        </div>
-        ${this.showAddDefinition ? html`
-          <div class="add-form">
-            <div class="row">
-              <input class="input field" type="text" placeholder="key" .value=${this.definitionKey} @input=${(e) => { this.definitionKey = e.target.value || ''; }} />
-              <input class="input field" type="number" min="1" placeholder="timeout seconds" .value=${this.definitionTimeoutSeconds} @input=${(e) => { this.definitionTimeoutSeconds = e.target.value || ''; }} />
-              <input class="input field" type="number" min="1" placeholder="max attempts" .value=${this.definitionMaxAttempts} @input=${(e) => { this.definitionMaxAttempts = e.target.value || ''; }} />
-              <label class="row muted"><input type="checkbox" .checked=${this.definitionActive} @change=${(e) => { this.definitionActive = !!e.target.checked; }} /> active</label>
-              <button class="btn btn-primary" ?disabled=${this.saving} @click=${this._createDefinition}>Create</button>
-            </div>
-            <div class="row" style="margin-top:8px;">
-              <input class="input field-wide" type="text" placeholder="description" .value=${this.definitionDescription} @input=${(e) => { this.definitionDescription = e.target.value || ''; }} />
-            </div>
-          </div>
-        ` : ''}
         <div class="table-wrap">
           <table>
             <thead>
-              <tr><th>Key</th><th>Timeout (s)</th><th>Max attempts</th><th>Active</th><th>Actions</th></tr>
+              <tr><th>Key</th><th>Timeout (s)</th><th>Max attempts</th><th>Active</th><th>Description</th><th></th></tr>
             </thead>
             <tbody>
               ${this.definitions.map((definition) => html`
                 <tr>
-                  <td><input class="input mono row-key-input" type="text" .value=${this._getDefinitionEdit(definition, 'key')} ?disabled=${this.saving} @input=${(e) => this._setDefinitionEdit(definition.id, 'key', e.target.value || '')} /></td>
-                  <td><input class="input row-number-input" type="number" min="1" max="86400" .value=${this._getDefinitionEdit(definition, 'timeout_seconds')} ?disabled=${this.saving} @input=${(e) => this._setDefinitionEdit(definition.id, 'timeout_seconds', e.target.value || '')} /></td>
-                  <td><input class="input row-number-input" type="number" min="1" max="100" .value=${this._getDefinitionEdit(definition, 'max_attempts')} ?disabled=${this.saving} @input=${(e) => this._setDefinitionEdit(definition.id, 'max_attempts', e.target.value || '')} /></td>
-                  <td><input type="checkbox" .checked=${!!definition.is_active} ?disabled=${this.saving} @change=${(e) => this._toggleDefinition(definition, !!e.target.checked)} /></td>
+                  <td class="mono">${definition.key}</td>
+                  <td>${definition.timeout_seconds}</td>
+                  <td>${definition.max_attempts}</td>
+                  <td>${definition.is_active ? '✓' : '—'}</td>
+                  <td class="muted">${definition.description || ''}</td>
                   <td>
-                    <div class="row">
-                      <button class="btn btn-primary btn-sm" ?disabled=${this.saving || !this._hasDefinitionChanged(definition)} @click=${() => this._saveDefinition(definition)}>Save</button>
-                      <button class="btn btn-danger btn-sm" ?disabled=${this.saving} @click=${() => this._deleteDefinition(definition)}>Delete</button>
-                    </div>
+                    <button class="btn btn-secondary btn-sm" @click=${() => this._startJobEdit(String(definition.id))}>Edit</button>
                   </td>
                 </tr>
-                <tr>
-                  <td colspan="5">
-                    <div style="display:flex;gap:8px;align-items:center;">
-                      <input class="input" style="flex:1;min-width:0;" type="text" .value=${this._getDefinitionEdit(definition, 'description')} ?disabled=${this.saving} @input=${(e) => this._setDefinitionEdit(definition.id, 'description', e.target.value || '')} />
-                      <button class="btn-docs" @click=${() => this._toggleDefinitionDocs(definition.id)}>${this.definitionDocsOpen[definition.id] ? 'Hide docs' : 'Docs'}</button>
-                    </div>
-                  </td>
-                </tr>
-                ${this.definitionDocsOpen[definition.id] ? html`
-                  <tr>
-                    <td colspan="5">${this._renderCliDocs(definition.cli_command)}</td>
-                  </tr>
-                ` : ''}
               `)}
-              ${!this.definitions.length ? html`<tr><td colspan="5" class="muted">${this.loading ? 'Loading…' : 'No jobs found.'}</td></tr>` : ''}
+              ${!this.definitions.length ? html`<tr><td colspan="6" class="muted">${this.loading ? 'Loading…' : 'No jobs found.'}</td></tr>` : ''}
             </tbody>
           </table>
         </div>
+      </div>
+    `;
+  }
+
+  _renderDefinitionEdit(definition) {
+    const isNew = !definition;
+    const get = (field) => isNew
+      ? (field === 'key' ? this.definitionKey
+        : field === 'description' ? this.definitionDescription
+        : field === 'timeout_seconds' ? this.definitionTimeoutSeconds
+        : field === 'max_attempts' ? this.definitionMaxAttempts
+        : '')
+      : this._getDefinitionEdit(definition, field);
+    const set = (field, value) => {
+      if (isNew) {
+        if (field === 'key') this.definitionKey = value;
+        else if (field === 'description') this.definitionDescription = value;
+        else if (field === 'timeout_seconds') this.definitionTimeoutSeconds = value;
+        else if (field === 'max_attempts') this.definitionMaxAttempts = value;
+      } else {
+        this._setDefinitionEdit(definition.id, field, value);
+      }
+    };
+    const isActive = isNew ? this.definitionActive : !!definition.is_active;
+    return html`
+      <div class="section">
+        <div class="row" style="margin-bottom:14px;">
+          <button class="btn btn-secondary btn-sm" @click=${() => this._stopJobEdit()}>← Back</button>
+          <h3 class="section-title" style="margin:0;">${isNew ? 'New Job' : `Edit Job: ${definition.key}`}</h3>
+        </div>
+        <div class="add-form">
+          <div class="row">
+            <label class="muted" style="min-width:120px;">Key</label>
+            <input class="input field" type="text" placeholder="key"
+              .value=${get('key')}
+              ?disabled=${this.saving}
+              @input=${(e) => set('key', e.target.value || '')} />
+          </div>
+          <div class="row" style="margin-top:8px;">
+            <label class="muted" style="min-width:120px;">Description</label>
+            <input class="input field-wide" type="text" placeholder="description"
+              .value=${get('description')}
+              ?disabled=${this.saving}
+              @input=${(e) => set('description', e.target.value || '')} />
+          </div>
+          <div class="row" style="margin-top:8px;">
+            <label class="muted" style="min-width:120px;">Timeout (s)</label>
+            <input class="input field" type="number" min="1" max="86400"
+              .value=${get('timeout_seconds')}
+              ?disabled=${this.saving}
+              @input=${(e) => set('timeout_seconds', e.target.value || '')} />
+            <label class="muted" style="min-width:90px;">Max attempts</label>
+            <input class="input field" type="number" min="1" max="100"
+              .value=${get('max_attempts')}
+              ?disabled=${this.saving}
+              @input=${(e) => set('max_attempts', e.target.value || '')} />
+          </div>
+          <div class="row" style="margin-top:8px;">
+            <label class="muted" style="min-width:120px;">Active</label>
+            <input type="checkbox"
+              .checked=${isActive}
+              ?disabled=${this.saving}
+              @change=${(e) => {
+                if (isNew) this.definitionActive = !!e.target.checked;
+                else this._toggleDefinition(definition, !!e.target.checked);
+              }} />
+          </div>
+          <div class="row" style="margin-top:14px;gap:8px;">
+            ${isNew ? html`
+              <button class="btn btn-primary" ?disabled=${this.saving} @click=${this._createDefinition}>Create</button>
+            ` : html`
+              <button class="btn btn-primary" ?disabled=${this.saving || !this._hasDefinitionChanged(definition)} @click=${() => this._saveDefinition(definition)}>Save</button>
+              <button class="btn btn-danger" ?disabled=${this.saving} @click=${() => this._deleteDefinition(definition)}>Delete</button>
+            `}
+          </div>
+        </div>
+        ${!isNew && definition.cli_command ? html`
+          <div style="margin-top:10px;">
+            <button class="btn-docs" @click=${() => this._toggleDefinitionDocs(definition.id)}>
+              ${this.definitionDocsOpen[definition.id] ? 'Hide docs' : 'CLI Docs'}
+            </button>
+            ${this.definitionDocsOpen[definition.id] ? this._renderCliDocs(definition.cli_command) : ''}
+          </div>
+        ` : ''}
       </div>
     `;
   }

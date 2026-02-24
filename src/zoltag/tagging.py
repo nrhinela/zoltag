@@ -3,9 +3,14 @@
 from typing import List, Tuple, Protocol
 from PIL import Image
 import io
-import torch
-from transformers import CLIPProcessor, CLIPModel
 import numpy as np
+
+# torch and transformers are optional — only needed when the AI model is in use.
+# Do not import them at module level so the app starts without them installed.
+try:
+    import torch
+except ImportError:
+    torch = None  # type: ignore[assignment]
 
 # Register HEIF/HEIC support for Pillow
 try:
@@ -427,6 +432,21 @@ class SigLIPTagger:
 _tagger_instances = {}
 
 
+_SIGLIP_MODEL_ID = "google/siglip-so400m-patch14-384"
+
+
+def is_model_cached(model_type: str = "siglip") -> bool:
+    """Return True if the model weights are already in the local HuggingFace cache."""
+    if model_type != "siglip":
+        return False
+    try:
+        from huggingface_hub import try_to_load_from_cache, _CACHED_NO_EXIST
+        result = try_to_load_from_cache(_SIGLIP_MODEL_ID, "config.json")
+        return result is not None and result is not _CACHED_NO_EXIST
+    except Exception:
+        return False
+
+
 def get_tagger(model_type: str = "siglip") -> ImageTagger:
     """
     Get or create global tagger instance.
@@ -440,12 +460,13 @@ def get_tagger(model_type: str = "siglip") -> ImageTagger:
     global _tagger_instances
 
     if model_type not in _tagger_instances:
-        # if model_type == "clip":
-        #     _tagger_instances[model_type] = CLIPTagger()
         if model_type == "siglip":
+            if not is_model_cached(model_type):
+                raise RuntimeError(
+                    "AI model not downloaded yet. "
+                    "Use 'Download Model' in the app settings to download it first (~1.7 GB)."
+                )
             _tagger_instances[model_type] = SigLIPTagger()
-        # elif model_type == "siglip2":
-        #     _tagger_instances[model_type] = SigLIP2Tagger()
         else:
             raise ValueError(f"Unknown model type: {model_type}. Currently only 'siglip' is supported")
 

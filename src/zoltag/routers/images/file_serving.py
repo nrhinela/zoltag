@@ -161,6 +161,20 @@ async def get_thumbnail(
     logger = logging.getLogger(__name__)
 
     try:
+        # Local desktop mode: serve from ~/.zoltag/thumbnails/<filename>
+        if settings.local_mode:
+            from pathlib import Path
+            thumb_key = storage_info.thumbnail_key or ""
+            thumb_path = Path(settings.local_data_dir) / "thumbnails" / Path(thumb_key).name
+            if not thumb_path.exists():
+                raise HTTPException(status_code=404, detail="Thumbnail not found in local storage")
+            thumbnail_data = thumb_path.read_bytes()
+            return StreamingResponse(
+                iter([thumbnail_data]),
+                media_type="image/jpeg",
+                headers={"Cache-Control": "public, max-age=3600"},
+            )
+
         bucket_name = tenant.get_thumbnail_bucket(settings)
         logger.warning(f"🖼️  Fetching thumbnail for image {image_id}")
         logger.warning(f"🖼️  Bucket: {bucket_name}")

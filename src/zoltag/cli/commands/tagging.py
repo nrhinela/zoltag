@@ -153,148 +153,142 @@ class RecomputeZeroShotTagsCommand(CliCommand):
             f"{', limit ' + str(self.limit) if self.limit is not None else ''})"
         )
 
-        with click.progressbar(
-            length=total_remaining,
-            label='Recomputing SigLIP tags',
-            show_eta=True,
-            show_pos=True
-        ) as bar:
-            while True:
-                batch = base_query.offset(current_offset).limit(self.batch_size).all()
-                if not batch:
+        _PROGRESS_INTERVAL = 25
+        while True:
+            batch = base_query.offset(current_offset).limit(self.batch_size).all()
+            if not batch:
+                break
+            assets_by_id = load_assets_for_images(self.db, batch)
+            reached_limit = False
+            for image in batch:
+                if self.limit is not None and processed >= self.limit:
+                    reached_limit = True
                     break
-                assets_by_id = load_assets_for_images(self.db, batch)
-                reached_limit = False
-                for image in batch:
-                    if self.limit is not None and processed >= self.limit:
-                        reached_limit = True
-                        break
-                    try:
-                        storage_info = resolve_image_storage(
-                            image=image,
-                            tenant=self.tenant,
-                            db=None,
-                            assets_by_id=assets_by_id,
-                            strict=False,
-                            preloaded_thumbnail_url="",  # skip URL signing; CLI only needs the key
-                        )
-                        thumbnail_key = storage_info.thumbnail_key
-                        if not thumbnail_key:
-                            skipped += 1
-                            bar.update(1)
-                            continue
-                        if not self.replace:
-                            existing = self.db.query(MachineTag.id).filter(
-                                self.tenant_filter(MachineTag),
-                                MachineTag.asset_id == image.asset_id,
-                                MachineTag.tag_type == 'siglip',
-                                MachineTag.model_name == model_name
-                            ).first()
-                            if existing:
-                                skipped += 1
-                                bar.update(1)
-                                continue
-                        # Delete existing SigLIP tags
-                        self.db.query(MachineTag).filter(
+                try:
+                    storage_info = resolve_image_storage(
+                        image=image,
+                        tenant=self.tenant,
+                        db=None,
+                        assets_by_id=assets_by_id,
+                        strict=False,
+                        preloaded_thumbnail_url="",  # skip URL signing; CLI only needs the key
+                    )
+                    thumbnail_key = storage_info.thumbnail_key
+                    if not thumbnail_key:
+                        skipped += 1
+                        continue
+                    if not self.replace:
+                        existing = self.db.query(MachineTag.id).filter(
                             self.tenant_filter(MachineTag),
                             MachineTag.asset_id == image.asset_id,
                             MachineTag.tag_type == 'siglip',
                             MachineTag.model_name == model_name
-                        ).delete()
-
-                        embedding_row = self.db.query(ImageEmbedding).filter(
-                            self.tenant_filter(ImageEmbedding),
-                            ImageEmbedding.asset_id == image.asset_id
                         ).first()
-                        if embedding_row:
-                            image_embedding = embedding_row.embedding
-                        else:
-                            # Download thumbnail from Cloud Storage only if needed for embedding
-                            blob = thumbnail_bucket.blob(thumbnail_key)
-                            if not blob.exists():
-                                skipped += 1
-                                bar.update(1)
-                                continue
+                        if existing:
+                            skipped += 1
+                            continue
+                    # Delete existing SigLIP tags
+                    self.db.query(MachineTag).filter(
+                        self.tenant_filter(MachineTag),
+                        MachineTag.asset_id == image.asset_id,
+                        MachineTag.tag_type == 'siglip',
+                        MachineTag.model_name == model_name
+                    ).delete()
 
-                            image_data = blob.download_as_bytes()
-                            embedding_record = ensure_image_embedding(
-                                self.db,
-                                self.tenant.id,
-                                image.id,
-                                image_data,
-                                model_name,
-                                model_version,
-                                asset_id=image.asset_id,
-                            )
-                            image_embedding = embedding_record.embedding
+                    embedding_row = self.db.query(ImageEmbedding).filter(
+                        self.tenant_filter(ImageEmbedding),
+                        ImageEmbedding.asset_id == image.asset_id
+                    ).first()
+                    if embedding_row:
+                        image_embedding = embedding_row.embedding
+                    else:
+                        # Download thumbnail from Cloud Storage only if needed for embedding
+                        blob = thumbnail_bucket.blob(thumbnail_key)
+                        if not blob.exists():
+                            skipped += 1
+                            continue
 
-                        # Score with precomputed text embeddings per category
-                        all_tags = []
-                        for category, payload in text_embeddings_by_category.items():
-                            keywords, text_embeddings = payload
-                            category_tags = tagger.score_with_embedding(
-                                image_embedding,
-                                keywords,
-                                text_embeddings,
-                                threshold=settings.zeroshot_tag_threshold
-                            )
-                            if settings.zeroshot_tag_top_n is not None:
-                                category_tags = category_tags[:settings.zeroshot_tag_top_n]
-                            all_tags.extend(category_tags)
+                        image_data = blob.download_as_bytes()
+                        embedding_record = ensure_image_embedding(
+                            self.db,
+                            self.tenant.id,
+                            image.id,
+                            image_data,
+                            model_name,
+                            model_version,
+                            asset_id=image.asset_id,
+                        )
+                        image_embedding = embedding_record.embedding
 
-                        tags_with_confidence = all_tags
+                    # Score with precomputed text embeddings per category
+                    all_tags = []
+                    for category, payload in text_embeddings_by_category.items():
+                        keywords, text_embeddings = payload
+                        category_tags = tagger.score_with_embedding(
+                            image_embedding,
+                            keywords,
+                            text_embeddings,
+                            threshold=settings.zeroshot_tag_threshold
+                        )
+                        if settings.zeroshot_tag_top_n is not None:
+                            category_tags = category_tags[:settings.zeroshot_tag_top_n]
+                        all_tags.extend(category_tags)
 
-                        # Create new tags
-                        for keyword, confidence in tags_with_confidence:
-                            keyword_info = keyword_info_by_name.get(keyword)
-                            if not keyword_info:
-                                click.echo(f"\n  Skipping tag '{keyword}': keyword not found in DB")
-                                continue
-                            tag = assign_tenant_scope(MachineTag(
-                                asset_id=image.asset_id,
-                                keyword_id=keyword_info["id"],
-                                confidence=confidence,
-                                tag_type='siglip',
-                                model_name=model_name,
-                                model_version=model_version
-                            ), self.tenant)
-                            self.db.add(tag)
+                    tags_with_confidence = all_tags
 
-                        # Update tags_applied flag
-                        image.tags_applied = len(tags_with_confidence) > 0
+                    # Create new tags
+                    for keyword, confidence in tags_with_confidence:
+                        keyword_info = keyword_info_by_name.get(keyword)
+                        if not keyword_info:
+                            print(f"  skipping tag '{keyword}': keyword not found in DB", flush=True)
+                            continue
+                        tag = assign_tenant_scope(MachineTag(
+                            asset_id=image.asset_id,
+                            keyword_id=keyword_info["id"],
+                            confidence=confidence,
+                            tag_type='siglip',
+                            model_name=model_name,
+                            model_version=model_version
+                        ), self.tenant)
+                        self.db.add(tag)
 
-                        self.db.commit()
-                        processed += 1
-                        bar.update(1)
-                        if self.limit is not None and processed >= self.limit:
-                            reached_limit = True
-                            break
+                    # Update tags_applied flag
+                    image.tags_applied = len(tags_with_confidence) > 0
 
-                    except OperationalError as e:
-                        click.echo(f"\n  DB connection lost ({image.filename}): {e}")
-                        try:
-                            self.db.rollback()
-                        except Exception:
-                            pass
-                        self.db.close()
-                        self.db = self.Session()
-                        skipped += 1
-                        bar.update(1)
-                    except Exception as e:
-                        click.echo(f"\n  Error processing {image.filename}: {e}")
-                        try:
-                            self.db.rollback()
-                        except Exception:
-                            pass
-                        skipped += 1
-                        bar.update(1)
-
-                    if reached_limit:
+                    self.db.commit()
+                    processed += 1
+                    if self.limit is not None and processed >= self.limit:
+                        reached_limit = True
                         break
 
-                current_offset += len(batch)
+                except OperationalError as e:
+                    print(f"  DB connection lost ({image.filename}): {e}", flush=True)
+                    try:
+                        self.db.rollback()
+                    except Exception:
+                        pass
+                    self.db.close()
+                    self.db = self.Session()
+                    skipped += 1
+                except Exception as e:
+                    print(f"  error processing {image.filename}: {e}", flush=True)
+                    try:
+                        self.db.rollback()
+                    except Exception:
+                        pass
+                    skipped += 1
+
+                done = processed + skipped
+                if done % _PROGRESS_INTERVAL == 0:
+                    print(f"  progress: {done}/{total_remaining} processed={processed} skipped={skipped}", flush=True)
 
                 if reached_limit:
                     break
 
-            click.echo(f"\n✓ Zero-shot tag recompute complete: {processed} · Skipped: {skipped} · Total: {total}")
+            current_offset += len(batch)
+
+            if reached_limit:
+                break
+
+        print(f"  progress: {processed + skipped}/{total_remaining} processed={processed} skipped={skipped}", flush=True)
+        click.echo(f"✓ Zero-shot tag recompute complete: {processed} · Skipped: {skipped} · Total: {total}")

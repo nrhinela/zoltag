@@ -21,6 +21,44 @@ from zoltag.auth.models import (
 )
 from zoltag.metadata import Tenant as TenantModel
 from zoltag.tenant_scope import tenant_column_filter_for_values, tenant_reference_filter
+from zoltag.settings import settings
+
+
+class _LocalUser:
+    """Lightweight stand-in for UserProfile used in local desktop mode."""
+
+    @property
+    def supabase_uid(self):
+        import uuid as _uuid
+        raw = settings.local_tenant_id or "00000000-0000-0000-0000-000000000001"
+        try:
+            return _uuid.UUID(raw)
+        except ValueError:
+            return _uuid.UUID("00000000-0000-0000-0000-000000000001")
+
+    email = "local@localhost"
+    email_verified = True
+    display_name = "Local User"
+    photo_url = None
+    is_active = True
+    is_super_admin = True
+    last_login_at = None
+    tenant_memberships = []
+
+    @property
+    def created_at(self):
+        from datetime import datetime
+        return datetime(2024, 1, 1)
+
+    @property
+    def updated_at(self):
+        from datetime import datetime
+        return datetime(2024, 1, 1)
+
+
+def _make_local_user() -> UserProfile:  # type: ignore[return-value]
+    """Synthetic UserProfile for local desktop mode (no auth required)."""
+    return _LocalUser()  # type: ignore[return-value]
 
 
 RBAC_PERMISSION_CACHE_TTL_SECONDS = 30
@@ -288,6 +326,8 @@ async def get_authenticated_user_allow_pending(
     db: Session = Depends(get_db)
 ) -> UserProfile:
     """Return authenticated user without enforcing approval status."""
+    if settings.local_mode:
+        return _make_local_user()
     return await _resolve_authenticated_user(authorization=authorization, db=db)
 
 
@@ -320,6 +360,9 @@ async def get_current_user(
         HTTPException 403: User account not approved
         HTTPException 404: User profile not found
     """
+    if settings.local_mode:
+        return _make_local_user()
+
     user = await _resolve_authenticated_user(authorization=authorization, db=db)
 
     changed_tenant_ids = claim_pending_invitations_for_user(db, user=user)
@@ -453,6 +496,8 @@ def require_tenant_access(tenant_id: str) -> Callable:
         user: UserProfile = Depends(get_current_user),
         db: Session = Depends(get_db)
     ) -> UserProfile:
+        if settings.local_mode:
+            return user
         # Super admins have access to all tenants
         if user.is_super_admin:
             return user
@@ -483,10 +528,17 @@ def require_tenant_permission_from_header(permission_key: str) -> Callable:
         raise ValueError("permission_key is required")
 
     async def check_permission(
-        x_tenant_id: str = Header(..., alias="X-Tenant-ID"),
+        x_tenant_id: Optional[str] = Header(None, alias="X-Tenant-ID"),
         user: UserProfile = Depends(get_current_user),
         db: Session = Depends(get_db),
     ) -> UserProfile:
+        if settings.local_mode:
+            return user
+        if not x_tenant_id:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="X-Tenant-ID header required",
+            )
         if user.is_super_admin:
             return user
 

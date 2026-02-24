@@ -1,6 +1,7 @@
 """Metadata storage and management."""
 
 from datetime import datetime
+import json as _json
 import uuid
 from typing import Optional
 
@@ -9,12 +10,96 @@ from sqlalchemy.dialects.postgresql import JSONB, ARRAY, UUID
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 from sqlalchemy.ext.compiler import compiles
-from sqlalchemy.types import JSON
+from sqlalchemy.types import JSON, TypeDecorator, String as SAString
 
 @compiles(JSONB, "sqlite")
 def compile_jsonb_for_sqlite(element, compiler, **kw):
     return compiler.visit_JSON(element, **kw)
 
+@compiles(UUID, "sqlite")
+def compile_uuid_for_sqlite(element, compiler, **kw):
+    return "TEXT"
+
+
+class _UUIDasText(TypeDecorator):
+    """
+    Portable UUID column: uses PostgreSQL native UUID on Postgres,
+    stores as plain TEXT on SQLite (so uuid.UUID objects and UUID strings
+    both bind correctly without calling .hex).
+    """
+    impl = SAString
+    cache_ok = True
+
+    def load_dialect_impl(self, dialect):
+        if dialect.name == "postgresql":
+            return dialect.type_descriptor(UUID(as_uuid=True))
+        return dialect.type_descriptor(SAString(36))
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return None
+        if dialect.name == "postgresql":
+            # PostgreSQL UUID type handles this natively
+            return value if not isinstance(value, str) else uuid.UUID(value)
+        # SQLite: store as plain UUID string
+        if isinstance(value, uuid.UUID):
+            return str(value)
+        return str(value) if value else None
+
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return None
+        if isinstance(value, uuid.UUID):
+            return value
+        try:
+            return uuid.UUID(str(value))
+        except (ValueError, AttributeError):
+            return value
+
+
+class _ArrayAsJSON(TypeDecorator):
+    """
+    Stores PostgreSQL ARRAY columns as JSON text in SQLite.
+
+    On PostgreSQL the underlying ARRAY type is used as-is; on SQLite the value
+    is serialised to/from a JSON string so that Python lists round-trip cleanly.
+    """
+    impl = JSON
+    cache_ok = True
+
+    def load_dialect_impl(self, dialect):
+        if dialect.name == "postgresql":
+            return dialect.type_descriptor(ARRAY(Text))
+        return dialect.type_descriptor(JSON())
+
+    def process_bind_param(self, value, dialect):
+        if dialect.name == "postgresql":
+            return value
+        if value is None:
+            return _json.dumps([])
+        if isinstance(value, str):
+            return value  # already serialised
+        return _json.dumps(value)
+
+    def process_result_value(self, value, dialect):
+        if dialect.name == "postgresql":
+            return value
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return value
+        try:
+            return _json.loads(value)
+        except Exception:
+            return []
+
+
+@compiles(_ArrayAsJSON, "sqlite")
+def compile_array_as_json_for_sqlite(element, compiler, **kw):
+    return compiler.visit_JSON(element, **kw)
+
+# Backwards-compat: the raw ARRAY type still needs a DDL shim so any
+# direct Column(ARRAY(...)) that wasn't updated yet still creates correctly.
 @compiles(ARRAY, "sqlite")
 def compile_array_for_sqlite(element, compiler, **kw):
     return compiler.visit_JSON(element, **kw)
@@ -161,7 +246,7 @@ class ImageMetadata(Base):
     
     # Visual features
     perceptual_hash = Column(String(64), index=True)  # For deduplication
-    color_histogram = Column(ARRAY(Float))
+    color_histogram = Column(_ArrayAsJSON)
     
     # EXIF data
     exif_data = Column(JSONB)  # Stored as JSON for flexibility
@@ -252,7 +337,7 @@ class DetectedFace(Base):
     bbox_left = Column(Integer)
 
     # Face encoding (for matching)
-    face_encoding = Column(ARRAY(Float))
+    face_encoding = Column(_ArrayAsJSON)
 
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -285,7 +370,7 @@ class ImageEmbedding(Base):
     asset_id = Column(UUID(as_uuid=True), ForeignKey("assets.id", ondelete="SET NULL"), nullable=False)
     tenant_id = Column(UUID(as_uuid=True), nullable=False, index=True)
     
-    embedding = Column(ARRAY(Float), nullable=False)  # Vector embedding
+    embedding = Column(_ArrayAsJSON, nullable=False)  # Vector embedding
     model_name = Column(String(100))  # e.g., "clip-vit-base"
     model_version = Column(String(50))
     
@@ -310,8 +395,8 @@ class KeywordModel(Base):
     model_name = Column(String(100), nullable=False)
     model_version = Column(String(50))
 
-    positive_centroid = Column(ARRAY(Float), nullable=False)
-    negative_centroid = Column(ARRAY(Float), nullable=True)
+    positive_centroid = Column(_ArrayAsJSON, nullable=False)
+    negative_centroid = Column(_ArrayAsJSON, nullable=True)
 
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -574,7 +659,7 @@ class AssetTextIndex(Base):
     tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
     search_text = Column(Text, nullable=False, default="")
     components = Column(JSONB, nullable=False, default=dict)
-    search_embedding = Column(ARRAY(Float), nullable=True)
+    search_embedding = Column(_ArrayAsJSON, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
@@ -648,7 +733,7 @@ class JobWorker(Base):
     worker_id = Column(Text, primary_key=True)
     hostname = Column(Text, nullable=False)
     version = Column(Text, nullable=False, default="")
-    queues = Column(ARRAY(Text), nullable=False, default=list)
+    queues = Column(_ArrayAsJSON, nullable=False, default=list)
     last_seen_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     running_count = Column(Integer, nullable=False, default=0)
     metadata_json = Column("metadata", JSONB, nullable=False, default=dict)
@@ -730,7 +815,7 @@ class WorkflowStepRun(Base):
     )
     status = Column(Text, nullable=False, default="pending")
     payload = Column(JSONB, nullable=False, default=dict)
-    depends_on = Column(ARRAY(Text), nullable=False, default=list)
+    depends_on = Column(_ArrayAsJSON, nullable=False, default=list)
     child_job_id = Column(UUID(as_uuid=True), ForeignKey("jobs.id", ondelete="SET NULL"), unique=True)
     queued_at = Column(DateTime)
     started_at = Column(DateTime)
