@@ -171,8 +171,14 @@ def _enqueue_build_embeddings(db: Session, tenant: Tenant) -> None:
         db.execute(text("""
             INSERT INTO jobs (tenant_id, definition_id, source, status, priority, payload,
                               scheduled_for, queued_at, max_attempts)
-            VALUES (:tenant_id, :definition_id, 'system', 'queued', 100, '{}',
-                    :now, :now, :max_attempts)
+            SELECT :tenant_id, :definition_id, 'system', 'queued', 100, '{}',
+                   :now, :now, :max_attempts
+            WHERE NOT EXISTS (
+                SELECT 1 FROM jobs
+                WHERE tenant_id = :tenant_id
+                  AND definition_id = :definition_id
+                  AND status IN ('queued', 'running')
+            )
         """), {
             "tenant_id": str(tenant.id),
             "definition_id": str(definition.id),

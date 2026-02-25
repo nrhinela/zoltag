@@ -67,7 +67,7 @@ class Settings(BaseSettings):
     task_location: str = "us-central1"
     
     # Processing
-    thumbnail_size: int = 256
+    thumbnail_size: int = 320
     batch_size: int = 10
     max_workers: int = 4
     asset_strict_reads: bool = False

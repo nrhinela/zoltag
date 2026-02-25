@@ -1290,11 +1290,10 @@ export const zoltagAppStyles = css`
     .curate-thumb-rating-widget {
         position: absolute;
         top: 6px;
-        left: 6px;
         right: 6px;
         display: flex;
         align-items: center;
-        justify-content: space-between;
+        justify-content: flex-end;
         gap: 8px;
         opacity: 0;
         transform: translateY(-2px);

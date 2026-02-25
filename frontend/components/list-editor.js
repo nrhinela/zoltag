@@ -12,6 +12,9 @@ import {
   fetchWithAuth,
   listAssetVariants,
   getAssetVariantContent,
+  getPresentationTemplates,
+  uploadPresentationTemplate,
+  exportListPptx,
 } from '../services/api.js';
 import { renderImageGrid } from './shared/image-grid.js';
 import { allowByPermissionOrRole } from './shared/tenant-permissions.js';
@@ -316,6 +319,15 @@ class ListEditor extends LitElement {
     editingSelectedList: { type: Boolean },
     isDownloading: { type: Boolean },
     isExportingPptx: { type: Boolean },
+    showPptxExportModal: { type: Boolean },
+    pptxTemplates: { type: Array },
+    pptxTemplatesLoading: { type: Boolean },
+    pptxTemplatesError: { type: String },
+    pptxSelectedTemplateId: { type: String },
+    pptxUploadName: { type: String },
+    pptxUploadVisibility: { type: String },
+    pptxUploadFileName: { type: String },
+    pptxUploadingTemplate: { type: Boolean },
     downloadIncludeVariants: { type: Boolean },
     isLoadingItems: { type: Boolean },
     isLoadingLists: { type: Boolean },
@@ -350,6 +362,15 @@ class ListEditor extends LitElement {
     this.editingSelectedList = false;
     this.isDownloading = false;
     this.isExportingPptx = false;
+    this.showPptxExportModal = false;
+    this.pptxTemplates = [];
+    this.pptxTemplatesLoading = false;
+    this.pptxTemplatesError = '';
+    this.pptxSelectedTemplateId = '';
+    this.pptxUploadName = '';
+    this.pptxUploadVisibility = 'private';
+    this.pptxUploadFileName = '';
+    this.pptxUploadingTemplate = false;
     this.downloadIncludeVariants = true;
     this.isLoadingItems = false;
     this.isLoadingLists = false;
@@ -390,6 +411,7 @@ class ListEditor extends LitElement {
     this._slideshowNavCycleKey = 0;
     this._slideshowNavLockDurationMs = 3000;
     this._slideshowFullImageAbortController = null;
+    this._pptxUploadFile = null;
     this._handleKeydown = this._handleKeydown.bind(this);
   }
 
@@ -1313,14 +1335,102 @@ class ListEditor extends LitElement {
     return fallback;
   }
 
+  _getTemplateOwnerLabel(template) {
+    return String(template?.created_by_name || '').trim()
+      || String(template?.created_by_uid || '').trim()
+      || 'Unknown';
+  }
+
+  _getTemplateVisibilityLabel(value) {
+    return String(value || '').trim().toLowerCase() === 'shared' ? 'Shared' : 'Private';
+  }
+
+  async _loadPptxTemplates() {
+    if (!this.tenant) {
+      this.pptxTemplates = [];
+      this.pptxTemplatesError = 'No tenant selected.';
+      return;
+    }
+    this.pptxTemplatesLoading = true;
+    this.pptxTemplatesError = '';
+    try {
+      const rows = await getPresentationTemplates(this.tenant);
+      this.pptxTemplates = Array.isArray(rows) ? rows : [];
+      if (
+        this.pptxSelectedTemplateId
+        && !this.pptxTemplates.some((template) => String(template?.id) === String(this.pptxSelectedTemplateId))
+      ) {
+        this.pptxSelectedTemplateId = '';
+      }
+    } catch (error) {
+      console.error('Failed to load PPTX templates:', error);
+      this.pptxTemplatesError = error?.message || 'Failed to load templates';
+      this.pptxTemplates = [];
+      this.pptxSelectedTemplateId = '';
+    } finally {
+      this.pptxTemplatesLoading = false;
+    }
+  }
+
+  async _openPptxExportModal() {
+    if (!this.selectedList?.id || this.isExportingPptx) return;
+    this.showPptxExportModal = true;
+    this.pptxTemplatesError = '';
+    await this._loadPptxTemplates();
+  }
+
+  _closePptxExportModal() {
+    if (this.isExportingPptx || this.pptxUploadingTemplate) return;
+    this.showPptxExportModal = false;
+  }
+
+  _handlePptxUploadFileChange(event) {
+    const file = event?.target?.files?.[0] || null;
+    this._pptxUploadFile = file;
+    this.pptxUploadFileName = file?.name || '';
+  }
+
+  async _uploadPptxTemplateForExport() {
+    if (this.pptxUploadingTemplate) return;
+    if (!this._pptxUploadFile) {
+      alert('Select a .pptx file to upload.');
+      return;
+    }
+    this.pptxUploadingTemplate = true;
+    this.pptxTemplatesError = '';
+    try {
+      const created = await uploadPresentationTemplate(this.tenant, {
+        file: this._pptxUploadFile,
+        name: this.pptxUploadName,
+        visibility: this.pptxUploadVisibility,
+      });
+      this.pptxUploadName = '';
+      this.pptxUploadVisibility = 'private';
+      this.pptxUploadFileName = '';
+      this._pptxUploadFile = null;
+      const fileInput = this.querySelector('[data-pptx-template-upload-input]');
+      if (fileInput) {
+        fileInput.value = '';
+      }
+      await this._loadPptxTemplates();
+      if (created?.id) {
+        this.pptxSelectedTemplateId = String(created.id);
+      }
+    } catch (error) {
+      console.error('Failed to upload PPTX template:', error);
+      this.pptxTemplatesError = error?.message || 'Failed to upload template';
+    } finally {
+      this.pptxUploadingTemplate = false;
+    }
+  }
+
   async _exportListPptx() {
     if (!this.selectedList?.id || this.isExportingPptx) return;
 
     this.isExportingPptx = true;
     try {
-      const response = await fetchWithAuth(`/lists/${this.selectedList.id}/export/pptx`, {
-        tenantId: this.tenant,
-        responseType: 'blob-with-headers',
+      const response = await exportListPptx(this.tenant, this.selectedList.id, {
+        templateId: this.pptxSelectedTemplateId || '',
       });
       const blob = response?.blob;
       if (!(blob instanceof Blob)) {
@@ -1339,6 +1449,7 @@ class ListEditor extends LitElement {
       link.click();
       document.body.removeChild(link);
       URL.revokeObjectURL(objectUrl);
+      this.showPptxExportModal = false;
     } catch (error) {
       console.error('Error exporting list presentation:', error);
       alert(error?.message || 'Failed to export PPTX. Please try again.');
@@ -1898,12 +2009,12 @@ class ListEditor extends LitElement {
                     Download
                   </button>
                   <button
-                    @click=${this._exportListPptx}
+                    @click=${this._openPptxExportModal}
                     ?disabled=${this.isExportingPptx}
                     class="bg-indigo-600 text-white px-3 py-1 rounded text-sm hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
                   >
                     ${this.isExportingPptx ? html`<span class="inline-block w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></span>` : ''}
-                    Export PPTX
+                    Download PPTX
                   </button>
                   ${this.selectedList.can_edit ? html`
                     <button @click=${() => { this.shareModalActive = true; }} style="background: #4f46e5; color: white; padding: 0.25rem 0.75rem; border-radius: 0.25rem; font-size: 0.875rem; border: none; cursor: pointer;" onmouseover="this.style.background='#4338ca'" onmouseout="this.style.background='#4f46e5'">Share</button>
@@ -2260,6 +2371,151 @@ class ListEditor extends LitElement {
           </div>
         </div>
       ` : ''}
+
+      ${this.showPptxExportModal ? html`
+        <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" @click=${this._closePptxExportModal}>
+          <div class="w-full max-w-3xl rounded-lg bg-white shadow-lg" @click=${(event) => event.stopPropagation()}>
+            <div class="flex items-center justify-between border-b border-gray-200 px-5 py-4">
+              <div>
+                <h3 class="text-xl font-bold text-gray-900">Download PPTX</h3>
+                <p class="mt-1 text-sm text-gray-600">
+                  Choose a template for "${this.selectedList?.title || 'this list'}" or export with default styling.
+                </p>
+              </div>
+              <button
+                class="text-2xl text-gray-500 hover:text-gray-700"
+                @click=${this._closePptxExportModal}
+                ?disabled=${this.isExportingPptx || this.pptxUploadingTemplate}
+                aria-label="Close"
+              >×</button>
+            </div>
+
+            <div class="max-h-[70vh] overflow-y-auto px-5 py-4 space-y-4">
+              ${this.pptxTemplatesError ? html`
+                <div class="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                  ${this.pptxTemplatesError}
+                </div>
+              ` : html``}
+
+              <div class="rounded-lg border border-gray-200 p-4">
+                <div class="mb-3 flex items-center justify-between gap-2">
+                  <div class="text-sm font-semibold text-gray-800">Select Template</div>
+                  <button
+                    class="rounded border border-blue-300 px-3 py-1 text-xs font-semibold text-blue-700 hover:bg-blue-50 disabled:opacity-60"
+                    ?disabled=${this.pptxTemplatesLoading}
+                    @click=${this._loadPptxTemplates}
+                  >
+                    ${this.pptxTemplatesLoading ? 'Refreshing…' : 'Refresh'}
+                  </button>
+                </div>
+                ${this.pptxTemplatesLoading ? html`
+                  <div class="text-sm text-gray-600">Loading templates…</div>
+                ` : html`
+                  <div class="space-y-2">
+                    <label class="flex cursor-pointer items-start gap-3 rounded-lg border border-gray-200 px-3 py-2 hover:bg-gray-50">
+                      <input
+                        type="radio"
+                        name="pptx-template"
+                        value=""
+                        .checked=${!this.pptxSelectedTemplateId}
+                        @change=${() => { this.pptxSelectedTemplateId = ''; }}
+                      >
+                      <div>
+                        <div class="text-sm font-semibold text-gray-900">No template (default)</div>
+                        <div class="text-xs text-gray-500">Generate with default slide styling.</div>
+                      </div>
+                    </label>
+                    ${this.pptxTemplates.map((template) => {
+                      const templateId = String(template?.id || '');
+                      return html`
+                        <label class="flex cursor-pointer items-start gap-3 rounded-lg border border-gray-200 px-3 py-2 hover:bg-gray-50">
+                          <input
+                            type="radio"
+                            name="pptx-template"
+                            .value=${templateId}
+                            .checked=${String(this.pptxSelectedTemplateId || '') === templateId}
+                            @change=${() => { this.pptxSelectedTemplateId = templateId; }}
+                          >
+                          <div class="min-w-0">
+                            <div class="truncate text-sm font-semibold text-gray-900">${template.name || template.original_filename || 'Untitled template'}</div>
+                            <div class="text-xs text-gray-500">
+                              Owner: ${this._getTemplateOwnerLabel(template)} · ${this._getTemplateVisibilityLabel(template.visibility)}
+                            </div>
+                          </div>
+                        </label>
+                      `;
+                    })}
+                    ${this.pptxTemplates.length === 0 ? html`
+                      <div class="text-sm text-gray-600">No templates uploaded yet.</div>
+                    ` : html``}
+                  </div>
+                `}
+              </div>
+
+              <div class="rounded-lg border border-gray-200 p-4">
+                <div class="mb-3 text-sm font-semibold text-gray-800">Upload Template</div>
+                <div class="grid gap-3 md:grid-cols-4">
+                  <div class="md:col-span-2">
+                    <input
+                      type="text"
+                      class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900"
+                      placeholder="Template name (optional)"
+                      .value=${this.pptxUploadName}
+                      @input=${(event) => { this.pptxUploadName = event.target.value; }}
+                    >
+                  </div>
+                  <div>
+                    <select
+                      class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900"
+                      .value=${this.pptxUploadVisibility}
+                      @change=${(event) => { this.pptxUploadVisibility = event.target.value; }}
+                    >
+                      <option value="private">Private</option>
+                      <option value="shared">Shared</option>
+                    </select>
+                  </div>
+                  <div>
+                    <input
+                      data-pptx-template-upload-input
+                      type="file"
+                      accept=".pptx,application/vnd.openxmlformats-officedocument.presentationml.presentation"
+                      class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900"
+                      @change=${this._handlePptxUploadFileChange}
+                    >
+                  </div>
+                </div>
+                <div class="mt-3 flex items-center justify-between gap-2">
+                  <div class="text-xs text-gray-500">${this.pptxUploadFileName ? `Selected: ${this.pptxUploadFileName}` : 'Select a .pptx file to upload'}</div>
+                  <button
+                    class="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-60"
+                    ?disabled=${this.pptxUploadingTemplate || !this._pptxUploadFile}
+                    @click=${this._uploadPptxTemplateForExport}
+                  >
+                    ${this.pptxUploadingTemplate ? 'Uploading…' : 'Upload Template'}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div class="flex items-center justify-end gap-2 border-t border-gray-200 px-5 py-4">
+              <button
+                class="rounded border border-gray-300 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-60"
+                @click=${this._closePptxExportModal}
+                ?disabled=${this.isExportingPptx || this.pptxUploadingTemplate}
+              >
+                Cancel
+              </button>
+              <button
+                class="rounded bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
+                @click=${this._exportListPptx}
+                ?disabled=${this.isExportingPptx || this.pptxUploadingTemplate}
+              >
+                ${this.isExportingPptx ? 'Downloading…' : 'Download PPTX'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ` : html``}
 
       <!-- Share List Modal -->
       ${this.shareModalActive && this.selectedList ? html`

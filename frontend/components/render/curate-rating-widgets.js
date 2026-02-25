@@ -10,14 +10,6 @@ export function renderCurateRatingWidget(host, image) {
       ${host._curateRatingBurstIds?.has(image.id) ? html`
         <span class="curate-thumb-burst" aria-hidden="true"></span>
       ` : html``}
-      <button
-        type="button"
-        class="curate-thumb-trash cursor-pointer mx-0.5 ${image.rating == 0 ? 'text-red-600' : 'text-gray-600 hover:text-gray-900'}"
-        title="0 stars"
-        @click=${(e) => host._curateExploreState.handleCurateRating(e, image, 0)}
-      >
-        ${image.rating == 0 ? '❌' : '🗑'}
-      </button>
       <span class="curate-thumb-stars">
         ${[1, 2, 3].map((star) => html`
           <button

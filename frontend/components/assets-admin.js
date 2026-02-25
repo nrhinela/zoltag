@@ -248,20 +248,12 @@ class AssetsAdmin extends LitElement {
   }
 
   _toggleSelect(imageId) {
+    if (!imageId) return;
     if (this.selectedIds.includes(imageId)) {
       this.selectedIds = this.selectedIds.filter((id) => id !== imageId);
-    } else {
-      this.selectedIds = [...this.selectedIds, imageId];
+      return;
     }
-  }
-
-  _toggleSelectAll() {
-    const allIds = (this.assets || []).map((a) => a.id).filter(Boolean);
-    if (allIds.length > 0 && allIds.every((id) => this.selectedIds.includes(id))) {
-      this.selectedIds = [];
-    } else {
-      this.selectedIds = allIds;
-    }
+    this.selectedIds = [...this.selectedIds, imageId];
   }
 
   async _handleBatchDelete() {
@@ -346,8 +338,6 @@ class AssetsAdmin extends LitElement {
 
   render() {
     const rows = this.assets || [];
-    const allIds = rows.map((a) => a.id).filter(Boolean);
-    const allSelected = allIds.length > 0 && allIds.every((id) => this.selectedIds.includes(id));
     const someSelected = this.selectedIds.length > 0;
     return html`
       <div class="w-full">
@@ -447,15 +437,7 @@ class AssetsAdmin extends LitElement {
               <table class="min-w-full text-sm">
                 <thead class="bg-gray-50 text-gray-600">
                   <tr>
-                    <th class="px-3 py-2 w-8">
-                      <input
-                        type="checkbox"
-                        .checked=${allSelected}
-                        ?disabled=${rows.length === 0 || this.batchDeleting}
-                        @change=${() => this._toggleSelectAll()}
-                        title="Select all on this page"
-                      >
-                    </th>
+                    <th class="px-3 py-2 w-8"></th>
                     <th class="px-3 py-2 text-left font-semibold">Filename</th>
                     <th class="px-3 py-2 text-left font-semibold">Date Created</th>
                     <th class="px-3 py-2 text-left font-semibold">Source</th>
