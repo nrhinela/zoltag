@@ -2,7 +2,7 @@ import { LitElement, html, css } from 'lit';
 import { tailwind } from './tailwind-lit.js';
 import { adminTypography } from './shared/admin-typography.js';
 import './admin-form-group.js';
-import { createTenant } from '../services/api.js';
+import { createTenant, fetchWithAuth } from '../services/api.js';
 
 /**
  * Admin Tenant List Component
@@ -16,264 +16,156 @@ export class AdminTenantList extends LitElement {
     newTenantName: { type: String },
     errorMessage: { type: String },
     successMessage: { type: String },
-    isCreating: { type: Boolean }
+    isCreating: { type: Boolean },
+    _storageUsage: { type: Object },  // { [tenantId]: { bytes: number, loading: boolean } }
   };
 
   static styles = [
     tailwind,
     adminTypography,
     css`
-      :host {
-        display: block;
-      }
+      :host { display: block; }
 
       .card {
         background: white;
-        border-radius: 8px;
-        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-        margin-bottom: 20px;
+        border: 1px solid #e5e7eb;
+        border-radius: 12px;
       }
 
-      .card-header {
-        padding: 20px;
+      .header {
+        padding: 18px 20px;
         border-bottom: 1px solid #e5e7eb;
         display: flex;
         justify-content: space-between;
         align-items: center;
-        gap: 16px;
+        gap: 12px;
+        flex-wrap: wrap;
       }
 
-      .card-title {
+      .title {
         margin: 0;
-        font-size: 18px;
+        font-size: 20px;
         font-weight: 600;
-        color: #1f2937;
+        color: #111827;
       }
 
-      .card-subtitle {
-        margin-top: 6px;
-        margin-bottom: 0;
-        font-size: 14px;
+      .subtitle {
+        margin: 4px 0 0;
         color: #6b7280;
+        font-size: 14px;
       }
 
-      .card-content {
-        padding: 20px;
-      }
+      .content { padding: 18px 20px 20px; }
 
       .btn {
-        padding: 8px 16px;
-        border: none;
-        border-radius: 6px;
-        cursor: pointer;
+        border: 1px solid #bfdbfe;
+        background: #eff6ff;
+        color: #1d4ed8;
+        border-radius: 8px;
+        padding: 8px 12px;
         font-size: 14px;
-        font-weight: 500;
-        transition: all 0.2s;
+        font-weight: 600;
+        cursor: pointer;
       }
 
-      .btn-primary {
-        background: #2563eb;
-        color: white;
-      }
+      .btn:disabled { opacity: 0.6; cursor: not-allowed; }
 
-      .btn-primary:hover {
-        background: #1d4ed8;
-      }
-
-      .btn-primary:disabled {
-        background: #cccccc;
-        cursor: not-allowed;
+      .btn-success {
+        border-color: #bbf7d0;
+        background: #f0fdf4;
+        color: #15803d;
       }
 
       .btn-secondary {
-        background: #e5e7eb;
+        border-color: #e5e7eb;
+        background: white;
         color: #374151;
       }
 
-      .btn-secondary:hover {
-        background: #d1d5db;
-      }
-
-      .btn-success {
-        background: #16a34a;
-        color: white;
-      }
-
-      .btn-success:hover {
-        background: #15803d;
-      }
+      .btn-sm { padding: 5px 10px; font-size: 12px; }
 
       .notice {
-        padding: 12px 16px;
-        border-radius: 6px;
-        margin-bottom: 20px;
+        padding: 10px 12px;
+        border-radius: 8px;
+        margin-bottom: 16px;
+        font-size: 14px;
       }
-
-      .notice-error {
-        background: #fee2e2;
-        color: #dc2626;
-        border-left: 4px solid #dc2626;
-      }
-
-      .notice-success {
-        background: #d1fae5;
-        color: #065f46;
-        border-left: 4px solid #10b981;
-      }
-
-      .toolbar {
-        display: flex;
-        justify-content: flex-end;
-      }
+      .notice-error { border: 1px solid #fecaca; background: #fef2f2; color: #b91c1c; }
+      .notice-success { border: 1px solid #bbf7d0; background: #f0fdf4; color: #15803d; }
 
       .new-tenant-form {
         border: 1px solid #e5e7eb;
-        padding: 20px;
-        border-radius: 8px;
-        margin-bottom: 20px;
+        padding: 16px;
+        border-radius: 10px;
+        margin-bottom: 16px;
       }
 
       .new-tenant-title {
-        margin: 0 0 16px;
+        margin: 0 0 14px;
         color: #1f2937;
-        font-size: 16px;
+        font-size: 15px;
         font-weight: 600;
       }
 
       .form-row {
         display: flex;
-        gap: 15px;
+        gap: 12px;
         align-items: flex-end;
         margin-bottom: 10px;
+        flex-wrap: wrap;
       }
 
-      .form-row > * {
-        flex: 1;
-        min-width: 0;
-      }
+      .form-row > * { flex: 1; min-width: 160px; }
 
-      .hint-text {
-        font-size: 12px;
-        color: #666;
-        margin-top: 4px;
-      }
-
-      .tenants-grid {
+      .table-wrap {
         border: 1px solid #e5e7eb;
-        border-radius: 8px;
-        overflow: hidden;
-        min-width: 1120px;
+        border-radius: 10px;
+        overflow-x: auto;
       }
 
-      .tenants-grid-row {
-        display: grid;
-        grid-template-columns:
-          minmax(120px, 1fr)
-          minmax(220px, 1.6fr)
-          minmax(180px, 1.2fr)
-          110px
-          120px
-          150px
-          130px
-          100px;
-        gap: 12px;
-        align-items: center;
-        padding: 12px 16px;
+      table { width: 100%; border-collapse: collapse; }
+
+      th {
+        text-align: left;
+        font-size: 12px;
+        color: #374151;
+        background: #f9fafb;
+        text-transform: uppercase;
+        letter-spacing: 0.02em;
+        padding: 10px 12px;
         border-bottom: 1px solid #e5e7eb;
       }
 
-      .tenants-grid-row:last-child {
-        border-bottom: none;
-      }
-
-      .tenants-grid-row:hover {
-        background: #f9fafb;
-      }
-
-      .tenants-grid-header {
-        background: #f9fafb;
-        font-weight: 700;
-        font-size: 12px;
-        color: #374151;
-        letter-spacing: 0.02em;
-        text-transform: uppercase;
-      }
-
-      .tenants-grid-header:hover {
-        background: #f9fafb;
-      }
-
-      .tenants-grid-cell {
-        min-width: 0;
-      }
-
-      .tenant-name {
-        font-weight: 500;
+      td {
+        padding: 10px 12px;
+        border-bottom: 1px solid #f1f5f9;
+        font-size: 13px;
         color: #1f2937;
+        vertical-align: middle;
       }
 
-      .created-date {
-        color: #6b7280;
-        font-size: 14px;
-      }
+      tr:last-child td { border-bottom: none; }
+      tr:hover td { background: #f9fafb; }
 
       .badge {
         display: inline-block;
-        padding: 4px 12px;
+        padding: 3px 10px;
         border-radius: 12px;
         font-size: 12px;
         font-weight: 500;
       }
+      .badge-active { background: #d1fae5; color: #065f46; }
+      .badge-inactive { background: #fee2e2; color: #991b1b; }
+      .badge-storage { background: #fee2e2; color: #991b1b; }
+      .badge-storage-dedicated { background: #dbeafe; color: #1e40af; }
+      .badge-dropbox { background: #fee2e2; color: #991b1b; }
+      .badge-dropbox-configured { background: #d1fae5; color: #065f46; }
 
-      .badge-active {
-        background: #d1fae5;
-        color: #065f46;
-      }
+      .mono { font-family: monospace; font-size: 12px; overflow-wrap: anywhere; }
+      .muted { color: #6b7280; }
+      .no-tenants { text-align: center; padding: 40px; color: #6b7280; }
 
-      .badge-inactive {
-        background: #fee2e2;
-        color: #991b1b;
-      }
-
-      .badge-storage {
-        background: #fee2e2;
-        color: #991b1b;
-      }
-
-      .badge-storage-dedicated {
-        background: #dbeafe;
-        color: #1e40af;
-      }
-
-      .badge-dropbox {
-        background: #fee2e2;
-        color: #991b1b;
-      }
-
-      .badge-dropbox-configured {
-        background: #d1fae5;
-        color: #065f46;
-      }
-
-      .action-buttons {
-        display: flex;
-        gap: 5px;
-      }
-
-      .btn-sm {
-        padding: 6px 12px;
-        font-size: 12px;
-      }
-
-      .no-tenants {
-        text-align: center;
-        padding: 40px;
-        color: #6b7280;
-      }
-
-      .mono {
-        overflow-wrap: anywhere;
-      }
+      .usage-val { font-variant-numeric: tabular-nums; }
     `
   ];
 
@@ -286,11 +178,32 @@ export class AdminTenantList extends LitElement {
     this.errorMessage = '';
     this.successMessage = '';
     this.isCreating = false;
+    this._storageUsage = {};
+  }
+
+  _formatBytes(bytes) {
+    if (bytes == null || bytes < 0) return '—';
+    if (bytes === 0) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(1024));
+    return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${units[i]}`;
+  }
+
+  async _loadStorageUsage(tenantId) {
+    this._storageUsage = { ...this._storageUsage, [tenantId]: { bytes: null, loading: true } };
+    try {
+      const data = await fetchWithAuth('/images/stats?include_storage=true', { tenantId });
+      this._storageUsage = {
+        ...this._storageUsage,
+        [tenantId]: { bytes: data.storage_bytes ?? -1, loading: false },
+      };
+    } catch (_e) {
+      this._storageUsage = { ...this._storageUsage, [tenantId]: { bytes: -1, loading: false } };
+    }
   }
 
   handleShowNewForm() {
     this.showNewForm = true;
-    // Focus on tenant ID input
     this.updateComplete.then(() => {
       const input = this.shadowRoot.querySelector('#new-tenant-id');
       if (input) input.focus();
@@ -304,198 +217,154 @@ export class AdminTenantList extends LitElement {
     this.errorMessage = '';
   }
 
-  handleTenantIdChange(e) {
-    this.newTenantId = e.detail.value;
-  }
-
-  handleTenantNameChange(e) {
-    this.newTenantName = e.detail.value;
-  }
+  handleTenantIdChange(e) { this.newTenantId = e.detail.value; }
+  handleTenantNameChange(e) { this.newTenantName = e.detail.value; }
 
   async handleCreateTenant(e) {
     e.preventDefault();
-
-    // Validate tenant identifier format
     if (!/^[a-z0-9-]+$/.test(this.newTenantId)) {
       this.errorMessage = 'Tenant identifier must contain only lowercase letters, numbers, and hyphens';
       return;
     }
-
-    if (this.newTenantId.trim().length === 0 || this.newTenantName.trim().length === 0) {
+    if (!this.newTenantId.trim() || !this.newTenantName.trim()) {
       this.errorMessage = 'Both tenant identifier and display name are required';
       return;
     }
-
     this.isCreating = true;
     this.errorMessage = '';
     this.successMessage = '';
-
     try {
-      const data = {
-        identifier: this.newTenantId.toLowerCase(),
-        name: this.newTenantName.trim(),
-        active: true
-      };
-
+      const data = { identifier: this.newTenantId.toLowerCase(), name: this.newTenantName.trim(), active: true };
       await createTenant(data);
-
       this.successMessage = `Tenant "${this.newTenantName}" created successfully`;
       this.newTenantId = '';
       this.newTenantName = '';
       this.showNewForm = false;
-
-      // Emit create event
-      this.dispatchEvent(
-        new CustomEvent('create-tenant', {
-          detail: { tenant: data },
-          bubbles: true,
-          composed: true
-        })
-      );
-
-      // Clear success message after 3 seconds
-      setTimeout(() => {
-        this.successMessage = '';
-      }, 3000);
+      this.dispatchEvent(new CustomEvent('create-tenant', { detail: { tenant: data }, bubbles: true, composed: true }));
+      setTimeout(() => { this.successMessage = ''; }, 3000);
     } catch (error) {
-      console.error('Error creating tenant:', error);
-      this.errorMessage =
-        error.response?.detail ||
-        error.message ||
-        'Failed to create tenant';
+      this.errorMessage = error.response?.detail || error.message || 'Failed to create tenant';
     } finally {
       this.isCreating = false;
     }
   }
 
   handleEditTenant(tenantId) {
-    this.dispatchEvent(
-      new CustomEvent('edit-tenant', {
-        detail: { tenantId },
-        bubbles: true,
-        composed: true
-      })
-    );
+    this.dispatchEvent(new CustomEvent('edit-tenant', { detail: { tenantId }, bubbles: true, composed: true }));
+  }
+
+  _renderStorageCell(t) {
+    const usage = this._storageUsage[t.id];
+    if (!usage) {
+      return html`<button class="btn btn-sm btn-secondary" @click=${() => this._loadStorageUsage(t.id)}>Load</button>`;
+    }
+    if (usage.loading) return html`<span class="muted">Loading…</span>`;
+    return html`<span class="usage-val">${this._formatBytes(usage.bytes)}</span>`;
   }
 
   render() {
     return html`
       <div class="card">
-        <div class="card-header">
+        <div class="header">
           <div>
-            <h2 class="card-title">Tenant Management</h2>
-            <p class="card-subtitle">${this.tenants.length} tenant${this.tenants.length === 1 ? '' : 's'}</p>
+            <h2 class="title">Tenant Management</h2>
+            <p class="subtitle">${this.tenants.length} tenant${this.tenants.length === 1 ? '' : 's'}</p>
           </div>
-          ${!this.showNewForm
-            ? html`<div class="toolbar">
-                <button class="btn btn-primary" @click="${this.handleShowNewForm}">
-                  + New Tenant
-                </button>
-              </div>`
-            : html``}
+          ${!this.showNewForm ? html`
+            <button class="btn" @click="${this.handleShowNewForm}">+ New Tenant</button>
+          ` : html``}
         </div>
 
-        <div class="card-content">
+        <div class="content">
           ${this.errorMessage ? html`<div class="notice notice-error">${this.errorMessage}</div>` : html``}
           ${this.successMessage ? html`<div class="notice notice-success">${this.successMessage}</div>` : html``}
 
-          ${this.showNewForm
-            ? html`<div class="new-tenant-form">
-                <h3 class="new-tenant-title">Create New Tenant</h3>
-                <form @submit="${this.handleCreateTenant}">
-                  <div class="form-row">
-                    <div>
-                      <admin-form-group
-                        id="new-tenant-id"
-                        label="Tenant Identifier"
-                        type="text"
-                        placeholder="identifier"
-                        .value="${this.newTenantId}"
-                        @input-changed="${this.handleTenantIdChange}"
-                        helper-text="Lowercase letters, numbers, and hyphens only"
-                        required
-                      ></admin-form-group>
-                    </div>
-                    <div>
-                      <admin-form-group
-                        id="new-tenant-name"
-                        label="Display Name"
-                        type="text"
-                        placeholder="Display Name"
-                        .value="${this.newTenantName}"
-                        @input-changed="${this.handleTenantNameChange}"
-                        required
-                      ></admin-form-group>
-                    </div>
-                  </div>
-                  <div class="form-row">
-                    <button
-                      type="submit"
-                      class="btn btn-success"
-                      ?disabled="${this.isCreating}"
-                    >
-                      ${this.isCreating ? 'Creating...' : 'Create'}
-                    </button>
-                    <button
-                      type="button"
-                      class="btn btn-secondary"
-                      @click="${this.handleHideNewForm}"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </form>
-              </div>`
-            : html``}
+          ${this.showNewForm ? html`
+            <div class="new-tenant-form">
+              <h3 class="new-tenant-title">Create New Tenant</h3>
+              <form @submit="${this.handleCreateTenant}">
+                <div class="form-row">
+                  <admin-form-group
+                    id="new-tenant-id"
+                    label="Tenant Identifier"
+                    type="text"
+                    placeholder="identifier"
+                    .value="${this.newTenantId}"
+                    @input-changed="${this.handleTenantIdChange}"
+                    helper-text="Lowercase letters, numbers, and hyphens only"
+                    required
+                  ></admin-form-group>
+                  <admin-form-group
+                    id="new-tenant-name"
+                    label="Display Name"
+                    type="text"
+                    placeholder="Display Name"
+                    .value="${this.newTenantName}"
+                    @input-changed="${this.handleTenantNameChange}"
+                    required
+                  ></admin-form-group>
+                </div>
+                <div class="form-row">
+                  <button type="submit" class="btn btn-success" ?disabled="${this.isCreating}">
+                    ${this.isCreating ? 'Creating…' : 'Create'}
+                  </button>
+                  <button type="button" class="btn btn-secondary" @click="${this.handleHideNewForm}">Cancel</button>
+                </div>
+              </form>
+            </div>
+          ` : html``}
 
           ${this.tenants.length === 0
             ? html`<div class="no-tenants">No tenants found</div>`
-            : html`<div class="tenants-grid">
-                <div class="tenants-grid-row tenants-grid-header">
-                  <div class="tenants-grid-cell">Identifier</div>
-                  <div class="tenants-grid-cell">UUID</div>
-                  <div class="tenants-grid-cell">Name</div>
-                  <div class="tenants-grid-cell">Status</div>
-                  <div class="tenants-grid-cell">Storage</div>
-                  <div class="tenants-grid-cell">Dropbox</div>
-                  <div class="tenants-grid-cell">Created</div>
-                  <div class="tenants-grid-cell">Actions</div>
-                </div>
-                ${this.tenants.map((t) => html`
-                  <div class="tenants-grid-row">
-                    <div class="tenants-grid-cell"><span class="mono">${t.identifier || t.id}</span></div>
-                    <div class="tenants-grid-cell"><span class="mono">${t.id}</span></div>
-                    <div class="tenants-grid-cell tenant-name">${t.name}</div>
-                    <div class="tenants-grid-cell">
-                      <span class="badge ${t.active ? 'badge-active' : 'badge-inactive'}">
-                        ${t.active ? 'Active' : 'Inactive'}
-                      </span>
-                    </div>
-                    <div class="tenants-grid-cell">
-                      <span
-                        class="badge ${t.thumbnail_bucket ? 'badge-storage-dedicated' : 'badge-storage'}"
-                        title="${t.thumbnail_bucket ? 'Dedicated buckets configured' : 'Using shared buckets'}"
-                      >
-                        ${t.thumbnail_bucket ? 'Dedicated' : 'Shared'}
-                      </span>
-                    </div>
-                    <div class="tenants-grid-cell">
-                      <span class="badge ${t.dropbox_configured ? 'badge-dropbox-configured' : 'badge-dropbox'}">
-                        ${t.dropbox_configured ? 'Configured' : 'Not configured'}
-                      </span>
-                    </div>
-                    <div class="tenants-grid-cell created-date">${new Date(t.created_at).toLocaleDateString()}</div>
-                    <div class="tenants-grid-cell action-buttons">
-                      <button
-                        class="btn btn-primary btn-sm"
-                        @click="${() => this.handleEditTenant(t.id)}"
-                      >
-                        Edit
-                      </button>
-                    </div>
-                  </div>
-                `)}
-              </div>`}
+            : html`
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Identifier</th>
+                      <th>UUID</th>
+                      <th>Name</th>
+                      <th>Status</th>
+                      <th>Storage type</th>
+                      <th>GCS usage</th>
+                      <th>Dropbox</th>
+                      <th>Created</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${this.tenants.map((t) => html`
+                      <tr>
+                        <td><span class="mono">${t.identifier || t.id}</span></td>
+                        <td><span class="mono muted">${t.id}</span></td>
+                        <td>${t.name}</td>
+                        <td>
+                          <span class="badge ${t.active ? 'badge-active' : 'badge-inactive'}">
+                            ${t.active ? 'Active' : 'Inactive'}
+                          </span>
+                        </td>
+                        <td>
+                          <span class="badge ${t.thumbnail_bucket ? 'badge-storage-dedicated' : 'badge-storage'}"
+                                title="${t.thumbnail_bucket ? 'Dedicated buckets configured' : 'Using shared buckets'}">
+                            ${t.thumbnail_bucket ? 'Dedicated' : 'Shared'}
+                          </span>
+                        </td>
+                        <td>${this._renderStorageCell(t)}</td>
+                        <td>
+                          <span class="badge ${t.dropbox_configured ? 'badge-dropbox-configured' : 'badge-dropbox'}">
+                            ${t.dropbox_configured ? 'Configured' : 'Not configured'}
+                          </span>
+                        </td>
+                        <td class="muted">${new Date(t.created_at).toLocaleDateString()}</td>
+                        <td>
+                          <button class="btn btn-sm" @click="${() => this.handleEditTenant(t.id)}">Edit</button>
+                        </td>
+                      </tr>
+                    `)}
+                  </tbody>
+                </table>
+              </div>
+            `}
         </div>
       </div>
     `;

@@ -95,7 +95,7 @@ class UploadLibraryModal extends LitElement {
     this.items = [];
     this.isUploading = false;
     this.dedupPolicy = 'skip_duplicate';
-    this.storeOriginals = false;
+    this.storeOriginals = true;
     this.error = '';
     this._activeXhrs = new Map();
   }
@@ -126,6 +126,7 @@ class UploadLibraryModal extends LitElement {
               >
                 <option value="keep_both">Keep both</option>
                 <option value="skip_duplicate">Skip duplicate</option>
+                <option value="refresh_duplicate_thumbnail">Refresh duplicate thumbnail</option>
               </select>
             </div>
             <label class="flex items-center gap-2 text-sm text-gray-700 cursor-pointer pb-2">
@@ -141,7 +142,7 @@ class UploadLibraryModal extends LitElement {
               id="library-file-input"
               type="file"
               multiple
-              accept="image/*"
+              accept="image/*,video/*"
               class="hidden"
               @change=${this._handleFileSelect}
             />
@@ -150,7 +151,7 @@ class UploadLibraryModal extends LitElement {
               type="file"
               webkitdirectory
               multiple
-              accept="image/*"
+              accept="image/*,video/*"
               class="hidden"
               @change=${this._handleFolderSelect}
             />
@@ -357,10 +358,16 @@ class UploadLibraryModal extends LitElement {
         }
 
         if (xhr.status >= 200 && xhr.status < 300) {
-          const status = payload?.status === 'skipped_duplicate' ? 'done' : 'done';
-          const message = payload?.status === 'skipped_duplicate'
-            ? 'Duplicate detected; reused existing image.'
-            : 'Uploaded and ingested successfully.';
+          const status = 'done';
+          let message = 'Uploaded and ingested successfully.';
+          if (payload?.status === 'skipped_duplicate') {
+            message = 'Duplicate detected; reused existing image.';
+          } else if (payload?.status === 'refreshed_duplicate_thumbnail') {
+            const refreshedCount = Number(payload?.refreshed_count || 1);
+            message = refreshedCount > 1
+              ? `Duplicate detected; refreshed thumbnails on ${refreshedCount} existing images.`
+              : 'Duplicate detected; refreshed thumbnail on existing image.';
+          }
           this._updateItem(itemId, { status, progress: 100, message });
         } else {
           this._updateItem(itemId, {

@@ -194,14 +194,14 @@ export async function getDropboxFolders(tenantId, { query = '', limit } = {}) {
   return fetchWithAuth(`/images/dropbox-folders${params.toString() ? '?' + params.toString() : ''}`, { tenantId });
 }
 
-export async function getImageStats(tenantId, { force = false, includeRatings = false } = {}) {
+export async function getImageStats(tenantId, { force = false, includeRatings = false, includeStorage = false } = {}) {
   const params = new URLSearchParams();
-  if (includeRatings) {
-    params.append('include_ratings', 'true');
-  }
+  if (includeRatings) params.append('include_ratings', 'true');
+  if (includeStorage) params.append('include_storage', 'true');
   const suffix = params.toString() ? `?${params.toString()}` : '';
+  const cacheKey = [includeRatings && 'full', includeStorage && 'storage'].filter(Boolean).join('-') || 'summary';
   return queryRequest(
-    ['imageStats', tenantId, includeRatings ? 'full' : 'summary'],
+    ['imageStats', tenantId, cacheKey],
     () => fetchWithAuth(`/images/stats${suffix}`, { tenantId }),
     { staleTimeMs: STATS_CACHE_MS, force }
   );

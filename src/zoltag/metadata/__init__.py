@@ -67,9 +67,13 @@ class _ArrayAsJSON(TypeDecorator):
     impl = JSON
     cache_ok = True
 
+    def __init__(self, item_type=None, *args, **kwargs):
+        self._item_type = item_type or Text
+        super().__init__(*args, **kwargs)
+
     def load_dialect_impl(self, dialect):
         if dialect.name == "postgresql":
-            return dialect.type_descriptor(ARRAY(Text))
+            return dialect.type_descriptor(ARRAY(self._item_type))
         return dialect.type_descriptor(JSON())
 
     def process_bind_param(self, value, dialect):
@@ -246,7 +250,7 @@ class ImageMetadata(Base):
     
     # Visual features
     perceptual_hash = Column(String(64), index=True)  # For deduplication
-    color_histogram = Column(_ArrayAsJSON)
+    color_histogram = Column(_ArrayAsJSON(Float))
     
     # EXIF data
     exif_data = Column(JSONB)  # Stored as JSON for flexibility
@@ -337,7 +341,7 @@ class DetectedFace(Base):
     bbox_left = Column(Integer)
 
     # Face encoding (for matching)
-    face_encoding = Column(_ArrayAsJSON)
+    face_encoding = Column(_ArrayAsJSON(Float))
 
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -370,7 +374,7 @@ class ImageEmbedding(Base):
     asset_id = Column(UUID(as_uuid=True), ForeignKey("assets.id", ondelete="SET NULL"), nullable=False)
     tenant_id = Column(UUID(as_uuid=True), nullable=False, index=True)
     
-    embedding = Column(_ArrayAsJSON, nullable=False)  # Vector embedding
+    embedding = Column(_ArrayAsJSON(Float), nullable=False)  # Vector embedding
     model_name = Column(String(100))  # e.g., "clip-vit-base"
     model_version = Column(String(50))
     
@@ -395,8 +399,8 @@ class KeywordModel(Base):
     model_name = Column(String(100), nullable=False)
     model_version = Column(String(50))
 
-    positive_centroid = Column(_ArrayAsJSON, nullable=False)
-    negative_centroid = Column(_ArrayAsJSON, nullable=True)
+    positive_centroid = Column(_ArrayAsJSON(Float), nullable=False)
+    negative_centroid = Column(_ArrayAsJSON(Float), nullable=True)
 
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -659,7 +663,7 @@ class AssetTextIndex(Base):
     tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
     search_text = Column(Text, nullable=False, default="")
     components = Column(JSONB, nullable=False, default=dict)
-    search_embedding = Column(_ArrayAsJSON, nullable=True)
+    search_embedding = Column(_ArrayAsJSON(Float), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
@@ -733,7 +737,7 @@ class JobWorker(Base):
     worker_id = Column(Text, primary_key=True)
     hostname = Column(Text, nullable=False)
     version = Column(Text, nullable=False, default="")
-    queues = Column(_ArrayAsJSON, nullable=False, default=list)
+    queues = Column(_ArrayAsJSON(Text), nullable=False, default=list)
     last_seen_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     running_count = Column(Integer, nullable=False, default=0)
     metadata_json = Column("metadata", JSONB, nullable=False, default=dict)
@@ -815,7 +819,7 @@ class WorkflowStepRun(Base):
     )
     status = Column(Text, nullable=False, default="pending")
     payload = Column(JSONB, nullable=False, default=dict)
-    depends_on = Column(_ArrayAsJSON, nullable=False, default=list)
+    depends_on = Column(_ArrayAsJSON(Text), nullable=False, default=list)
     child_job_id = Column(UUID(as_uuid=True), ForeignKey("jobs.id", ondelete="SET NULL"), unique=True)
     queued_at = Column(DateTime)
     started_at = Column(DateTime)

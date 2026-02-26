@@ -11,7 +11,7 @@ from typing import Tuple
 
 import imagehash
 import numpy as np
-from PIL import Image, ExifTags, ImageDraw
+from PIL import Image, ExifTags, ImageDraw, ImageOps
 import cv2
 
 # Register HEIC support if available
@@ -49,8 +49,10 @@ class ImageProcessor:
     
     def create_thumbnail(self, image: Image.Image) -> bytes:
         """Create thumbnail and return as JPEG bytes."""
+        # Normalize EXIF orientation so thumbnails match browser/full-image rendering.
+        img = ImageOps.exif_transpose(image)
         # Create a copy and convert to RGB if necessary
-        img = image.copy()
+        img = img.copy()
         if img.mode not in ("RGB", "L"):
             img = img.convert("RGB")
         
@@ -229,14 +231,21 @@ class VideoProcessor:
                 temp_path = temp_file.name
 
             width, height, duration_ms, format_name = self._probe_video(temp_path)
-            frame_bytes = self._extract_frame(temp_path, seek_seconds=self.seek_seconds)
+            duration_s = (duration_ms / 1000.0) if duration_ms else None
+            seek_candidates = self._seek_candidates(duration_s)
             thumbnail_bytes = None
-            if frame_bytes:
+            for seek_s in seek_candidates:
+                frame_bytes = self._extract_frame(temp_path, seek_seconds=seek_s)
+                if not frame_bytes:
+                    continue
                 try:
                     frame_image = self._image_processor.load_image(frame_bytes)
+                    if self._is_mostly_black(frame_image):
+                        continue
                     thumbnail_bytes = self._image_processor.create_thumbnail(frame_image)
+                    break
                 except Exception:
-                    thumbnail_bytes = None
+                    continue
             if thumbnail_bytes is None:
                 thumbnail_bytes = self.create_placeholder_thumbnail()
 
@@ -288,6 +297,28 @@ class VideoProcessor:
         if fmt.get("format_name"):
             format_name = str(fmt.get("format_name")).split(",")[0].upper()
         return width, height, duration_ms, format_name
+
+    def _seek_candidates(self, duration_s: float | None) -> list[float]:
+        """Return a list of seek positions to try, from most to least preferred."""
+        if duration_s and duration_s > 0:
+            candidates = sorted({
+                duration_s * 0.1,
+                duration_s * 0.25,
+                duration_s * 0.5,
+                min(self.seek_seconds, duration_s * 0.9),
+            })
+            return candidates
+        return [self.seek_seconds, 3.0, 0.5]
+
+    def _is_mostly_black(self, image: "Image.Image", threshold: float = 0.98) -> bool:
+        """Return True if nearly all pixels are very dark (likely a black frame)."""
+        try:
+            small = image.convert("L").resize((32, 32))
+            pixels = list(small.getdata())
+            dark = sum(1 for p in pixels if p < 16)
+            return dark / len(pixels) >= threshold
+        except Exception:
+            return False
 
     def _extract_frame(self, video_path: str, seek_seconds: float = 1.0) -> bytes | None:
         if shutil.which("ffmpeg") is None:

@@ -1,6 +1,7 @@
 """Image stats endpoint."""
 
 import asyncio
+import logging
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends
 from sqlalchemy import func, distinct, and_, case
@@ -10,8 +11,31 @@ from zoltag.tenant import Tenant
 from zoltag.metadata import ImageMetadata, Permatag
 from zoltag.models.config import Keyword, KeywordCategory, PhotoList
 from zoltag.tenant_scope import tenant_column_filter_for_values
+from zoltag.settings import settings
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+def _compute_gcs_storage_bytes(tenant: Tenant) -> int:
+    """Sum the size of all GCS objects under the tenant's key prefix."""
+    if settings.local_mode:
+        return 0
+    try:
+        from google.cloud import storage as gcs
+        client = gcs.Client(project=settings.gcp_project_id)
+        storage_bucket = tenant.get_storage_bucket(settings)
+        thumbnail_bucket = tenant.get_thumbnail_bucket(settings)
+        prefix = f"tenants/{tenant.secret_scope}/"
+        total = 0
+        for bucket_name in {storage_bucket, thumbnail_bucket}:
+            bucket = client.bucket(bucket_name)
+            for blob in client.list_blobs(bucket, prefix=prefix):
+                total += blob.size or 0
+        return total
+    except Exception as exc:
+        logger.warning("GCS storage usage fetch failed for tenant %s: %s", tenant.id, exc)
+        return -1
 
 
 def _compute_image_stats(tenant_id: str, include_ratings: bool) -> dict:
@@ -270,10 +294,16 @@ def _compute_image_stats(tenant_id: str, include_ratings: bool) -> dict:
 @router.get("/images/stats", response_model=dict, operation_id="get_image_stats")
 async def get_image_stats(
     tenant: Tenant = Depends(get_tenant),
-    include_ratings: bool = False
+    include_ratings: bool = False,
+    include_storage: bool = False,
 ):
     """Return image summary stats for a tenant."""
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(
+    stats = await loop.run_in_executor(
         None, _compute_image_stats, tenant.id, include_ratings
     )
+    if include_storage:
+        stats["storage_bytes"] = await loop.run_in_executor(
+            None, _compute_gcs_storage_bytes, tenant
+        )
+    return stats

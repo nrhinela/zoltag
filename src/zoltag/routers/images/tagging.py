@@ -26,7 +26,7 @@ from zoltag.tenant import Tenant
 from zoltag.metadata import Asset, ImageMetadata, JobDefinition, MachineTag
 from zoltag.models.config import Keyword
 from zoltag.settings import settings
-from zoltag.image import ImageProcessor
+from zoltag.image import ImageProcessor, VideoProcessor, is_supported_media_file, is_supported_video_file
 from zoltag.config.db_config import ConfigManager
 from zoltag.tagging import get_tagger
 from zoltag.learning import ensure_image_embedding, score_keywords_for_categories
@@ -35,8 +35,9 @@ from zoltag.tenant_scope import assign_tenant_scope, tenant_column_filter
 # Sub-router with no prefix/tags (inherits from parent)
 router = APIRouter()
 
-PHASE1_MAX_UPLOAD_BYTES = 20 * 1024 * 1024  # 20 MB
-PHASE1_ALLOWED_DEDUP_POLICIES = {"keep_both", "skip_duplicate"}
+PHASE1_MAX_IMAGE_BYTES = 20 * 1024 * 1024   # 20 MB for images
+PHASE1_MAX_VIDEO_BYTES = 500 * 1024 * 1024  # 500 MB for videos
+PHASE1_ALLOWED_DEDUP_POLICIES = {"keep_both", "skip_duplicate", "refresh_duplicate_thumbnail"}
 
 
 def _resolve_storage_or_409(
@@ -73,8 +74,8 @@ async def upload_images(
 
     for file in files:
         try:
-            # Check if file is an image
-            if not processor.is_supported(file.filename):
+            # Check if file is a supported image or video
+            if not is_supported_media_file(file.filename, mime_type=file.content_type):
                 results.append({
                     "filename": file.filename,
                     "status": "skipped",
@@ -195,7 +196,10 @@ def _enqueue_build_embeddings(db: Session, tenant: Tenant) -> None:
 @router.post("/images/upload-and-ingest", response_model=dict, operation_id="upload_and_ingest_image")
 async def upload_and_ingest_image(
     file: UploadFile = File(...),
-    dedup_policy: str = Query("keep_both", description="Dedup policy: keep_both or skip_duplicate"),
+    dedup_policy: str = Query(
+        "keep_both",
+        description="Dedup policy: keep_both, skip_duplicate, or refresh_duplicate_thumbnail",
+    ),
     relative_path: Optional[str] = Query(None, description="Relative path within uploaded folder (e.g. vacation/2024/img.jpg)"),
     store_original: bool = Query(True, description="When false, only the thumbnail is stored; the original file bytes are discarded after processing"),
     tenant: Tenant = Depends(get_tenant),
@@ -207,7 +211,10 @@ async def upload_and_ingest_image(
     if policy not in PHASE1_ALLOWED_DEDUP_POLICIES:
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported dedup policy '{dedup_policy}'. Allowed: keep_both, skip_duplicate.",
+            detail=(
+                f"Unsupported dedup policy '{dedup_policy}'. Allowed: keep_both, "
+                "skip_duplicate, refresh_duplicate_thumbnail."
+            ),
         )
 
     # Use relative_path (from folder upload) as the display filename when provided.
@@ -215,48 +222,189 @@ async def upload_and_ingest_image(
     if not filename:
         raise HTTPException(status_code=400, detail="Missing filename.")
 
-    processor = ImageProcessor(thumbnail_size=(settings.thumbnail_size, settings.thumbnail_size))
-    if not processor.is_supported(filename):
+    _thumb_size = (settings.thumbnail_size, settings.thumbnail_size)
+    processor = ImageProcessor(thumbnail_size=_thumb_size)
+    _is_video = is_supported_video_file(filename, mime_type=file.content_type)
+    if not _is_video and not processor.is_supported(filename):
         raise HTTPException(status_code=400, detail="Unsupported file format.")
 
     file_bytes = await file.read()
     if not file_bytes:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
-    if len(file_bytes) > PHASE1_MAX_UPLOAD_BYTES:
+    max_bytes = PHASE1_MAX_VIDEO_BYTES if _is_video else PHASE1_MAX_IMAGE_BYTES
+    if len(file_bytes) > max_bytes:
         raise HTTPException(
             status_code=413,
-            detail=f"File exceeds Phase 1 upload limit ({PHASE1_MAX_UPLOAD_BYTES // (1024 * 1024)} MB).",
+            detail=f"File exceeds upload limit ({max_bytes // (1024 * 1024)} MB).",
         )
 
-    # Header-level validation: reject non-image bytes even if extension/mime are spoofed.
-    try:
-        probe = processor.load_image(file_bytes)
-        probe.verify()
-    except Exception:
-        raise HTTPException(status_code=400, detail="Uploaded file content is not a valid image.")
+    # For images: validate file bytes are actually an image.
+    # For videos: skip PIL validation — rely on extension/mime check above.
+    if not _is_video:
+        try:
+            probe = processor.load_image(file_bytes)
+            probe.verify()
+        except Exception:
+            raise HTTPException(status_code=400, detail="Uploaded file content is not a valid image.")
 
     content_hash = hashlib.sha256(file_bytes).hexdigest()
-    if policy == "skip_duplicate":
-        existing = (
+    guessed_content_type = mimetypes.guess_type(filename)[0]
+    content_type = (file.content_type or guessed_content_type or "application/octet-stream").strip()
+
+    existing_matches = []
+    if policy in {"skip_duplicate", "refresh_duplicate_thumbnail"}:
+        existing_matches = (
             db.query(ImageMetadata)
             .filter(
                 tenant_column_filter(ImageMetadata, tenant),
                 ImageMetadata.content_hash == content_hash,
             )
             .order_by(ImageMetadata.id.asc())
-            .first()
+            .all()
         )
-        if existing:
-            return {
-                "status": "skipped_duplicate",
-                "tenant_id": tenant.id,
-                "dedup_policy": policy,
-                "image_id": existing.id,
-                "filename": existing.filename,
-            }
 
-    guessed_content_type = mimetypes.guess_type(filename)[0]
-    content_type = (file.content_type or guessed_content_type or "application/octet-stream").strip()
+    if policy == "skip_duplicate" and existing_matches:
+        existing = existing_matches[0]
+        return {
+            "status": "skipped_duplicate",
+            "tenant_id": tenant.id,
+            "dedup_policy": policy,
+            "image_id": existing.id,
+            "filename": existing.filename,
+        }
+
+    if policy == "refresh_duplicate_thumbnail" and existing_matches:
+        missing_asset_rows = [row.id for row in existing_matches if row.asset_id is None]
+        if missing_asset_rows:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Duplicate image rows found without asset_id. "
+                    f"Cannot refresh all duplicates (missing_asset_id_rows={len(missing_asset_rows)})."
+                ),
+            )
+
+        asset_ids = [row.asset_id for row in existing_matches if row.asset_id is not None]
+        existing_assets = (
+            db.query(Asset)
+            .filter(
+                tenant_column_filter(Asset, tenant),
+                Asset.id.in_(asset_ids) if asset_ids else False,
+            )
+            .all()
+        )
+        assets_by_id = {asset.id: asset for asset in existing_assets}
+        missing_asset_ids = [asset_id for asset_id in asset_ids if asset_id not in assets_by_id]
+        if missing_asset_ids:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Duplicate image rows found with missing assets. "
+                    f"Cannot refresh all duplicates (missing={len(missing_asset_ids)})."
+                ),
+            )
+
+        try:
+            if _is_video:
+                features = VideoProcessor(thumbnail_size=_thumb_size).extract_features(file_bytes, filename=filename)
+            else:
+                features = processor.extract_features(file_bytes)
+            exif = features.get("exif", {}) or {}
+
+            capture_timestamp = parse_exif_datetime(get_exif_value(exif, "DateTimeOriginal", "DateTime"))
+            gps_latitude = parse_exif_float(get_exif_value(exif, "GPSLatitude"))
+            gps_longitude = parse_exif_float(get_exif_value(exif, "GPSLongitude"))
+            iso = parse_exif_int(get_exif_value(exif, "ISOSpeedRatings", "ISOSpeed", "ISO"))
+            aperture = parse_exif_float(get_exif_value(exif, "FNumber", "ApertureValue"))
+            shutter_speed = parse_exif_str(get_exif_value(exif, "ExposureTime", "ShutterSpeedValue"))
+            focal_length = parse_exif_float(get_exif_value(exif, "FocalLength"))
+            camera_make = parse_exif_str(get_exif_value(exif, "Make"))
+            camera_model = parse_exif_str(get_exif_value(exif, "Model"))
+            lens_model = parse_exif_str(get_exif_value(exif, "LensModel", "Lens"))
+
+            mime_type = guessed_content_type
+            if not mime_type and features.get("format"):
+                mime_type = f"image/{str(features.get('format')).lower()}"
+
+            if settings.local_mode:
+                from pathlib import Path
+                from zoltag.routers.local import _LocalThumbnailBucket
+
+                local_thumb_dir = Path(settings.local_data_dir) / "thumbnails"
+                thumbnail_bucket = _LocalThumbnailBucket(local_thumb_dir)
+            else:
+                storage_client = storage.Client(project=settings.gcp_project_id)
+                thumbnail_bucket = storage_client.bucket(tenant.get_thumbnail_bucket(settings))
+            now_utc = datetime.utcnow()
+            refreshed_image_ids = []
+            refreshed_asset_ids = []
+
+            for existing in existing_matches:
+                existing_asset = assets_by_id.get(existing.asset_id)
+                if not existing_asset:
+                    continue
+
+                refresh_thumbnail_key = existing_asset.thumbnail_key or tenant.get_asset_thumbnail_key(
+                    str(existing_asset.id),
+                    "default-320.jpg",
+                )
+                thumbnail_blob = thumbnail_bucket.blob(refresh_thumbnail_key)
+                thumbnail_blob.cache_control = "public, max-age=31536000, immutable"
+                thumbnail_blob.upload_from_string(features["thumbnail"], content_type="image/jpeg")
+
+                if not existing_asset.thumbnail_key:
+                    existing_asset.thumbnail_key = refresh_thumbnail_key
+                existing_asset.width = features.get("width")
+                existing_asset.height = features.get("height")
+                if mime_type:
+                    existing_asset.mime_type = mime_type
+
+                existing.file_size = len(file_bytes)
+                existing.content_hash = content_hash
+                existing.modified_time = now_utc
+                existing.width = features.get("width")
+                existing.height = features.get("height")
+                existing.format = features.get("format")
+                existing.perceptual_hash = features.get("perceptual_hash")
+                existing.color_histogram = features.get("color_histogram")
+                existing.exif_data = exif
+                existing.camera_make = camera_make
+                existing.camera_model = camera_model
+                existing.lens_model = lens_model
+                existing.iso = iso
+                existing.aperture = aperture
+                existing.shutter_speed = shutter_speed
+                existing.focal_length = focal_length
+                existing.capture_timestamp = capture_timestamp
+                existing.gps_latitude = gps_latitude
+                existing.gps_longitude = gps_longitude
+                existing.last_processed = now_utc
+                if settings.asset_write_legacy_fields and hasattr(ImageMetadata, "thumbnail_path"):
+                    setattr(existing, "thumbnail_path", refresh_thumbnail_key)
+
+                refreshed_image_ids.append(existing.id)
+                refreshed_asset_ids.append(str(existing_asset.id))
+
+            db.commit()
+        except HTTPException:
+            db.rollback()
+            raise
+        except Exception as exc:
+            db.rollback()
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to refresh duplicate thumbnail: {exc}",
+            )
+
+        return {
+            "status": "refreshed_duplicate_thumbnail",
+            "tenant_id": tenant.id,
+            "dedup_policy": policy,
+            "refreshed_count": len(refreshed_image_ids),
+            "image_ids": refreshed_image_ids,
+            "asset_ids": refreshed_asset_ids,
+            "filename": filename,
+        }
 
     asset_id = uuid4()
     source_key = tenant.get_asset_source_key(str(asset_id), filename) if store_original else f"managed-thumbnail-only/{asset_id}"
@@ -284,10 +432,13 @@ async def upload_and_ingest_image(
             source_blob.upload_from_string(file_bytes, content_type=content_type)
             source_uploaded = True
 
-        features = processor.extract_features(file_bytes)
+        if _is_video:
+            features = VideoProcessor(thumbnail_size=_thumb_size).extract_features(file_bytes, filename=filename)
+        else:
+            features = processor.extract_features(file_bytes)
         model_name = settings.tagging_model
         model_version = settings.tagging_model
-        if settings.upload_generate_embeddings:
+        if not _is_video and settings.upload_generate_embeddings:
             tagger = get_tagger(model_type=settings.tagging_model)
             model_name = getattr(tagger, "model_name", settings.tagging_model)
             model_version = getattr(tagger, "model_version", model_name)
@@ -310,7 +461,8 @@ async def upload_and_ingest_image(
 
         mime_type = guessed_content_type
         if not mime_type and features.get("format"):
-            mime_type = f"image/{str(features.get('format')).lower()}"
+            prefix = "video" if _is_video else "image"
+            mime_type = f"{prefix}/{str(features.get('format')).lower()}"
 
         asset = assign_tenant_scope(Asset(
             id=asset_id,
@@ -319,10 +471,11 @@ async def upload_and_ingest_image(
             source_key=source_key,
             source_rev=str(source_blob.generation) if (store_original and source_blob is not None and getattr(source_blob, 'generation', None) is not None) else None,
             thumbnail_key=thumbnail_key,
+            media_type="video" if _is_video else "image",
             mime_type=mime_type,
             width=features.get("width"),
             height=features.get("height"),
-            duration_ms=None,
+            duration_ms=features.get("duration_ms"),
             created_by=current_user.supabase_uid,
         ), tenant)
         db.add(asset)

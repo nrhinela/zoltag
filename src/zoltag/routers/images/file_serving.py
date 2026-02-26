@@ -236,6 +236,10 @@ async def get_full_image(
             raise HTTPException(status_code=404, detail="Image not available in Dropbox")
         raise HTTPException(status_code=404, detail=f"Image not available in {provider_name}")
 
+    # Thumbnail-only uploads have no stored original
+    if source_ref and "thumbnail-only" in source_ref:
+        raise HTTPException(status_code=404, detail="Full-size image not available — this file was uploaded in thumbnail-only mode")
+
     try:
         provider = await run_in_threadpool(
             create_storage_provider,

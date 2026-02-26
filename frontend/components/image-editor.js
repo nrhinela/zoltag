@@ -2722,6 +2722,12 @@ class ImageEditor extends LitElement {
     if (mimeType.startsWith('video/')) {
       return 'video';
     }
+    const filename = String(details?.filename || '').trim().toLowerCase();
+    const videoExts = new Set(['.mp4', '.mov', '.m4v', '.avi', '.mkv', '.webm', '.mpeg', '.mpg', '.wmv']);
+    const ext = filename.slice(filename.lastIndexOf('.'));
+    if (ext && videoExts.has(ext)) {
+      return 'video';
+    }
     return 'image';
   }
 
