@@ -498,6 +498,8 @@ class Asset(Base):
     source_provider = Column(String(64), nullable=False)
     source_key = Column(String(1024), nullable=False)
     source_rev = Column(String(255))
+    source_display_path = Column(String(2048), nullable=True)
+    provider_id = Column(UUID(as_uuid=True), ForeignKey("tenant_provider_integrations.id", ondelete="SET NULL"), nullable=True)
 
     thumbnail_key = Column(String(1024), nullable=False)
 
@@ -514,6 +516,8 @@ class Asset(Base):
     __table_args__ = (
         Index("idx_assets_source_key", "source_provider", "source_key"),
         Index("idx_assets_tenant_media_type", "tenant_id", "media_type"),
+        Index("idx_assets_source_display_path", "tenant_id", "source_provider", "source_display_path"),
+        Index("idx_assets_provider_id", "tenant_id", "provider_id"),
     )
 
 

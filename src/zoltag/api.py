@@ -41,6 +41,7 @@ from zoltag.routers import (
     admin_roles,
     dropbox,
     gdrive,
+    youtube,
     sync,
     config,
     nl_search,
@@ -176,6 +177,7 @@ app.include_router(admin_database.router)
 app.include_router(admin_roles.router)
 app.include_router(dropbox.router)
 app.include_router(gdrive.router)
+app.include_router(youtube.router)
 app.include_router(sync.router)
 app.include_router(config.router)
 app.include_router(nl_search.router)

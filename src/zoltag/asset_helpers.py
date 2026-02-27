@@ -50,6 +50,7 @@ class ResolvedImageStorage:
     source_provider: Optional[str]
     source_key: Optional[str]
     source_rev: Optional[str]
+    source_display_path: Optional[str] = None
 
 
 def load_assets_for_images(db: Session, images: Iterable[ImageMetadata]) -> Dict[str, Asset]:
@@ -75,23 +76,38 @@ def bulk_preload_thumbnail_urls(
     resolve_image_storage via the preloaded_urls parameter to skip
     per-image signing.
     """
-    # Collect thumbnail keys per image
+    # Collect thumbnail keys per image; short-circuit YouTube CDN URLs when no GCS key yet
     keys_by_image_id: Dict[int, Optional[str]] = {}
+    direct_urls: Dict[int, str] = {}  # image.id -> URL (no GCS signing needed)
     for image in images:
         asset = assets_by_id.get(str(image.asset_id)) if image.asset_id is not None else None
         legacy_thumbnail = getattr(image, "thumbnail_path", None)
         thumbnail_key = (asset.thumbnail_key if asset else None) or legacy_thumbnail
-        keys_by_image_id[image.id] = thumbnail_key
+        # YouTube: use GCS key if available, fall back to CDN URL
+        if (
+            asset and asset.source_provider == "youtube" and asset.source_key
+            and (not thumbnail_key or thumbnail_key.startswith("https://"))
+        ):
+            direct_urls[image.id] = f"https://i.ytimg.com/vi/{asset.source_key}/hqdefault.jpg"
+            keys_by_image_id[image.id] = None
+        else:
+            keys_by_image_id[image.id] = thumbnail_key
 
     # In local mode return backend-served URLs; skip GCS signing entirely.
     if settings.local_mode:
-        return {image.id: f"/api/v1/images/{image.id}/thumbnail" for image in images}
+        return {
+            image.id: direct_urls.get(image.id) or f"/api/v1/images/{image.id}/thumbnail"
+            for image in images
+        }
 
     unique_keys = [k for k in set(keys_by_image_id.values()) if k]
     signed = tenant.bulk_sign_thumbnail_urls(settings, unique_keys)
 
     result: Dict[int, Optional[str]] = {}
     for image in images:
+        if image.id in direct_urls:
+            result[image.id] = direct_urls[image.id]
+            continue
         key = keys_by_image_id.get(image.id)
         url = signed.get(key) if key else None
         # Apply cache busting for non-signed URLs
@@ -155,6 +171,9 @@ def resolve_image_storage(
 
     if preloaded_thumbnail_url is not None:
         thumbnail_url = preloaded_thumbnail_url
+    elif source_provider == "youtube" and source_key:
+        # YouTube CDN provides stable thumbnail URLs — no GCS storage needed
+        thumbnail_url = f"https://i.ytimg.com/vi/{source_key}/hqdefault.jpg"
     else:
         thumbnail_url = tenant.get_thumbnail_url(settings, thumbnail_key)
         cache_token = (
@@ -172,6 +191,7 @@ def resolve_image_storage(
         source_provider=source_provider,
         source_key=source_key,
         source_rev=source_rev,
+        source_display_path=asset.source_display_path if asset else None,
     )
 
 

@@ -364,9 +364,6 @@ class TaggingAdmin extends LitElement {
     }
 
     if (this.dialog.type === 'category') {
-      const availableParents = this._getCategoriesAlphabetical(
-        (this.categories || []).filter((cat) => cat.id !== this.dialog.categoryId)
-      );
       return html`
         <div class="fixed inset-0 z-50 flex items-center justify-center modal-backdrop">
           <div class="bg-white rounded-lg shadow-xl w-full max-w-6xl mx-4 p-6">
@@ -379,27 +376,16 @@ class TaggingAdmin extends LitElement {
                 class="w-full border rounded-lg px-3 py-2 mb-6"
                 .value=${this.dialog.name}
                 @input=${(e) => { this.dialog = { ...this.dialog, name: e.target.value }; }}
-                placeholder="e.g. Circus Skills"
+                placeholder="e.g. Family"
                 required
               />
-              <label class="block text-sm font-semibold text-gray-700 mb-2">Slug</label>
+              <label class="block text-sm font-semibold text-gray-700 mb-2">Description</label>
               <input
                 class="w-full border rounded-lg px-3 py-2 mb-6"
                 .value=${this.dialog.slug}
                 @input=${(e) => { this.dialog = { ...this.dialog, slug: e.target.value }; }}
-                placeholder="e.g. circus"
+                placeholder="Short description for this category"
               />
-              <label class="block text-sm font-semibold text-gray-700 mb-2">Parent Category</label>
-              <select
-                class="w-full border rounded-lg px-3 py-2 mb-4"
-                .value=${String(this.dialog.parentId ?? '')}
-                @change=${(e) => { this.dialog = { ...this.dialog, parentId: e.target.value }; }}
-              >
-                <option value="">None</option>
-                ${availableParents.map((cat) => html`
-                  <option value=${cat.id}>${cat.name}</option>
-                `)}
-              </select>
               <label class="block text-sm font-semibold text-gray-700 mb-2">Sort Order</label>
               <input
                 class="w-full border rounded-lg px-3 py-2 mb-4"
@@ -409,24 +395,30 @@ class TaggingAdmin extends LitElement {
                 placeholder="0"
                 min="0"
               />
-              <div class="flex flex-wrap gap-6 mb-4">
-                <label class="inline-flex items-center gap-2 text-sm text-gray-700">
+              <div class="mb-4 space-y-3">
+                <label class="flex items-start gap-2 text-sm text-gray-700">
                   <input
                     type="checkbox"
-                    class="rounded border-gray-300"
+                    class="rounded border-gray-300 mt-0.5"
                     .checked=${this.dialog.isPeopleCategory}
                     @change=${(e) => { this.dialog = { ...this.dialog, isPeopleCategory: e.target.checked }; }}
                   />
-                  People category
+                  <span>
+                    <span class="block font-semibold text-gray-800">People category</span>
+                    <span class="block text-xs text-gray-500">Links tags in this category to people or organizations.</span>
+                  </span>
                 </label>
-                <label class="inline-flex items-center gap-2 text-sm text-gray-700">
+                <label class="flex items-start gap-2 text-sm text-gray-700">
                   <input
                     type="checkbox"
-                    class="rounded border-gray-300"
+                    class="rounded border-gray-300 mt-0.5"
                     .checked=${this.dialog.isAttribution}
                     @change=${(e) => { this.dialog = { ...this.dialog, isAttribution: e.target.checked }; }}
                   />
-                  Attribution category
+                  <span>
+                    <span class="block font-semibold text-gray-800">Attribution category</span>
+                    <span class="block text-xs text-gray-500">Marks tags used for crediting creators, sources, or ownership. Marking this surfaces these tags on exports so photo attribution is straightforward.</span>
+                  </span>
                 </label>
               </div>
               <div class="flex justify-between items-center gap-3">
@@ -518,9 +510,6 @@ class TaggingAdmin extends LitElement {
                 <div class="flex gap-3">
                   ${this.dialog.mode === 'edit' ? html`
                     <button type="button" class="px-4 py-2 border rounded-lg" @click=${this.closeDialog}>Close</button>
-                    <button type="button" class="px-4 py-2 bg-blue-100 text-blue-700 rounded-lg" @click=${this._openUploadModal}>
-                      Test
-                    </button>
                   ` : html`
                     <button type="button" class="px-4 py-2 border rounded-lg" @click=${this.closeDialog}>Cancel</button>
                   `}
@@ -629,7 +618,7 @@ class TaggingAdmin extends LitElement {
                   </div>
                 `)}
               </div>
-            ` : html`<div class="text-sm text-gray-500">No keywords yet.</div>`}
+            ` : html`<div class="text-sm text-gray-500">No tags yet.</div>`}
           </div>
         ` : ''}
       </div>
@@ -643,27 +632,20 @@ class TaggingAdmin extends LitElement {
         <div class="bg-white rounded-lg border border-gray-200 p-6">
           <div class="flex items-center justify-between mb-4">
             <div>
-              <h2 class="text-xl font-semibold text-gray-800">Keywords Configuration</h2>
-              <p class="text-sm text-gray-500">Define categories and keywords for image tagging.</p>
+              <h2 class="text-xl font-semibold text-gray-800">Tag Configurations</h2>
+              <p class="text-sm text-gray-500">Define categories and tags for image tagging.</p>
               ${this.readOnly ? html`
                 <p class="text-xs text-gray-500 mt-1">Read-only for your tenant role.</p>
               ` : html``}
             </div>
-            ${this.readOnly ? html`` : html`
-              <div class="flex items-center gap-3">
-                <button class="px-4 py-2 bg-blue-600 text-white rounded-lg" @click=${this._openUploadModal}>
-                  <i class="fas fa-flask mr-2"></i>Test
-                </button>
-              </div>
-            `}
           </div>
           <details class="help-panel mb-6">
-            <summary>How keywords and categories work</summary>
+            <summary>How tags and categories work</summary>
             <ul>
-              <li>Keywords are one of the most important parts of getting the most out of Zoltag.</li>
-              <li>Create multiple sets of keywords by creating keyword categories.</li>
-              <li>You can link keywords to companies or people by using category attributes.</li>
-              <li>Keyword prompts help AI systems automatically suggest relevant tags to get started.</li>
+              <li>Tags are one of the most important parts of getting the most out of Zoltag.</li>
+              <li>Create multiple sets of tags by creating tag categories.</li>
+              <li>You can link tags to companies or people by using category attributes.</li>
+              <li>Tag prompts help AI systems automatically suggest relevant tags to get started.</li>
             </ul>
           </details>
 
@@ -685,10 +667,6 @@ class TaggingAdmin extends LitElement {
     `;
   }
 
-  _openUploadModal() {
-    if (this.readOnly) return;
-    this.dispatchEvent(new CustomEvent('open-upload-modal', { bubbles: true, composed: true }));
-  }
 }
 
 customElements.define('tagging-admin', TaggingAdmin);

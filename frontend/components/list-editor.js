@@ -593,8 +593,45 @@ class ListEditor extends LitElement {
   }
 
   _createList() {
-    console.log('Add New List button clicked!');
-    this.editingList = { title: '', notebox: '' };
+    const activeScope = this._getActiveVisibilityScope();
+    this.editingList = {
+      title: '',
+      notebox: '',
+      visibility: activeScope === 'private' ? 'private' : 'shared',
+    };
+  }
+
+  _cancelCreateList() {
+    this.editingList = null;
+  }
+
+  async _saveNewList() {
+    if (!this.tenant) return;
+    const title = String(this.querySelector('#create-list-title')?.value || '').trim();
+    const notebox = this.querySelector('#create-list-notes')?.value || '';
+    const visibility = this.querySelector('#create-list-visibility')?.value || 'shared';
+
+    if (!title) {
+      console.warn('List title cannot be empty');
+      return;
+    }
+
+    try {
+      await createList(this.tenant, {
+        title,
+        notebox,
+        visibility,
+      });
+      this.editingList = null;
+
+      if (visibility === 'shared' && this._getActiveVisibilityScope() === 'private') {
+        this.listVisibilityScope = 'default';
+      }
+
+      await this.fetchLists({ force: true });
+    } catch (error) {
+      console.error('Error creating list:', error);
+    }
   }
 
   _editList(list) {
@@ -2014,7 +2051,7 @@ class ListEditor extends LitElement {
                     class="bg-indigo-600 text-white px-3 py-1 rounded text-sm hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
                   >
                     ${this.isExportingPptx ? html`<span class="inline-block w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></span>` : ''}
-                    Download PPTX
+                    Download Powerpoint
                   </button>
                   ${this.selectedList.can_edit ? html`
                     <button @click=${() => { this.shareModalActive = true; }} style="background: #4f46e5; color: white; padding: 0.25rem 0.75rem; border-radius: 0.25rem; font-size: 0.875rem; border: none; cursor: pointer;" onmouseover="this.style.background='#4338ca'" onmouseout="this.style.background='#4f46e5'">Share</button>
@@ -2218,6 +2255,7 @@ class ListEditor extends LitElement {
                               style="opacity: ${this._isSlideshowFullImageCached(image.id) ? '1' : '0.58'};"
                               src=${image.thumbnail_url || `/api/v1/images/${image.id}/thumbnail`}
                               alt=${image.filename || `#${image.id}`}
+                              @error=${(e) => { const fallback = `/api/v1/images/${image.id}/thumbnail`; if (e.target.src !== fallback) e.target.src = fallback; }}
                             >
                           </button>
                         `)}
@@ -2304,6 +2342,57 @@ class ListEditor extends LitElement {
           `)}
       </div>
 
+      ${this.editingList ? html`
+        <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div class="bg-white rounded-lg shadow-lg w-full max-w-2xl mx-4 max-h-90vh overflow-auto p-6">
+            <div class="flex justify-between items-center mb-6">
+              <h3 class="text-xl font-bold text-gray-900">Create New List</h3>
+              <button @click=${this._cancelCreateList} class="text-gray-500 hover:text-gray-700 text-2xl">×</button>
+            </div>
+
+            <div class="mb-6">
+              <div class="mb-4">
+                <label class="block text-sm font-semibold text-gray-700 mb-2">Title</label>
+                <input
+                  id="create-list-title"
+                  type="text"
+                  .value=${this.editingList.title || ''}
+                  class="w-full p-2 border border-gray-300 rounded text-sm"
+                  placeholder="Enter list title"
+                >
+              </div>
+
+              <div class="mb-4">
+                <label class="block text-sm font-semibold text-gray-700 mb-2">Notes</label>
+                <textarea
+                  id="create-list-notes"
+                  .value=${this.editingList.notebox || ''}
+                  class="w-full p-2 border border-gray-300 rounded text-sm"
+                  rows="4"
+                  placeholder="Optional notes"
+                ></textarea>
+              </div>
+
+              <div class="mb-4">
+                <label class="block text-sm font-semibold text-gray-700 mb-2">Visibility</label>
+                <select
+                  id="create-list-visibility"
+                  class="w-full p-2 border border-gray-300 rounded text-sm"
+                >
+                  <option value="shared" ?selected=${String(this.editingList.visibility || 'shared') === 'shared'}>All</option>
+                  <option value="private" ?selected=${String(this.editingList.visibility || 'shared') === 'private'}>Private</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="flex items-center justify-end gap-2">
+              <button @click=${this._cancelCreateList} class="border border-gray-400 text-gray-700 px-4 py-2 rounded text-sm hover:bg-gray-100">Cancel</button>
+              <button @click=${this._saveNewList} class="bg-blue-600 text-white px-4 py-2 rounded text-sm hover:bg-blue-700">Create</button>
+            </div>
+          </div>
+        </div>
+      ` : ''}
+
       ${this.editingSelectedList && this.selectedList ? html`
         <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div class="bg-white rounded-lg shadow-lg w-full max-w-2xl mx-4 max-h-90vh overflow-auto p-6">
@@ -2377,7 +2466,7 @@ class ListEditor extends LitElement {
           <div class="w-full max-w-3xl rounded-lg bg-white shadow-lg" @click=${(event) => event.stopPropagation()}>
             <div class="flex items-center justify-between border-b border-gray-200 px-5 py-4">
               <div>
-                <h3 class="text-xl font-bold text-gray-900">Download PPTX</h3>
+                <h3 class="text-xl font-bold text-gray-900">Download Powerpoint</h3>
                 <p class="mt-1 text-sm text-gray-600">
                   Choose a template for "${this.selectedList?.title || 'this list'}" or export with default styling.
                 </p>
@@ -2510,7 +2599,7 @@ class ListEditor extends LitElement {
                 @click=${this._exportListPptx}
                 ?disabled=${this.isExportingPptx || this.pptxUploadingTemplate}
               >
-                ${this.isExportingPptx ? 'Downloading…' : 'Download PPTX'}
+                ${this.isExportingPptx ? 'Downloading…' : 'Download Powerpoint'}
               </button>
             </div>
           </div>

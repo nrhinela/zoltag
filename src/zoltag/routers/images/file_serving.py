@@ -1,11 +1,17 @@
 """Image file serving endpoints: thumbnail and full-size image."""
 
 import io
+import logging
 import mimetypes
+import time
 from datetime import datetime, timedelta, timezone
 
+logger = logging.getLogger(__name__)
+
+import httpx
+
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import RedirectResponse, StreamingResponse
 from google.cloud import storage
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
@@ -126,6 +132,7 @@ async def get_thumbnail(
     tenant_settings = getattr(tenant_row, "settings", None) if isinstance(getattr(tenant_row, "settings", None), dict) else {}
     dropbox_runtime = runtime_context.get("dropbox") or {}
     gdrive_runtime = runtime_context.get("gdrive") or {}
+    youtube_runtime = runtime_context.get("youtube") or {}
     key_prefix = (getattr(tenant_row, "key_prefix", None) or str(tenant_row.id)).strip()
 
     tenant = Tenant(
@@ -144,6 +151,8 @@ async def get_thumbnail(
         gdrive_client_id=str(gdrive_runtime.get("client_id") or "").strip() or None,
         gdrive_token_secret=str(gdrive_runtime.get("token_secret_name") or f"gdrive-token-{key_prefix}").strip(),
         gdrive_client_secret=str(gdrive_runtime.get("client_secret_name") or f"gdrive-client-secret-{key_prefix}").strip(),
+        youtube_token_secret=str(youtube_runtime.get("token_secret_name") or f"youtube-token-{key_prefix}").strip(),
+        youtube_sync_folders=list(youtube_runtime.get("sync_folders") or []),
         storage_bucket=tenant_row.storage_bucket,
         thumbnail_bucket=tenant_row.thumbnail_bucket,
         settings=tenant_settings,
@@ -156,6 +165,25 @@ async def get_thumbnail(
     )
     if not storage_info.thumbnail_key:
         raise HTTPException(status_code=404, detail="Thumbnail not found")
+
+    # YouTube assets: find the best available CDN thumbnail quality and redirect.
+    if storage_info.source_provider == "youtube" and storage_info.source_key:
+        video_id = storage_info.source_key
+        variants = ("maxresdefault", "sddefault", "hqdefault", "mqdefault", "default")
+        chosen_url = None
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                for variant in variants:
+                    url = f"https://i.ytimg.com/vi/{video_id}/{variant}.jpg"
+                    resp = await client.head(url)
+                    if resp.status_code == 200:
+                        chosen_url = url
+                        break
+        except Exception:
+            pass
+        if not chosen_url:
+            chosen_url = f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
+        return RedirectResponse(url=chosen_url, status_code=302)
 
     import logging
     logger = logging.getLogger(__name__)
@@ -383,12 +411,6 @@ async def stream_image_playback(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to initialize {provider_name} provider: {exc}")
 
-    try:
-        file_bytes = provider.download_file(source_ref)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Error fetching {provider_name} video: {exc}")
-
-    total_size = len(file_bytes)
     filename = image.filename or "video"
     content_type = str(getattr(getattr(storage_info, "asset", None), "mime_type", "") or "").strip()
     if not content_type:
@@ -398,6 +420,62 @@ async def stream_image_playback(
             fallback="video/mp4",
         )
 
+    range_header = request.headers.get("range")
+    print(f"[stream] provider={provider_name} source={source_ref} range={range_header} has_stream={hasattr(provider, 'stream_file_async')}", flush=True)
+    logger.info("[stream] provider=%s source=%s range=%s has_stream=%s",
+                provider_name, source_ref, range_header, hasattr(provider, "stream_file_async"))
+
+    # For providers that support async chunked streaming, pipe directly without buffering.
+    if hasattr(provider, "stream_file_async"):
+        t0 = time.monotonic()
+        upstream_gen = provider.stream_file_async(source_ref, range_header=range_header)
+        try:
+            first = await upstream_gen.__anext__()
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Error streaming {provider_name} video: {exc}")
+
+        upstream_status, upstream_headers = first
+        print(f"[stream] upstream responded status={upstream_status} in {time.monotonic() - t0:.2f}s", flush=True)
+        logger.info("[stream] upstream responded status=%s in %.2fs headers=%s",
+                    upstream_status, time.monotonic() - t0,
+                    {k: upstream_headers[k] for k in ("content-length", "content-type", "content-range") if k in upstream_headers})
+
+        status_code = upstream_status if upstream_status in (200, 206) else 200
+        passthrough_headers = {
+            "Accept-Ranges": "bytes",
+            "Cache-Control": "no-store",
+            "Content-Disposition": f'inline; filename="{filename}"',
+        }
+        for h in ("content-length", "content-range"):
+            if h in upstream_headers:
+                passthrough_headers[h.title()] = upstream_headers[h]
+
+        chunk_count = 0
+
+        async def _iter_chunks():
+            nonlocal chunk_count
+            async for chunk in upstream_gen:
+                chunk_count += 1
+                if chunk_count == 1:
+                    print(f"[stream] first chunk at {time.monotonic() - t0:.2f}s", flush=True)
+                    logger.info("[stream] first chunk yielded at %.2fs", time.monotonic() - t0)
+                yield chunk
+            logger.info("[stream] done — %d chunks in %.2fs", chunk_count, time.monotonic() - t0)
+
+        return StreamingResponse(
+            _iter_chunks(),
+            status_code=status_code,
+            media_type=content_type,
+            headers=passthrough_headers,
+        )
+
+    # Fallback: download fully then serve (used for providers without stream_file).
+    try:
+        file_bytes = provider.download_file(source_ref)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error fetching {provider_name} video: {exc}")
+
+    total_size = len(file_bytes)
     status_code = 200
     payload = file_bytes
     headers = {
@@ -406,7 +484,6 @@ async def stream_image_playback(
         "Content-Disposition": f'inline; filename="{filename}"',
         "Content-Length": str(total_size),
     }
-    range_header = request.headers.get("range")
     if range_header and total_size > 0:
         try:
             start, end = _parse_single_range_header(range_header, total_size)

@@ -18,6 +18,15 @@ function appendIf(params, key, value, condition) {
   }
 }
 
+function normalizeSourceProviderFilter(value) {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  if (!normalized || normalized === 'all') return '';
+  if (normalized === 'google') return 'gdrive';
+  if (normalized === 'google-drive' || normalized === 'google_drive' || normalized === 'drive') return 'gdrive';
+  if (normalized === 'yt') return 'youtube';
+  return normalized;
+}
+
 /**
  * Build pagination parameters (limit, offset)
  * @param {Object} filters - Filter object containing limit and offset
@@ -183,4 +192,18 @@ export function addMediaTypeParams(params, filters = {}) {
   if (raw === 'image' || raw === 'video') {
     params.append('media_type', raw);
   }
+}
+
+/**
+ * Build source provider filter parameter.
+ * @param {Object} filters - Filter object
+ * @param {URLSearchParams} params - URLSearchParams to append to
+ */
+export function addSourceParams(params, filters = {}) {
+  const value = normalizeSourceProviderFilter(
+    filters.sourceProvider
+    ?? filters.source_provider
+    ?? filters.source
+  );
+  appendIf(params, 'source_provider', value, value !== '');
 }

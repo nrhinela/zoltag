@@ -2,6 +2,13 @@ import { LitElement, html } from 'lit';
 import { tailwind } from '../../tailwind-lit.js';
 import { getKeywordsByCategory, getCategoryCount, getKeywordsByCategoryFromList, getCategoryCountFromList } from '../keyword-utils.js';
 
+const SOURCE_PROVIDER_OPTIONS = [
+  { value: 'dropbox', label: 'Dropbox' },
+  { value: 'gdrive', label: 'Google Drive' },
+  { value: 'youtube', label: 'YouTube' },
+  { value: 'managed', label: 'Managed Uploads' },
+];
+
 class FilterChips extends LitElement {
   // Use Light DOM to access Tailwind CSS classes
   createRenderRoot() {
@@ -104,7 +111,7 @@ class FilterChips extends LitElement {
       type: 'keyword',
       keywordsByCategory: normalizedKeywords,
       operator: operator || 'OR',
-      displayLabel: 'Keywords',
+      displayLabel: 'Tags',
       displayValue: Object.keys(normalizedKeywords).length ? 'Multiple' : '',
     };
   }
@@ -241,8 +248,9 @@ class FilterChips extends LitElement {
   _getAvailableFilterTypes() {
     const active = new Set(this.activeFilters.map(f => f.type));
     const all = [
-      { type: 'keyword', label: 'Keywords', icon: '🏷️' },
+      { type: 'keyword', label: 'Tags', icon: '🏷️' },
       { type: 'rating', label: 'Rating', icon: '⭐' },
+      { type: 'source', label: 'Source', icon: '🔌' },
       { type: 'media', label: 'Media Type', icon: '🎬' },
       { type: 'folder', label: 'Folder', icon: '📂' },
       { type: 'list', label: 'List', icon: '🧾' },
@@ -431,6 +439,72 @@ class FilterChips extends LitElement {
     this.filterMenuOpen = false;
   }
 
+  _normalizeSourceProviderValue(value) {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (!normalized || normalized === 'all') return '';
+    if (normalized === 'google') return 'gdrive';
+    if (normalized === 'google-drive' || normalized === 'google_drive' || normalized === 'drive') return 'gdrive';
+    if (normalized === 'yt') return 'youtube';
+    if (normalized === 'managed_uploads' || normalized === 'managed-uploads' || normalized === 'uploads' || normalized === 'upload') return 'managed';
+    return normalized;
+  }
+
+  _getSourceProviderLabel(value) {
+    const normalized = this._normalizeSourceProviderValue(value);
+    if (!normalized) return 'All sources';
+    const known = SOURCE_PROVIDER_OPTIONS.find((option) => option.value === normalized);
+    if (known) return known.label;
+    return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+  }
+
+  _handleSourceSelect(sourceProvider) {
+    const normalized = this._normalizeSourceProviderValue(sourceProvider);
+    if (!normalized) {
+      this._removeFilterByType('source');
+      this.valueSelectorOpen = null;
+      this.filterMenuOpen = false;
+      return;
+    }
+    this._addFilter({
+      type: 'source',
+      value: normalized,
+      displayLabel: 'Source',
+      displayValue: this._getSourceProviderLabel(normalized),
+    });
+    this.valueSelectorOpen = null;
+    this.filterMenuOpen = false;
+  }
+
+  _getSourceProviderCounts() {
+    const raw = this.imageStats?.source_provider_counts;
+    if (!raw || typeof raw !== 'object') return {};
+    const counts = {};
+    Object.entries(raw).forEach(([provider, count]) => {
+      const normalized = this._normalizeSourceProviderValue(provider);
+      if (!normalized) return;
+      const parsed = Number(count);
+      counts[normalized] = (counts[normalized] || 0) + (Number.isFinite(parsed) ? parsed : 0);
+    });
+    return counts;
+  }
+
+  _getSourceOptionsWithCounts() {
+    const counts = this._getSourceProviderCounts();
+    const knownValues = new Set(SOURCE_PROVIDER_OPTIONS.map((option) => option.value));
+    const dynamicOptions = Object.entries(counts)
+      .filter(([provider]) => provider && !knownValues.has(provider))
+      .sort((a, b) => (b[1] - a[1]) || a[0].localeCompare(b[0]))
+      .map(([provider]) => ({
+        value: provider,
+        label: this._getSourceProviderLabel(provider),
+      }));
+    return [
+      { value: 'all', label: 'All sources' },
+      ...SOURCE_PROVIDER_OPTIONS,
+      ...dynamicOptions,
+    ];
+  }
+
   _handleListModeChange(mode) {
     this.listFilterMode = mode === 'exclude' ? 'exclude' : 'include';
   }
@@ -617,6 +691,8 @@ class FilterChips extends LitElement {
         return this._renderRatingSelector();
       case 'media':
         return this._renderMediaSelector();
+      case 'source':
+        return this._renderSourceSelector();
       case 'folder':
         return this._renderFolderSelector();
       case 'list':
@@ -634,6 +710,7 @@ class FilterChips extends LitElement {
 
   _renderKeywordSelector() {
     const categories = this._getKeywordsByCategory();
+    const hasTagDefinitions = Array.isArray(categories) && categories.length > 0;
     const keywordFilter = this._getKeywordFilter();
     const keywordState = this._normalizeKeywordFilter(keywordFilter);
     const selectedCount = Object.values(keywordState.keywordsByCategory || {}).reduce((total, set) => total + set.size, 0);
@@ -657,7 +734,7 @@ class FilterChips extends LitElement {
         <div class="sticky top-0 bg-white border-b border-gray-100 px-4 py-2 text-xs">
           <div class="flex items-center justify-between">
             <div class="flex items-center gap-3">
-              <span class="font-semibold text-gray-700">Keywords</span>
+              <span class="font-semibold text-gray-700">Tags</span>
               ${this.keywordMultiSelect && selectedCount > 0 ? html`
                 <div class="inline-flex items-center gap-1">
                   <button
@@ -693,18 +770,20 @@ class FilterChips extends LitElement {
               </button>
             </div>
           </div>
-          <div class="mt-2">
-            <input
-              type="text"
-              class="w-full px-3 py-2 border rounded-lg text-sm"
-              placeholder="Search keywords..."
-              .value=${this.keywordSearchQuery}
-              @input=${(e) => {
-                e.stopPropagation();
-                this.keywordSearchQuery = e.target.value;
-              }}
-            >
-          </div>
+          ${hasTagDefinitions ? html`
+            <div class="mt-2">
+              <input
+                type="text"
+                class="w-full px-3 py-2 border rounded-lg text-sm"
+                placeholder="Search tags..."
+                .value=${this.keywordSearchQuery}
+                @input=${(e) => {
+                  e.stopPropagation();
+                  this.keywordSearchQuery = e.target.value;
+                }}
+              >
+            </div>
+          ` : ''}
         </div>
         ${filteredCategories.map(([category, keywords]) => html`
           <div class="px-4 py-2 font-semibold text-gray-600 bg-gray-50 text-xs uppercase tracking-wide flex items-center justify-between">
@@ -725,8 +804,24 @@ class FilterChips extends LitElement {
             </div>
           `)}
         `)}
-        ${query && !filteredCategories.length ? html`
-          <div class="px-4 py-3 text-sm text-gray-500">No keywords found.</div>
+        ${!hasTagDefinitions ? html`
+          <div class="px-4 py-4">
+            <div class="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3">
+              <div class="text-sm font-semibold text-blue-900">No tags defined.</div>
+              <div class="mt-1 text-sm text-blue-800">
+                Set up tags to start filtering by tag categories and values.
+              </div>
+              <a
+                class="mt-2 inline-flex items-center gap-1 text-sm font-semibold text-blue-700 hover:text-blue-800 underline underline-offset-2"
+                href="?tab=library&subTab=keywords&adminSubTab=tagging"
+              >
+                Click here for tag setup
+              </a>
+            </div>
+          </div>
+        ` : ''}
+        ${query && hasTagDefinitions && !filteredCategories.length ? html`
+          <div class="px-4 py-3 text-sm text-gray-500">No tags found.</div>
         ` : ''}
       </div>
     `;
@@ -826,7 +921,7 @@ class FilterChips extends LitElement {
             </div>
           </div>
           <div class="mt-1 text-[11px] text-gray-500">
-            Show items missing positive permatags in selected coverage rules.
+            Show items missing positive permatags in selected coverage rules. Show items that have no tags at all for each category.
           </div>
         </div>
         <div
@@ -888,6 +983,43 @@ class FilterChips extends LitElement {
                   type="button"
                 >
                   ${option.label}
+                </button>
+              `;
+            })}
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  _renderSourceSelector() {
+    const currentValue = this._normalizeSourceProviderValue(
+      (this.activeFilters || []).find((filter) => filter.type === 'source')?.value
+    );
+    const counts = this._getSourceProviderCounts();
+    const totalCount = Number(this.imageStats?.image_count || 0);
+    const options = this._getSourceOptionsWithCounts();
+    return html`
+      <div class="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-50 min-w-[260px] max-w-[360px]">
+        <div class="p-4">
+          <div class="text-sm font-semibold text-gray-700 mb-3">Source</div>
+          <div class="space-y-2">
+            ${options.map((option) => {
+              const normalizedOption = this._normalizeSourceProviderValue(option.value);
+              const isActive = option.value === 'all'
+                ? !currentValue
+                : normalizedOption === currentValue;
+              const optionCount = option.value === 'all'
+                ? totalCount
+                : Number(counts[normalizedOption] || 0);
+              return html`
+                <button
+                  class=${`w-full flex items-center justify-between gap-3 text-left px-3 py-2 border rounded-lg text-sm transition-colors ${isActive ? 'bg-blue-50 border-blue-300 text-blue-800' : 'hover:bg-gray-50 border-gray-200 text-gray-700'}`}
+                  @click=${() => this._handleSourceSelect(option.value)}
+                  type="button"
+                >
+                  <span>${option.label}</span>
+                  <span class="text-xs opacity-75">${optionCount.toLocaleString('en-US')}</span>
                 </button>
               `;
             })}
@@ -1176,7 +1308,7 @@ class FilterChips extends LitElement {
                                     <button
                                       class="text-blue-600 hover:text-blue-800"
                                       @click=${(e) => { e.stopPropagation(); this._handleKeywordRemove(category, keyword); }}
-                                      aria-label="Remove keyword"
+                                      aria-label="Remove tag"
                                     >
                                       ×
                                     </button>

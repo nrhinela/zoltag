@@ -38,7 +38,7 @@ class KeywordDropdown extends LitElement {
   constructor() {
     super();
     this.value = '';
-    this.placeholder = 'Select a keyword...';
+    this.placeholder = 'Select a Tag...';
     this.tagStatsBySource = {};
     this.activeCurateTagSource = 'permatags';
     this.keywords = [];
@@ -228,7 +228,7 @@ class KeywordDropdown extends LitElement {
         ${prependOptions.map((opt, index) => html`
           <div
             class=${this.prependOptionsEmphasized
-              ? `px-4 py-2 cursor-pointer ${index === prependOptions.length - 1 ? 'border-b border-gray-100' : 'border-b border-gray-50'} hover:bg-gray-100 transition-colors font-semibold text-gray-800`
+              ? `px-4 py-3 cursor-pointer ${index === prependOptions.length - 1 ? 'border-b border-gray-100' : 'border-b border-gray-50'} hover:bg-blue-100 transition-colors text-lg font-extrabold tracking-tight text-blue-900 bg-blue-50`
               : `px-4 py-2 cursor-pointer ${index === prependOptions.length - 1 ? 'border-b border-gray-100' : 'border-b border-gray-50'} hover:bg-gray-100 transition-colors`}
             @click=${() => this._selectValue(String(opt?.value || ''))}
           >

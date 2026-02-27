@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import mimetypes
+import uuid as _uuid_module
 from datetime import datetime
 from typing import Any, Callable, Dict, Optional
+
+import httpx
 
 from sqlalchemy.orm import Session
 
@@ -134,6 +137,143 @@ def _entry_from_dropbox_raw(entry: Any) -> ProviderEntry:
     )
 
 
+def _create_asset_record_only(
+    *,
+    db: Session,
+    tenant: Tenant,
+    entry: ProviderEntry,
+    provider: StorageProvider,
+    thumbnail_bucket: Any = None,
+    provider_id: Optional[str] = None,
+    reprocess_existing: bool = False,
+    log: Optional[Callable[[str], None]] = None,
+) -> ProcessResult:
+    """Create Asset + ImageMetadata without downloading file bytes (YouTube, etc.)."""
+    provider_uuid = _uuid_module.UUID(str(provider_id)) if provider_id else None
+    existing = (
+        db.query(ImageMetadata)
+        .join(Asset, Asset.id == ImageMetadata.asset_id)
+        .filter(
+            tenant_column_filter(ImageMetadata, tenant),
+            tenant_column_filter(Asset, tenant),
+            Asset.source_provider == provider.provider_name,
+            Asset.source_key == entry.source_key,
+            *([Asset.provider_id == provider_uuid] if provider_uuid is not None else []),
+        )
+        .order_by(ImageMetadata.id.asc())
+        .first()
+    )
+    if existing and not reprocess_existing:
+        return ProcessResult(status="skipped", image_id=existing.id)
+
+    asset = (
+        db.query(Asset)
+        .filter(
+            tenant_column_filter(Asset, tenant),
+            Asset.source_provider == provider.provider_name,
+            Asset.source_key == entry.source_key,
+            *([Asset.provider_id == provider_uuid] if provider_uuid is not None else []),
+        )
+        .order_by(Asset.created_at.asc(), Asset.id.asc())
+        .first()
+    )
+    # Placeholder CDN URL satisfies the DB NOT NULL constraint before we attempt GCS upload
+    cdn_thumbnail_url = (
+        f"https://i.ytimg.com/vi/{entry.source_key}/hqdefault.jpg"
+        if provider.provider_name == "youtube" and entry.source_key
+        else None
+    )
+    if asset is None:
+        asset = assign_tenant_scope(Asset(
+            filename=entry.name,
+            source_provider=provider.provider_name,
+            source_key=entry.source_key,
+            source_rev=entry.revision,
+            source_display_path=entry.display_path or entry.source_key,
+            thumbnail_key=cdn_thumbnail_url,
+            provider_id=provider_uuid,
+            media_type="video",
+            mime_type=entry.mime_type,
+        ), tenant)
+        db.add(asset)
+        db.flush()
+    else:
+        asset.filename = entry.name or asset.filename
+        asset.source_display_path = entry.display_path or entry.source_key
+        if entry.revision:
+            asset.source_rev = entry.revision
+        if cdn_thumbnail_url and not asset.thumbnail_key:
+            asset.thumbnail_key = cdn_thumbnail_url
+
+    # Download YouTube CDN thumbnail and store in GCS so AI features work
+    if cdn_thumbnail_url and thumbnail_bucket is not None:
+        try:
+            gcs_key = tenant.get_asset_thumbnail_key(str(asset.id), "default-256.jpg")
+            blob = thumbnail_bucket.blob(gcs_key)
+            if not blob.exists():
+                # Try known YouTube thumbnail variants in descending quality; some videos only expose webp.
+                thumb_bytes = None
+                thumb_content_type = "image/jpeg"
+                selected_cdn_url = None
+                failed_attempts: list[str] = []
+                source_key = str(entry.source_key or "").strip()
+                jpg_variants = ("maxresdefault", "sddefault", "hqdefault", "mqdefault", "default", "0")
+                webp_variants = ("maxresdefault", "sddefault", "hqdefault", "mqdefault", "default")
+                candidates = [
+                    *(f"https://i.ytimg.com/vi/{source_key}/{variant}.jpg" for variant in jpg_variants),
+                    *(f"https://i.ytimg.com/vi_webp/{source_key}/{variant}.webp" for variant in webp_variants),
+                ]
+                request_headers = {"User-Agent": "Mozilla/5.0 (compatible; zoltag-sync/1.0)"}
+                with httpx.Client(timeout=15, follow_redirects=True, headers=request_headers) as client:
+                    for url in candidates:
+                        resp = client.get(url)
+                        if resp.status_code != 200 or not resp.content:
+                            failed_attempts.append(f"{url.rsplit('/', 1)[-1]}:{resp.status_code}")
+                            continue
+                        content_type = str(resp.headers.get("content-type") or "").lower()
+                        if content_type and "image" not in content_type:
+                            failed_attempts.append(f"{url.rsplit('/', 1)[-1]}:content-type={content_type}")
+                            continue
+                        thumb_bytes = resp.content
+                        if content_type:
+                            thumb_content_type = content_type
+                        selected_cdn_url = url
+                        break
+                if thumb_bytes:
+                    blob.cache_control = "public, max-age=31536000, immutable"
+                    blob.upload_from_string(thumb_bytes, content_type=thumb_content_type)
+                    _log(log, f"[Sync] YouTube thumbnail uploaded to GCS: {gcs_key}")
+                    asset.thumbnail_key = gcs_key
+                else:
+                    detail = f" (attempts: {', '.join(failed_attempts[:6])})" if failed_attempts else ""
+                    _log(log, f"[Sync] YouTube thumbnail not available for {entry.source_key}{detail}")
+                    # Keep CDN URL fallback when GCS upload is unavailable; do not point to missing GCS object.
+                    asset.thumbnail_key = selected_cdn_url or cdn_thumbnail_url
+            else:
+                _log(log, f"[Sync] YouTube thumbnail already in GCS: {gcs_key}")
+                asset.thumbnail_key = gcs_key
+        except Exception as exc:
+            # Non-fatal: CDN URL fallback remains in thumbnail_key
+            _log(log, f"[Sync] YouTube thumbnail GCS upload failed for {entry.source_key}: {exc}")
+
+    metadata = existing or assign_tenant_scope(ImageMetadata(), tenant)
+    metadata.asset_id = asset.id
+    assign_tenant_scope(metadata, tenant)
+    metadata.filename = entry.name
+    metadata.file_size = entry.size
+    metadata.content_hash = entry.content_hash
+    metadata.modified_time = entry.modified_time
+    metadata.dropbox_properties = None
+
+    if existing is None:
+        db.add(metadata)
+    db.commit()
+    db.refresh(metadata)
+
+    _log(log, f"[Sync] {provider.provider_name} metadata-only record created for {entry.source_key}")
+    return ProcessResult(status="processed", image_id=metadata.id)
+
+
 def process_storage_entry(
     *,
     db: Session,
@@ -146,6 +286,7 @@ def process_storage_entry(
     model_type: str = "siglip",
     keyword_models: Optional[Dict[str, Any]] = None,
     reprocess_existing: bool = False,
+    provider_id: Optional[str] = None,
     log: Optional[Callable[[str], None]] = None,
 ) -> ProcessResult:
     """Process a provider entry into Asset + ImageMetadata."""
@@ -153,6 +294,10 @@ def process_storage_entry(
     _ = keyword_to_category
     _ = model_type
     _ = keyword_models
+
+    # YouTube videos cannot be downloaded — create metadata-only record.
+    if getattr(entry, "no_download", False) or entry.mime_type == "video/youtube":
+        return _create_asset_record_only(db=db, tenant=tenant, entry=entry, provider=provider, thumbnail_bucket=thumbnail_bucket, provider_id=provider_id, reprocess_existing=reprocess_existing, log=log)
 
     processor = ImageProcessor()
     video_processor = VideoProcessor(thumbnail_size=(settings.thumbnail_size, settings.thumbnail_size))
@@ -268,6 +413,7 @@ def process_storage_entry(
     camera_model = parse_exif_str(get_exif_value(exif, "Model"))
     lens_model = parse_exif_str(get_exif_value(exif, "LensModel", "Lens"))
 
+    provider_uuid = _uuid_module.UUID(str(provider_id)) if provider_id else None
     existing = (
         db.query(ImageMetadata)
         .join(Asset, Asset.id == ImageMetadata.asset_id)
@@ -276,6 +422,7 @@ def process_storage_entry(
             tenant_column_filter(Asset, tenant),
             Asset.source_provider == provider.provider_name,
             Asset.source_key == entry.source_key,
+            *([Asset.provider_id == provider_uuid] if provider_uuid is not None else []),
         )
         .order_by(ImageMetadata.id.asc())
         .first()
@@ -294,6 +441,7 @@ def process_storage_entry(
             tenant_column_filter(Asset, tenant),
             Asset.source_provider == provider.provider_name,
             Asset.source_key == entry.source_key,
+            *([Asset.provider_id == provider_uuid] if provider_uuid is not None else []),
         )
         .order_by(Asset.created_at.asc(), Asset.id.asc())
         .first()
@@ -304,12 +452,14 @@ def process_storage_entry(
             source_provider=provider.provider_name,
             source_key=entry.source_key,
             source_rev=entry.revision,
+            source_display_path=entry.display_path or entry.source_key,
             thumbnail_key=f"legacy:{tenant.secret_scope}:{entry.source_key}:thumbnail",
             media_type=media_type,
             mime_type=mime_type,
             width=features.get("width"),
             height=features.get("height"),
             duration_ms=duration_ms if media_type == "video" else None,
+            provider_id=provider_uuid,
         ), tenant)
         db.add(asset)
         db.flush()
@@ -329,6 +479,8 @@ def process_storage_entry(
             current_duration = _to_int(getattr(asset, "duration_ms", None))
             if current_duration is None or abs(current_duration - duration_ms) > 100:
                 asset.duration_ms = duration_ms
+        # Always update so re-syncs populate/correct the display path
+        asset.source_display_path = entry.display_path or entry.source_key
 
     thumbnail_key = tenant.get_asset_thumbnail_key(str(asset.id), "default-256.jpg")
     blob = thumbnail_bucket.blob(thumbnail_key)
@@ -404,6 +556,7 @@ def process_dropbox_entry(
     model_type: str = "siglip",
     keyword_models: Optional[Dict[str, Any]] = None,
     reprocess_existing: bool = False,
+    provider_id: Optional[str] = None,
     log: Optional[Callable[[str], None]] = None,
 ) -> ProcessResult:
     """Backward-compatible Dropbox wrapper for existing callers."""
@@ -420,5 +573,6 @@ def process_dropbox_entry(
         model_type=model_type,
         keyword_models=keyword_models,
         reprocess_existing=reprocess_existing,
+        provider_id=provider_id,
         log=log,
     )

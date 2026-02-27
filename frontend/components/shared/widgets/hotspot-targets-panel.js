@@ -131,7 +131,7 @@ export class HotspotTargetsPanel extends LitElement {
             .value=${selectedValue}
             @change=${(e) => this._emit('hotspot-keyword-change', { targetId: target.id, value: e.target.value })}
           >
-            <option value="">Select keyword…</option>
+            <option value="">Select Tag…</option>
             ${keywordsByCategory.map(([category, keywords]) => html`
               <optgroup label="${category}">
                 ${keywords.map((kw) => html`

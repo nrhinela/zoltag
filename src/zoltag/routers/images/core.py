@@ -1302,6 +1302,8 @@ async def list_images(
     hide_zero_rating: bool = False,
     reviewed: Optional[bool] = None,
     media_type: Optional[str] = None,
+    source_provider: Optional[str] = None,
+    source: Optional[str] = None,
     dropbox_path_prefix: Optional[str] = None,
     filename_query: Optional[str] = None,
     text_query: Optional[str] = None,
@@ -1368,6 +1370,7 @@ async def list_images(
     media_type_value = (media_type or "all").strip().lower()
     if media_type_value not in {"all", "image", "video"}:
         media_type_value = "all"
+    resolved_source_provider = source_provider if str(source_provider or "").strip() else source
     text_query_value = str(text_query or "").strip()
     normalized_text_query, text_query_tokens = _tokenize_text_query(text_query_value)
     vector_weight_value, lexical_weight_value = _normalize_hybrid_weights(
@@ -1395,6 +1398,7 @@ async def list_images(
         hide_zero_rating=hide_zero_rating,
         reviewed=reviewed,
         media_type=None if media_type_value == "all" else media_type_value,
+        source_provider=resolved_source_provider,
         dropbox_path_prefix=dropbox_path_prefix,
         filename_query=filename_query,
         permatag_keyword=permatag_keyword,
@@ -1989,6 +1993,7 @@ async def list_images(
                     hide_zero_rating=True,
                     reviewed=reviewed,
                     media_type=None if media_type_value == "all" else media_type_value,
+                    source_provider=resolved_source_provider,
                     dropbox_path_prefix=dropbox_path_prefix,
                     filename_query=filename_query,
                     permatag_keyword=similarity_keyword,
@@ -2014,6 +2019,7 @@ async def list_images(
                     hide_zero_rating=True,
                     reviewed=reviewed,
                     media_type=None if media_type_value == "all" else media_type_value,
+                    source_provider=resolved_source_provider,
                     dropbox_path_prefix=dropbox_path_prefix,
                     filename_query=filename_query,
                     permatag_keyword=similarity_keyword,
@@ -2939,6 +2945,7 @@ async def get_image(
         "dropbox_path": storage_info.source_key,
         "source_provider": storage_info.source_provider,
         "source_key": storage_info.source_key,
+        "source_display_path": storage_info.source_display_path,
         "source_rev": storage_info.source_rev,
         "source_url": _build_source_url(storage_info, tenant, image),
         "camera_make": image.camera_make,

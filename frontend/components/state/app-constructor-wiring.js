@@ -115,6 +115,7 @@ function wireFilterPanelListeners(host) {
     host.curateDropboxPathPrefix = filters.dropboxPathPrefix || '';
     host.curateFilenameQuery = filters.filenameQuery || '';
     host.curateTextQuery = filters.textQuery || '';
+    host.curateSourceProvider = filters.sourceProvider || filters.source_provider || filters.source || '';
     host.curateListId = filters.listId || '';
     host.curateListExcludeId = filters.listExcludeId || '';
     host.curateCategoryFilterOperator = filters.categoryFilterOperator ?? undefined;
@@ -148,6 +149,7 @@ function wireFilterPanelListeners(host) {
     host.curateAuditDropboxPathPrefix = filters.dropboxPathPrefix || '';
     host.curateAuditFilenameQuery = filters.filenameQuery || '';
     host.curateAuditTextQuery = filters.textQuery || '';
+    host.curateAuditSourceProvider = filters.sourceProvider || filters.source_provider || filters.source || '';
     if (filters.permatagKeyword !== undefined) {
       host.curateAuditKeyword = filters.permatagKeyword || '';
     }

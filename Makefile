@@ -3,7 +3,7 @@
 .PHONY: help install test lint format clean deploy migrate dev worker dev-backend dev-frontend dev-css dev-clean
 .PHONY: db-dev db-prod db-migrate-prod db-migrate-dev db-create-migration
 .PHONY: deploy-api deploy-worker deploy-all status logs-api logs-worker env-check
-.PHONY: train-and-recompute daily verify-video-rollout
+.PHONY: train-and-recompute daily sync-gdrive sync-youtube verify-video-rollout
 
 # Default environment
 ENV ?= prod
@@ -379,6 +379,24 @@ daily:
 	zoltag sync-dropbox --tenant-id $(TENANT_ID)
 	@echo "Running train-and-recompute..."
 	$(MAKE) train-and-recompute TENANT_ID=$(TENANT_ID)
+
+sync-gdrive:
+	@if [ -z "$(TENANT_ID)" ]; then \
+		echo "ERROR: TENANT_ID is required"; \
+		echo "Usage: make sync-gdrive TENANT_ID=<tenant_id>"; \
+		exit 1; \
+	fi
+	@echo "Syncing Google Drive for tenant: $(TENANT_ID)..."
+	zoltag sync-gdrive --tenant-id $(TENANT_ID)
+
+sync-youtube:
+	@if [ -z "$(TENANT_ID)" ]; then \
+		echo "ERROR: TENANT_ID is required"; \
+		echo "Usage: make sync-youtube TENANT_ID=<tenant_id>"; \
+		exit 1; \
+	fi
+	@echo "Syncing YouTube for tenant: $(TENANT_ID)..."
+	zoltag sync-youtube --tenant-id $(TENANT_ID) $(if $(REPROCESS),--reprocess-existing,)
 
 verify-video-rollout:
 	@echo "Running video-thumbnail rollout verification..."

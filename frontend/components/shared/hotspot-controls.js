@@ -21,7 +21,7 @@ export function renderHotspotConfig(hotspot, index, options, handlers) {
           .value=${hotspot.keyword || ''}
           @change=${(e) => onChange(index, 'keyword', e.target.value)}
         >
-          <option value="">Select keyword...</option>
+          <option value="">Select Tag...</option>
           ${keywords.map((kw) => html`
             <option value=${kw.value}>${kw.label}</option>
           `)}

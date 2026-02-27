@@ -124,10 +124,12 @@ export function renderAuxTabContent(host, { formatCurateDate }) {
     'list.edit.shared',
     ['admin'],
   );
+  const hasDefinedTags = Array.isArray(host.keywords)
+    && host.keywords.some((kw) => String(kw?.keyword || '').trim().length > 0);
   const unavailableLibraryTabs = [
-    !canReadKeywords ? 'Keywords' : null,
+    !canReadKeywords ? 'Tags' : null,
     !canViewUsers ? 'Users' : null,
-    !canViewAudit ? 'Audit' : null,
+    !canViewAudit ? 'User Activity' : null,
     !canManageProviders ? 'Providers' : null,
     !canManageJobs ? 'Jobs' : null,
     !canManageTemplates ? 'Templates' : null,
@@ -161,10 +163,10 @@ export function renderAuxTabContent(host, { formatCurateDate }) {
             <button
               class="admin-subtab ${librarySubTab === 'keywords' ? 'active' : ''}"
               ?disabled=${!canReadKeywords}
-              title=${canReadKeywords ? 'View and manage keywords' : 'Requires keywords.read permission'}
+              title=${canReadKeywords ? 'View and manage tags' : 'Requires keywords.read permission'}
               @click=${() => host.activeLibrarySubTab = 'keywords'}
             >
-              Keywords
+              Tags
             </button>
             <button
               class="admin-subtab ${librarySubTab === 'users' ? 'active' : ''}"
@@ -177,10 +179,10 @@ export function renderAuxTabContent(host, { formatCurateDate }) {
             <button
               class="admin-subtab ${librarySubTab === 'audit' ? 'active' : ''}"
               ?disabled=${!canViewAudit}
-              title=${canViewAudit ? 'View tenant activity' : 'Requires tenant.audit.view permission'}
+              title=${canViewAudit ? 'View user activity' : 'Requires tenant.audit.view permission'}
               @click=${() => host.activeLibrarySubTab = 'audit'}
             >
-              Audit
+              User Activity
             </button>
             <button
               class="admin-subtab ${librarySubTab === 'providers' ? 'active' : ''}"
@@ -254,13 +256,13 @@ export function renderAuxTabContent(host, { formatCurateDate }) {
             <tagging-admin
               .tenant=${host.tenant}
               .readOnly=${!canEditKeywords}
-              @open-upload-modal=${host._handleOpenUploadModal}
             ></tagging-admin>
           ` : html``}
           ${host.activeAdminSubTab === 'people' ? html`
             <person-manager
               .tenant=${host.tenant}
               .readOnly=${!canEditKeywords}
+              .hasDefinedTags=${hasDefinedTags}
             ></person-manager>
           ` : html``}
         ` : html``}
@@ -342,6 +344,7 @@ export function renderAuxTabContent(host, { formatCurateDate }) {
         <person-manager
           .tenant=${host.tenant}
           .readOnly=${!canEditKeywords}
+          .hasDefinedTags=${hasDefinedTags}
         ></person-manager>
       </div>
     ` : html``}
@@ -351,7 +354,6 @@ export function renderAuxTabContent(host, { formatCurateDate }) {
         <tagging-admin
           .tenant=${host.tenant}
           .readOnly=${!canEditKeywords}
-          @open-upload-modal=${host._handleOpenUploadModal}
         ></tagging-admin>
       </div>
     ` : html``}

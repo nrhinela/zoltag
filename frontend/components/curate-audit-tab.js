@@ -79,6 +79,7 @@ export class CurateAuditTab extends LitElement {
     dropboxPathPrefix: { type: String },
     filenameQuery: { type: String },
     textQuery: { type: String },
+    sourceProvider: { type: String },
     dropboxFolders: { type: Array },
     offset: { type: Number },
     limit: { type: Number },
@@ -144,6 +145,7 @@ export class CurateAuditTab extends LitElement {
     this.dropboxPathPrefix = '';
     this.filenameQuery = '';
     this.textQuery = '';
+    this.sourceProvider = '';
     this.dropboxFolders = [];
     this.offset = 0;
     this.limit = 100;
@@ -1101,6 +1103,25 @@ export class CurateAuditTab extends LitElement {
       });
     }
 
+    if (this.sourceProvider) {
+      const normalized = String(this.sourceProvider || '').trim().toLowerCase();
+      const displayValue = normalized === 'dropbox'
+        ? 'Dropbox'
+        : (normalized === 'gdrive'
+          ? 'Google Drive'
+          : (normalized === 'youtube'
+            ? 'YouTube'
+            : (normalized === 'managed'
+              ? 'Managed Uploads'
+              : (normalized.charAt(0).toUpperCase() + normalized.slice(1)))));
+      filters.push({
+        type: 'source',
+        value: normalized,
+        displayLabel: 'Source',
+        displayValue,
+      });
+    }
+
     const mediaType = String(this.mediaType || 'all').trim().toLowerCase();
     if (mediaType === 'image' || mediaType === 'video') {
       filters.push({
@@ -1494,7 +1515,7 @@ export class CurateAuditTab extends LitElement {
       ? (this.mode === 'missing'
         ? `Possible matches for "${this.keyword}"`
         : `Images with "${this.keyword}"`)
-      : 'Select a keyword';
+      : 'Select a Tag';
     const selectedKeywordValue = this._getAuditKeywordDropdownValue();
     const selectedModeValue = this.mode === 'existing' ? 'existing' : 'missing';
     const modeOptions = [
@@ -1535,7 +1556,7 @@ export class CurateAuditTab extends LitElement {
                 <div class="space-y-1">
                   <div class="text-[11px] font-semibold uppercase tracking-wide text-gray-500 inline-flex items-center gap-2">
                     <span class="inline-flex h-5 w-5 items-center justify-center rounded-full border border-blue-300 bg-blue-100 text-[10px] font-bold text-blue-700">1</span>
-                    <span>Select a Topic</span>
+                    <span>Select a Tag</span>
                   </div>
                   <keyword-dropdown
                     .value=${selectedKeywordValue}
@@ -1881,7 +1902,7 @@ export class CurateAuditTab extends LitElement {
                                 .value=${selectedValue}
                                 @change=${(event) => this._handleHotspotKeywordChange(event, target.id)}
                               >
-                                <option value="">Select keyword…</option>
+                                <option value="">Select Tag…</option>
                                 ${keywordOptions.map(([category, keywords]) => html`
                                   <optgroup label="${category}">
                                     ${keywords.map((kw) => {
@@ -1983,7 +2004,7 @@ export class CurateAuditTab extends LitElement {
         ` : html`
           <div class="bg-white rounded-lg shadow p-6 text-sm text-gray-600 text-center">
             <p class="max-w-3xl mx-auto">
-              This screen lets you scan your collection for all images tagged to a Keyword. You can verify existing images, and look for images that should have it. Select a keyword to proceed.
+              This screen lets you scan your collection for all images tagged to a Tag. You can verify existing images, and look for images that should have it. Select a Tag to proceed.
             </p>
           </div>
         `}

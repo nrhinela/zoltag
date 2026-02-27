@@ -5,6 +5,7 @@ import {
   getKeywords,
   getKeywordCategories,
   createKeyword,
+  createKeywordCategory,
   addPermatag,
   getFullImage,
   getImagePlayback,
@@ -175,7 +176,8 @@ class ImageEditor extends LitElement {
       background: #f3f4f6;
       flex-shrink: 0;
     }
-    .image-wrap video {
+    .image-wrap video,
+    .image-wrap iframe {
       width: 100%;
       height: 100%;
       max-width: 100%;
@@ -217,7 +219,8 @@ class ImageEditor extends LitElement {
       max-height: 100%;
       object-fit: contain;
     }
-    .image-wrap.image-full video {
+    .image-wrap.image-full video,
+    .image-wrap.image-full iframe {
       width: 100%;
       height: 100%;
       max-width: 100%;
@@ -443,9 +446,16 @@ class ImageEditor extends LitElement {
       gap: 8px;
       background: #f8fafc;
     }
+    .new-keyword-heading {
+      color: #1f2937;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+    }
     .new-keyword-grid {
       display: grid;
-      grid-template-columns: minmax(130px, 0.9fr) minmax(170px, 1.1fr);
+      grid-template-columns: 1fr;
       gap: 8px;
     }
     .new-keyword-input,
@@ -1421,9 +1431,11 @@ class ImageEditor extends LitElement {
     commentDeletingId: { type: String },
     commentFormOpen: { type: Boolean },
     commentSortDesc: { type: Boolean },
+    showTimeTravelHelp: { type: Boolean, state: true },
     keywordCategories: { type: Array },
     newKeywordMode: { type: Boolean },
     newKeywordCategoryId: { type: [Number, String] },
+    newKeywordCategoryName: { type: String },
     newKeywordName: { type: String },
     newKeywordSaving: { type: Boolean },
     newKeywordError: { type: String },
@@ -1498,9 +1510,11 @@ class ImageEditor extends LitElement {
     this.commentDeletingId = '';
     this.commentFormOpen = false;
     this.commentSortDesc = true;
+    this.showTimeTravelHelp = false;
     this.keywordCategories = [];
     this.newKeywordMode = false;
     this.newKeywordCategoryId = '';
+    this.newKeywordCategoryName = '';
     this.newKeywordName = '';
     this.newKeywordSaving = false;
     this.newKeywordError = '';
@@ -1523,6 +1537,7 @@ class ImageEditor extends LitElement {
   updated(changedProperties) {
     if (changedProperties.has('image')) {
       this._resetFullImage();
+      this.showTimeTravelHelp = false;
     }
     if (changedProperties.has('open') || changedProperties.has('image')) {
       this._syncBodyScrollLock();
@@ -1674,8 +1689,12 @@ class ImageEditor extends LitElement {
     try {
       this.keywordsByCategory = await getKeywords(this.tenant, { source: 'permatags', includePeople: true });
       this.keywordCategories = await getKeywordCategories(this.tenant);
-      if (this.newKeywordMode && !this.newKeywordCategoryId && Array.isArray(this.keywordCategories) && this.keywordCategories.length) {
-        this.newKeywordCategoryId = String(this.keywordCategories[0].id);
+      if (this.newKeywordMode && !this.newKeywordCategoryId) {
+        if (Array.isArray(this.keywordCategories) && this.keywordCategories.length) {
+          this.newKeywordCategoryId = String(this.keywordCategories[0].id);
+        } else {
+          this.newKeywordCategoryId = '__new_category__';
+        }
       }
     } catch (error) {
       console.error('ImageEditor: fetchKeywords failed', error);
@@ -1724,6 +1743,7 @@ class ImageEditor extends LitElement {
   _scheduleSimilarWarmup() {
     if (!this.details?.id || !this.tenant) return;
     if (this.activeTab === 'similar') return;
+    if (this._inferMediaType(this.details) === 'video') return;
     const warmupKey = this._getSimilarWarmupKey();
     if (!warmupKey || similarWarmupCompleted.has(warmupKey) || similarWarmupInflight.has(warmupKey)) {
       return;
@@ -2231,6 +2251,7 @@ class ImageEditor extends LitElement {
   async _loadVideoPlayback({ force = false } = {}) {
     if (!this.details || !this.tenant) return;
     if (!this._isVideoMedia(this.details)) return;
+    if (this._isYouTube(this.details)) return;  // YouTube embeds via IFrame, no playback URL needed
     if (!force && (this.videoPlaybackLoading || this.videoPlaybackUrl)) return;
 
     this._cancelVideoPlaybackLoad();
@@ -2515,6 +2536,8 @@ class ImageEditor extends LitElement {
     const categories = this._getKeywordCategoriesSorted();
     if (!this.newKeywordCategoryId && categories.length) {
       this.newKeywordCategoryId = String(categories[0].id);
+    } else if (!this.newKeywordCategoryId) {
+      this.newKeywordCategoryId = '__new_category__';
     }
   }
 
@@ -2522,6 +2545,7 @@ class ImageEditor extends LitElement {
     this.newKeywordMode = false;
     this.newKeywordName = '';
     this.newKeywordCategoryId = '';
+    this.newKeywordCategoryName = '';
     this.newKeywordError = '';
     this.tagInput = '';
     this.tagCategory = '';
@@ -2596,34 +2620,69 @@ class ImageEditor extends LitElement {
     }
     const keyword = String(this.newKeywordName || '').trim();
     const categoryId = String(this.newKeywordCategoryId || '').trim();
-    if (!categoryId) {
-      this.newKeywordError = 'Select a category.';
-      console.warn('ImageEditor: save tag aborted - missing category selection');
-      return;
-    }
+    const newCategoryName = String(this.newKeywordCategoryName || '').trim();
     if (!keyword) {
       this.newKeywordError = 'Enter a keyword name.';
       console.warn('ImageEditor: save tag aborted - missing keyword name');
       return;
     }
     const categories = this._getKeywordCategoriesSorted();
-    if (!categories.length) {
-      this.newKeywordError = 'No categories are available for this tenant.';
-      console.warn('ImageEditor: save tag aborted - no keyword categories loaded');
+
+    let resolvedCategoryId = '';
+    let resolvedCategoryName = '';
+    const createNewCategory = categoryId === '__new_category__';
+
+    if (createNewCategory) {
+      if (!newCategoryName) {
+        this.newKeywordError = 'Enter a new category name.';
+        console.warn('ImageEditor: save tag aborted - missing new category name');
+        return;
+      }
+      const normalizedNewName = newCategoryName.toLowerCase();
+      const existingCategory = categories.find(
+        (cat) => String(cat?.name || '').trim().toLowerCase() === normalizedNewName
+      );
+      if (existingCategory?.id) {
+        resolvedCategoryId = String(existingCategory.id);
+        resolvedCategoryName = String(existingCategory.name || newCategoryName).trim() || newCategoryName;
+      } else {
+        const createdCategory = await createKeywordCategory(this.tenant, { name: newCategoryName });
+        const createdCategoryId = createdCategory?.id;
+        if (!createdCategoryId && createdCategoryId !== 0) {
+          throw new Error('Failed to create category.');
+        }
+        resolvedCategoryId = String(createdCategoryId);
+        resolvedCategoryName = String(createdCategory?.name || newCategoryName).trim() || newCategoryName;
+      }
+    } else {
+      if (!categoryId) {
+        this.newKeywordError = 'Select or create a category.';
+        console.warn('ImageEditor: save tag aborted - missing category selection');
+        return;
+      }
+      const selectedCategory = categories.find((cat) => String(cat?.id) === categoryId);
+      if (!selectedCategory) {
+        this.newKeywordError = 'Selected category no longer exists.';
+        console.warn('ImageEditor: save tag aborted - selected category not found', { categoryId });
+        return;
+      }
+      resolvedCategoryId = categoryId;
+      resolvedCategoryName = String(selectedCategory.name || 'Uncategorized');
+    }
+
+    const parsedCategoryId = Number(resolvedCategoryId);
+    if (!Number.isFinite(parsedCategoryId)) {
+      this.newKeywordError = 'Invalid category selected.';
+      console.warn('ImageEditor: save tag aborted - invalid category id', { resolvedCategoryId });
       return;
     }
-    const selectedCategory = categories.find((cat) => String(cat?.id) === categoryId);
-    if (!selectedCategory) {
-      this.newKeywordError = 'Selected category no longer exists.';
-      console.warn('ImageEditor: save tag aborted - selected category not found', { categoryId });
-      return;
-    }
+
     this.newKeywordSaving = true;
     this.newKeywordError = '';
     try {
-      await createKeyword(this.tenant, Number(categoryId), { keyword });
+      await createKeyword(this.tenant, parsedCategoryId, { keyword });
       await this.fetchKeywords();
-      await this._applyPermatag(keyword, selectedCategory.name || 'Uncategorized');
+      await this._applyPermatag(keyword, resolvedCategoryName || 'Uncategorized');
       this._cancelNewKeywordMode();
     } catch (error) {
       this.newKeywordError = error?.message || 'Failed to create keyword.';
@@ -2735,6 +2794,10 @@ class ImageEditor extends LitElement {
     return this._inferMediaType(details) === 'video';
   }
 
+  _isYouTube(details = this.details) {
+    return this._normalizeSourceProvider(details?.source_provider) === 'youtube';
+  }
+
   _formatMediaType(details = this.details) {
     return this._isVideoMedia(details) ? 'Video' : 'Photo';
   }
@@ -2756,6 +2819,7 @@ class ImageEditor extends LitElement {
     if (!normalized) return 'Unknown';
     if (normalized === 'dropbox') return 'Dropbox';
     if (normalized === 'gdrive') return 'Google Drive';
+    if (normalized === 'youtube') return 'YouTube';
     if (normalized === 'managed') return 'Managed Storage';
     if (normalized === 'local') return 'Local Storage';
     if (normalized === 'flickr') return 'Flickr';
@@ -2769,6 +2833,13 @@ class ImageEditor extends LitElement {
   }
 
   _getSourcePath(details = this.details) {
+    if (details?.source_display_path) {
+      return details.source_display_path;
+    }
+    const provider = (details?.source_provider || '').toLowerCase();
+    if (provider === 'gdrive' || provider === 'google-drive' || provider === 'google_drive') {
+      return details?.filename || details?.source_key || '';
+    }
     return details?.source_key || details?.dropbox_path || '';
   }
 
@@ -2780,6 +2851,9 @@ class ImageEditor extends LitElement {
     const sourceProvider = this._normalizeSourceProvider(details?.source_provider);
     if (!sourceProvider || sourceProvider === 'dropbox') {
       return this._buildDropboxHref(sourcePath);
+    }
+    if (sourceProvider === 'youtube' && details?.source_key) {
+      return `https://www.youtube.com/watch?v=${details.source_key}`;
     }
     if (sourcePath.startsWith('http://') || sourcePath.startsWith('https://')) {
       return sourcePath;
@@ -2820,13 +2894,30 @@ class ImageEditor extends LitElement {
               value: html`
                 <span>${this.details?.id ?? 'Unknown'}</span>
                 ${this.details?.id ? html`
-                  <button
-                    type="button"
-                    class="ml-2 text-blue-600 hover:text-blue-700 underline underline-offset-2"
-                    @click=${this._handleZoomToPhoto}
-                  >
-                    [time travel]
-                  </button>
+                  <span class="inline-flex items-center flex-wrap">
+                    <button
+                      type="button"
+                      class="ml-2 text-blue-600 hover:text-blue-700 underline underline-offset-2"
+                      @click=${this._handleZoomToPhoto}
+                    >
+                      [time travel]
+                    </button>
+                    <button
+                      type="button"
+                      class="ml-1 inline-flex h-5 w-5 items-center justify-center rounded-full border border-gray-300 text-[11px] font-semibold text-gray-600 hover:bg-gray-100"
+                      aria-label="What is time travel?"
+                      aria-expanded=${this.showTimeTravelHelp ? 'true' : 'false'}
+                      title="What is time travel?"
+                      @click=${this._toggleTimeTravelHelp}
+                    >
+                      ?
+                    </button>
+                    ${this.showTimeTravelHelp ? html`
+                      <span class="w-full mt-1 ml-2 text-xs text-gray-600">
+                        Time travel zooms you to photos or videos taken around this time.
+                      </span>
+                    ` : html``}
+                  </span>
                 ` : html``}
               `,
             },
@@ -2878,12 +2969,17 @@ class ImageEditor extends LitElement {
             ` : html``}
             ${this.newKeywordMode ? html`
               <div class="new-keyword-panel">
+                <div class="new-keyword-heading">New Tag</div>
                 <div class="new-keyword-grid">
                   <select
                     class="new-keyword-select"
                     .value=${String(this.newKeywordCategoryId || '')}
                     @change=${(event) => {
-                      this.newKeywordCategoryId = String(event?.target?.value || '');
+                      const nextCategoryId = String(event?.target?.value || '');
+                      this.newKeywordCategoryId = nextCategoryId;
+                      if (nextCategoryId !== '__new_category__') {
+                        this.newKeywordCategoryName = '';
+                      }
                       this.newKeywordError = '';
                     }}
                   >
@@ -2891,11 +2987,24 @@ class ImageEditor extends LitElement {
                     ${sortedKeywordCategories.map((cat) => html`
                       <option value=${String(cat.id)}>${cat.name}</option>
                     `)}
+                    <option value="__new_category__">+ Create new category...</option>
                   </select>
+                  ${String(this.newKeywordCategoryId || '') === '__new_category__' ? html`
+                    <input
+                      type="text"
+                      class="new-keyword-input"
+                      placeholder="New category name"
+                      .value=${this.newKeywordCategoryName}
+                      @input=${(event) => {
+                        this.newKeywordCategoryName = String(event?.target?.value || '');
+                        this.newKeywordError = '';
+                      }}
+                    />
+                  ` : html``}
                   <input
                     type="text"
                     class="new-keyword-input"
-                    placeholder="Keyword name"
+                    placeholder="New Tag Name"
                     .value=${this.newKeywordName}
                     @input=${(event) => {
                       this.newKeywordName = String(event?.target?.value || '');
@@ -3023,6 +3132,12 @@ class ImageEditor extends LitElement {
       bubbles: true,
       composed: true,
     }));
+  }
+
+  _toggleTimeTravelHelp(event) {
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
+    this.showTimeTravelHelp = !this.showTimeTravelHelp;
   }
 
   _renderTagsReadOnly() {
@@ -3885,8 +4000,9 @@ class ImageEditor extends LitElement {
       ? this.fullImageUrl
       : (this.details.thumbnail_url || `/api/v1/images/${this.details.id}/thumbnail`);
     const isVideoMedia = this._isVideoMedia(this.details);
+    const isYouTube = this._isYouTube(this.details);
     const videoDuration = isVideoMedia ? this._formatMediaDuration(this.details) : '';
-    const showVideoStatus = isVideoMedia && (
+    const showVideoStatus = isVideoMedia && !isYouTube && (
       (this.videoPlaybackLoading && !this.videoPlaybackUrl)
       || !!this.videoPlaybackError
     );
@@ -3924,7 +4040,16 @@ class ImageEditor extends LitElement {
       <div class="panel-body">
         <div class="image-wrap image-full">
           <div class="${imageContainerClasses}">
-            ${isVideoMedia ? html`
+            ${isYouTube ? html`
+              <iframe
+                class="image-video-player youtube-embed"
+                src="https://www.youtube.com/embed/${this.details.source_key}"
+                title="${this.details.filename || 'YouTube video'}"
+                frameborder="0"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                allowfullscreen
+              ></iframe>
+            ` : isVideoMedia ? html`
               ${this.videoPlaybackUrl ? html`
                 <video
                   class="image-video-player"

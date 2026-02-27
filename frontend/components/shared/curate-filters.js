@@ -15,6 +15,7 @@ export function buildCurateFilterObject(state, overrides = {}) {
     dropboxPathPrefix: overrides.dropboxPathPrefix !== undefined ? overrides.dropboxPathPrefix : state.curateDropboxPathPrefix,
     filenameQuery: overrides.filenameQuery !== undefined ? overrides.filenameQuery : state.curateFilenameQuery,
     textQuery: overrides.textQuery !== undefined ? overrides.textQuery : state.curateTextQuery,
+    sourceProvider: overrides.sourceProvider !== undefined ? overrides.sourceProvider : state.curateSourceProvider,
     noPermatagCategories: overrides.noPermatagCategories !== undefined
       ? overrides.noPermatagCategories
       : (Array.isArray(state.curateNoPermatagCategories) ? state.curateNoPermatagCategories : []),
@@ -82,6 +83,7 @@ export function buildCurateAuditFilterObject(state, overrides = {}) {
     dropboxPathPrefix: overrides.dropboxPathPrefix !== undefined ? overrides.dropboxPathPrefix : state.curateAuditDropboxPathPrefix,
     filenameQuery: overrides.filenameQuery !== undefined ? overrides.filenameQuery : state.curateAuditFilenameQuery,
     textQuery: overrides.textQuery !== undefined ? overrides.textQuery : state.curateAuditTextQuery,
+    sourceProvider: overrides.sourceProvider !== undefined ? overrides.sourceProvider : state.curateAuditSourceProvider,
   };
 
   if (useAiSort) {

@@ -110,6 +110,10 @@ class Settings(BaseSettings):
     supabase_service_role_key: Optional[str] = None
     oauth_state_secret: Optional[str] = None
 
+    # Google Drive connector (shared across all tenants)
+    zoltag_gdrive_connector_client_id: Optional[str] = None
+    zoltag_gdrive_connector_secret: Optional[str] = None
+
     # Gemini API (Natural language search)
     gemini_api_key: Optional[str] = None
     gemini_model: str = "gemini-2.5-flash"

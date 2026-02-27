@@ -344,6 +344,7 @@ export class SearchTab extends LitElement {
       filenameQuery: '',
       textQuery: '',
       mediaType: 'all',
+      sourceProvider: '',
       permatagPositiveMissing: false,
       noPermatagCategories: [],
       noPermatagUntagged: false,
@@ -402,6 +403,7 @@ export class SearchTab extends LitElement {
       orderBy: base.orderBy,
       hideZeroRating: base.hideZeroRating,
       mediaType: base.mediaType || 'all',
+      sourceProvider: base.sourceProvider || '',
     });
   }
 
@@ -476,8 +478,13 @@ export class SearchTab extends LitElement {
         this.searchDragStartIndex = null;
         this.searchDragEndIndex = null;
       }
+      const hadLongPress = this._searchLongPressTriggered;
       this._searchBrowseGroupKey = null;
       this._searchHistoryGroupKey = null;
+      this._searchSelectionHandlers.cancelPressState();
+      if (hadLongPress) {
+        this._searchSuppressClick = true;
+      }
     };
 
     document.addEventListener('pointerdown', this._handleSearchGlobalPointerDown);
@@ -757,7 +764,7 @@ export class SearchTab extends LitElement {
   _getRightPanelTools() {
     if (this.canCurate) {
       return [
-        { id: 'tags', label: 'Keyword' },
+        { id: 'tags', label: 'Tag' },
         { id: 'ratings', label: 'Ratings' },
         { id: 'lists', label: 'Lists' },
       ];
@@ -1856,6 +1863,25 @@ export class SearchTab extends LitElement {
     this._syncChipFiltersFromFilterState(filters);
   }
 
+  _normalizeSourceProviderFilter(value) {
+    const normalized = String(value ?? '').trim().toLowerCase();
+    if (!normalized || normalized === 'all') return '';
+    if (normalized === 'google') return 'gdrive';
+    if (normalized === 'google-drive' || normalized === 'google_drive' || normalized === 'drive') return 'gdrive';
+    if (normalized === 'yt') return 'youtube';
+    return normalized;
+  }
+
+  _formatSourceProviderLabel(value) {
+    const normalized = this._normalizeSourceProviderFilter(value);
+    if (!normalized) return '';
+    if (normalized === 'dropbox') return 'Dropbox';
+    if (normalized === 'gdrive') return 'Google Drive';
+    if (normalized === 'youtube') return 'YouTube';
+    if (normalized === 'managed') return 'Managed Uploads';
+    return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+  }
+
   _syncChipFiltersFromFilterState(filters) {
     const nextChips = [];
     if (this.searchSubTab === 'results') {
@@ -1972,6 +1998,20 @@ export class SearchTab extends LitElement {
         value: mediaType,
         displayLabel: 'Media',
         displayValue: mediaType === 'video' ? 'Videos' : 'Photos',
+      });
+    }
+
+    const sourceProvider = this._normalizeSourceProviderFilter(
+      filters.sourceProvider
+      ?? filters.source_provider
+      ?? filters.source
+    );
+    if (sourceProvider) {
+      nextChips.push({
+        type: 'source',
+        value: sourceProvider,
+        displayLabel: 'Source',
+        displayValue: this._formatSourceProviderLabel(sourceProvider),
       });
     }
 
@@ -2240,6 +2280,7 @@ export class SearchTab extends LitElement {
       textQuery: shouldPreserveTextSearch
         ? String(currentFilters.textQuery || this.vectorstoreQuery || '').trim()
         : '',
+      sourceProvider: '',
       noPermatagCategories: [],
       noPermatagUntagged: false,
       noPermatagOperator: 'AND',
@@ -2302,6 +2343,9 @@ export class SearchTab extends LitElement {
           break;
         case 'media':
           searchFilters.mediaType = chip.value === 'video' ? 'video' : (chip.value === 'image' ? 'image' : 'all');
+          break;
+        case 'source':
+          searchFilters.sourceProvider = this._normalizeSourceProviderFilter(chip.value);
           break;
         case 'tag_coverage': {
           const categories = Array.isArray(chip.noPermatagCategories)
@@ -2697,13 +2741,13 @@ export class SearchTab extends LitElement {
       },
       {
         key: 'chips',
-        label: 'Browse Keywords',
-        subtitle: 'See your entire tag vocabulary at a glance. Click any keyword to explore all images with that tag.',
+        label: 'Browse Tags',
+        subtitle: 'See your entire tag vocabulary at a glance. Click any tag to explore all images with that tag.',
         accentClass: 'home-cta-keywords',
         glyphChar: 'K',
         iconSvg: html`<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.2 7.2h15.6M6.5 12h11M8.6 16.8h6.8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path><circle cx="5.2" cy="7.2" r="1" fill="currentColor"></circle><circle cx="7.6" cy="12" r="1" fill="currentColor"></circle><circle cx="9.7" cy="16.8" r="1" fill="currentColor"></circle></svg>`,
         metrics: [
-          { label: 'Keywords', value: keywordCount },
+          { label: 'Tags', value: keywordCount },
         ],
       },
     ];
@@ -2968,13 +3012,13 @@ export class SearchTab extends LitElement {
                 class="curate-subtab ${this.searchSubTab === 'browse-by-folder' ? 'active' : ''}"
                 @click=${() => this._handleSearchSubTabChange('browse-by-folder')}
               >
-                Browse by Folder
+                Browse by Source Folder
               </button>
               <button
                 class="curate-subtab ${this.searchSubTab === 'chips' ? 'active' : ''}"
                 @click=${() => this._handleSearchSubTabChange('chips')}
               >
-                Browse by Keyword
+                Browse by Tag
               </button>
               <button
                 class="curate-subtab ${this.searchSubTab === 'results' ? 'active' : ''}"
@@ -3126,7 +3170,7 @@ export class SearchTab extends LitElement {
               .keywords=${this.keywords}
               .imageStats=${this.imageStats}
               .activeFilters=${this.searchChipFilters}
-              .availableFilterTypes=${['keyword', 'rating', 'media', 'folder', 'list', 'tag_coverage', 'filename', 'text_search']}
+              .availableFilterTypes=${['keyword', 'rating', 'source', 'media', 'folder', 'list', 'tag_coverage', 'filename', 'text_search']}
               .hideFiltersSection=${Boolean(this.searchSimilarityAssetUuid)}
               .dropboxFolders=${this.searchDropboxOptions || []}
               .lists=${this.searchLists}
@@ -3236,7 +3280,7 @@ export class SearchTab extends LitElement {
               <div class="curate-pane" @dragover=${this._handleSearchAvailableDragOver} @drop=${this._handleSearchAvailableDrop}>
                 <div class="curate-pane-header">
                   <div class="curate-pane-header-row">
-                    <span class="text-sm font-semibold">Browse by Folder</span>
+                    <span class="text-sm font-semibold">Browse by Source Folder</span>
                   </div>
                 </div>
                 <div class="curate-pane-body">

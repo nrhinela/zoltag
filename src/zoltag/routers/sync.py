@@ -31,13 +31,29 @@ def _normalize_provider(provider: str) -> str:
     return value
 
 
+def _patch_tenant_from_record(tenant: Tenant, provider_name: str, record) -> None:
+    """Patch tenant OAuth token secret attrs from a specific provider integration record."""
+    if provider_name == "dropbox":
+        tenant.dropbox_token_secret = record.dropbox_token_secret_name
+    elif provider_name == "gdrive":
+        tenant.gdrive_token_secret = record.gdrive_token_secret_name
+        tenant.gdrive_client_secret = record.gdrive_client_secret_name
+        sync_folders = list((record.config_json or {}).get("sync_folders") or [])
+        tenant.gdrive_sync_folders = sync_folders
+    elif provider_name == "youtube":
+        tenant.youtube_token_secret = record.youtube_token_secret_name
+        sync_folders = list((record.config_json or {}).get("sync_folders") or [])
+        tenant.youtube_sync_folders = sync_folders
+
+
 @router.post("/sync", response_model=dict)
 async def trigger_sync(
     tenant: Tenant = Depends(get_tenant),
     db: Session = Depends(get_db),
     model: str = Query("siglip", description="'clip' or 'siglip'"),
     reprocess_existing: bool = Query(False, description="Reprocess entries even if already ingested"),
-    provider: str | None = Query(None, description="Storage provider: dropbox or gdrive"),
+    provider: str | None = Query(None, description="Storage provider: dropbox, gdrive, or youtube"),
+    provider_id: str | None = Query(None, description="Specific provider integration UUID (omit for primary)"),
 ):
     """Trigger one-item sync for the requested storage provider."""
     try:
@@ -47,29 +63,66 @@ async def trigger_sync(
             raise HTTPException(status_code=404, detail="Tenant not found")
 
         repo = TenantIntegrationRepository(db)
-        runtime_context = repo.build_runtime_context(tenant_row)
-        configured_provider = str(runtime_context.get("default_source_provider") or "dropbox").strip().lower()
-        provider_name = _normalize_provider(provider or configured_provider)
-        if provider_name == "dropbox":
-            dropbox_runtime = runtime_context.get("dropbox") or {}
-            if not bool(dropbox_runtime.get("is_active")):
+
+        # When provider_id is given, resolve the specific integration record directly.
+        # Otherwise fall back to the primary record via build_runtime_context.
+        record_provider_id: str | None = None
+        if provider_id:
+            try:
+                specific_record = repo.get_provider_record_by_id(tenant_row, provider_id)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+            if specific_record is None:
+                raise HTTPException(status_code=404, detail="Provider integration not found")
+            if not specific_record.is_active:
                 raise HTTPException(
                     status_code=409,
-                    detail="Dropbox integration is inactive. Activate this provider in Admin -> Providers before syncing.",
+                    detail="Provider integration is inactive. Activate this provider in Admin -> Providers before syncing.",
                 )
-            sync_folders = normalize_sync_folders(dropbox_runtime.get("sync_folders"))
-            tenant.dropbox_oauth_mode = str(dropbox_runtime.get("oauth_mode") or "").strip().lower() or None
-            tenant.dropbox_sync_folders = list(sync_folders)
+            provider_name = _normalize_provider(specific_record.provider_type)
+            sync_folders = normalize_sync_folders(list((specific_record.config_json or {}).get("sync_folders") or []))
+            record_provider_id = str(specific_record.id)
+            # Patch tenant with this record's token secret so create_storage_provider can find it
+            _patch_tenant_from_record(tenant, provider_name, specific_record)
         else:
-            gdrive_runtime = runtime_context.get("gdrive") or {}
-            if not bool(gdrive_runtime.get("is_active")):
-                raise HTTPException(
-                    status_code=409,
-                    detail="Google Drive integration is inactive. Activate this provider in Admin -> Providers before syncing.",
-                )
-            sync_folders = normalize_sync_folders(gdrive_runtime.get("sync_folders"))
-            tenant.gdrive_sync_folders = list(sync_folders)
-        tenant.default_source_provider = configured_provider
+            runtime_context = repo.build_runtime_context(tenant_row)
+            configured_provider = str(runtime_context.get("default_source_provider") or "dropbox").strip().lower()
+            provider_name = _normalize_provider(provider or configured_provider)
+            if provider_name == "dropbox":
+                dropbox_runtime = runtime_context.get("dropbox") or {}
+                if not bool(dropbox_runtime.get("is_active")):
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Dropbox integration is inactive. Activate this provider in Admin -> Providers before syncing.",
+                    )
+                sync_folders = normalize_sync_folders(dropbox_runtime.get("sync_folders"))
+                tenant.dropbox_oauth_mode = str(dropbox_runtime.get("oauth_mode") or "").strip().lower() or None
+                tenant.dropbox_sync_folders = list(sync_folders)
+            elif provider_name == "youtube":
+                youtube_runtime = runtime_context.get("youtube") or {}
+                if not bool(youtube_runtime.get("is_active")):
+                    raise HTTPException(
+                        status_code=409,
+                        detail="YouTube integration is inactive. Activate this provider in Admin -> Providers before syncing.",
+                    )
+                sync_folders = normalize_sync_folders(youtube_runtime.get("sync_folders"))
+                tenant.youtube_sync_folders = list(sync_folders)
+            else:
+                gdrive_runtime = runtime_context.get("gdrive") or {}
+                if not bool(gdrive_runtime.get("is_active")):
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Google Drive integration is inactive. Activate this provider in Admin -> Providers before syncing.",
+                    )
+                sync_folders = normalize_sync_folders(gdrive_runtime.get("sync_folders"))
+                tenant.gdrive_sync_folders = list(sync_folders)
+            tenant.default_source_provider = configured_provider
+            # Capture record_provider_id for the primary record
+            try:
+                primary_record = repo.get_provider_record(tenant_row, provider_name)
+                record_provider_id = str(primary_record.id) if primary_record.id else None
+            except Exception:
+                record_provider_id = None
 
         try:
             storage_provider = create_storage_provider(provider_name, tenant=tenant, get_secret=get_secret)
@@ -78,18 +131,21 @@ async def trigger_sync(
         except Exception as exc:
             raise HTTPException(status_code=400, detail=f"Unable to initialize {provider_name} provider: {exc}")
 
+        import uuid as _uuid_mod
+        _pid_uuid = _uuid_mod.UUID(record_provider_id) if record_provider_id else None
+
         processed_paths = set()
         if not reprocess_existing:
-            processed_paths = set(
-                row[0]
-                for row in db.query(Asset.source_key)
+            q = (
+                db.query(Asset.source_key)
                 .filter(
                     tenant_column_filter(Asset, tenant),
                     Asset.source_provider == storage_provider.provider_name,
                 )
-                .all()
-                if row[0]
             )
+            if _pid_uuid is not None:
+                q = q.filter(Asset.provider_id == _pid_uuid)
+            processed_paths = set(row[0] for row in q.all() if row[0])
 
         try:
             file_entries = storage_provider.list_image_entries(sync_folders=sync_folders)
@@ -124,6 +180,7 @@ async def trigger_sync(
                 provider=storage_provider,
                 thumbnail_bucket=thumbnail_bucket,
                 reprocess_existing=reprocess_existing,
+                provider_id=record_provider_id,
                 log=print,
             )
         except Exception as exc:

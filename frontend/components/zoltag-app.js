@@ -86,6 +86,7 @@ class ZoltagApp extends LitElement {
       curateDropboxPathPrefix: { type: String },
       curateFilenameQuery: { type: String },
       curateTextQuery: { type: String },
+      curateSourceProvider: { type: String },
       curateListId: { type: [Number, String] },
       curateListExcludeId: { type: [Number, String] },
       curateImages: { type: Array },
@@ -136,6 +137,7 @@ class ZoltagApp extends LitElement {
       curateAuditDropboxPathPrefix: { type: String },
       curateAuditFilenameQuery: { type: String },
       curateAuditTextQuery: { type: String },
+      curateAuditSourceProvider: { type: String },
       curateHomeRefreshing: { type: Boolean },
       curateStatsLoading: { type: Boolean },
       homeSubTab: { type: String },
@@ -244,7 +246,7 @@ class ZoltagApp extends LitElement {
       { key: 'search', label: 'Explore', subtitle: 'Explore and save results', icon: 'fa-magnifying-glass' },
       { key: 'curate', label: 'Curate', subtitle: 'Build stories and sets', icon: 'fa-star' },
       { key: 'lists', label: 'Lists', subtitle: 'Organize saved sets', icon: 'fa-list' },
-      { key: 'admin', label: 'Keywords', subtitle: 'Manage configuration', icon: 'fa-cog' },
+      { key: 'admin', label: 'Tags', subtitle: 'Manage configuration', icon: 'fa-cog' },
       { key: 'system', label: 'System', subtitle: 'Manage pipelines and tasks', icon: 'fa-sliders' },
     ].filter((card) => canCurate || card.key !== 'curate');
     this._curateLeftOrder = this.curateImages.map((img) => img.id);

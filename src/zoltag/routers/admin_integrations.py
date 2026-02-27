@@ -6,9 +6,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from zoltag.auth.dependencies import require_tenant_permission_from_header
+from zoltag.settings import settings as _settings
 from zoltag.auth.models import UserProfile
 from zoltag.database import get_db
-from zoltag.dependencies import delete_secret, get_secret, get_tenant
+from zoltag.dependencies import delete_secret, get_secret, get_tenant, store_secret
 from zoltag.dropbox_oauth import (
     inspect_dropbox_oauth_config,
     load_dropbox_oauth_credentials,
@@ -27,6 +28,7 @@ router = APIRouter(prefix="/api/v1/admin/integrations", tags=["admin-integration
 _PROVIDER_LABELS = {
     "dropbox": "Dropbox",
     "gdrive": "Google Drive",
+    "youtube": "YouTube",
 }
 
 
@@ -61,25 +63,17 @@ def _resolve_redirect_origin_from_request(request: Request, payload: dict | None
 
 
 def _build_dropbox_status(record) -> dict:
-    token_value = _read_secret_value(record.dropbox_token_secret_name)
-    connected = bool(token_value)
     config_json = record.config_json or {}
+    connected = bool(config_json.get("token_stored"))
+    issues: list[str] = []
 
     if connected:
         selected_mode = "managed"
         can_connect = True
-        issues: list[str] = []
     else:
-        oauth_config = inspect_dropbox_oauth_config(
-            tenant_id=record.secret_scope,
-            tenant_app_key=str(config_json.get("app_key") or "").strip(),
-            tenant_app_secret_name=record.dropbox_app_secret_name,
-            get_secret=get_secret,
-            selection_mode="managed_only",
-        )
-        selected_mode = oauth_config["selected_mode"]
-        can_connect = bool(oauth_config["can_connect"])
-        issues = oauth_config["issues"]
+        app_key = str(config_json.get("app_key") or "").strip()
+        selected_mode = "managed" if app_key else "managed"
+        can_connect = True  # managed OAuth is always available
 
     return {
         "id": "dropbox",  # Backward-compatible provider id used by existing UI/API callers.
@@ -98,22 +92,34 @@ def _build_dropbox_status(record) -> dict:
     }
 
 
+def _gdrive_env_client_id() -> str:
+    return str(_settings.zoltag_gdrive_connector_client_id or "").strip()
+
+
+def _gdrive_env_client_secret() -> str:
+    return str(_settings.zoltag_gdrive_connector_secret or "").strip()
+
+
+def _resolve_gdrive_credentials(record) -> tuple[str, str]:
+    """Return (client_id, client_secret), preferring env vars over per-record config."""
+    config_json = record.config_json or {}
+    client_id = _gdrive_env_client_id() or str(config_json.get("client_id") or "").strip()
+    client_secret = _gdrive_env_client_secret() or _read_secret_value(record.gdrive_client_secret_name) or ""
+    return client_id, client_secret
+
+
 def _build_gdrive_status(record) -> dict:
     config_json = record.config_json or {}
-    client_id = str(config_json.get("client_id") or "").strip()
-    token_secret_name = record.gdrive_token_secret_name
-    client_secret_name = record.gdrive_client_secret_name
-    connected = bool(_read_secret_value(token_secret_name))
+    connected = bool(config_json.get("token_stored"))
+    client_id = _gdrive_env_client_id() or str(config_json.get("client_id") or "").strip()
 
     issues: list[str] = []
-    if connected:
-        can_connect = True
-    else:
+    if not connected:
         if not client_id:
             issues.append("gdrive_client_id_not_configured")
-        if not _read_secret_value(client_secret_name):
+        if not _gdrive_env_client_secret() and not config_json.get("client_secret_name"):
             issues.append("gdrive_client_secret_not_configured")
-        can_connect = bool(client_id and not issues)
+    can_connect = bool(client_id and not issues)
 
     return {
         "id": "gdrive",  # Backward-compatible provider id used by existing UI/API callers.
@@ -127,6 +133,29 @@ def _build_gdrive_status(record) -> dict:
         "mode": "tenant_oauth",
         "issues": issues,
         "sync_folder_key": "gdrive_sync_folders",
+        "sync_folders": normalize_sync_folders(config_json.get("sync_folders")),
+        "source": record.source,
+    }
+
+
+def _build_youtube_status(record) -> dict:
+    config_json = record.config_json or {}
+    connected = bool(config_json.get("token_stored"))
+    client_id = str(_settings.zoltag_gdrive_connector_client_id or "").strip()
+    can_connect = bool(client_id)
+    config_json = record.config_json or {}
+    return {
+        "id": "youtube",
+        "provider_id": record.id,
+        "provider_type": "youtube",
+        "label": _PROVIDER_LABELS["youtube"],
+        "integration_label": record.label,
+        "is_active": bool(record.is_active),
+        "connected": connected,
+        "can_connect": can_connect,
+        "mode": "tenant_oauth",
+        "issues": [],
+        "sync_folder_key": "youtube_sync_folders",
         "sync_folders": normalize_sync_folders(config_json.get("sync_folders")),
         "source": record.source,
     }
@@ -250,27 +279,63 @@ def _dropbox_relative_depth(path_display: str, root_path: str) -> int:
     return max(0, _dropbox_path_depth(path_display) - _dropbox_path_depth(root_path))
 
 
+def _backfill_token_stored(all_records, repo, tenant_row, db: Session) -> None:
+    """One-time migration: for records missing token_stored in config_json, probe Secret Manager
+    and persist the flag so future requests are fast."""
+    _secret_fn = {"dropbox": lambda r: r.dropbox_token_secret_name,
+                  "gdrive": lambda r: r.gdrive_token_secret_name,
+                  "youtube": lambda r: r.youtube_token_secret_name}
+    dirty = False
+    for rec in all_records:
+        if "token_stored" in (rec.config_json or {}):
+            continue
+        fn = _secret_fn.get(rec.provider_type)
+        if not fn:
+            continue
+        has_token = bool(_read_secret_value(fn(rec)))
+        repo.update_provider(tenant_row, rec.provider_type, provider_id=rec.id,
+                             config_json_patch={"token_stored": has_token})
+        dirty = True
+    if dirty:
+        db.commit()
+
+
 def _build_integrations_status(tenant_row: TenantModel, db: Session) -> dict:
     repo = TenantIntegrationRepository(db)
+    # Fetch all records once; backfill token_stored flag if absent (one-time migration cost).
+    all_records = repo.list_provider_records(tenant_row, include_inactive=True, include_placeholders=False)
+    _backfill_token_stored(all_records, repo, tenant_row, db)
+    # Re-fetch after potential commit so config_json reflects updated flags.
+    all_records = repo.list_provider_records(tenant_row, include_inactive=True, include_placeholders=False)
     primary_records = repo.get_primary_records_by_type(tenant_row)
 
     dropbox_status = _build_dropbox_status(primary_records["dropbox"])
     gdrive_status = _build_gdrive_status(primary_records["gdrive"])
-    providers = [dropbox_status, gdrive_status]
+    youtube_status = _build_youtube_status(primary_records["youtube"])
+    providers = [dropbox_status, gdrive_status, youtube_status]
 
     default_provider = repo.resolve_default_sync_provider(tenant_row)
     default_source_provider = default_provider.provider_type
     provider_configs = {provider["id"]: provider for provider in providers}
 
+    # Build status for every instance (all rows, not just primary).
+    _build_fn = {"dropbox": _build_dropbox_status, "gdrive": _build_gdrive_status, "youtube": _build_youtube_status}
+    all_providers_status = []
+    for rec in all_records:
+        fn = _build_fn.get(rec.provider_type)
+        if fn:
+            all_providers_status.append(fn(rec))
+
     active_provider = provider_configs.get(default_source_provider) or dropbox_status
     return {
         "tenant_id": str(tenant_row.id),
         "default_source_provider": default_source_provider,
-        "providers": providers,
+        "providers": all_providers_status,
         "provider_configs": provider_configs,
         "source_provider_options": [
             {"id": "dropbox", "label": _PROVIDER_LABELS["dropbox"]},
             {"id": "gdrive", "label": _PROVIDER_LABELS["gdrive"]},
+            {"id": "youtube", "label": _PROVIDER_LABELS["youtube"]},
         ],
         # Backward-compatible fields for existing UI callers.
         "source_provider": default_source_provider,
@@ -499,6 +564,70 @@ async def list_live_dropbox_folders(
         raise HTTPException(status_code=502, detail=f"Dropbox folder lookup failed: {exc}")
 
 
+@router.get("/gdrive/folders")
+async def list_live_gdrive_folders(
+    parent_id: str | None = None,
+    q: str | None = None,
+    limit: int = 200,
+    ids: str | None = None,
+    tenant: Tenant = Depends(get_tenant),
+    _admin: UserProfile = Depends(require_tenant_permission_from_header("provider.view")),
+    db: Session = Depends(get_db),
+):
+    """Live Google Drive folder browser for provider sync-folder selection.
+
+    Pass ``ids`` as a comma-separated list of folder IDs to resolve their names
+    instead of listing children of a parent.
+    """
+    from zoltag.storage.providers import GoogleDriveStorageProvider
+
+    tenant_row = db.query(TenantModel).filter(TenantModel.id == tenant.id).first()
+    if not tenant_row:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    repo = TenantIntegrationRepository(db)
+    record = repo.get_provider_record(tenant_row, "gdrive")
+    if not record:
+        raise HTTPException(status_code=404, detail="Google Drive provider not found")
+
+    refresh_token = _read_secret_value(record.gdrive_token_secret_name)
+    if not refresh_token:
+        raise HTTPException(status_code=400, detail="Google Drive is not connected for this tenant")
+
+    client_id, client_secret = _resolve_gdrive_credentials(record)
+    if not client_id or not client_secret:
+        raise HTTPException(status_code=400, detail="Google Drive client credentials are not configured for this tenant")
+
+    try:
+        provider = GoogleDriveStorageProvider(
+            client_id=client_id,
+            client_secret=client_secret,
+            refresh_token=refresh_token,
+        )
+
+        # Resolve specific folder IDs to names (used to label configured sync folders).
+        if ids:
+            folder_ids = [fid.strip() for fid in ids.split(",") if fid.strip()]
+            folders = []
+            for fid in folder_ids:
+                try:
+                    meta = provider._get_file(fid)
+                    folders.append({"id": fid, "name": meta.get("name") or fid})
+                except Exception:
+                    folders.append({"id": fid, "name": fid})
+            return {"folders": folders, "has_more": False, "parent_id": None}
+
+        folders, has_more = provider.list_folders(parent_id=parent_id or None, limit=max(1, min(int(limit), 1000)))
+        if q:
+            q_lower = q.strip().lower()
+            folders = [f for f in folders if q_lower in f["name"].lower()]
+        return {"folders": folders, "has_more": has_more, "parent_id": parent_id}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Google Drive folder lookup failed: {exc}")
+
+
 @router.get("/dropbox/status")
 async def get_dropbox_status(
     tenant: Tenant = Depends(get_tenant),
@@ -687,6 +816,18 @@ async def start_provider_connect(
             "mode": gdrive_status["mode"],
         }
 
+    if record.provider_type == "youtube":
+        youtube_status = _build_youtube_status(record)
+        if not youtube_status["can_connect"]:
+            raise HTTPException(status_code=400, detail="YouTube OAuth is not configured for this provider")
+        return {
+            "tenant_id": tenant.id,
+            "provider": "youtube",
+            "provider_id": provider_id,
+            "authorize_url": f"/oauth/youtube/authorize?{urlencode(query_payload)}",
+            "mode": youtube_status["mode"],
+        }
+
     raise HTTPException(status_code=400, detail="Unsupported provider type")
 
 
@@ -711,8 +852,18 @@ async def disconnect_provider_connection(
         delete_secret(record.dropbox_token_secret_name)
     elif record.provider_type == "gdrive":
         delete_secret(record.gdrive_token_secret_name)
+    elif record.provider_type == "youtube":
+        delete_secret(record.youtube_token_secret_name)
     else:
         raise HTTPException(status_code=400, detail="Unsupported provider type")
+
+    repo.update_provider(
+        tenant_row,
+        record.provider_type,
+        provider_id=provider_id,
+        config_json_patch={"token_stored": False},
+    )
+    db.commit()
 
     return {
         "tenant_id": tenant.id,
@@ -775,6 +926,54 @@ async def update_dropbox_config(
     status = _build_integrations_status(refreshed, db)
     status["status"] = "updated"
     return status
+
+
+@router.patch("/gdrive/credentials")
+async def update_gdrive_credentials(
+    payload: dict,
+    tenant: Tenant = Depends(get_tenant),
+    _admin: UserProfile = Depends(require_tenant_permission_from_header("provider.manage")),
+    db: Session = Depends(get_db),
+):
+    """Save Google Drive OAuth client_id and client_secret for a tenant."""
+    tenant_row = db.query(TenantModel).filter(TenantModel.id == tenant.id).first()
+    if not tenant_row:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    client_id = str(payload.get("client_id") or "").strip()
+    client_secret = str(payload.get("client_secret") or "").strip()
+    if not client_id or not client_secret:
+        raise HTTPException(status_code=400, detail="client_id and client_secret are required")
+
+    repo = TenantIntegrationRepository(db)
+    record = repo.get_provider_record(tenant_row, "gdrive")
+
+    # Persist client_id in config_json; write client_secret to Secret Manager.
+    repo.update_provider(tenant_row, "gdrive", client_id=client_id)
+    db.commit()
+
+    # Re-fetch to get updated record with correct secret name.
+    record = repo.get_provider_record(tenant_row, "gdrive")
+    store_secret(record.gdrive_client_secret_name, client_secret)
+
+    refreshed = db.query(TenantModel).filter(TenantModel.id == tenant.id).first()
+    status = _build_integrations_status(refreshed, db)
+    status["status"] = "updated"
+    return status
+
+
+@router.patch("/gdrive/config")
+async def update_gdrive_config(
+    payload: dict,
+    tenant: Tenant = Depends(get_tenant),
+    _admin: UserProfile = Depends(require_tenant_permission_from_header("provider.manage")),
+    db: Session = Depends(get_db),
+):
+    """Update Google Drive integration sync source and provider sync folders."""
+    # Ensure provider is always set to gdrive so the shared handler routes correctly.
+    merged = dict(payload)
+    merged.setdefault("provider", "gdrive")
+    return await update_dropbox_config(merged, tenant=tenant, _admin=_admin, db=db)
 
 
 @router.post("/dropbox/connect")
@@ -924,3 +1123,116 @@ async def disconnect_gdrive(
         "provider_id": record.id,
         "status": "disconnected",
     }
+
+
+@router.post("/youtube/connect")
+async def start_youtube_connect(
+    request: Request,
+    payload: dict | None = None,
+    tenant: Tenant = Depends(get_tenant),
+    _admin: UserProfile = Depends(require_tenant_permission_from_header("provider.manage")),
+    db: Session = Depends(get_db),
+):
+    """Generate YouTube OAuth authorize URL for redirect-based flow."""
+    tenant_row = db.query(TenantModel).filter(TenantModel.id == tenant.id).first()
+    if not tenant_row:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    repo = TenantIntegrationRepository(db)
+    youtube_record = repo.get_provider_record(tenant_row, "youtube")
+    youtube_status = _build_youtube_status(youtube_record)
+    if not youtube_status["can_connect"]:
+        raise HTTPException(status_code=400, detail="YouTube OAuth is not configured for this tenant")
+
+    requested_return_to = (payload or {}).get("return_to")
+    requested_redirect_origin = _resolve_redirect_origin_from_request(request, payload)
+    return_to = sanitize_return_path(requested_return_to)
+    query_payload = {
+        "tenant": tenant.id,
+        "flow": "redirect",
+        "return_to": return_to,
+    }
+    if youtube_record.id:
+        query_payload["provider_id"] = youtube_record.id
+    if requested_redirect_origin:
+        query_payload["redirect_origin"] = requested_redirect_origin
+    query = urlencode(query_payload)
+
+    return {
+        "tenant_id": tenant.id,
+        "provider": "youtube",
+        "provider_id": youtube_record.id,
+        "authorize_url": f"/oauth/youtube/authorize?{query}",
+        "mode": youtube_status["mode"],
+    }
+
+
+@router.delete("/youtube/connection")
+async def disconnect_youtube(
+    tenant: Tenant = Depends(get_tenant),
+    _admin: UserProfile = Depends(require_tenant_permission_from_header("provider.manage")),
+    db: Session = Depends(get_db),
+):
+    """Disconnect YouTube by deleting tenant refresh token secret."""
+    tenant_row = db.query(TenantModel).filter(TenantModel.id == tenant.id).first()
+    if not tenant_row:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    repo = TenantIntegrationRepository(db)
+    record = repo.get_provider_record(tenant_row, "youtube")
+
+    candidate_secret_names = {
+        str(record.youtube_token_secret_name).strip(),
+        str(getattr(tenant, "youtube_token_secret", None) or "").strip(),
+        f"youtube-token-{tenant.secret_scope}",
+        f"youtube-token-{tenant.id}",
+    }
+    for token_secret_name in candidate_secret_names:
+        if token_secret_name:
+            delete_secret(token_secret_name)
+
+    return {
+        "tenant_id": tenant.id,
+        "provider": "youtube",
+        "provider_id": record.id,
+        "status": "disconnected",
+    }
+
+
+@router.get("/youtube/playlists")
+async def list_live_youtube_playlists(
+    tenant: Tenant = Depends(get_tenant),
+    _admin: UserProfile = Depends(require_tenant_permission_from_header("provider.view")),
+    db: Session = Depends(get_db),
+):
+    """List the authenticated YouTube channel's playlists."""
+    from zoltag.storage.providers import YouTubeStorageProvider
+
+    tenant_row = db.query(TenantModel).filter(TenantModel.id == tenant.id).first()
+    if not tenant_row:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    repo = TenantIntegrationRepository(db)
+    record = repo.get_provider_record(tenant_row, "youtube")
+
+    refresh_token = _read_secret_value(record.youtube_token_secret_name)
+    if not refresh_token:
+        raise HTTPException(status_code=400, detail="YouTube is not connected for this tenant")
+
+    client_id = str(_settings.zoltag_gdrive_connector_client_id or "").strip()
+    client_secret = str(_settings.zoltag_gdrive_connector_secret or "").strip()
+    if not client_id or not client_secret:
+        raise HTTPException(status_code=400, detail="YouTube client credentials are not configured")
+
+    try:
+        provider = YouTubeStorageProvider(
+            client_id=client_id,
+            client_secret=client_secret,
+            refresh_token=refresh_token,
+        )
+        playlists = provider.list_folders()
+        return {"playlists": playlists}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"YouTube playlist lookup failed: {exc}")

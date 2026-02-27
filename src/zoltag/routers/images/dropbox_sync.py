@@ -46,8 +46,8 @@ async def list_dropbox_folders(
     limit: Optional[int] = None,
     db: Session = Depends(get_db)
 ):
-    """List Dropbox folder paths for a tenant, filtered by query."""
-    parent_expr = func.regexp_replace(Asset.source_key, "/[^/]+$", "")
+    """List distinct folder paths across all synced assets (all providers)."""
+    parent_expr = func.regexp_replace(Asset.source_display_path, "/[^/]+$", "")
     folder_expr = func.coalesce(func.nullif(parent_expr, ""), "/")
     query = (
         db.query(folder_expr.label("folder"))
@@ -55,8 +55,8 @@ async def list_dropbox_folders(
         .filter(
             tenant_column_filter(ImageMetadata, tenant),
             tenant_column_filter(Asset, tenant),
-            Asset.source_provider == "dropbox",
-            Asset.source_key.isnot(None),
+            Asset.source_display_path.isnot(None),
+            Asset.source_display_path.notlike("/local/%"),
         )
     )
     if q:
@@ -65,8 +65,7 @@ async def list_dropbox_folders(
     if limit:
         query = query.limit(limit)
     rows = query.all()
-    folders = [row[0] for row in rows]
-    return {"tenant_id": tenant.id, "folders": folders}
+    return {"tenant_id": tenant.id, "folders": [row[0] for row in rows]}
 
 
 @router.post("/images/{image_id}/refresh-metadata", response_model=dict, operation_id="refresh_image_metadata")

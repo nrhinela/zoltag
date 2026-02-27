@@ -6,6 +6,7 @@ from .providers import (
     ProviderMediaMetadata,
     DropboxStorageProvider,
     GoogleDriveStorageProvider,
+    YouTubeStorageProvider,
     ManagedStorageProvider,
     create_storage_provider,
 )
@@ -16,6 +17,7 @@ __all__ = [
     "ProviderMediaMetadata",
     "DropboxStorageProvider",
     "GoogleDriveStorageProvider",
+    "YouTubeStorageProvider",
     "ManagedStorageProvider",
     "create_storage_provider",
 ]

@@ -11,10 +11,11 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from zoltag.metadata import Tenant, TenantProviderIntegration
 
-ALLOWED_PROVIDER_TYPES = ("dropbox", "gdrive")
+ALLOWED_PROVIDER_TYPES = ("dropbox", "gdrive", "youtube")
 DEFAULT_PROVIDER_LABELS = {
     "dropbox": "Default Dropbox",
     "gdrive": "Default Google Drive",
+    "youtube": "Default YouTube",
 }
 
 _UNSET = object()
@@ -26,6 +27,8 @@ def normalize_provider_type(value: str | None) -> str:
         provider = "gdrive"
     if provider in {"dbx"}:
         provider = "dropbox"
+    if provider in {"yt"}:
+        provider = "youtube"
     if provider not in ALLOWED_PROVIDER_TYPES:
         raise ValueError("Invalid provider type")
     return provider
@@ -77,6 +80,10 @@ class ProviderIntegrationRecord:
     def gdrive_token_secret_name(self) -> str:
         return str(self.config_json.get("token_secret_name") or f"gdrive-token-{self.secret_scope}").strip()
 
+    @property
+    def youtube_token_secret_name(self) -> str:
+        return str(self.config_json.get("token_secret_name") or f"youtube-token-{self.secret_scope}").strip()
+
 
 class TenantIntegrationRepository:
     """CRUD repository for provider integration config."""
@@ -95,6 +102,11 @@ class TenantIntegrationRepository:
                 "sync_folders": [],
                 "token_secret_name": f"dropbox-token-{secret_scope}",
                 "app_secret_name": f"dropbox-app-secret-{secret_scope}",
+            }
+        if normalized == "youtube":
+            return {
+                "sync_folders": [],
+                "token_secret_name": f"youtube-token-{secret_scope}",
             }
         return {
             "sync_folders": [],
@@ -588,6 +600,7 @@ class TenantIntegrationRepository:
 
         dropbox_record = primary["dropbox"]
         gdrive_record = primary["gdrive"]
+        youtube_record = primary["youtube"]
 
         return {
             "default_source_provider": default_record.provider_type,
@@ -613,6 +626,15 @@ class TenantIntegrationRepository:
                 "client_id": str(gdrive_record.config_json.get("client_id") or "").strip(),
                 "token_secret_name": gdrive_record.gdrive_token_secret_name,
                 "client_secret_name": gdrive_record.gdrive_client_secret_name,
+            },
+            "youtube": {
+                "provider_id": youtube_record.id,
+                "label": youtube_record.label,
+                "source": youtube_record.source,
+                "is_active": bool(youtube_record.is_active),
+                "secret_scope": youtube_record.secret_scope,
+                "sync_folders": normalize_sync_folders(youtube_record.config_json.get("sync_folders")),
+                "token_secret_name": youtube_record.youtube_token_secret_name,
             },
             "resolution_source": "new_table" if any(record.source == "new_table" for record in records) else "synthetic",
         }

@@ -1,0 +1,164 @@
+Deploying Zoltag to production...
+Project: photocat-483622
+Region: us-central1
+
+COMMIT_SHA=$(git rev-parse --short HEAD) ; \
+	gcloud builds submit --project photocat-483622 --config=cloudbuild.yaml --substitutions=_COMMIT_SHA=$COMMIT_SHA
+Creating temporary archive of 412 file(s) totalling 8.9 MiB before compression.
+Uploading tarball of [.] to [gs://photocat-483622_cloudbuild/source/1772205177.481424-0a32a32cf51a4576a21147f966bc8fa2.tgz]
+Created [https://cloudbuild.googleapis.com/v1/projects/photocat-483622/locations/global/builds/77507710-ecd2-430d-b8db-bf26988eb14f].
+Logs are available at [ https://console.cloud.google.com/cloud-build/builds/77507710-ecd2-430d-b8db-bf26988eb14f?project=978982171858 ].
+Waiting for build to complete. Polling interval: 1 second(s).
+Exception in thread Thread-1:
+Traceback (most recent call last):
+  File "/opt/homebrew/Caskroom/gcloud-cli/549.0.1/google-cloud-sdk/lib/third_party/urllib3/connection.py", line 206, in _new_conn
+    sock = connection.create_connection(
+        (self._dns_host, self.port),
+    ...<3 lines>...
+        google_protocol_id=self.google_protocol_id,
+    )
+  File "/opt/homebrew/Caskroom/gcloud-cli/549.0.1/google-cloud-sdk/lib/third_party/urllib3/util/connection.py", line 62, in create_connection
+    for res in socket.getaddrinfo(host, port, family, socket.SOCK_STREAM):
+               ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.13/3.13.11/Frameworks/Python.framework/Versions/3.13/lib/python3.13/socket.py", line 977, in getaddrinfo
+    for res in _socket.getaddrinfo(host, port, family, type, proto, flags):
+               ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+socket.gaierror: [Errno 8] nodename nor servname provided, or not known
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/opt/homebrew/Caskroom/gcloud-cli/549.0.1/google-cloud-sdk/lib/third_party/urllib3/connectionpool.py", line 787, in urlopen
+    response = self._make_request(
+        conn,
+    ...<10 lines>...
+        **response_kw,
+    )
+  File "/opt/homebrew/Caskroom/gcloud-cli/549.0.1/google-cloud-sdk/lib/third_party/urllib3/connectionpool.py", line 488, in _make_request
+    raise new_e
+  File "/opt/homebrew/Caskroom/gcloud-cli/549.0.1/google-cloud-sdk/lib/third_party/urllib3/connectionpool.py", line 464, in _make_request
+    self._validate_conn(conn)
+    ~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "/opt/homebrew/Caskroom/gcloud-cli/549.0.1/google-cloud-sdk/lib/third_party/urllib3/connectionpool.py", line 1096, in _validate_conn
+    conn.connect()
+    ~~~~~~~~~~~~^^
+  File "/opt/homebrew/Caskroom/gcloud-cli/549.0.1/google-cloud-sdk/lib/third_party/urllib3/connection.py", line 764, in connect
+    self.sock = sock = self._new_conn()
+                       ~~~~~~~~~~~~~~^^
+  File "/opt/homebrew/Caskroom/gcloud-cli/549.0.1/google-cloud-sdk/lib/third_party/urllib3/connection.py", line 214, in _new_conn
+    raise NameResolutionError(self.host, self, e) from e
+urllib3.exceptions.NameResolutionError: HTTPSConnection(host='oauth2.googleapis.com', port=443): Failed to resolve 'oauth2.googleapis.com' ([Errno 8] nodename nor servname provided, or not known)
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/opt/homebrew/Caskroom/gcloud-cli/549.0.1/google-cloud-sdk/lib/third_party/requests/adapters.py", line 667, in send
+    resp = conn.urlopen(
+        method=request.method,
+    ...<9 lines>...
+        chunked=chunked,
+    )
+  File "/opt/homebrew/Caskroom/gcloud-cli/549.0.1/google-cloud-sdk/lib/third_party/urllib3/connectionpool.py", line 841, in urlopen
+    retries = retries.increment(
+        method, url, error=new_e, _pool=self, _stacktrace=sys.exc_info()[2]
+    )
+  File "/opt/homebrew/Caskroom/gcloud-cli/549.0.1/google-cloud-sdk/lib/third_party/urllib3/util/retry.py", line 536, in increment
+    raise MaxRetryError(_pool, url, reason) from reason  # type: ignore[arg-type]
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+urllib3.exceptions.MaxRetryError: HTTPSConnectionPool(host='oauth2.googleapis.com', port=443): Max retries exceeded with url: /token (Caused by NameResolutionError("HTTPSConnection(host='oauth2.googleapis.com', port=443): Failed to resolve 'oauth2.googleapis.com' ([Errno 8] nodename nor servname provided, or not known)"))
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/opt/homebrew/Caskroom/gcloud-cli/549.0.1/google-cloud-sdk/lib/third_party/google/auth/transport/requests.py", line 186, in __call__
+    response = self.session.request(
+        method, url, data=body, headers=headers, timeout=timeout, **kwargs
+    )
+  File "/opt/homebrew/Caskroom/gcloud-cli/549.0.1/google-cloud-sdk/lib/googlecloudsdk/core/credentials/requests.py", line 169, in RequestWithRetry
+    response = wrapped_request(*args, **kwargs)
+  File "/opt/homebrew/Caskroom/gcloud-cli/549.0.1/google-cloud-sdk/lib/googlecloudsdk/core/transport.py", line 281, in WrappedRequest
+    response = orig_request(*modified_args, **modified_kwargs)
+  File "/opt/homebrew/Caskroom/gcloud-cli/549.0.1/google-cloud-sdk/lib/googlecloudsdk/core/transport.py", line 281, in WrappedRequest
+    response = orig_request(*modified_args, **modified_kwargs)
+  File "/opt/homebrew/Caskroom/gcloud-cli/549.0.1/google-cloud-sdk/lib/googlecloudsdk/core/requests.py", line 658, in WrappedRequest
+    return orig_request_method(*args, **kwargs)
+  File "/opt/homebrew/Caskroom/gcloud-cli/549.0.1/google-cloud-sdk/lib/third_party/requests/sessions.py", line 589, in request
+    resp = self.send(prep, **send_kwargs)
+  File "/opt/homebrew/Caskroom/gcloud-cli/549.0.1/google-cloud-sdk/lib/third_party/requests/sessions.py", line 703, in send
+    r = adapter.send(request, **kwargs)
+  File "/opt/homebrew/Caskroom/gcloud-cli/549.0.1/google-cloud-sdk/lib/third_party/requests/adapters.py", line 700, in send
+    raise ConnectionError(e, request=request)
+requests.exceptions.ConnectionError: HTTPSConnectionPool(host='oauth2.googleapis.com', port=443): Max retries exceeded with url: /token (Caused by NameResolutionError("HTTPSConnection(host='oauth2.googleapis.com', port=443): Failed to resolve 'oauth2.googleapis.com' ([Errno 8] nodename nor servname provided, or not known)"))
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/opt/homebrew/Cellar/python@3.13/3.13.11/Frameworks/Python.framework/Versions/3.13/lib/python3.13/threading.py", line 1044, in _bootstrap_inner
+    self.run()
+    ~~~~~~~~^^
+  File "/opt/homebrew/Caskroom/gcloud-cli/549.0.1/google-cloud-sdk/lib/googlecloudsdk/api_lib/cloudbuild/logs.py", line 429, in run
+    self.target()
+    ~~~~~~~~~~~^^
+  File "/opt/homebrew/Caskroom/gcloud-cli/549.0.1/google-cloud-sdk/lib/googlecloudsdk/api_lib/cloudbuild/logs.py", line 401, in Tail
+    self.Poll()
+    ~~~~~~~~~^^
+  File "/opt/homebrew/Caskroom/gcloud-cli/549.0.1/google-cloud-sdk/lib/googlecloudsdk/api_lib/cloudbuild/logs.py", line 339, in Poll
+    res = self.transport.Request(self.url, self.cursor)
+  File "/opt/homebrew/Caskroom/gcloud-cli/549.0.1/google-cloud-sdk/lib/googlecloudsdk/api_lib/cloudbuild/logs.py", line 83, in Request
+    response = self.session.request(
+        'GET', url, headers={'Range': 'bytes={0}-'.format(cursor)})
+  File "/opt/homebrew/Caskroom/gcloud-cli/549.0.1/google-cloud-sdk/lib/googlecloudsdk/core/transport.py", line 281, in WrappedRequest
+    response = orig_request(*modified_args, **modified_kwargs)
+  File "/opt/homebrew/Caskroom/gcloud-cli/549.0.1/google-cloud-sdk/lib/googlecloudsdk/core/credentials/requests.py", line 117, in WrappedRequest
+    creds.before_request(auth_request, method, url, headers)
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Caskroom/gcloud-cli/549.0.1/google-cloud-sdk/lib/third_party/google/auth/credentials.py", line 239, in before_request
+    self._blocking_refresh(request)
+    ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "/opt/homebrew/Caskroom/gcloud-cli/549.0.1/google-cloud-sdk/lib/third_party/google/auth/credentials.py", line 202, in _blocking_refresh
+    self.refresh(request)
+    ~~~~~~~~~~~~^^^^^^^^^
+  File "/opt/homebrew/Caskroom/gcloud-cli/549.0.1/google-cloud-sdk/lib/googlecloudsdk/core/credentials/creds.py", line 836, in _WrappedRefresh
+    orig_refresh(request)
+    ~~~~~~~~~~~~^^^^^^^^^
+  File "/opt/homebrew/Caskroom/gcloud-cli/549.0.1/google-cloud-sdk/lib/googlecloudsdk/core/credentials/google_auth_credentials.py", line 100, in refresh
+    return self._Refresh(request)
+           ~~~~~~~~~~~~~^^^^^^^^^
+  File "/opt/homebrew/Caskroom/gcloud-cli/549.0.1/google-cloud-sdk/lib/googlecloudsdk/core/credentials/google_auth_credentials.py", line 153, in _Refresh
+    access_token, refresh_token, expiry, grant_response = _RefreshGrant(
+                                                          ~~~~~~~~~~~~~^
+        request, self._token_uri, self._refresh_token, self._client_id,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        self._client_secret, self._scopes, rapt_token)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Caskroom/gcloud-cli/549.0.1/google-cloud-sdk/lib/googlecloudsdk/core/credentials/google_auth_credentials.py", line 248, in _RefreshGrant
+    response_data = _TokenEndpointRequestWithRetry(request, token_uri, body)
+  File "/opt/homebrew/Caskroom/gcloud-cli/549.0.1/google-cloud-sdk/lib/googlecloudsdk/core/util/retry.py", line 312, in DecoratedFunction
+    exceptions.reraise(to_reraise[1], tb=to_reraise[2])
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Caskroom/gcloud-cli/549.0.1/google-cloud-sdk/lib/googlecloudsdk/core/exceptions.py", line 149, in reraise
+    six.reraise(type(exc_value), exc_value, tb)
+    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Caskroom/gcloud-cli/549.0.1/google-cloud-sdk/lib/third_party/six/__init__.py", line 719, in reraise
+    raise value
+  File "/opt/homebrew/Caskroom/gcloud-cli/549.0.1/google-cloud-sdk/lib/googlecloudsdk/core/util/retry.py", line 182, in TryFunc
+    return func(*args, **kwargs), None
+           ~~~~^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Caskroom/gcloud-cli/549.0.1/google-cloud-sdk/lib/googlecloudsdk/core/credentials/google_auth_credentials.py", line 304, in _TokenEndpointRequestWithRetry
+    response = request(method='POST', url=token_uri, headers=headers, body=body)
+  File "/opt/homebrew/Caskroom/gcloud-cli/549.0.1/google-cloud-sdk/lib/third_party/google/auth/transport/requests.py", line 192, in __call__
+    raise new_exc from caught_exc
+google.auth.exceptions.TransportError: HTTPSConnectionPool(host='oauth2.googleapis.com', port=443): Max retries exceeded with url: /token (Caused by NameResolutionError("HTTPSConnection(host='oauth2.googleapis.com', port=443): Failed to resolve 'oauth2.googleapis.com' ([Errno 8] nodename nor servname provided, or not known)"))
+ERROR: (gcloud.builds.submit) There was a problem refreshing your current auth tokens: HTTPSConnectionPool(host='oauth2.googleapis.com', port=443): Max retries exceeded with url: /token (Caused by NameResolutionError("HTTPSConnection(host='oauth2.googleapis.com', port=443): Failed to resolve 'oauth2.googleapis.com' ([Errno 8] nodename nor servname provided, or not known)"))
+Please run:
+
+  $ gcloud auth login
+
+to obtain new credentials.
+
+If you have already logged in with a different account, run:
+
+  $ gcloud config set account ACCOUNT
+
+to select an already authenticated account to use.
+make: *** [deploy-all] Error 1

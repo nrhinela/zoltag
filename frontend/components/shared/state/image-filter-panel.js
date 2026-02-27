@@ -36,6 +36,7 @@ import {
   addOrderingParams,
   addMiscParams,
   addMediaTypeParams,
+  addSourceParams,
 } from '../../../services/api-params.js';
 
 export class ImageFilterPanel {
@@ -59,6 +60,7 @@ export class ImageFilterPanel {
       filenameQuery: '',
       textQuery: '',
       mediaType: 'all',
+      sourceProvider: '',
       permatagPositiveMissing: false,
       noPermatagCategories: [],
       noPermatagUntagged: false,
@@ -133,6 +135,7 @@ export class ImageFilterPanel {
     addOrderingParams(params, this.filters);
     addMiscParams(params, this.filters);
     addMediaTypeParams(params, this.filters);
+    addSourceParams(params, this.filters);
 
     return params;
   }
@@ -239,6 +242,7 @@ export class ImageFilterPanel {
       filenameQuery: '',
       textQuery: '',
       mediaType: 'all',
+      sourceProvider: '',
       permatagPositiveMissing: false,
       noPermatagCategories: [],
       noPermatagUntagged: false,
@@ -291,6 +295,12 @@ export class ImageFilterPanel {
       }
       if (!filters.mediaType) {
         filters.mediaType = 'all';
+      }
+      if (!filters.sourceProvider && (filters.source_provider || filters.source)) {
+        filters.sourceProvider = filters.source_provider || filters.source || '';
+      }
+      if (!filters.sourceProvider) {
+        filters.sourceProvider = '';
       }
       if (!Array.isArray(filters.noPermatagCategories)) {
         if (filters.noPermatagCategories === undefined || filters.noPermatagCategories === null || filters.noPermatagCategories === '') {

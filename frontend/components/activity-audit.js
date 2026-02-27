@@ -310,7 +310,7 @@ class ActivityAudit extends LitElement {
       <div class="card">
         <div class="header">
           <div>
-            <h2 class="title">Audit</h2>
+            <h2 class="title">User Activity</h2>
             <p class="subtitle">
               ${this.scope === 'global'
                 ? 'System-wide login and search activity'
@@ -349,7 +349,7 @@ class ActivityAudit extends LitElement {
                 class="input"
                 type="text"
                 .value=${this.tenantFilter}
-                placeholder="Filter tenant UUID"
+                placeholder="Filter tenant ID (UUID)"
                 @change=${(e) => {
                   this.tenantFilter = String(e.target.value || '').trim();
                   this._load();
@@ -382,7 +382,7 @@ class ActivityAudit extends LitElement {
                   <tr>
                     <td class="muted">${this._formatEventTime(row.created_at)}</td>
                     ${this.scope === 'global' ? html`
-                      <td class="muted">${row.tenant_id || 'n/a'}</td>
+                      <td class="muted">${row.tenant_name || row.tenant_identifier || 'Unknown tenant'}</td>
                     ` : html``}
                     <td>${this._eventLabel(row.event_type)}</td>
                     <td>
@@ -395,7 +395,9 @@ class ActivityAudit extends LitElement {
                   </tr>
                 `) : html`
                   <tr>
-                    <td colspan="4" class="empty">${this.loading ? 'Loading activity...' : 'No activity events found.'}</td>
+                    <td colspan=${this.scope === 'global' ? 5 : 4} class="empty">
+                      ${this.loading ? 'Loading activity...' : 'No activity events found.'}
+                    </td>
                   </tr>
                 `}
               </tbody>

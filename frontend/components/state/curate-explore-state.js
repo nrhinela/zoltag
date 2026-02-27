@@ -166,6 +166,7 @@ export class CurateExploreStateController extends BaseStateController {
     this.host.curateDropboxPathPrefix = '';
     this.host.curateFilenameQuery = '';
     this.host.curateTextQuery = '';
+    this.host.curateSourceProvider = '';
     this.host.curateListId = '';
     this.host.curateListExcludeId = '';
     this.host.curateFilters = buildCurateFilterObject(this.host);

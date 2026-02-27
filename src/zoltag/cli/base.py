@@ -53,6 +53,7 @@ class CliCommand:
         tenant_settings = tenant_row.settings if isinstance(tenant_row.settings, dict) else {}
         dropbox_runtime = runtime_context.get("dropbox") or {}
         gdrive_runtime = runtime_context.get("gdrive") or {}
+        youtube_runtime = runtime_context.get("youtube") or {}
         key_prefix = getattr(tenant_row, "key_prefix", None) or canonical_tenant_id
         tenant = Tenant(
             id=canonical_tenant_id,
@@ -69,6 +70,8 @@ class CliCommand:
             gdrive_client_id=str(gdrive_runtime.get("client_id") or "").strip() or None,
             gdrive_token_secret=str(gdrive_runtime.get("token_secret_name") or f"gdrive-token-{key_prefix}").strip(),
             gdrive_client_secret=str(gdrive_runtime.get("client_secret_name") or f"gdrive-client-secret-{key_prefix}").strip(),
+            youtube_token_secret=str(youtube_runtime.get("token_secret_name") or f"youtube-token-{key_prefix}").strip(),
+            youtube_sync_folders=list(youtube_runtime.get("sync_folders") or []),
             storage_bucket=tenant_row.storage_bucket,
             thumbnail_bucket=tenant_row.thumbnail_bucket,
             settings=tenant_settings,

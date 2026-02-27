@@ -119,6 +119,7 @@ export class CurateExploreTab extends LitElement {
     dropboxPathPrefix: { type: String },
     filenameQuery: { type: String },
     textQuery: { type: String },
+    sourceProvider: { type: String },
     listFilterId: { type: [String, Number] },
     listFilterMode: { type: String },
     dropboxFolders: { type: Array },
@@ -188,6 +189,7 @@ export class CurateExploreTab extends LitElement {
     this.dropboxPathPrefix = '';
     this.filenameQuery = '';
     this.textQuery = '';
+    this.sourceProvider = '';
     this.listFilterId = '';
     this.listFilterMode = 'include';
     this.dropboxFolders = [];
@@ -1082,6 +1084,25 @@ export class CurateExploreTab extends LitElement {
       });
     }
 
+    const normalizedSource = String(this.sourceProvider || '').trim().toLowerCase();
+    if (normalizedSource) {
+      const displayValue = normalizedSource === 'dropbox'
+        ? 'Dropbox'
+        : (normalizedSource === 'gdrive'
+          ? 'Google Drive'
+          : (normalizedSource === 'youtube'
+            ? 'YouTube'
+            : (normalizedSource === 'managed'
+              ? 'Managed Uploads'
+              : (normalizedSource.charAt(0).toUpperCase() + normalizedSource.slice(1)))));
+      filters.push({
+        type: 'source',
+        value: normalizedSource,
+        displayLabel: 'Source',
+        displayValue,
+      });
+    }
+
     if (this.listFilterId) {
       const lists = this._lists || [];
       const match = lists.find((list) => String(list.id) === String(this.listFilterId));
@@ -1567,7 +1588,7 @@ export class CurateExploreTab extends LitElement {
           </div>
           <right-panel
             .tools=${[
-              { id: 'tags', label: 'Keyword' },
+              { id: 'tags', label: 'Tag' },
               { id: 'ratings', label: 'Ratings' },
               { id: 'lists', label: 'Lists' },
             ]}

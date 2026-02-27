@@ -27,6 +27,7 @@ class ProviderEntry:
     content_hash: Optional[str] = None
     revision: Optional[str] = None
     mime_type: Optional[str] = None
+    no_download: bool = False
 
 
 @dataclass
@@ -312,23 +313,88 @@ class GoogleDriveStorageProvider(StorageProvider):
 
     def list_image_entries(self, sync_folders: Optional[Sequence[str]] = None) -> list[ProviderEntry]:
         folders = [folder.strip() for folder in (sync_folders or []) if isinstance(folder, str) and folder.strip()]
-        media_query = "(mimeType contains 'image/' or mimeType contains 'video/')"
-        if not folders:
-            queries = [f"trashed = false and {media_query}"]
-        else:
-            queries = [
-                f"'{folder}' in parents and trashed = false and {media_query}"
-                for folder in folders
-            ]
-
         deduped: Dict[str, ProviderEntry] = {}
-        for query in queries:
-            for item in self._list_files(query):
+        if not folders:
+            # No sync folders configured — flat listing; display_path stays as filename only
+            media_query = "(mimeType contains 'image/' or mimeType contains 'video/')"
+            for item in self._list_files(f"trashed = false and {media_query}"):
                 deduped[item.source_key] = item
+        else:
+            for folder_id in folders:
+                # Resolve the top-level folder name to seed the path chain
+                try:
+                    folder_meta = self._get_file(folder_id)
+                    folder_name = folder_meta.get("name", folder_id)
+                except Exception:
+                    folder_name = folder_id
+                for item in self._list_files_recursive(folder_id, _path_segments=[folder_name]):
+                    deduped[item.source_key] = item
 
         entries = list(deduped.values())
         entries.sort(key=lambda item: item.modified_time or datetime.min, reverse=True)
         return entries
+
+    def _list_files_recursive(
+        self,
+        folder_id: str,
+        _visited: Optional[set] = None,
+        _path_segments: Optional[list] = None,
+    ) -> list[ProviderEntry]:
+        """Recursively list all image/video files under folder_id, building display paths."""
+        if _visited is None:
+            _visited = set()
+        if folder_id in _visited:
+            return []
+        _visited.add(folder_id)
+
+        current_segments = _path_segments or []
+        media_query = "(mimeType contains 'image/' or mimeType contains 'video/')"
+        raw_entries = self._list_files(f"'{folder_id}' in parents and trashed = false and {media_query}")
+
+        entries = []
+        for entry in raw_entries:
+            folder_prefix = "/" + "/".join(current_segments) if current_segments else ""
+            entry.display_path = f"{folder_prefix}/{entry.name}"
+            entries.append(entry)
+
+        subfolder_query = (
+            f"'{folder_id}' in parents and trashed = false"
+            " and mimeType = 'application/vnd.google-apps.folder'"
+        )
+        for subfolder_id, subfolder_name in self._list_folder_children(subfolder_query):
+            entries.extend(
+                self._list_files_recursive(
+                    subfolder_id,
+                    _visited=_visited,
+                    _path_segments=current_segments + [subfolder_name],
+                )
+            )
+
+        return entries
+
+    def _list_folder_children(self, query: str) -> list:
+        """Return (id, name) pairs for folders matching query."""
+        results = []
+        next_page_token: Optional[str] = None
+        while True:
+            params: Dict[str, str] = {
+                "q": query,
+                "fields": "nextPageToken,files(id,name)",
+                "pageSize": "1000",
+                "includeItemsFromAllDrives": "true",
+                "supportsAllDrives": "true",
+            }
+            if next_page_token:
+                params["pageToken"] = next_page_token
+            response = self._request("GET", "/files", params=params)
+            payload = response.json()
+            for item in payload.get("files", []) or []:
+                if item.get("id"):
+                    results.append((item["id"], item.get("name", item["id"])))
+            next_page_token = payload.get("nextPageToken")
+            if not next_page_token:
+                break
+        return results
 
     def get_entry(self, source_key: str) -> ProviderEntry:
         file_obj = self._get_file(source_key)
@@ -397,6 +463,23 @@ class GoogleDriveStorageProvider(StorageProvider):
         _ = size
         # Drive does not expose a stable equivalent to Dropbox thumbnail size controls.
         return None
+
+    async def stream_file_async(self, source_key: str, range_header: Optional[str] = None):
+        """Async generator that streams file bytes directly from Drive.
+
+        Yields (status_code, headers, async_byte_iterator) on first iteration,
+        then raw bytes chunks. Callers should use the helper in file_serving.
+        """
+        access_token = self._get_access_token()
+        url = f"{self._drive_base_url}/files/{source_key}?alt=media&supportsAllDrives=true"
+        req_headers = {"Authorization": f"Bearer {access_token}"}
+        if range_header:
+            req_headers["Range"] = range_header
+        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
+            async with client.stream("GET", url, headers=req_headers) as response:
+                yield response.status_code, dict(response.headers)
+                async for chunk in response.aiter_bytes(chunk_size=256 * 1024):
+                    yield chunk
 
     def resolve_source_key(self, source_key: Optional[str], image: Any = None) -> Optional[str]:
         value = (source_key or "").strip()
@@ -477,6 +560,27 @@ class GoogleDriveStorageProvider(StorageProvider):
             mime_type=item.get("mimeType"),
         )
 
+    def list_folders(self, parent_id: Optional[str] = None, limit: int = 200) -> tuple[list[dict], bool]:
+        """List immediate child folders of parent_id (None = Drive root)."""
+        parent = parent_id or "root"
+        query = f"'{parent}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+        params: Dict[str, str] = {
+            "q": query,
+            "fields": "nextPageToken,files(id,name)",
+            "orderBy": "name",
+            "pageSize": str(min(max(1, limit), 1000)),
+            "includeItemsFromAllDrives": "true",
+            "supportsAllDrives": "true",
+        }
+        response = self._request("GET", "/files", params=params)
+        payload = response.json()
+        folders = [
+            {"id": item["id"], "name": item.get("name", item["id"])}
+            for item in (payload.get("files") or [])
+        ]
+        has_more = bool(payload.get("nextPageToken"))
+        return folders, has_more
+
     def _request(
         self,
         method: str,
@@ -525,6 +629,272 @@ class GoogleDriveStorageProvider(StorageProvider):
         expires_in = int(payload.get("expires_in") or 3600)
         if not access_token:
             raise RuntimeError("Google Drive token response missing access_token")
+
+        self._access_token = access_token
+        self._access_token_expires_at = datetime.utcnow() + timedelta(seconds=expires_in)
+        return access_token
+
+
+class YouTubeStorageProvider(StorageProvider):
+    """YouTube-backed storage provider (OAuth refresh-token flow, read-only)."""
+
+    provider_name = "youtube"
+
+    _youtube_base_url = "https://www.googleapis.com/youtube/v3"
+    _token_url = "https://oauth2.googleapis.com/token"
+
+    def __init__(self, *, client_id: str, client_secret: str, refresh_token: str):
+        if not client_id or not client_secret or not refresh_token:
+            raise ValueError("YouTubeStorageProvider requires client_id, client_secret, and refresh_token")
+        self._client_id = client_id
+        self._client_secret = client_secret
+        self._refresh_token = refresh_token
+        self._access_token: Optional[str] = None
+        self._access_token_expires_at: Optional[datetime] = None
+
+    def list_image_entries(self, sync_folders: Optional[Sequence[str]] = None) -> list[ProviderEntry]:
+        """List YouTube video entries. sync_folders = playlist IDs (empty = all uploads)."""
+        playlist_ids = [p.strip() for p in (sync_folders or []) if isinstance(p, str) and p.strip()]
+        deduped: Dict[str, ProviderEntry] = {}
+
+        if not playlist_ids:
+            # No playlist filter — fetch uploads playlist for the channel
+            uploads_playlist_id = self._get_uploads_playlist_id()
+            if uploads_playlist_id:
+                for entry in self._list_playlist_items(uploads_playlist_id):
+                    deduped[entry.source_key] = entry
+        else:
+            for playlist_id in playlist_ids:
+                playlist_name = self._get_playlist_name(playlist_id)
+                for entry in self._list_playlist_items(playlist_id, playlist_name=playlist_name):
+                    deduped[entry.source_key] = entry
+
+        entries = list(deduped.values())
+        entries.sort(key=lambda e: e.modified_time or datetime.min, reverse=True)
+        return entries
+
+    def _get_uploads_playlist_id(self) -> Optional[str]:
+        """Return the uploads playlist ID for the authenticated channel."""
+        response = self._request(
+            "GET",
+            "/channels",
+            params={"part": "contentDetails", "mine": "true"},
+        )
+        payload = response.json()
+        items = payload.get("items") or []
+        if not items:
+            return None
+        return (items[0].get("contentDetails") or {}).get("relatedPlaylists", {}).get("uploads")
+
+    def _get_playlist_name(self, playlist_id: str) -> str:
+        """Return the title of a playlist by ID, falling back to the ID."""
+        try:
+            response = self._request(
+                "GET",
+                "/playlists",
+                params={"part": "snippet", "id": playlist_id},
+            )
+            payload = response.json()
+            items = payload.get("items") or []
+            if items:
+                return (items[0].get("snippet") or {}).get("title", playlist_id)
+        except Exception:
+            pass
+        return playlist_id
+
+    def _get_channel_title(self) -> str:
+        """Return the title of the authenticated channel."""
+        try:
+            response = self._request(
+                "GET",
+                "/channels",
+                params={"part": "snippet", "mine": "true"},
+            )
+            payload = response.json()
+            items = payload.get("items") or []
+            if items:
+                return (items[0].get("snippet") or {}).get("title", "YouTube")
+        except Exception:
+            pass
+        return "YouTube"
+
+    def _list_playlist_items(
+        self,
+        playlist_id: str,
+        *,
+        playlist_name: Optional[str] = None,
+    ) -> list[ProviderEntry]:
+        """List all videos in a playlist as ProviderEntry objects."""
+        if playlist_name is None:
+            playlist_name = self._get_channel_title()
+
+        entries: list[ProviderEntry] = []
+        next_page_token: Optional[str] = None
+
+        while True:
+            params: Dict[str, str] = {
+                "part": "snippet",
+                "playlistId": playlist_id,
+                "maxResults": "50",
+            }
+            if next_page_token:
+                params["pageToken"] = next_page_token
+
+            response = self._request("GET", "/playlistItems", params=params)
+            payload = response.json()
+
+            for item in payload.get("items") or []:
+                snippet = item.get("snippet") or {}
+                resource = snippet.get("resourceId") or {}
+                video_id = resource.get("videoId")
+                if not video_id:
+                    continue
+                title = snippet.get("title") or video_id
+                published_at = _parse_iso_datetime(snippet.get("publishedAt"))
+                entries.append(
+                    ProviderEntry(
+                        provider=self.provider_name,
+                        source_key=video_id,
+                        file_id=video_id,
+                        name=title,
+                        display_path=f"/{playlist_name}/{title}",
+                        modified_time=published_at,
+                        mime_type="video/youtube",
+                        no_download=True,
+                    )
+                )
+
+            next_page_token = payload.get("nextPageToken")
+            if not next_page_token:
+                break
+
+        return entries
+
+    def list_folders(self) -> list[dict]:
+        """List the authenticated user's playlists (YouTube's folder equivalent)."""
+        playlists: list[dict] = []
+        next_page_token: Optional[str] = None
+
+        while True:
+            params: Dict[str, str] = {
+                "part": "snippet",
+                "mine": "true",
+                "maxResults": "50",
+            }
+            if next_page_token:
+                params["pageToken"] = next_page_token
+
+            response = self._request("GET", "/playlists", params=params)
+            payload = response.json()
+
+            for item in payload.get("items") or []:
+                snippet = item.get("snippet") or {}
+                playlists.append({"id": item["id"], "name": snippet.get("title", item["id"])})
+
+            next_page_token = payload.get("nextPageToken")
+            if not next_page_token:
+                break
+
+        return playlists
+
+    def get_entry(self, source_key: str) -> ProviderEntry:
+        response = self._request(
+            "GET",
+            "/videos",
+            params={"part": "snippet", "id": source_key},
+        )
+        payload = response.json()
+        items = payload.get("items") or []
+        if not items:
+            raise ValueError(f"YouTube video not found: {source_key}")
+        snippet = items[0].get("snippet") or {}
+        title = snippet.get("title") or source_key
+        published_at = _parse_iso_datetime(snippet.get("publishedAt"))
+        return ProviderEntry(
+            provider=self.provider_name,
+            source_key=source_key,
+            file_id=source_key,
+            name=title,
+            display_path=f"/{title}",
+            modified_time=published_at,
+            mime_type="video/youtube",
+            no_download=True,
+        )
+
+    def get_media_metadata(self, source_key: str) -> ProviderMediaMetadata:
+        response = self._request(
+            "GET",
+            "/videos",
+            params={"part": "snippet,contentDetails,statistics", "id": source_key},
+        )
+        payload = response.json()
+        items = payload.get("items") or []
+        provider_properties: Dict[str, Any] = {}
+        if items:
+            snippet = items[0].get("snippet") or {}
+            content_details = items[0].get("contentDetails") or {}
+            statistics = items[0].get("statistics") or {}
+            provider_properties["youtube.channel_title"] = snippet.get("channelTitle", "")
+            provider_properties["youtube.duration"] = content_details.get("duration", "")
+            provider_properties["youtube.view_count"] = statistics.get("viewCount", "")
+        return ProviderMediaMetadata(provider_properties=provider_properties)
+
+    def download_file(self, source_key: str) -> bytes:
+        raise NotImplementedError("YouTube videos cannot be downloaded via the API")
+
+    def get_thumbnail(self, source_key: str, size: str = "w640h480") -> Optional[bytes]:
+        return None
+
+    def get_playback_url(self, source_key: str, expires_seconds: int = 300) -> Optional[str]:
+        return f"https://www.youtube.com/watch?v={source_key}"
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: Optional[Dict[str, str]] = None,
+        timeout: int = 30,
+    ) -> httpx.Response:
+        access_token = self._get_access_token()
+        headers = {"Authorization": f"Bearer {access_token}"}
+        with httpx.Client(timeout=timeout) as client:
+            response = client.request(
+                method,
+                f"{self._youtube_base_url}{path}",
+                headers=headers,
+                params=params,
+            )
+        if response.status_code >= 400:
+            raise RuntimeError(
+                f"YouTube API error {response.status_code} for {path}: {response.text}"
+            )
+        return response
+
+    def _get_access_token(self) -> str:
+        if self._access_token and self._access_token_expires_at:
+            if datetime.utcnow() + timedelta(seconds=30) < self._access_token_expires_at:
+                return self._access_token
+
+        with httpx.Client(timeout=30) as client:
+            response = client.post(
+                self._token_url,
+                data={
+                    "client_id": self._client_id,
+                    "client_secret": self._client_secret,
+                    "refresh_token": self._refresh_token,
+                    "grant_type": "refresh_token",
+                },
+            )
+
+        if response.status_code >= 400:
+            raise RuntimeError(f"Failed to refresh YouTube access token: {response.text}")
+
+        payload = response.json()
+        access_token = payload.get("access_token")
+        expires_in = int(payload.get("expires_in") or 3600)
+        if not access_token:
+            raise RuntimeError("YouTube token response missing access_token")
 
         self._access_token = access_token
         self._access_token_expires_at = datetime.utcnow() + timedelta(seconds=expires_in)
@@ -632,16 +1002,55 @@ def create_storage_provider(
         )
 
     if normalized in {"gdrive", "google-drive", "google_drive", "drive"}:
-        client_id = getattr(tenant, "gdrive_client_id", None)
+        from zoltag.settings import settings as _settings
+        client_id = (
+            str(_settings.zoltag_gdrive_connector_client_id or "").strip()
+            or str(getattr(tenant, "gdrive_client_id", None) or "").strip()
+        )
         token_secret = getattr(tenant, "gdrive_token_secret", None)
         client_secret_name = getattr(tenant, "gdrive_client_secret", None)
         if not client_id:
             raise ValueError("Google Drive client ID not configured for tenant")
-        if not token_secret or not client_secret_name:
-            raise ValueError("Google Drive secrets not configured for tenant")
-        refresh_token = get_secret(token_secret)
-        client_secret = get_secret(client_secret_name)
+        if not token_secret:
+            raise ValueError("Google Drive token secret not configured for tenant")
+        try:
+            refresh_token = get_secret(token_secret)
+        except Exception as exc:
+            raise ValueError(f"No Google Drive refresh token found ({exc})") from exc
+        env_secret = str(_settings.zoltag_gdrive_connector_secret or "").strip()
+        if env_secret:
+            client_secret = env_secret
+        elif client_secret_name:
+            try:
+                client_secret = get_secret(client_secret_name)
+            except Exception as exc:
+                raise ValueError(f"Google Drive client secret not found ({exc})") from exc
+        else:
+            raise ValueError("Google Drive client secret not configured for tenant")
         return GoogleDriveStorageProvider(
+            client_id=client_id,
+            client_secret=client_secret,
+            refresh_token=refresh_token,
+        )
+
+    if normalized in {"youtube", "yt"}:
+        from zoltag.settings import settings as _settings
+        client_id = str(_settings.zoltag_gdrive_connector_client_id or "").strip()
+        if not client_id:
+            raise ValueError("YouTube client ID not configured (uses ZOLTAG_GDRIVE_CONNECTOR_CLIENT_ID)")
+        token_secret = getattr(tenant, "youtube_token_secret", None)
+        if not token_secret:
+            raise ValueError("YouTube token secret not configured for tenant")
+        try:
+            refresh_token = get_secret(token_secret)
+        except Exception as exc:
+            raise ValueError(f"No YouTube refresh token found ({exc})") from exc
+        if not refresh_token:
+            raise ValueError("YouTube is not connected for this tenant")
+        client_secret = str(_settings.zoltag_gdrive_connector_secret or "").strip()
+        if not client_secret:
+            raise ValueError("YouTube client secret not configured (uses ZOLTAG_GDRIVE_CONNECTOR_SECRET)")
+        return YouTubeStorageProvider(
             client_id=client_id,
             client_secret=client_secret,
             refresh_token=refresh_token,

@@ -181,6 +181,7 @@ export function renderImageGrid(config) {
               alt=${image.filename}
               class="curate-thumb ${isSelected ? 'selected' : ''} ${isFlashing ? 'flash' : ''}"
               draggable="false"
+              @error=${(e) => { const fallback = `/api/v1/images/${imageId}/thumbnail`; if (e.target.src !== fallback) e.target.src = fallback; }}
               @pointerdown=${(event) => onPointerDown?.(event, index, imageId)}
               @pointermove=${(event) => onPointerMove?.(event)}
               @pointerenter=${() => onPointerEnter?.(index)}

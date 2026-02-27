@@ -118,6 +118,10 @@ def _is_non_retryable_command_failure(stdout_tail: Optional[str], stderr_tail: O
         "managed app credentials are not configured",
         "tenant not found in database",
         "provider integration is inactive",
+        "google drive is not connected for this tenant",
+        "google drive client id not configured",
+        "google drive client secret not configured",
+        "no google drive refresh token found",
     )
     return any(marker in text for marker in markers)
 

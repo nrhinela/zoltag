@@ -245,6 +245,38 @@ class TestCombinedFiltersEquivalence:
         _, _, _, has_empty = build_image_query_with_subqueries(test_db, test_tenant, list_id=999)
         assert has_empty is True
 
+    def test_source_provider_filter(self, test_db: Session, test_tenant: Tenant, sample_images):
+        sample_asset_ids = [image.asset_id for image in sample_images[:3]]
+        providers = ["dropbox", "gdrive", "youtube"]
+        for asset_id, provider in zip(sample_asset_ids, providers):
+            asset = test_db.query(Asset).filter(Asset.id == asset_id).first()
+            asset.source_provider = provider
+        test_db.commit()
+
+        base_query, subqueries_list, _, has_empty = build_image_query_with_subqueries(
+            test_db,
+            test_tenant,
+            source_provider="google",  # alias for gdrive
+        )
+        assert has_empty is False
+        query = base_query
+        for subquery in subqueries_list:
+            query = query.filter(ImageMetadata.id.in_(subquery))
+        google_ids = {img.id for img in query.all()}
+        assert google_ids == {2}
+
+        base_query, subqueries_list, _, has_empty = build_image_query_with_subqueries(
+            test_db,
+            test_tenant,
+            source_provider="youtube",
+        )
+        assert has_empty is False
+        query = base_query
+        for subquery in subqueries_list:
+            query = query.filter(ImageMetadata.id.in_(subquery))
+        youtube_ids = {img.id for img in query.all()}
+        assert youtube_ids == {3}
+
 
 class TestMemoryEfficiency:
     def test_subquery_not_materialized(self, test_db: Session, test_tenant: Tenant, sample_photo_list):

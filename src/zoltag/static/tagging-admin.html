@@ -237,7 +237,7 @@
                         <span id="environment-badge" style="font-size: 14px; padding: 4px 12px; border-radius: 4px; font-weight: 600; margin-left: 12px;">...</span>
                         <span style="font-weight: 400; font-size: 20px; color: #666;">Tagging Administration</span>
                     </h1>
-                    <p>Configure keywords and manage people for facial recognition</p>
+                    <p>Configure tags and manage people for facial recognition</p>
                 </div>
                 <div>
                     <button class="btn btn-secondary" onclick="window.location.href='/'">
@@ -258,25 +258,25 @@
 
     <!-- Tabs -->
     <div class="tabs">
-        <div class="tab active" data-tab="keywords"><i class="fas fa-tag"></i> Keywords</div>
+        <div class="tab active" data-tab="keywords"><i class="fas fa-tag"></i> Tags</div>
         <div class="tab" data-tab="people"><i class="fas fa-users"></i> People</div>
     </div>
 
     <!-- Keywords Tab -->
     <div id="keywords" class="tab-content active">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-            <h2><i class="fas fa-tags"></i> Keywords Configuration</h2>
+            <h2><i class="fas fa-tags"></i> Tag Configurations</h2>
         </div>
-        <p style="color: #666; margin-bottom: 10px;">Define categories and keywords for image tagging. Keywords are used by the ML model to categorize images.</p>
+        <p style="color: #666; margin-bottom: 10px;">Define categories and tags for image tagging. Tags are used by the ML model to categorize images.</p>
 
         <!-- Info Box -->
         <div style="background: #e7f3ff; border-left: 4px solid #0066cc; padding: 12px 15px; margin-bottom: 20px; border-radius: 4px;">
             <div style="display: flex; align-items: start; gap: 10px;">
                 <i class="fas fa-info-circle" style="color: #0066cc; margin-top: 2px;"></i>
                 <div style="font-size: 13px; color: #333;">
-                    <strong>How scoring works:</strong> Keywords within the same category are scored relative to each other.
-                    When you improve one keyword's description, it may affect the confidence scores of other keywords in that category.
-                    Keywords in different categories are scored independently.
+                    <strong>How tags and categories work:</strong> Tags within the same category are scored relative to each other.
+                    When you improve one tag's description, it may affect the confidence scores of other tags in that category.
+                    Tags in different categories are scored independently.
                 </div>
             </div>
         </div>
@@ -473,7 +473,7 @@
                 renderCategories();
             } catch (error) {
                 console.error('Error loading categories:', error);
-                showError('keywords', 'Failed to load keyword categories');
+                showError('keywords', 'Failed to load tag categories');
             }
         }
 
@@ -492,10 +492,10 @@
                             <div style="display: flex; align-items: center; gap: 10px;">
                                 <span style="font-size: 12px;">${isExpanded ? '▼' : '▶'}</span>
                                 <strong>${cat.name}</strong>
-                                <span style="color: #666; font-size: 13px;">(${cat.keyword_count} keywords)</span>
+                                <span style="color: #666; font-size: 13px;">(${cat.keyword_count} tags)</span>
                             </div>
                             <div style="display: flex; gap: 8px;" onclick="event.stopPropagation()">
-                                <button class="btn btn-primary" style="padding: 4px 12px; font-size: 12px;" onclick="showKeywordModal(null, ${cat.id})">+ Add Keyword</button>
+                                <button class="btn btn-primary" style="padding: 4px 12px; font-size: 12px;" onclick="showKeywordModal(null, ${cat.id})">+ Add Tag</button>
                                 <button class="btn" style="padding: 4px 12px; font-size: 12px; background: #6c757d; color: white;" onclick="editCategory(${cat.id})">Edit</button>
                                 <button class="btn" style="padding: 4px 12px; font-size: 12px; background: #dc3545; color: white;" onclick="deleteCategory(${cat.id})">Delete</button>
                             </div>
@@ -528,7 +528,7 @@
 
                 const container = document.getElementById(`category-keywords-${categoryId}`);
                 if (keywords.length === 0) {
-                    container.innerHTML = '<p style="color: #999; font-style: italic;">No keywords in this category yet.</p>';
+                    container.innerHTML = '<p style="color: #999; font-style: italic;">No tags in this category yet.</p>';
                     return;
                 }
 
@@ -536,7 +536,7 @@
                     <table style="width: 100%; border-collapse: collapse;">
                         <thead>
                             <tr style="background: #f8f9fa;">
-                                <th style="padding: 10px; text-align: left; border-bottom: 2px solid #dee2e6;">Keyword</th>
+                                <th style="padding: 10px; text-align: left; border-bottom: 2px solid #dee2e6;">Tag</th>
                                 <th style="padding: 10px; text-align: left; border-bottom: 2px solid #dee2e6;">Prompt</th>
                                 <th style="padding: 10px; text-align: left; border-bottom: 2px solid #dee2e6; width: 100px;">Order</th>
                                 <th style="padding: 10px; text-align: right; border-bottom: 2px solid #dee2e6; width: 150px;">Actions</th>
@@ -629,7 +629,7 @@
 
         async function deleteCategory(categoryId) {
             const category = categories.find(c => c.id === categoryId);
-            if (!confirm(`Delete category "${category.name}" and all its keywords? This cannot be undone.`)) {
+            if (!confirm(`Delete category "${category.name}" and all its tags? This cannot be undone.`)) {
                 return;
             }
 
@@ -650,7 +650,7 @@
 
         // Keyword Modal Functions
         function showKeywordModal(keywordId = null, categoryId = null) {
-            document.getElementById('keyword-modal-title').textContent = keywordId ? 'Edit Keyword' : 'New Keyword';
+            document.getElementById('keyword-modal-title').textContent = keywordId ? 'Edit Tag' : 'New Tag';
             document.getElementById('keyword-edit-id').value = keywordId || '';
             document.getElementById('keyword-category-id').value = categoryId || '';
             document.getElementById('keyword-text').value = '';
@@ -707,20 +707,20 @@
                     body: JSON.stringify({ keyword, prompt })
                 });
 
-                if (!response.ok) throw new Error('Failed to save keyword');
+                if (!response.ok) throw new Error('Failed to save tag');
 
                 closeKeywordModal();
                 await loadKeywordsForCategory(categoryId);
                 await loadKeywords(); // Refresh counts
-                showSuccess('keywords', 'Keyword saved successfully!');
+                showSuccess('keywords', 'Tag saved successfully!');
             } catch (error) {
                 console.error('Error saving keyword:', error);
-                showError('keywords', 'Failed to save keyword: ' + error.message);
+                showError('keywords', 'Failed to save tag: ' + error.message);
             }
         }
 
         async function deleteKeyword(keywordId, categoryId) {
-            if (!confirm('Delete this keyword? This cannot be undone.')) {
+            if (!confirm('Delete this tag? This cannot be undone.')) {
                 return;
             }
 
@@ -729,14 +729,14 @@
                     method: 'DELETE'
                 });
 
-                if (!response.ok) throw new Error('Failed to delete keyword');
+                if (!response.ok) throw new Error('Failed to delete tag');
 
                 await loadKeywordsForCategory(categoryId);
                 await loadKeywords(); // Refresh counts
-                showSuccess('keywords', 'Keyword deleted successfully!');
+                showSuccess('keywords', 'Tag deleted successfully!');
             } catch (error) {
                 console.error('Error deleting keyword:', error);
-                showError('keywords', 'Failed to delete keyword: ' + error.message);
+                showError('keywords', 'Failed to delete tag: ' + error.message);
             }
         }
 
@@ -769,7 +769,7 @@
                 await loadKeywordsForCategory(categoryId);
             } catch (error) {
                 console.error('Error moving keyword:', error);
-                showError('keywords', 'Failed to reorder keyword');
+                showError('keywords', 'Failed to reorder tag');
             }
         }
 
@@ -987,20 +987,20 @@
     <div id="keyword-modal" class="modal">
         <div class="modal-content" style="max-width: 600px;">
             <div class="modal-header">
-                <h2 id="keyword-modal-title">New Keyword</h2>
+                <h2 id="keyword-modal-title">New Tag</h2>
                 <span class="close" onclick="closeKeywordModal()">&times;</span>
             </div>
             <form id="keyword-form" onsubmit="saveKeyword(event)">
                 <input type="hidden" id="keyword-edit-id">
                 <input type="hidden" id="keyword-category-id">
                 <div class="form-group">
-                    <label>Keyword *</label>
+                    <label>Tag *</label>
                     <input type="text" id="keyword-text" required placeholder="e.g., juggling">
                 </div>
                 <div class="form-group">
                     <label>Prompt *</label>
                     <textarea id="keyword-prompt" required rows="4" placeholder="Describe what to look for in images..." style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; font-family: inherit;"></textarea>
-                    <small style="color: #666;">Describe the visual elements that identify this keyword in images</small>
+                    <small style="color: #666;">Describe the visual elements that identify this tag in images</small>
                 </div>
                 <div style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px;">
                     <button type="button" class="btn btn-secondary" onclick="closeKeywordModal()">Cancel</button>

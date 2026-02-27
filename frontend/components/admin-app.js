@@ -220,7 +220,7 @@ class AdminApp extends LitElement {
             class="tab-button ${this.activeTab === 'audit' ? 'active' : ''}"
             @click="${() => this.switchTab('audit')}"
           >
-            <i class="fas fa-chart-column mr-2"></i>Audit
+            <i class="fas fa-chart-column mr-2"></i>User Activity
           </button>
           <button
             class="tab-button ${this.activeTab === 'database' ? 'active' : ''}"

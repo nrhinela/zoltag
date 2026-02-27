@@ -267,7 +267,13 @@ def _serialize_activity_rows(db: Session, rows: list[ActivityEvent]) -> list[dic
         for row in rows
         if row.actor_supabase_uid is not None
     })
+    tenant_ids = sorted({
+        row.tenant_id
+        for row in rows
+        if row.tenant_id is not None
+    })
     actor_by_uid: dict[UUID, dict] = {}
+    tenant_by_id: dict[UUID, dict] = {}
     if actor_ids:
         actor_rows = db.query(
             UserProfile.supabase_uid,
@@ -283,11 +289,28 @@ def _serialize_activity_rows(db: Session, rows: list[ActivityEvent]) -> list[dic
             }
             for actor_uid, email, display_name in actor_rows
         }
+    if tenant_ids:
+        tenant_rows = db.query(
+            TenantModel.id,
+            TenantModel.name,
+            TenantModel.identifier,
+        ).filter(
+            TenantModel.id.in_(tenant_ids)
+        ).all()
+        tenant_by_id = {
+            tenant_id: {
+                "name": str(name or "").strip() or None,
+                "identifier": str(identifier or "").strip() or None,
+            }
+            for tenant_id, name, identifier in tenant_rows
+        }
 
     return [
         {
             "id": str(row.id),
             "tenant_id": str(row.tenant_id) if row.tenant_id else None,
+            "tenant_name": tenant_by_id.get(row.tenant_id, {}).get("name"),
+            "tenant_identifier": tenant_by_id.get(row.tenant_id, {}).get("identifier"),
             "actor_supabase_uid": str(row.actor_supabase_uid) if row.actor_supabase_uid else None,
             "actor_email": actor_by_uid.get(row.actor_supabase_uid, {}).get("email"),
             "actor_display_name": actor_by_uid.get(row.actor_supabase_uid, {}).get("display_name"),

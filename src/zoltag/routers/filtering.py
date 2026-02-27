@@ -13,7 +13,7 @@ import json
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
-from sqlalchemy import func, select, or_
+from sqlalchemy import func, select, or_, and_
 from sqlalchemy.sql import Selectable
 
 from zoltag.auth.models import UserProfile
@@ -25,6 +25,20 @@ from zoltag.dependencies import get_tenant_setting
 from zoltag.machine_tag_types import normalize_ml_tag_type
 from zoltag.routers.filter_builder import FilterBuilder
 from zoltag.tenant_scope import tenant_column_filter
+
+
+def normalize_source_provider_filter(value: Optional[str]) -> Optional[str]:
+    """Normalize source provider filter values to canonical provider ids."""
+    normalized = str(value or "").strip().lower()
+    if not normalized or normalized == "all":
+        return None
+    if normalized in {"google", "google-drive", "google_drive", "drive"}:
+        return "gdrive"
+    if normalized in {"yt"}:
+        return "youtube"
+    if normalized in {"managed_uploads", "managed-uploads", "uploads", "upload"}:
+        return "managed"
+    return normalized
 
 
 def apply_list_filter(
@@ -927,6 +941,7 @@ def build_image_query_with_subqueries(
     dropbox_path_prefix: Optional[str] = None,
     filename_query: Optional[str] = None,
     media_type: Optional[str] = None,
+    source_provider: Optional[str] = None,
     ml_keyword: Optional[str] = None,
     ml_tag_type: Optional[str] = None,
     apply_ml_tag_filter: bool = True,
@@ -955,6 +970,7 @@ def build_image_query_with_subqueries(
         no_permatag_operator: Operator for combining no-permatag conditions ("AND" or "OR")
         filename_query: Case-insensitive partial filename match
         media_type: Optional media type filter ('image' or 'video')
+        source_provider: Optional source provider filter (e.g., 'dropbox', 'gdrive', 'youtube')
         ml_keyword: Optional ML keyword to filter by (for zero-shot tagging)
         ml_tag_type: Optional ML tag type (e.g., 'siglip', 'clip') to use with ml_keyword
         apply_ml_tag_filter: Whether to apply explicit ML keyword/type filter subquery
@@ -1107,35 +1123,31 @@ def build_image_query_with_subqueries(
                 base_query = base_query.filter(condition)
 
     if dropbox_path_prefix:
-        normalized_prefixes = []
-        for prefix in [dropbox_path_prefix]:
-            if not prefix:
-                continue
-            normalized = prefix.strip()
-            if not normalized or normalized == "/":
-                continue
+        normalized = dropbox_path_prefix.strip()
+        if normalized and normalized != "/":
             if not normalized.startswith("/"):
                 normalized = f"/{normalized}"
             if not normalized.endswith("/"):
                 normalized = f"{normalized}/"
-            normalized_prefixes.append(normalized)
-        if normalized_prefixes:
-            normalized_prefixes = list(dict.fromkeys(normalized_prefixes))
-            dropbox_subquery = (
+            folder_subquery = (
                 db.query(ImageMetadata.id)
                 .join(Asset, Asset.id == ImageMetadata.asset_id)
                 .filter(
                     tenant_column_filter(ImageMetadata, tenant),
                     tenant_column_filter(Asset, tenant),
-                    Asset.source_provider == "dropbox",
-                    or_(*[
-                        Asset.source_key.ilike(f"{prefix}%")
-                        for prefix in normalized_prefixes
-                    ])
+                    or_(
+                        Asset.source_display_path.ilike(f"{normalized}%"),
+                        # Fallback for Dropbox assets without source_display_path (pre-migration)
+                        and_(
+                            Asset.source_provider == "dropbox",
+                            Asset.source_display_path.is_(None),
+                            Asset.source_key.ilike(f"{normalized}%"),
+                        ),
+                    ),
                 )
                 .subquery()
             )
-            subqueries_list.append(dropbox_subquery)
+            subqueries_list.append(folder_subquery)
 
     if filename_query:
         normalized_filename_query = str(filename_query).strip()
@@ -1162,6 +1174,20 @@ def build_image_query_with_subqueries(
             .subquery()
         )
         subqueries_list.append(media_type_subquery)
+
+    normalized_source_provider = normalize_source_provider_filter(source_provider)
+    if normalized_source_provider:
+        source_provider_subquery = (
+            db.query(ImageMetadata.id)
+            .join(Asset, Asset.id == ImageMetadata.asset_id)
+            .filter(
+                tenant_column_filter(ImageMetadata, tenant),
+                tenant_column_filter(Asset, tenant),
+                func.lower(Asset.source_provider) == normalized_source_provider,
+            )
+            .subquery()
+        )
+        subqueries_list.append(source_provider_subquery)
 
     # Apply ML tag type filter if both keyword and tag_type provided
     if apply_ml_tag_filter and ml_keyword and ml_tag_type:

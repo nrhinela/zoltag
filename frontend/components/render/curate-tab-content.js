@@ -32,13 +32,13 @@ export function renderCurateTabContent(host, { formatCurateDate }) {
             class="curate-subtab ${host.curateSubTab === 'browse-folder' ? 'active' : ''}"
             @click=${() => host._handleCurateSubTabChange('browse-folder')}
           >
-            Browse by Folder
+            Browse by Source Folder
           </button>
           <button
             class="curate-subtab ${host.curateSubTab === 'tag-audit' ? 'active' : ''}"
             @click=${() => host._handleCurateSubTabChange('tag-audit')}
           >
-            Tag audit
+            AI Tag Finder
           </button>
           <button
             class="curate-subtab ${host.curateSubTab === 'home' ? 'active' : ''}"
@@ -133,6 +133,7 @@ export function renderCurateTabContent(host, { formatCurateDate }) {
             .dropboxPathPrefix=${host.curateDropboxPathPrefix}
             .filenameQuery=${host.curateFilenameQuery}
             .textQuery=${host.curateTextQuery}
+            .sourceProvider=${host.curateSourceProvider}
             .renderCurateRatingWidget=${(image) => renderCurateRatingWidget(host, image)}
             .renderCurateRatingStatic=${renderCurateRatingStatic}
             .renderCuratePermatagSummary=${renderCuratePermatagSummary}
@@ -225,6 +226,7 @@ export function renderCurateTabContent(host, { formatCurateDate }) {
             .dropboxPathPrefix=${host.curateAuditDropboxPathPrefix}
             .filenameQuery=${host.curateAuditFilenameQuery}
             .textQuery=${host.curateAuditTextQuery}
+            .sourceProvider=${host.curateAuditSourceProvider}
             .offset=${host.curateAuditPageOffset || 0}
             .limit=${host.curateAuditLimit}
             .total=${host.curateAuditTotal}
@@ -288,7 +290,7 @@ export function renderCurateTabContent(host, { formatCurateDate }) {
                   </li>
                   <li class="flex gap-3">
                     <span class="font-bold flex-shrink-0">2.</span>
-                    <span><button @click=${() => host._handleCurateSubTabChange('tag-audit')} class="font-bold text-blue-600 hover:text-blue-800 hover:underline cursor-pointer">Tag Audit Tab</button>: Review and validate machine-generated tags. Ensure your automated tags are accurate and complete.</span>
+                    <span><button @click=${() => host._handleCurateSubTabChange('tag-audit')} class="font-bold text-blue-600 hover:text-blue-800 hover:underline cursor-pointer">AI Tag Finder</button>: Review and validate machine-generated tags. Ensure your automated tags are accurate and complete.</span>
                   </li>
                   <li class="flex gap-3">
                     <span class="font-bold flex-shrink-0">3.</span>

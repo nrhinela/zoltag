@@ -1,4 +1,4 @@
-"""Router for Google Drive OAuth handlers."""
+"""Router for YouTube OAuth handlers."""
 
 from urllib.parse import urlencode
 
@@ -16,21 +16,14 @@ from zoltag.settings import settings
 from zoltag.tenant_scope import tenant_reference_filter
 
 router = APIRouter(
-    tags=["gdrive"],
+    tags=["youtube"],
 )
 
 
-def _resolve_gdrive_credentials(record) -> tuple[str, str]:
-    """Return (client_id, client_secret), preferring env vars over per-record config."""
-    client_id = str(settings.zoltag_gdrive_connector_client_id or "").strip() or str(
-        (record.config_json or {}).get("client_id") or ""
-    ).strip()
+def _resolve_youtube_credentials() -> tuple[str, str]:
+    """Return (client_id, client_secret) for the YouTube/Google OAuth app."""
+    client_id = str(settings.zoltag_gdrive_connector_client_id or "").strip()
     client_secret = str(settings.zoltag_gdrive_connector_secret or "").strip()
-    if not client_secret:
-        try:
-            client_secret = get_secret(record.gdrive_client_secret_name) or ""
-        except Exception:
-            client_secret = ""
     return client_id, client_secret
 
 
@@ -63,8 +56,8 @@ def _resolve_redirect_origin(request: Request, explicit_origin: str | None = Non
     raise HTTPException(status_code=500, detail="Unable to resolve OAuth redirect origin")
 
 
-@router.get("/oauth/gdrive/authorize")
-async def gdrive_authorize(
+@router.get("/oauth/youtube/authorize")
+async def youtube_authorize(
     request: Request,
     tenant: str,
     flow: str = "popup",
@@ -73,7 +66,7 @@ async def gdrive_authorize(
     return_to: str | None = None,
     db: Session = Depends(get_db),
 ):
-    """Redirect user to Google OAuth consent for Drive access."""
+    """Redirect user to Google OAuth consent for YouTube access."""
     flow = "redirect" if flow == "redirect" else "popup"
     resolved_return_to = sanitize_return_path(return_to)
     tenant_obj = _resolve_tenant(db, tenant)
@@ -82,16 +75,16 @@ async def gdrive_authorize(
 
     repo = TenantIntegrationRepository(db)
     try:
-        provider_record = repo.get_provider_record(tenant_obj, "gdrive", provider_id=provider_id)
+        provider_record = repo.get_provider_record(tenant_obj, "youtube", provider_id=provider_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    client_id, _client_secret = _resolve_gdrive_credentials(provider_record)
+    client_id, _client_secret = _resolve_youtube_credentials()
     if not client_id:
-        raise HTTPException(status_code=400, detail="Google Drive client ID not configured")
+        raise HTTPException(status_code=400, detail="YouTube client ID not configured")
 
     resolved_origin = _resolve_redirect_origin(request, redirect_origin)
-    redirect_uri = f"{resolved_origin}/oauth/gdrive/callback"
+    redirect_uri = f"{resolved_origin}/oauth/youtube/callback"
     state = oauth_state.generate_with_context(
         str(tenant_obj.id),
         {
@@ -105,7 +98,7 @@ async def gdrive_authorize(
         "client_id": client_id,
         "redirect_uri": redirect_uri,
         "response_type": "code",
-        "scope": "https://www.googleapis.com/auth/drive.readonly",
+        "scope": "https://www.googleapis.com/auth/youtube.readonly",
         "access_type": "offline",
         "include_granted_scopes": "true",
         "prompt": "consent",
@@ -115,14 +108,14 @@ async def gdrive_authorize(
     return RedirectResponse(oauth_url)
 
 
-@router.get("/oauth/gdrive/callback")
-async def gdrive_callback(
+@router.get("/oauth/youtube/callback")
+async def youtube_callback(
     request: Request,
     code: str,
     state: str,
     db: Session = Depends(get_db),
 ):
-    """Handle Google OAuth callback and persist refresh token."""
+    """Handle Google OAuth callback and persist YouTube refresh token."""
     state_payload = oauth_state.consume_with_context(state)
     state_context: dict = {}
     if state_payload:
@@ -140,20 +133,20 @@ async def gdrive_callback(
     provider_id = str(state_context.get("provider_id") or "").strip() or None
     repo = TenantIntegrationRepository(db)
     try:
-        provider_record = repo.get_provider_record(tenant_obj, "gdrive", provider_id=provider_id)
+        provider_record = repo.get_provider_record(tenant_obj, "youtube", provider_id=provider_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    token_secret = provider_record.gdrive_token_secret_name
-    client_id, client_secret = _resolve_gdrive_credentials(provider_record)
+    token_secret = provider_record.youtube_token_secret_name
+    client_id, client_secret = _resolve_youtube_credentials()
 
     if not client_id:
-        raise HTTPException(status_code=400, detail="Google Drive client ID not configured")
+        raise HTTPException(status_code=400, detail="YouTube client ID not configured")
     if not client_secret:
-        raise HTTPException(status_code=400, detail="Google Drive client secret not configured")
+        raise HTTPException(status_code=400, detail="YouTube client secret not configured")
 
     resolved_origin = _resolve_redirect_origin(request, state_context.get("redirect_origin"))
-    redirect_uri = f"{resolved_origin}/oauth/gdrive/callback"
+    redirect_uri = f"{resolved_origin}/oauth/youtube/callback"
 
     with httpx.Client(timeout=30) as client:
         response = client.post(
@@ -182,10 +175,8 @@ async def gdrive_callback(
 
     repo.update_provider(
         tenant_obj,
-        "gdrive",
+        "youtube",
         provider_id=provider_record.id,
-        client_id=client_id,
-        client_secret_name=provider_record.gdrive_client_secret_name,
         token_secret_name=token_secret,
         config_json_patch={"token_stored": True},
     )
@@ -197,7 +188,7 @@ async def gdrive_callback(
         redirect_target = append_query_params(
             return_to,
             {
-                "integration": "gdrive",
+                "integration": "youtube",
                 "result": "connected",
             },
         )
@@ -207,7 +198,7 @@ async def gdrive_callback(
         """
         <html>
             <body>
-                <h1>Google Drive Connected</h1>
+                <h1>YouTube Connected</h1>
                 <p>You can close this window and return to Zoltag.</p>
                 <script>window.close();</script>
             </body>

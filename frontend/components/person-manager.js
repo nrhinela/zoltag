@@ -19,6 +19,7 @@ class PersonManager extends LitElement {
   static properties = {
     tenant: { type: String },
     readOnly: { type: Boolean },
+    hasDefinedTags: { type: Boolean },
     view: { type: String }, // 'list' or 'editor'
     people: { type: Array },
     selectedPersonId: { type: Number },
@@ -292,6 +293,16 @@ class PersonManager extends LitElement {
       font-size: 48px;
       margin-bottom: 12px;
     }
+    .warning-banner {
+      margin-top: 12px;
+      padding: 10px 12px;
+      border-radius: 8px;
+      border: 1px solid #fdba74;
+      background: #fff7ed;
+      color: #9a3412;
+      font-size: 14px;
+      font-weight: 600;
+    }
     .references-section {
       margin-top: 24px;
       padding-top: 20px;
@@ -438,6 +449,7 @@ class PersonManager extends LitElement {
   constructor() {
     super();
     this.readOnly = false;
+    this.hasDefinedTags = true;
     this.view = 'list';
     this.people = [];
     this.selectedPersonId = null;
@@ -792,6 +804,7 @@ class PersonManager extends LitElement {
   render() {
     const filteredPeople = this.getFilteredPeople();
     const referenceSummary = this._getReferenceSummary();
+    const showTagsWarning = this.view === 'list' && !this.hasDefinedTags;
     return html`
       <div class="container">
         <div class="header">
@@ -816,6 +829,11 @@ class PersonManager extends LitElement {
               </button>
             `}
           </div>
+          ${showTagsWarning ? html`
+            <div class="warning-banner" role="status">
+              Stop - you should define your tags first.
+            </div>
+          ` : html``}
         </div>
 
         <div class="content">

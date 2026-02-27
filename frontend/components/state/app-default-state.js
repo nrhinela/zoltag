@@ -30,6 +30,7 @@ export function initializeAppDefaultState(host) {
   host.curateDropboxPathPrefix = '';
   host.curateFilenameQuery = '';
   host.curateTextQuery = '';
+  host.curateSourceProvider = '';
   host.curateListId = '';
   host.curateListExcludeId = '';
   host.curateFilters = buildCurateFilterObject(host);
@@ -81,6 +82,7 @@ export function initializeAppDefaultState(host) {
   host.curateAuditDropboxPathPrefix = '';
   host.curateAuditFilenameQuery = '';
   host.curateAuditTextQuery = '';
+  host.curateAuditSourceProvider = '';
   host.curateHomeRefreshing = false;
   host.curateStatsLoading = false;
   host.curateAdvancedOpen = false;

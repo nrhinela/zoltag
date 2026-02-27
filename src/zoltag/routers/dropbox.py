@@ -190,6 +190,7 @@ async def dropbox_callback(
         token_secret_name=provider_record.dropbox_token_secret_name,
         config_json_patch={
             "app_secret_name": credentials.get("app_secret_name"),
+            "token_stored": True,
         },
     )
     db.commit()

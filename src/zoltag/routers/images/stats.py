@@ -8,13 +8,26 @@ from sqlalchemy import func, distinct, and_, case
 from zoltag.database import SessionLocal
 from zoltag.dependencies import get_tenant, get_tenant_setting
 from zoltag.tenant import Tenant
-from zoltag.metadata import ImageMetadata, Permatag
+from zoltag.metadata import Asset, ImageMetadata, Permatag
 from zoltag.models.config import Keyword, KeywordCategory, PhotoList
 from zoltag.tenant_scope import tenant_column_filter_for_values
 from zoltag.settings import settings
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+def _normalize_source_provider_key(value: str | None) -> str:
+    normalized = str(value or "").strip().lower()
+    if not normalized:
+        return "unknown"
+    if normalized in {"google", "google-drive", "google_drive", "drive"}:
+        return "gdrive"
+    if normalized == "yt":
+        return "youtube"
+    if normalized in {"managed_uploads", "managed-uploads", "uploads", "upload"}:
+        return "managed"
+    return normalized
 
 
 def _compute_gcs_storage_bytes(tenant: Tenant) -> int:
@@ -73,6 +86,7 @@ def _compute_image_stats(tenant_id: str, include_ratings: bool) -> dict:
             func.sum(case((ImageMetadata.rating == 2, 1), else_=0)),
             func.sum(case((ImageMetadata.rating == 3, 1), else_=0)),
             func.sum(case((ImageMetadata.rating > 0, 1), else_=0)),
+            func.sum(ImageMetadata.file_size),
         ).filter(
             tenant_column_filter_for_values(ImageMetadata, tenant_id)
         ).one()
@@ -95,6 +109,7 @@ def _compute_image_stats(tenant_id: str, include_ratings: bool) -> dict:
             'stars_3': int(img_row[11] or 0),
         }
         rated_image_count = int(img_row[12] or 0)
+        original_file_bytes = int(img_row[13] or 0)
 
         # Single pass over permatags: reviewed count, positive image count, positive tag count, oldest/newest
         ptag_row = db.query(
@@ -136,6 +151,23 @@ def _compute_image_stats(tenant_id: str, include_ratings: bool) -> dict:
         list_count = db.query(func.count(PhotoList.id)).filter(
             tenant_column_filter_for_values(PhotoList, tenant_id)
         ).scalar() or 0
+
+        source_provider_rows = db.query(
+            Asset.source_provider,
+            func.count(ImageMetadata.id),
+        ).join(
+            Asset, Asset.id == ImageMetadata.asset_id
+        ).filter(
+            tenant_column_filter_for_values(ImageMetadata, tenant_id),
+            tenant_column_filter_for_values(Asset, tenant_id),
+        ).group_by(
+            Asset.source_provider
+        ).all()
+
+        source_provider_counts: dict[str, int] = {}
+        for provider, count in source_provider_rows:
+            key = _normalize_source_provider_key(provider)
+            source_provider_counts[key] = source_provider_counts.get(key, 0) + int(count or 0)
 
         rating_by_category = {}
         if include_ratings:
@@ -283,9 +315,11 @@ def _compute_image_stats(tenant_id: str, include_ratings: bool) -> dict:
             "category_count": int(category_count),
             "keyword_count": int(keyword_count),
             "rated_image_count": rated_image_count,
+            "original_file_bytes": original_file_bytes,
             "rating_counts": rating_counts,
             "photo_age_bins": photo_age_bins,
-            "rating_by_category": rating_by_category
+            "rating_by_category": rating_by_category,
+            "source_provider_counts": source_provider_counts,
         }
     finally:
         db.close()

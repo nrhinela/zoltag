@@ -8,7 +8,8 @@ import {
   addCategoryFilterParams,
   addOrderingParams,
   addMiscParams,
-  addMediaTypeParams
+  addMediaTypeParams,
+  addSourceParams,
 } from './api-params.js';
 import { createCrudOps } from './crud-helper.js';
 import { invalidateQueries, queryRequest } from './request-cache.js';
@@ -151,6 +152,7 @@ export async function getImages(tenantId, filters = {}) {
   addMlTagParams(params, filters);
   addMlSimilarityParams(params, filters);
   addMediaTypeParams(params, filters);
+  addSourceParams(params, filters);
 
   const url = `/images?${params.toString()}`;
   return fetchWithAuth(url, {
@@ -859,6 +861,52 @@ export async function getLiveDropboxFolders(tenantId, options = {}) {
 }
 
 /**
+ * Save Google Drive OAuth credentials (client_id + client_secret) for a tenant
+ * @param {string} tenantId
+ * @param {{clientId: string, clientSecret: string}} credentials
+ */
+export async function saveGdriveCredentials(tenantId, { clientId, clientSecret }) {
+  const result = await fetchWithAuth('/admin/integrations/gdrive/credentials', {
+    method: 'PATCH',
+    tenantId,
+    body: JSON.stringify({ client_id: clientId, client_secret: clientSecret }),
+  });
+  invalidateQueries(['integrationStatus', tenantId]);
+  return result;
+}
+
+/**
+ * List Google Drive folders for sync-folder selection (live hierarchical browser)
+ * @param {string} tenantId - Tenant ID
+ * @param {{parentId?: string, q?: string, limit?: number}} options
+ * @returns {Promise<{folders: {id: string, name: string}[], has_more: boolean}>}
+ */
+export async function getLiveGdriveFolders(tenantId, options = {}) {
+  const params = new URLSearchParams();
+  const parentId = String(options?.parentId || '').trim();
+  const query = String(options?.q || '').trim();
+  const limit = Number(options?.limit || 0);
+  const ids = Array.isArray(options?.ids)
+    ? options.ids.filter(Boolean).join(',')
+    : String(options?.ids || '').trim();
+  if (parentId) params.append('parent_id', parentId);
+  if (query) params.append('q', query);
+  if (Number.isFinite(limit) && limit > 0) params.append('limit', String(limit));
+  if (ids) params.append('ids', ids);
+  const suffix = params.toString() ? `?${params.toString()}` : '';
+  return fetchWithAuth(`/admin/integrations/gdrive/folders${suffix}`, { tenantId });
+}
+
+/**
+ * List YouTube playlists for sync-folder selection
+ * @param {string} tenantId - Tenant ID
+ * @returns {Promise<{playlists: {id: string, name: string}[]}>}
+ */
+export async function getLiveYoutubePlaylists(tenantId) {
+  return fetchWithAuth('/admin/integrations/youtube/playlists', { tenantId });
+}
+
+/**
  * Start provider OAuth connection for current tenant (tenant admin scope)
  * @param {string} tenantId - Tenant ID
  * @param {'dropbox'|'gdrive'} provider - Provider id
@@ -873,7 +921,7 @@ export async function startIntegrationConnect(
   redirectOrigin = ''
 ) {
   const normalizedProvider = String(provider || '').trim().toLowerCase();
-  if (!normalizedProvider || !['dropbox', 'gdrive'].includes(normalizedProvider)) {
+  if (!normalizedProvider || !['dropbox', 'gdrive', 'youtube'].includes(normalizedProvider)) {
     throw new Error('Invalid provider');
   }
   const result = await fetchWithAuth(`/admin/integrations/${normalizedProvider}/connect`, {
@@ -896,7 +944,7 @@ export async function startIntegrationConnect(
  */
 export async function disconnectIntegration(tenantId, provider) {
   const normalizedProvider = String(provider || '').trim().toLowerCase();
-  if (!normalizedProvider || !['dropbox', 'gdrive'].includes(normalizedProvider)) {
+  if (!normalizedProvider || !['dropbox', 'gdrive', 'youtube'].includes(normalizedProvider)) {
     throw new Error('Invalid provider');
   }
   const result = await fetchWithAuth(`/admin/integrations/${normalizedProvider}/connection`, {
@@ -904,6 +952,106 @@ export async function disconnectIntegration(tenantId, provider) {
     tenantId,
   });
   invalidateQueries(['integrationStatus', tenantId]);
+  return result;
+}
+
+/**
+ * List all provider integration instances for a tenant (all rows, including non-primary)
+ * @param {string} tenantId - Tenant ID
+ * @returns {Promise<{providers: Object[]}>} All provider records
+ */
+export async function getIntegrationProviders(tenantId) {
+  return queryRequest(
+    ['integrationProviders', tenantId],
+    () => fetchWithAuth('/admin/integrations/providers', { tenantId }),
+    { staleTimeMs: INTEGRATION_STATUS_CACHE_MS }
+  );
+}
+
+/**
+ * Create a new provider integration instance for a tenant
+ * @param {string} tenantId - Tenant ID
+ * @param {string} providerType - Provider type: 'dropbox', 'gdrive', or 'youtube'
+ * @param {string} label - Human-readable label for the new instance
+ * @returns {Promise<Object>} Created provider record
+ */
+export async function createIntegration(tenantId, providerType, label = '') {
+  const result = await fetchWithAuth('/admin/integrations/providers', {
+    method: 'POST',
+    tenantId,
+    body: JSON.stringify({ provider_type: providerType, label: label || undefined }),
+  });
+  invalidateQueries(['integrationStatus', tenantId]);
+  invalidateQueries(['integrationProviders', tenantId]);
+  return result;
+}
+
+/**
+ * Update a specific provider integration instance by UUID
+ * @param {string} tenantId - Tenant ID
+ * @param {string} providerUuid - Provider instance UUID
+ * @param {Object} payload - Fields to update (label, is_active, sync_folders, etc.)
+ * @returns {Promise<Object>} Updated provider record
+ */
+export async function updateIntegrationProvider(tenantId, providerUuid, payload = {}) {
+  const result = await fetchWithAuth(`/admin/integrations/providers/${providerUuid}`, {
+    method: 'PATCH',
+    tenantId,
+    body: JSON.stringify(payload),
+  });
+  invalidateQueries(['integrationStatus', tenantId]);
+  invalidateQueries(['integrationProviders', tenantId]);
+  return result;
+}
+
+/**
+ * Delete a specific provider integration instance by UUID
+ * @param {string} tenantId - Tenant ID
+ * @param {string} providerUuid - Provider instance UUID
+ * @returns {Promise<Object>}
+ */
+export async function deleteIntegrationProvider(tenantId, providerUuid) {
+  const result = await fetchWithAuth(`/admin/integrations/providers/${providerUuid}`, {
+    method: 'DELETE',
+    tenantId,
+  });
+  invalidateQueries(['integrationStatus', tenantId]);
+  invalidateQueries(['integrationProviders', tenantId]);
+  return result;
+}
+
+/**
+ * Start OAuth connect for a specific provider integration instance by UUID
+ * @param {string} tenantId - Tenant ID
+ * @param {string} providerUuid - Provider instance UUID
+ * @param {string} returnTo - Same-origin return path after OAuth
+ * @param {string} redirectOrigin - Browser origin for callback
+ * @returns {Promise<Object>} OAuth authorize URL payload
+ */
+export async function connectIntegrationProvider(tenantId, providerUuid, returnTo = '/app?tab=library&subTab=providers', redirectOrigin = '') {
+  const result = await fetchWithAuth(`/admin/integrations/providers/${providerUuid}/connect`, {
+    method: 'POST',
+    tenantId,
+    body: JSON.stringify({ return_to: returnTo, redirect_origin: redirectOrigin }),
+  });
+  invalidateQueries(['integrationStatus', tenantId]);
+  invalidateQueries(['integrationProviders', tenantId]);
+  return result;
+}
+
+/**
+ * Disconnect OAuth token for a specific provider integration instance by UUID
+ * @param {string} tenantId - Tenant ID
+ * @param {string} providerUuid - Provider instance UUID
+ * @returns {Promise<Object>}
+ */
+export async function disconnectIntegrationProvider(tenantId, providerUuid) {
+  const result = await fetchWithAuth(`/admin/integrations/providers/${providerUuid}/connection`, {
+    method: 'DELETE',
+    tenantId,
+  });
+  invalidateQueries(['integrationStatus', tenantId]);
+  invalidateQueries(['integrationProviders', tenantId]);
   return result;
 }
 
@@ -927,7 +1075,9 @@ export async function updateIntegrationConfig(tenantId, payload = {}) {
   if (payload.isActive !== undefined) {
     body.is_active = !!payload.isActive;
   }
-  const result = await fetchWithAuth('/admin/integrations/dropbox/config', {
+  const provider = String(payload.provider || 'dropbox').trim().toLowerCase();
+  const configEndpoint = provider === 'gdrive' ? '/admin/integrations/gdrive/config' : '/admin/integrations/dropbox/config';
+  const result = await fetchWithAuth(configEndpoint, {
     method: 'PATCH',
     tenantId,
     body: JSON.stringify(body),

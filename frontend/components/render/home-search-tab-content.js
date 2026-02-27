@@ -104,10 +104,19 @@ function renderCtaGlyph(glyphKey) {
   return html`<span class="home-cta-glyph-char">+</span>`;
 }
 
+function formatOriginalSizeGb(bytesValue) {
+  const bytes = Number(bytesValue || 0);
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 GB';
+  const gb = bytes / (1024 ** 3);
+  const fractionDigits = gb >= 100 ? 0 : 1;
+  return `${gb.toLocaleString('en-US', { minimumFractionDigits: fractionDigits, maximumFractionDigits: fractionDigits })} GB`;
+}
+
 export function renderHomeTabContent(host, { navCards, formatCurateDate }) {
   const imageStats = host.imageStats || {};
   const totalImages = Number(imageStats.image_count || 0);
   const taggedImages = Number(imageStats.positive_permatag_image_count || 0);
+  const originalFileBytes = Number(imageStats.original_file_bytes || 0);
   const coverageRate = totalImages > 0
     ? `${Math.round((taggedImages / totalImages) * 100)}%`
     : '0%';
@@ -124,10 +133,11 @@ export function renderHomeTabContent(host, { navCards, formatCurateDate }) {
     ],
     'keyword-definitions': [
       { label: 'Categories', value: formatStatNumber(imageStats.category_count) },
-      { label: 'Keywords', value: formatStatNumber(imageStats.keyword_count) },
+      { label: 'Tags', value: formatStatNumber(imageStats.keyword_count) },
     ],
     'asset-library': [
       { label: 'Items', value: formatStatNumber(imageStats.image_count) },
+      { label: 'Originals', value: formatOriginalSizeGb(originalFileBytes) },
     ],
   };
   const exploreTagCategories = getKeywordsByCategoryFromList(host.keywords || [])
@@ -218,8 +228,8 @@ export function renderHomeTabContent(host, { navCards, formatCurateDate }) {
       tab: 'library',
       subTab: 'keywords',
       adminSubTab: 'tagging',
-      label: 'Keyword Definitions',
-      subtitle: 'Define keyword categories and tag vocabulary.',
+      label: 'Tag Definitions',
+      subtitle: 'Define tag categories and tag vocabulary.',
       iconKey: 'keywords',
       accentClass: 'home-cta-keywords',
       glyphKey: 'keywords',
@@ -431,7 +441,7 @@ export function renderHomeTabContent(host, { navCards, formatCurateDate }) {
                     class="admin-subtab ${homeRecommendationsTab === 'keywords' ? 'active' : ''}"
                     @click=${() => { host.homeRecommendationsTab = 'keywords'; }}
                   >
-                    Keywords
+                    Tags
                   </button>
                   <button
                     type="button"
@@ -689,16 +699,16 @@ export function renderHomeTabContent(host, { navCards, formatCurateDate }) {
                       .
                     </p>
                   ` : html`
-                    <h3 class="home-keyword-onboarding-title">Add keywords to get started.</h3>
+                    <h3 class="home-keyword-onboarding-title">Add tags to get started.</h3>
                     <p class="home-keyword-onboarding-text">
-                      You do not have any keywords yet. Keywords power search, tagging, curation, and model suggestions.
+                      You do not have any tags yet. Tags power search, tagging, curation, and model suggestions.
                     </p>
                     <button
                       type="button"
                       class="home-keyword-onboarding-btn"
                       @click=${handleKeywordSetupNavigate}
                     >
-                      Setup your Keywords
+                      Setup your Tags
                     </button>
                   `}
                 </div>

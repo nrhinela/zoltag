@@ -118,6 +118,7 @@ export class CurateBrowseFolderTab extends LitElement {
       categoryFilterOperator: undefined,
       categoryFilterSource: 'permatags',
       textQuery: '',
+      sourceProvider: '',
       noPermatagCategories: [],
       noPermatagUntagged: false,
       noPermatagOperator: 'AND',
@@ -240,7 +241,12 @@ export class CurateBrowseFolderTab extends LitElement {
         this.browseDragStartIndex = null;
         this.browseDragEndIndex = null;
       }
+      const hadLongPress = this._browseLongPressTriggered;
       this._browseGroupKey = null;
+      this._browseSelectionHandlers.cancelPressState();
+      if (hadLongPress) {
+        this._browseSuppressClick = true;
+      }
     };
 
     document.addEventListener('pointerdown', this._handleBrowseGlobalPointerDown);
@@ -953,6 +959,7 @@ export class CurateBrowseFolderTab extends LitElement {
       categoryFilterSource: 'permatags',
       filenameQuery: '',
       textQuery: '',
+      sourceProvider: '',
       listId: undefined,
       listExcludeId: undefined,
       rating: undefined,
@@ -1008,6 +1015,9 @@ export class CurateBrowseFolderTab extends LitElement {
           break;
         case 'text_search':
           nextFilters.textQuery = chip.value || '';
+          break;
+        case 'source':
+          nextFilters.sourceProvider = chip.value || '';
           break;
         case 'tag_coverage': {
           const categories = Array.isArray(chip.noPermatagCategories)
@@ -1282,7 +1292,7 @@ export class CurateBrowseFolderTab extends LitElement {
             .keywords=${this.keywords}
             .activeFilters=${this.browseChipFilters}
             .lists=${this._lists}
-            .availableFilterTypes=${['keyword', 'rating', 'list', 'tag_coverage', 'filename', 'text_search']}
+            .availableFilterTypes=${['keyword', 'rating', 'source', 'list', 'tag_coverage', 'filename', 'text_search']}
             .renderSortControls=${() => html`
               <div class="flex items-center gap-2">
                 <span class="text-sm font-semibold text-gray-700">Sort:</span>
@@ -1317,7 +1327,7 @@ export class CurateBrowseFolderTab extends LitElement {
         <div class="curate-pane">
           <div class="curate-pane-header">
             <div class="curate-pane-header-row">
-              <span class="text-sm font-semibold">Browse by Folder</span>
+              <span class="text-sm font-semibold">Browse by Source Folder</span>
             </div>
           </div>
           <div class="curate-pane-body">
@@ -1474,7 +1484,7 @@ export class CurateBrowseFolderTab extends LitElement {
 
         <right-panel
           .tools=${[
-            { id: 'tags', label: 'Keyword' },
+            { id: 'tags', label: 'Tag' },
             { id: 'ratings', label: 'Ratings' },
             { id: 'lists', label: 'Lists' },
           ]}
