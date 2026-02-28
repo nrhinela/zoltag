@@ -335,6 +335,7 @@ async def get_current_user(
     request: Request,
     authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db),
+    x_tenant_id: Optional[str] = Header(None, alias="X-Tenant-ID"),
     x_forwarded_for: Optional[str] = Header(None, alias="X-Forwarded-For"),
     x_real_ip: Optional[str] = Header(None, alias="X-Real-IP"),
     user_agent: Optional[str] = Header(None, alias="User-Agent"),
@@ -402,11 +403,22 @@ async def get_current_user(
     should_emit_login_event = is_new_login_session or (token_issued_at is None and is_auth_me_request)
 
     if should_emit_login_event:
+        activity_tenant_id: Optional[str] = None
+        tenant_ref = str(x_tenant_id).strip() if isinstance(x_tenant_id, str) else ""
+        if tenant_ref:
+            activity_tenant_id = _resolve_tenant_scope(db, tenant_ref) or tenant_ref
+        else:
+            accepted_memberships = db.query(UserTenant.tenant_id).filter(
+                UserTenant.supabase_uid == user.supabase_uid,
+                UserTenant.accepted_at.isnot(None),
+            ).limit(2).all()
+            if len(accepted_memberships) == 1:
+                activity_tenant_id = str(accepted_memberships[0][0])
         record_activity_event(
             db,
             event_type=EVENT_AUTH_LOGIN,
             actor_supabase_uid=user.supabase_uid,
-            tenant_id=None,
+            tenant_id=activity_tenant_id,
             request_path=request_path,
             client_ip=extract_client_ip(
                 x_forwarded_for=x_forwarded_for,

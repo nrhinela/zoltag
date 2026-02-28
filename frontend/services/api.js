@@ -389,8 +389,13 @@ export async function retagImage(tenantId, imageId) {
     });
 }
 
-export async function sync(tenantId) {
-    return fetchWithAuth(`/sync`, {
+export async function sync(tenantId, { provider, provider_id, reprocess_existing } = {}) {
+    const params = new URLSearchParams();
+    if (provider) params.set('provider', String(provider));
+    if (provider_id) params.set('provider_id', String(provider_id));
+    if (reprocess_existing !== undefined) params.set('reprocess_existing', reprocess_existing ? 'true' : 'false');
+    const query = params.toString();
+    return fetchWithAuth(`/sync${query ? `?${query}` : ''}`, {
         method: 'POST',
         tenantId,
     });
@@ -841,7 +846,7 @@ export async function getIntegrationStatus(tenantId) {
 /**
  * Live Dropbox folder browse/search for provider sync-folder configuration
  * @param {string} tenantId - Tenant ID
- * @param {{query?: string, path?: string, limit?: number, depth?: number, mode?: string}} options
+ * @param {{query?: string, path?: string, limit?: number, depth?: number, mode?: string, provider_id?: string}} options
  * @returns {Promise<{folders: string[], has_more?: boolean}>}
  */
 export async function getLiveDropboxFolders(tenantId, options = {}) {
@@ -851,11 +856,13 @@ export async function getLiveDropboxFolders(tenantId, options = {}) {
   const limit = Number(options?.limit || 0);
   const depth = Number(options?.depth || 0);
   const mode = String(options?.mode || '').trim();
+  const providerId = String(options?.provider_id || '').trim();
   if (query) params.append('q', query);
   if (path) params.append('path', path);
   if (Number.isFinite(limit) && limit > 0) params.append('limit', String(limit));
   if (Number.isFinite(depth) && depth > 0) params.append('depth', String(depth));
   if (mode) params.append('mode', mode);
+  if (providerId) params.append('provider_id', providerId);
   const suffix = params.toString() ? `?${params.toString()}` : '';
   return fetchWithAuth(`/admin/integrations/dropbox/folders${suffix}`, { tenantId });
 }
@@ -906,53 +913,38 @@ export async function getLiveYoutubePlaylists(tenantId) {
   return fetchWithAuth('/admin/integrations/youtube/playlists', { tenantId });
 }
 
-/**
- * Start provider OAuth connection for current tenant (tenant admin scope)
- * @param {string} tenantId - Tenant ID
- * @param {'dropbox'|'gdrive'} provider - Provider id
- * @param {string} returnTo - Same-origin return path after OAuth
- * @param {string} redirectOrigin - Browser origin for callback
- * @returns {Promise<Object>} OAuth authorize URL payload
- */
-export async function startIntegrationConnect(
-  tenantId,
-  provider,
-  returnTo = '/app?tab=library&subTab=providers',
-  redirectOrigin = ''
-) {
-  const normalizedProvider = String(provider || '').trim().toLowerCase();
-  if (!normalizedProvider || !['dropbox', 'gdrive', 'youtube'].includes(normalizedProvider)) {
-    throw new Error('Invalid provider');
-  }
-  const result = await fetchWithAuth(`/admin/integrations/${normalizedProvider}/connect`, {
-    method: 'POST',
-    tenantId,
-    body: JSON.stringify({
-      return_to: returnTo,
-      redirect_origin: redirectOrigin,
-    }),
-  });
-  invalidateQueries(['integrationStatus', tenantId]);
-  return result;
+export async function getLiveGphotosAlbums(tenantId, options = {}) {
+  const params = new URLSearchParams();
+  if (options.provider_id) params.set('provider_id', options.provider_id);
+  const qs = params.toString();
+  return fetchWithAuth(`/admin/integrations/gphotos/albums${qs ? `?${qs}` : ''}`, { tenantId });
 }
 
-/**
- * Disconnect provider integration for current tenant (tenant admin scope)
- * @param {string} tenantId - Tenant ID
- * @param {'dropbox'|'gdrive'} provider - Provider id
- * @returns {Promise<Object>} Disconnect result
- */
-export async function disconnectIntegration(tenantId, provider) {
-  const normalizedProvider = String(provider || '').trim().toLowerCase();
-  if (!normalizedProvider || !['dropbox', 'gdrive', 'youtube'].includes(normalizedProvider)) {
-    throw new Error('Invalid provider');
-  }
-  const result = await fetchWithAuth(`/admin/integrations/${normalizedProvider}/connection`, {
-    method: 'DELETE',
+export async function startIntegrationPickerSession(tenantId, providerUuid, options = {}) {
+  if (!providerUuid) throw new Error('Missing provider UUID');
+  return fetchWithAuth(`/admin/integrations/providers/${providerUuid}/picker/session`, {
+    method: 'POST',
     tenantId,
+    body: JSON.stringify(options || {}),
   });
-  invalidateQueries(['integrationStatus', tenantId]);
-  return result;
+}
+
+export async function getIntegrationPickerSession(tenantId, providerUuid, sessionId) {
+  if (!providerUuid) throw new Error('Missing provider UUID');
+  if (!sessionId) throw new Error('Missing picker session ID');
+  const params = new URLSearchParams();
+  params.set('session_id', String(sessionId));
+  return fetchWithAuth(`/admin/integrations/providers/${providerUuid}/picker/session?${params.toString()}`, { tenantId });
+}
+
+export async function listIntegrationPickerItems(tenantId, providerUuid, sessionId, options = {}) {
+  if (!providerUuid) throw new Error('Missing provider UUID');
+  if (!sessionId) throw new Error('Missing picker session ID');
+  const params = new URLSearchParams();
+  params.set('session_id', String(sessionId));
+  const limit = Number(options?.limit || 0);
+  if (Number.isFinite(limit) && limit > 0) params.set('limit', String(limit));
+  return fetchWithAuth(`/admin/integrations/providers/${providerUuid}/picker/items?${params.toString()}`, { tenantId });
 }
 
 /**
@@ -1049,6 +1041,24 @@ export async function disconnectIntegrationProvider(tenantId, providerUuid) {
   const result = await fetchWithAuth(`/admin/integrations/providers/${providerUuid}/connection`, {
     method: 'DELETE',
     tenantId,
+  });
+  invalidateQueries(['integrationStatus', tenantId]);
+  invalidateQueries(['integrationProviders', tenantId]);
+  return result;
+}
+
+/**
+ * Queue a sync job for a specific provider integration instance by UUID
+ * @param {string} tenantId - Tenant ID
+ * @param {string} providerUuid - Provider instance UUID
+ * @param {{count?: number, reprocess_existing?: boolean}} payload
+ * @returns {Promise<Object>}
+ */
+export async function queueIntegrationProviderSync(tenantId, providerUuid, payload = {}) {
+  const result = await fetchWithAuth(`/admin/integrations/providers/${providerUuid}/sync`, {
+    method: 'POST',
+    tenantId,
+    body: JSON.stringify(payload || {}),
   });
   invalidateQueries(['integrationStatus', tenantId]);
   invalidateQueries(['integrationProviders', tenantId]);

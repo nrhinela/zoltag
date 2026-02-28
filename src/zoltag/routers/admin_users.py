@@ -274,6 +274,7 @@ def _serialize_activity_rows(db: Session, rows: list[ActivityEvent]) -> list[dic
     })
     actor_by_uid: dict[UUID, dict] = {}
     tenant_by_id: dict[UUID, dict] = {}
+    inferred_tenant_by_actor: dict[UUID, UUID] = {}
     if actor_ids:
         actor_rows = db.query(
             UserProfile.supabase_uid,
@@ -288,6 +289,23 @@ def _serialize_activity_rows(db: Session, rows: list[ActivityEvent]) -> list[dic
                 "display_name": str(display_name or "").strip() or None,
             }
             for actor_uid, email, display_name in actor_rows
+        }
+        membership_rows = db.query(
+            UserTenant.supabase_uid,
+            UserTenant.tenant_id,
+        ).filter(
+            UserTenant.supabase_uid.in_(actor_ids),
+            UserTenant.accepted_at.isnot(None),
+        ).all()
+        memberships_by_actor: dict[UUID, set[UUID]] = {}
+        for actor_uid, tenant_id in membership_rows:
+            if actor_uid is None or tenant_id is None:
+                continue
+            memberships_by_actor.setdefault(actor_uid, set()).add(tenant_id)
+        inferred_tenant_by_actor = {
+            actor_uid: next(iter(tenant_ids_for_actor))
+            for actor_uid, tenant_ids_for_actor in memberships_by_actor.items()
+            if len(tenant_ids_for_actor) == 1
         }
     if tenant_ids:
         tenant_rows = db.query(
@@ -304,25 +322,50 @@ def _serialize_activity_rows(db: Session, rows: list[ActivityEvent]) -> list[dic
             }
             for tenant_id, name, identifier in tenant_rows
         }
+    inferred_tenant_ids = sorted({
+        tenant_id
+        for tenant_id in inferred_tenant_by_actor.values()
+        if tenant_id not in tenant_by_id
+    })
+    if inferred_tenant_ids:
+        inferred_rows = db.query(
+            TenantModel.id,
+            TenantModel.name,
+            TenantModel.identifier,
+        ).filter(
+            TenantModel.id.in_(inferred_tenant_ids)
+        ).all()
+        tenant_by_id.update({
+            tenant_id: {
+                "name": str(name or "").strip() or None,
+                "identifier": str(identifier or "").strip() or None,
+            }
+            for tenant_id, name, identifier in inferred_rows
+        })
 
-    return [
-        {
-            "id": str(row.id),
-            "tenant_id": str(row.tenant_id) if row.tenant_id else None,
-            "tenant_name": tenant_by_id.get(row.tenant_id, {}).get("name"),
-            "tenant_identifier": tenant_by_id.get(row.tenant_id, {}).get("identifier"),
-            "actor_supabase_uid": str(row.actor_supabase_uid) if row.actor_supabase_uid else None,
-            "actor_email": actor_by_uid.get(row.actor_supabase_uid, {}).get("email"),
-            "actor_display_name": actor_by_uid.get(row.actor_supabase_uid, {}).get("display_name"),
-            "event_type": row.event_type,
-            "request_path": row.request_path,
-            "client_ip": row.client_ip,
-            "user_agent": row.user_agent,
-            "details": row.details if isinstance(row.details, dict) else {},
-            "created_at": row.created_at.isoformat() if row.created_at else None,
-        }
-        for row in rows
-    ]
+    serialized_rows: list[dict] = []
+    for row in rows:
+        resolved_tenant_id = row.tenant_id
+        if resolved_tenant_id is None and row.actor_supabase_uid is not None:
+            resolved_tenant_id = inferred_tenant_by_actor.get(row.actor_supabase_uid)
+        serialized_rows.append(
+            {
+                "id": str(row.id),
+                "tenant_id": str(resolved_tenant_id) if resolved_tenant_id else None,
+                "tenant_name": tenant_by_id.get(resolved_tenant_id, {}).get("name"),
+                "tenant_identifier": tenant_by_id.get(resolved_tenant_id, {}).get("identifier"),
+                "actor_supabase_uid": str(row.actor_supabase_uid) if row.actor_supabase_uid else None,
+                "actor_email": actor_by_uid.get(row.actor_supabase_uid, {}).get("email"),
+                "actor_display_name": actor_by_uid.get(row.actor_supabase_uid, {}).get("display_name"),
+                "event_type": row.event_type,
+                "request_path": row.request_path,
+                "client_ip": row.client_ip,
+                "user_agent": row.user_agent,
+                "details": row.details if isinstance(row.details, dict) else {},
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+            }
+        )
+    return serialized_rows
 
 
 # ============================================================================

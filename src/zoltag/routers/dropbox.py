@@ -1,6 +1,7 @@
 """Router for Dropbox OAuth and webhook handlers."""
 
 import json
+from urllib.parse import urlencode
 import requests
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse, HTMLResponse
@@ -16,6 +17,7 @@ from zoltag.tenant_scope import tenant_reference_filter
 from zoltag.dropbox_oauth import (
     append_query_params,
     load_dropbox_oauth_credentials,
+    is_allowed_redirect_origin,
     sanitize_redirect_origin,
     sanitize_return_path,
 )
@@ -27,6 +29,28 @@ router = APIRouter(
 
 def _resolve_tenant(db: Session, tenant_ref: str):
     return db.query(TenantModel).filter(tenant_reference_filter(TenantModel, tenant_ref)).first()
+
+
+def _assert_dropbox_provider_scope_safe(tenant_obj, provider_record) -> None:
+    allowed_scopes: set[str] = set()
+    for candidate in (
+        getattr(tenant_obj, "id", None),
+        getattr(tenant_obj, "key_prefix", None),
+        getattr(tenant_obj, "identifier", None),
+    ):
+        value = str(candidate or "").strip()
+        if value:
+            allowed_scopes.add(value)
+
+    record_scope = str(getattr(provider_record, "secret_scope", "") or "").strip()
+    if record_scope and record_scope not in allowed_scopes:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Dropbox connection scope does not match this tenant. "
+                "Reconnect the provider from the tenant admin integrations page."
+            ),
+        )
 
 
 def _resolve_redirect_origin(request: Request, explicit_origin: str | None = None) -> str:
@@ -49,9 +73,9 @@ def _resolve_redirect_origin(request: Request, explicit_origin: str | None = Non
 
     for candidate in candidates:
         normalized = sanitize_redirect_origin(candidate)
-        if normalized:
+        if normalized and is_allowed_redirect_origin(normalized):
             return normalized
-    raise HTTPException(status_code=500, detail="Unable to resolve OAuth redirect origin")
+    raise HTTPException(status_code=400, detail="OAuth redirect origin is not permitted")
 
 
 @router.get("/oauth/dropbox/authorize")
@@ -60,6 +84,8 @@ async def dropbox_authorize(
     tenant: str,
     flow: str = "popup",
     credential_mode: str = "auto",
+    force_reauthentication: bool = False,
+    force_reapprove: bool = False,
     provider_id: str | None = None,
     redirect_origin: str | None = None,
     return_to: str | None = None,
@@ -82,6 +108,7 @@ async def dropbox_authorize(
         provider_record = repo.get_provider_record(tenant_obj, "dropbox", provider_id=provider_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    _assert_dropbox_provider_scope_safe(tenant_obj, provider_record)
 
     try:
         credentials = load_dropbox_oauth_credentials(
@@ -105,14 +132,18 @@ async def dropbox_authorize(
         "provider_id": provider_record.id,
     }
     state = oauth_state.generate_with_context(str(tenant_obj.id), state_context)
-    oauth_url = (
-        f"https://www.dropbox.com/oauth2/authorize"
-        f"?client_id={app_key}"
-        f"&response_type=code"
-        f"&token_access_type=offline"
-        f"&redirect_uri={redirect_uri}"
-        f"&state={state}"
-    )
+    oauth_params = {
+        "client_id": app_key,
+        "response_type": "code",
+        "token_access_type": "offline",
+        "redirect_uri": redirect_uri,
+        "state": state,
+    }
+    if force_reauthentication:
+        oauth_params["force_reauthentication"] = "true"
+    if force_reapprove:
+        oauth_params["force_reapprove"] = "true"
+    oauth_url = f"https://www.dropbox.com/oauth2/authorize?{urlencode(oauth_params)}"
 
     return RedirectResponse(oauth_url)
 
@@ -144,6 +175,7 @@ async def dropbox_callback(
         provider_record = repo.get_provider_record(tenant_obj, "dropbox", provider_id=provider_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    _assert_dropbox_provider_scope_safe(tenant_obj, provider_record)
 
     try:
         credentials = load_dropbox_oauth_credentials(
@@ -202,6 +234,8 @@ async def dropbox_callback(
             {
                 "integration": "dropbox",
                 "result": "connected",
+                "provider_id": str(provider_record.id),
+                "configure_step": "2",
             },
         )
         return RedirectResponse(redirect_target)

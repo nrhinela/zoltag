@@ -1,27 +1,32 @@
 """Tenant-admin integrations endpoints."""
 
+from datetime import datetime
 from urllib.parse import urlencode, urlsplit
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from zoltag.auth.dependencies import require_tenant_permission_from_header
-from zoltag.settings import settings as _settings
 from zoltag.auth.models import UserProfile
 from zoltag.database import get_db
 from zoltag.dependencies import delete_secret, get_secret, get_tenant, store_secret
 from zoltag.dropbox_oauth import (
-    inspect_dropbox_oauth_config,
     load_dropbox_oauth_credentials,
     sanitize_redirect_origin,
     sanitize_return_path,
 )
 from zoltag.integrations import (
     TenantIntegrationRepository,
+    normalize_picker_session_id,
     normalize_provider_type,
+    normalize_selection_mode,
     normalize_sync_folders,
+    normalize_sync_items,
 )
-from zoltag.metadata import Tenant as TenantModel
+from zoltag.metadata import Job, JobDefinition, Tenant as TenantModel
+from zoltag.settings import settings as _settings
 from zoltag.tenant import Tenant
 
 router = APIRouter(prefix="/api/v1/admin/integrations", tags=["admin-integrations"])
@@ -29,6 +34,13 @@ _PROVIDER_LABELS = {
     "dropbox": "Dropbox",
     "gdrive": "Google Drive",
     "youtube": "YouTube",
+    "gphotos": "Google Photos",
+}
+_PROVIDER_SYNC_DEFINITION_KEYS = {
+    "dropbox": "sync-dropbox",
+    "gdrive": "sync-gdrive",
+    "youtube": "sync-youtube",
+    "gphotos": "sync-gphotos",
 }
 
 
@@ -44,6 +56,52 @@ def _read_secret_value(secret_id: str) -> str:
         return str(get_secret(secret_id) or "").strip()
     except Exception:
         return ""
+
+
+def _selection_capabilities(provider_type: str) -> dict:
+    normalized = normalize_provider_type(provider_type)
+    if normalized == "gphotos":
+        return {
+            "supports_catalog": False,
+            "supports_picker": True,
+            "catalog_load_label": "",
+            "picker_start_label": "Launch Picker",
+            "resource_label_plural": "media items",
+        }
+    if normalized == "youtube":
+        return {
+            "supports_catalog": True,
+            "supports_picker": False,
+            "catalog_load_label": "Load Playlists",
+            "picker_start_label": "",
+            "resource_label_plural": "playlists",
+        }
+    if normalized == "gdrive":
+        return {
+            "supports_catalog": True,
+            "supports_picker": False,
+            "catalog_load_label": "Browse Folders",
+            "picker_start_label": "",
+            "resource_label_plural": "folders",
+        }
+    return {
+        "supports_catalog": True,
+        "supports_picker": False,
+        "catalog_load_label": "Load Folders",
+        "picker_start_label": "",
+        "resource_label_plural": "folders",
+    }
+
+
+def _selection_state(provider_type: str, config_json: dict) -> dict:
+    normalized = normalize_provider_type(provider_type)
+    mode = normalize_selection_mode(normalized, config_json.get("selection_mode"))
+    return {
+        "selection_mode": mode,
+        "sync_items": normalize_sync_items(config_json.get("sync_items")),
+        "picker_session_id": normalize_picker_session_id(config_json.get("picker_session_id")),
+        "selection_capabilities": _selection_capabilities(normalized),
+    }
 
 
 def _resolve_redirect_origin_from_request(request: Request, payload: dict | None = None) -> str:
@@ -88,6 +146,7 @@ def _build_dropbox_status(record) -> dict:
         "issues": issues,
         "sync_folder_key": "dropbox_sync_folders",
         "sync_folders": normalize_sync_folders(config_json.get("sync_folders")),
+        **_selection_state("dropbox", config_json),
         "source": record.source,
     }
 
@@ -134,6 +193,30 @@ def _build_gdrive_status(record) -> dict:
         "issues": issues,
         "sync_folder_key": "gdrive_sync_folders",
         "sync_folders": normalize_sync_folders(config_json.get("sync_folders")),
+        **_selection_state("gdrive", config_json),
+        "source": record.source,
+    }
+
+
+def _build_gphotos_status(record) -> dict:
+    config_json = record.config_json or {}
+    connected = bool(config_json.get("token_stored"))
+    client_id = str(_settings.zoltag_gdrive_connector_client_id or "").strip()
+    can_connect = bool(client_id)
+    return {
+        "id": "gphotos",
+        "provider_id": record.id,
+        "provider_type": "gphotos",
+        "label": _PROVIDER_LABELS["gphotos"],
+        "integration_label": record.label,
+        "is_active": bool(record.is_active),
+        "connected": connected,
+        "can_connect": can_connect,
+        "mode": "tenant_oauth",
+        "issues": [],
+        "sync_folder_key": "gphotos_sync_folders",
+        "sync_folders": normalize_sync_folders(config_json.get("sync_folders")),
+        **_selection_state("gphotos", config_json),
         "source": record.source,
     }
 
@@ -157,8 +240,64 @@ def _build_youtube_status(record) -> dict:
         "issues": [],
         "sync_folder_key": "youtube_sync_folders",
         "sync_folders": normalize_sync_folders(config_json.get("sync_folders")),
+        **_selection_state("youtube", config_json),
         "source": record.source,
     }
+
+
+def _provider_sync_definition_key(provider_type: str) -> str:
+    normalized = normalize_provider_type(provider_type)
+    definition_key = _PROVIDER_SYNC_DEFINITION_KEYS.get(normalized)
+    if not definition_key:
+        raise HTTPException(status_code=400, detail="Unsupported provider type")
+    return definition_key
+
+
+def _provider_connected(record) -> bool:
+    config_json = record.config_json or {}
+    return bool(config_json.get("token_stored"))
+
+
+def _allowed_secret_scopes_for_tenant(tenant_row: TenantModel) -> set[str]:
+    allowed: set[str] = set()
+    for candidate in (
+        getattr(tenant_row, "id", None),
+        getattr(tenant_row, "key_prefix", None),
+        getattr(tenant_row, "identifier", None),
+    ):
+        value = str(candidate or "").strip()
+        if value:
+            allowed.add(value)
+    return allowed
+
+
+def _assert_dropbox_provider_scope_safe(tenant_row: TenantModel, record) -> None:
+    """Reject Dropbox provider rows that appear bound to a different tenant scope."""
+    if str(getattr(record, "provider_type", "") or "").strip().lower() != "dropbox":
+        return
+
+    allowed_scopes = _allowed_secret_scopes_for_tenant(tenant_row)
+    record_scope = str(getattr(record, "secret_scope", "") or "").strip()
+    if record_scope and record_scope not in allowed_scopes:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Dropbox connection scope does not match this tenant. "
+                "Disconnect and reconnect this provider from the current tenant."
+            ),
+        )
+
+    token_secret_name = str(getattr(record, "dropbox_token_secret_name", "") or "").strip()
+    if token_secret_name.startswith("dropbox-token-"):
+        allowed_token_secret_names = {f"dropbox-token-{scope}" for scope in allowed_scopes}
+        if token_secret_name not in allowed_token_secret_names:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Dropbox token secret appears bound to another tenant. "
+                    "Disconnect and reconnect this provider from the current tenant."
+                ),
+            )
 
 
 def _normalize_dropbox_path(path: str | None) -> str:
@@ -284,7 +423,8 @@ def _backfill_token_stored(all_records, repo, tenant_row, db: Session) -> None:
     and persist the flag so future requests are fast."""
     _secret_fn = {"dropbox": lambda r: r.dropbox_token_secret_name,
                   "gdrive": lambda r: r.gdrive_token_secret_name,
-                  "youtube": lambda r: r.youtube_token_secret_name}
+                  "youtube": lambda r: r.youtube_token_secret_name,
+                  "gphotos": lambda r: r.gphotos_token_secret_name}
     dirty = False
     for rec in all_records:
         if "token_stored" in (rec.config_json or {}):
@@ -312,14 +452,20 @@ def _build_integrations_status(tenant_row: TenantModel, db: Session) -> dict:
     dropbox_status = _build_dropbox_status(primary_records["dropbox"])
     gdrive_status = _build_gdrive_status(primary_records["gdrive"])
     youtube_status = _build_youtube_status(primary_records["youtube"])
-    providers = [dropbox_status, gdrive_status, youtube_status]
+    gphotos_status = _build_gphotos_status(primary_records["gphotos"])
+    providers = [dropbox_status, gdrive_status, youtube_status, gphotos_status]
 
     default_provider = repo.resolve_default_sync_provider(tenant_row)
     default_source_provider = default_provider.provider_type
     provider_configs = {provider["id"]: provider for provider in providers}
 
     # Build status for every instance (all rows, not just primary).
-    _build_fn = {"dropbox": _build_dropbox_status, "gdrive": _build_gdrive_status, "youtube": _build_youtube_status}
+    _build_fn = {
+        "dropbox": _build_dropbox_status,
+        "gdrive": _build_gdrive_status,
+        "youtube": _build_youtube_status,
+        "gphotos": _build_gphotos_status,
+    }
     all_providers_status = []
     for rec in all_records:
         fn = _build_fn.get(rec.provider_type)
@@ -336,6 +482,7 @@ def _build_integrations_status(tenant_row: TenantModel, db: Session) -> dict:
             {"id": "dropbox", "label": _PROVIDER_LABELS["dropbox"]},
             {"id": "gdrive", "label": _PROVIDER_LABELS["gdrive"]},
             {"id": "youtube", "label": _PROVIDER_LABELS["youtube"]},
+            {"id": "gphotos", "label": _PROVIDER_LABELS["gphotos"]},
         ],
         # Backward-compatible fields for existing UI callers.
         "source_provider": default_source_provider,
@@ -349,6 +496,11 @@ def _build_integrations_status(tenant_row: TenantModel, db: Session) -> dict:
 
 
 def _serialize_provider_record(record) -> dict:
+    config_json = dict(record.config_json or {})
+    config_json["sync_folders"] = normalize_sync_folders(config_json.get("sync_folders"))
+    config_json["sync_items"] = normalize_sync_items(config_json.get("sync_items"))
+    config_json["selection_mode"] = normalize_selection_mode(record.provider_type, config_json.get("selection_mode"))
+    config_json["picker_session_id"] = normalize_picker_session_id(config_json.get("picker_session_id"))
     return {
         "id": record.id,
         "tenant_id": record.tenant_id,
@@ -357,7 +509,7 @@ def _serialize_provider_record(record) -> dict:
         "is_active": record.is_active,
         "is_default_sync_source": record.is_default_sync_source,
         "secret_scope": record.secret_scope,
-        "config_json": record.config_json,
+        "config_json": config_json,
         "source": record.source,
     }
 
@@ -382,6 +534,7 @@ async def list_live_dropbox_folders(
     limit: int = 100,
     depth: int | None = None,
     mode: str | None = None,
+    provider_id: str | None = None,
     tenant: Tenant = Depends(get_tenant),
     _admin: UserProfile = Depends(require_tenant_permission_from_header("provider.view")),
     db: Session = Depends(get_db),
@@ -392,9 +545,11 @@ async def list_live_dropbox_folders(
         raise HTTPException(status_code=404, detail="Tenant not found")
 
     repo = TenantIntegrationRepository(db)
-    dropbox_record = repo.get_provider_record(tenant_row, "dropbox")
-    if not dropbox_record:
-        raise HTTPException(status_code=404, detail="Dropbox provider not found")
+    try:
+        dropbox_record = repo.get_provider_record(tenant_row, "dropbox", provider_id=provider_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    _assert_dropbox_provider_scope_safe(tenant_row, dropbox_record)
 
     refresh_token = _read_secret_value(dropbox_record.dropbox_token_secret_name)
     if not refresh_token:
@@ -552,6 +707,7 @@ async def list_live_dropbox_folders(
         return {
             "tenant_id": str(tenant_row.id),
             "provider": "dropbox",
+            "provider_id": str(dropbox_record.id or ""),
             "query": query,
             "path": browse_path or "/",
             "folders": list(ordered_paths.keys()),
@@ -714,6 +870,12 @@ async def update_integration_provider(
         update_kwargs["is_default_sync_source"] = bool(payload.get("is_default_sync_source"))
     if "sync_folders" in payload:
         update_kwargs["sync_folders"] = normalize_sync_folders(payload.get("sync_folders"))
+    if "sync_items" in payload:
+        update_kwargs["sync_items"] = normalize_sync_items(payload.get("sync_items"))
+    if "selection_mode" in payload:
+        update_kwargs["selection_mode"] = normalize_selection_mode(existing.provider_type, payload.get("selection_mode"))
+    if "picker_session_id" in payload:
+        update_kwargs["picker_session_id"] = normalize_picker_session_id(payload.get("picker_session_id"))
     if "oauth_mode" in payload:
         requested_mode = str(payload.get("oauth_mode") or "").strip().lower()
         if requested_mode not in {"", "managed"}:
@@ -792,10 +954,13 @@ async def start_provider_connect(
         query_payload["redirect_origin"] = requested_redirect_origin
 
     if record.provider_type == "dropbox":
+        _assert_dropbox_provider_scope_safe(tenant_row, record)
         dropbox_status = _build_dropbox_status(record)
         if not dropbox_status["can_connect"]:
             raise HTTPException(status_code=400, detail="Dropbox OAuth is not configured for this provider")
         query_payload["credential_mode"] = "managed"
+        query_payload["force_reauthentication"] = "true"
+        query_payload["force_reapprove"] = "true"
         return {
             "tenant_id": tenant.id,
             "provider": "dropbox",
@@ -828,6 +993,18 @@ async def start_provider_connect(
             "mode": youtube_status["mode"],
         }
 
+    if record.provider_type == "gphotos":
+        gphotos_status = _build_gphotos_status(record)
+        if not gphotos_status["can_connect"]:
+            raise HTTPException(status_code=400, detail="Google Photos OAuth is not configured for this provider")
+        return {
+            "tenant_id": tenant.id,
+            "provider": "gphotos",
+            "provider_id": provider_id,
+            "authorize_url": f"/oauth/gphotos/authorize?{urlencode(query_payload)}",
+            "mode": gphotos_status["mode"],
+        }
+
     raise HTTPException(status_code=400, detail="Unsupported provider type")
 
 
@@ -849,11 +1026,14 @@ async def disconnect_provider_connection(
         raise HTTPException(status_code=404, detail="Provider not found")
 
     if record.provider_type == "dropbox":
+        _assert_dropbox_provider_scope_safe(tenant_row, record)
         delete_secret(record.dropbox_token_secret_name)
     elif record.provider_type == "gdrive":
         delete_secret(record.gdrive_token_secret_name)
     elif record.provider_type == "youtube":
         delete_secret(record.youtube_token_secret_name)
+    elif record.provider_type == "gphotos":
+        delete_secret(record.gphotos_token_secret_name)
     else:
         raise HTTPException(status_code=400, detail="Unsupported provider type")
 
@@ -871,6 +1051,249 @@ async def disconnect_provider_connection(
         "provider_id": provider_id,
         "status": "disconnected",
     }
+
+
+@router.post("/providers/{provider_id}/sync")
+async def enqueue_provider_sync(
+    provider_id: str,
+    payload: dict | None = None,
+    tenant: Tenant = Depends(get_tenant),
+    admin: UserProfile = Depends(require_tenant_permission_from_header("provider.manage")),
+    db: Session = Depends(get_db),
+):
+    """Queue a provider-scoped sync job for one integration row."""
+    tenant_row = db.query(TenantModel).filter(TenantModel.id == tenant.id).first()
+    if not tenant_row:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    repo = TenantIntegrationRepository(db)
+    record = repo.get_provider_record_by_id(tenant_row, provider_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Provider not found")
+    if record.provider_type == "dropbox":
+        _assert_dropbox_provider_scope_safe(tenant_row, record)
+    if not bool(record.is_active):
+        raise HTTPException(
+            status_code=409,
+            detail="Provider integration is inactive. Activate this provider before syncing.",
+        )
+    if not _provider_connected(record):
+        raise HTTPException(status_code=409, detail="Provider is not connected. Connect this provider before syncing.")
+
+    definition_key = _provider_sync_definition_key(record.provider_type)
+    definition = db.query(JobDefinition).filter(
+        JobDefinition.key == definition_key,
+        JobDefinition.is_active.is_(True),
+    ).first()
+    if not definition:
+        raise HTTPException(status_code=409, detail=f"Sync job definition is missing or inactive: {definition_key}")
+
+    requested_payload = payload or {}
+    if not isinstance(requested_payload, dict):
+        raise HTTPException(status_code=400, detail="payload must be an object")
+
+    job_payload = {"provider_id": str(record.id)}
+    count_raw = requested_payload.get("count")
+    if count_raw not in (None, ""):
+        try:
+            count = int(count_raw)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="count must be an integer")
+        if count < 1 or count > 10000:
+            raise HTTPException(status_code=400, detail="count must be between 1 and 10000")
+        job_payload["count"] = count
+    if bool(requested_payload.get("reprocess_existing")):
+        job_payload["reprocess_existing"] = True
+
+    tenant_uuid = UUID(str(tenant.id))
+    dedupe_key = f"provider-sync:{record.id}"
+    existing = db.query(Job).filter(
+        Job.tenant_id == tenant_uuid,
+        Job.dedupe_key == dedupe_key,
+        Job.status.in_(("queued", "running")),
+    ).order_by(Job.queued_at.desc()).first()
+    if existing:
+        return {
+            "tenant_id": str(tenant.id),
+            "provider_id": str(record.id),
+            "provider_type": record.provider_type,
+            "definition_key": definition_key,
+            "job_id": str(existing.id),
+            "status": "already_queued",
+        }
+
+    now = datetime.utcnow()
+    job = Job(
+        tenant_id=tenant_uuid,
+        definition_id=definition.id,
+        source="manual",
+        status="queued",
+        priority=100,
+        payload=job_payload,
+        dedupe_key=dedupe_key,
+        scheduled_for=now,
+        queued_at=now,
+        max_attempts=int(definition.max_attempts or 3),
+        created_by=admin.supabase_uid,
+    )
+    db.add(job)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        existing = db.query(Job).filter(
+            Job.tenant_id == tenant_uuid,
+            Job.dedupe_key == dedupe_key,
+            Job.status.in_(("queued", "running")),
+        ).order_by(Job.queued_at.desc()).first()
+        if existing:
+            return {
+                "tenant_id": str(tenant.id),
+                "provider_id": str(record.id),
+                "provider_type": record.provider_type,
+                "definition_key": definition_key,
+                "job_id": str(existing.id),
+                "status": "already_queued",
+            }
+        raise HTTPException(status_code=409, detail="Sync job enqueue conflict")
+
+    db.refresh(job)
+    return {
+        "tenant_id": str(tenant.id),
+        "provider_id": str(record.id),
+        "provider_type": record.provider_type,
+        "definition_key": definition_key,
+        "job_id": str(job.id),
+        "status": "queued",
+    }
+
+
+def _build_gphotos_provider_or_400(record):
+    from zoltag.storage.providers import GooglePhotosStorageProvider
+
+    refresh_token = _read_secret_value(record.gphotos_token_secret_name)
+    if not refresh_token:
+        raise HTTPException(status_code=400, detail="Google Photos is not connected for this provider")
+
+    client_id = str(_settings.zoltag_gdrive_connector_client_id or "").strip()
+    client_secret = str(_settings.zoltag_gdrive_connector_secret or "").strip()
+    if not client_id or not client_secret:
+        raise HTTPException(status_code=400, detail="Google Photos client credentials are not configured")
+
+    return GooglePhotosStorageProvider(
+        client_id=client_id,
+        client_secret=client_secret,
+        refresh_token=refresh_token,
+    )
+
+
+@router.post("/providers/{provider_id}/picker/session")
+async def start_provider_picker_session(
+    provider_id: str,
+    payload: dict | None = None,
+    tenant: Tenant = Depends(get_tenant),
+    _admin: UserProfile = Depends(require_tenant_permission_from_header("provider.manage")),
+    db: Session = Depends(get_db),
+):
+    """Start picker flow for provider rows that support picker selection."""
+    tenant_row = db.query(TenantModel).filter(TenantModel.id == tenant.id).first()
+    if not tenant_row:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    repo = TenantIntegrationRepository(db)
+    record = repo.get_provider_record_by_id(tenant_row, provider_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Provider not found")
+    if record.provider_type != "gphotos":
+        raise HTTPException(status_code=400, detail="Picker mode is not supported for this provider")
+
+    max_item_count = int((payload or {}).get("max_item_count") or 2000)
+    max_item_count = max(1, min(max_item_count, 10000))
+
+    try:
+        provider = _build_gphotos_provider_or_400(record)
+        session_payload = provider.create_picker_session(max_item_count=max_item_count)
+        return {"provider_id": provider_id, "provider_type": record.provider_type, **session_payload}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Provider picker session creation failed: {exc}")
+
+
+@router.get("/providers/{provider_id}/picker/session")
+async def get_provider_picker_session(
+    provider_id: str,
+    session_id: str,
+    tenant: Tenant = Depends(get_tenant),
+    _admin: UserProfile = Depends(require_tenant_permission_from_header("provider.view")),
+    db: Session = Depends(get_db),
+):
+    """Read picker session details for provider rows that support picker selection."""
+    tenant_row = db.query(TenantModel).filter(TenantModel.id == tenant.id).first()
+    if not tenant_row:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    repo = TenantIntegrationRepository(db)
+    record = repo.get_provider_record_by_id(tenant_row, provider_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Provider not found")
+    if record.provider_type != "gphotos":
+        raise HTTPException(status_code=400, detail="Picker mode is not supported for this provider")
+
+    normalized_session_id = str(session_id or "").strip()
+    if not normalized_session_id:
+        raise HTTPException(status_code=400, detail="session_id is required")
+
+    try:
+        provider = _build_gphotos_provider_or_400(record)
+        session_payload = provider.get_picker_session(normalized_session_id)
+        return {"provider_id": provider_id, "provider_type": record.provider_type, **session_payload}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Provider picker session lookup failed: {exc}")
+
+
+@router.get("/providers/{provider_id}/picker/items")
+async def list_provider_picker_items(
+    provider_id: str,
+    session_id: str,
+    limit: int = 1000,
+    tenant: Tenant = Depends(get_tenant),
+    _admin: UserProfile = Depends(require_tenant_permission_from_header("provider.view")),
+    db: Session = Depends(get_db),
+):
+    """List picker-selected media items for provider rows that support picker selection."""
+    tenant_row = db.query(TenantModel).filter(TenantModel.id == tenant.id).first()
+    if not tenant_row:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    repo = TenantIntegrationRepository(db)
+    record = repo.get_provider_record_by_id(tenant_row, provider_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Provider not found")
+    if record.provider_type != "gphotos":
+        raise HTTPException(status_code=400, detail="Picker mode is not supported for this provider")
+
+    normalized_session_id = str(session_id or "").strip()
+    if not normalized_session_id:
+        raise HTTPException(status_code=400, detail="session_id is required")
+    bounded_limit = max(1, min(int(limit or 1000), 5000))
+
+    try:
+        provider = _build_gphotos_provider_or_400(record)
+        items = provider.list_picker_media_items(normalized_session_id, limit=bounded_limit)
+        return {
+            "provider_id": provider_id,
+            "provider_type": record.provider_type,
+            "session_id": normalized_session_id,
+            "items": items,
+            "count": len(items),
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Provider picker items lookup failed: {exc}")
 
 
 @router.patch("/dropbox/config")
@@ -976,227 +1399,32 @@ async def update_gdrive_config(
     return await update_dropbox_config(merged, tenant=tenant, _admin=_admin, db=db)
 
 
-@router.post("/dropbox/connect")
-async def start_dropbox_connect(
-    request: Request,
-    payload: dict | None = None,
+@router.get("/gphotos/albums")
+async def list_live_gphotos_albums(
+    provider_id: str | None = None,
     tenant: Tenant = Depends(get_tenant),
-    _admin: UserProfile = Depends(require_tenant_permission_from_header("provider.manage")),
+    _admin: UserProfile = Depends(require_tenant_permission_from_header("provider.view")),
     db: Session = Depends(get_db),
 ):
-    """Generate Dropbox OAuth authorize URL for redirect-based flow."""
+    """List the authenticated user's Google Photos albums."""
     tenant_row = db.query(TenantModel).filter(TenantModel.id == tenant.id).first()
     if not tenant_row:
         raise HTTPException(status_code=404, detail="Tenant not found")
 
     repo = TenantIntegrationRepository(db)
-    dropbox_record = repo.get_provider_record(tenant_row, "dropbox")
-    dropbox_status = _build_dropbox_status(dropbox_record)
-    if not dropbox_status["can_connect"]:
-        raise HTTPException(status_code=400, detail="Dropbox OAuth is not configured for this tenant")
+    try:
+        record = repo.get_provider_record(tenant_row, "gphotos", provider_id=provider_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
 
-    requested_return_to = (payload or {}).get("return_to")
-    requested_redirect_origin = _resolve_redirect_origin_from_request(request, payload)
-    return_to = sanitize_return_path(requested_return_to)
-    query_payload = {
-        "tenant": tenant.id,
-        "flow": "redirect",
-        "credential_mode": "managed",
-        "return_to": return_to,
-    }
-    if dropbox_record.id:
-        query_payload["provider_id"] = dropbox_record.id
-    if requested_redirect_origin:
-        query_payload["redirect_origin"] = requested_redirect_origin
-
-    query = urlencode(query_payload)
-    return {
-        "tenant_id": tenant.id,
-        "provider": "dropbox",
-        "provider_id": dropbox_record.id,
-        "authorize_url": f"/oauth/dropbox/authorize?{query}",
-        "mode": dropbox_status["mode"],
-    }
-
-
-@router.post("/gdrive/connect")
-async def start_gdrive_connect(
-    request: Request,
-    payload: dict | None = None,
-    tenant: Tenant = Depends(get_tenant),
-    _admin: UserProfile = Depends(require_tenant_permission_from_header("provider.manage")),
-    db: Session = Depends(get_db),
-):
-    """Generate Google Drive OAuth authorize URL for redirect-based flow."""
-    tenant_row = db.query(TenantModel).filter(TenantModel.id == tenant.id).first()
-    if not tenant_row:
-        raise HTTPException(status_code=404, detail="Tenant not found")
-
-    repo = TenantIntegrationRepository(db)
-    gdrive_record = repo.get_provider_record(tenant_row, "gdrive")
-    gdrive_status = _build_gdrive_status(gdrive_record)
-    if not gdrive_status["can_connect"]:
-        raise HTTPException(status_code=400, detail="Google Drive OAuth is not configured for this tenant")
-
-    requested_return_to = (payload or {}).get("return_to")
-    requested_redirect_origin = _resolve_redirect_origin_from_request(request, payload)
-    return_to = sanitize_return_path(requested_return_to)
-    query_payload = {
-        "tenant": tenant.id,
-        "flow": "redirect",
-        "return_to": return_to,
-    }
-    if gdrive_record.id:
-        query_payload["provider_id"] = gdrive_record.id
-    if requested_redirect_origin:
-        query_payload["redirect_origin"] = requested_redirect_origin
-    query = urlencode(query_payload)
-
-    return {
-        "tenant_id": tenant.id,
-        "provider": "gdrive",
-        "provider_id": gdrive_record.id,
-        "authorize_url": f"/oauth/gdrive/authorize?{query}",
-        "mode": gdrive_status["mode"],
-    }
-
-
-@router.delete("/dropbox/connection")
-async def disconnect_dropbox(
-    tenant: Tenant = Depends(get_tenant),
-    _admin: UserProfile = Depends(require_tenant_permission_from_header("provider.manage")),
-    db: Session = Depends(get_db),
-):
-    """Disconnect Dropbox by deleting tenant refresh token secret."""
-    tenant_row = db.query(TenantModel).filter(TenantModel.id == tenant.id).first()
-    if not tenant_row:
-        raise HTTPException(status_code=404, detail="Tenant not found")
-
-    repo = TenantIntegrationRepository(db)
-    record = repo.get_provider_record(tenant_row, "dropbox")
-
-    candidate_secret_names = {
-        str(record.dropbox_token_secret_name).strip(),
-        str(tenant.dropbox_token_secret or "").strip(),
-        f"dropbox-token-{tenant.secret_scope}",
-        f"dropbox-token-{tenant.id}",
-    }
-    for token_secret_name in candidate_secret_names:
-        if token_secret_name:
-            delete_secret(token_secret_name)
-
-    return {
-        "tenant_id": tenant.id,
-        "provider": "dropbox",
-        "provider_id": record.id,
-        "status": "disconnected",
-    }
-
-
-@router.delete("/gdrive/connection")
-async def disconnect_gdrive(
-    tenant: Tenant = Depends(get_tenant),
-    _admin: UserProfile = Depends(require_tenant_permission_from_header("provider.manage")),
-    db: Session = Depends(get_db),
-):
-    """Disconnect Google Drive by deleting tenant refresh token secret."""
-    tenant_row = db.query(TenantModel).filter(TenantModel.id == tenant.id).first()
-    if not tenant_row:
-        raise HTTPException(status_code=404, detail="Tenant not found")
-
-    repo = TenantIntegrationRepository(db)
-    record = repo.get_provider_record(tenant_row, "gdrive")
-
-    candidate_secret_names = {
-        str(record.gdrive_token_secret_name).strip(),
-        str(tenant.gdrive_token_secret or "").strip(),
-        f"gdrive-token-{tenant.secret_scope}",
-        f"gdrive-token-{tenant.id}",
-    }
-    for token_secret_name in candidate_secret_names:
-        if token_secret_name:
-            delete_secret(token_secret_name)
-
-    return {
-        "tenant_id": tenant.id,
-        "provider": "gdrive",
-        "provider_id": record.id,
-        "status": "disconnected",
-    }
-
-
-@router.post("/youtube/connect")
-async def start_youtube_connect(
-    request: Request,
-    payload: dict | None = None,
-    tenant: Tenant = Depends(get_tenant),
-    _admin: UserProfile = Depends(require_tenant_permission_from_header("provider.manage")),
-    db: Session = Depends(get_db),
-):
-    """Generate YouTube OAuth authorize URL for redirect-based flow."""
-    tenant_row = db.query(TenantModel).filter(TenantModel.id == tenant.id).first()
-    if not tenant_row:
-        raise HTTPException(status_code=404, detail="Tenant not found")
-
-    repo = TenantIntegrationRepository(db)
-    youtube_record = repo.get_provider_record(tenant_row, "youtube")
-    youtube_status = _build_youtube_status(youtube_record)
-    if not youtube_status["can_connect"]:
-        raise HTTPException(status_code=400, detail="YouTube OAuth is not configured for this tenant")
-
-    requested_return_to = (payload or {}).get("return_to")
-    requested_redirect_origin = _resolve_redirect_origin_from_request(request, payload)
-    return_to = sanitize_return_path(requested_return_to)
-    query_payload = {
-        "tenant": tenant.id,
-        "flow": "redirect",
-        "return_to": return_to,
-    }
-    if youtube_record.id:
-        query_payload["provider_id"] = youtube_record.id
-    if requested_redirect_origin:
-        query_payload["redirect_origin"] = requested_redirect_origin
-    query = urlencode(query_payload)
-
-    return {
-        "tenant_id": tenant.id,
-        "provider": "youtube",
-        "provider_id": youtube_record.id,
-        "authorize_url": f"/oauth/youtube/authorize?{query}",
-        "mode": youtube_status["mode"],
-    }
-
-
-@router.delete("/youtube/connection")
-async def disconnect_youtube(
-    tenant: Tenant = Depends(get_tenant),
-    _admin: UserProfile = Depends(require_tenant_permission_from_header("provider.manage")),
-    db: Session = Depends(get_db),
-):
-    """Disconnect YouTube by deleting tenant refresh token secret."""
-    tenant_row = db.query(TenantModel).filter(TenantModel.id == tenant.id).first()
-    if not tenant_row:
-        raise HTTPException(status_code=404, detail="Tenant not found")
-
-    repo = TenantIntegrationRepository(db)
-    record = repo.get_provider_record(tenant_row, "youtube")
-
-    candidate_secret_names = {
-        str(record.youtube_token_secret_name).strip(),
-        str(getattr(tenant, "youtube_token_secret", None) or "").strip(),
-        f"youtube-token-{tenant.secret_scope}",
-        f"youtube-token-{tenant.id}",
-    }
-    for token_secret_name in candidate_secret_names:
-        if token_secret_name:
-            delete_secret(token_secret_name)
-
-    return {
-        "tenant_id": tenant.id,
-        "provider": "youtube",
-        "provider_id": record.id,
-        "status": "disconnected",
-    }
+    try:
+        provider = _build_gphotos_provider_or_400(record)
+        albums = provider.list_albums()
+        return {"albums": albums}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Google Photos album lookup failed: {exc}")
 
 
 @router.get("/youtube/playlists")
