@@ -1,7 +1,5 @@
 """Dropbox synchronization command."""
 
-import uuid as _uuid_mod
-
 import click
 from dropbox.exceptions import ApiError
 
@@ -37,6 +35,11 @@ def _format_folder_listing_error(folder: str, exc: Exception) -> str:
     if "not_found" in text.lower():
         return f"Configured Dropbox folder not found: {folder_label}"
     return f"Failed to list Dropbox folder {folder_label}: {text or exc.__class__.__name__}"
+
+
+def _dropbox_entry_key(entry) -> str:
+    """Return stable Dropbox identity key (id preferred, path fallback)."""
+    return str(getattr(entry, "id", "") or "").strip() or str(getattr(entry, "path_display", "") or "").strip()
 
 
 @click.command(name='sync-dropbox')
@@ -153,16 +156,12 @@ class SyncDropboxCommand(CliCommand):
 
         click.echo(f"Sync folders: {sync_folders}")
 
-        _pid = _uuid_mod.UUID(str(record_provider_id)) if record_provider_id else None
-
         processed_paths: set[str] = set()
         if not self.reprocess_existing:
             q = self.db.query(Asset.source_key).filter(
                 self.tenant_filter(Asset),
                 Asset.source_provider == "dropbox",
             )
-            if _pid is not None:
-                q = q.filter(Asset.provider_id == _pid)
             processed_paths = set(row[0] for row in q.all() if row[0])
 
         processed = 0
@@ -190,10 +189,10 @@ class SyncDropboxCommand(CliCommand):
                     click.echo(f"  Scanned {index}/{total_entries} entries...")
                 if not is_supported_media_file(entry.name, None):
                     continue
-                dropbox_path = entry.path_display
-                if not dropbox_path:
+                dropbox_key = _dropbox_entry_key(entry)
+                if not dropbox_key:
                     continue
-                if not self.reprocess_existing and dropbox_path in processed_paths:
+                if not self.reprocess_existing and dropbox_key in processed_paths:
                     continue
                 unprocessed.append(entry)
                 if len(unprocessed) >= folder_remaining:
@@ -221,8 +220,9 @@ class SyncDropboxCommand(CliCommand):
                     )
 
                     if result.status == "processed":
-                        if entry.path_display:
-                            processed_paths.add(entry.path_display)
+                        dropbox_key = _dropbox_entry_key(entry)
+                        if dropbox_key:
+                            processed_paths.add(dropbox_key)
                         click.echo(f"  ✓ Metadata + asset recorded (ID: {result.image_id})")
                         processed += 1
                     elif result.status == "skipped":

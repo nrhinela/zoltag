@@ -105,13 +105,20 @@ export async function fetchWithAuth(url, options = {}) {
   // Handle 403 Forbidden (access denied)
   if (response.status === 403) {
     const error = await response.json().catch(() => ({ detail: 'Access denied' }));
-    throw new Error(error.detail);
+    const err = new Error(error.detail || 'Access denied');
+    err.status = 403;
+    err.detail = error.detail || 'Access denied';
+    throw err;
   }
 
   // Handle other errors
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: 'Request failed' }));
-    throw new Error(error.detail || 'Request failed');
+    const detail = error.detail || 'Request failed';
+    const err = new Error(detail);
+    err.status = response.status;
+    err.detail = detail;
+    throw err;
   }
 
   // Return blob for image downloads
@@ -833,13 +840,15 @@ export async function getSystemSettings() {
 /**
  * Get integration status/config for current tenant (tenant admin scope)
  * @param {string} tenantId - Tenant ID
+ * @param {{force?: boolean}} options
  * @returns {Promise<Object>} Integration status payload
  */
-export async function getIntegrationStatus(tenantId) {
+export async function getIntegrationStatus(tenantId, options = {}) {
+  const force = !!options?.force;
   return queryRequest(
     ['integrationStatus', tenantId],
     () => fetchWithAuth('/admin/integrations/status', { tenantId }),
-    { staleTimeMs: INTEGRATION_STATUS_CACHE_MS }
+    { staleTimeMs: INTEGRATION_STATUS_CACHE_MS, force }
   );
 }
 
@@ -950,13 +959,15 @@ export async function listIntegrationPickerItems(tenantId, providerUuid, session
 /**
  * List all provider integration instances for a tenant (all rows, including non-primary)
  * @param {string} tenantId - Tenant ID
+ * @param {{force?: boolean}} options
  * @returns {Promise<{providers: Object[]}>} All provider records
  */
-export async function getIntegrationProviders(tenantId) {
+export async function getIntegrationProviders(tenantId, options = {}) {
+  const force = !!options?.force;
   return queryRequest(
     ['integrationProviders', tenantId],
     () => fetchWithAuth('/admin/integrations/providers', { tenantId }),
-    { staleTimeMs: INTEGRATION_STATUS_CACHE_MS }
+    { staleTimeMs: INTEGRATION_STATUS_CACHE_MS, force }
   );
 }
 
@@ -1165,6 +1176,16 @@ export async function retryJob(tenantId, jobId, payload = {}) {
     tenantId,
     body: JSON.stringify(payload || {}),
   });
+}
+
+/**
+ * Get a job by id
+ * @param {string} tenantId
+ * @param {string} jobId
+ * @returns {Promise<Object>}
+ */
+export async function getJob(tenantId, jobId) {
+  return fetchWithAuth(`/jobs/${jobId}`, { tenantId });
 }
 
 /**

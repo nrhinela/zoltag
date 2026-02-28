@@ -13,6 +13,7 @@ from . import admin_database
 from . import admin_roles
 from . import dropbox
 from . import gdrive
+from . import gphotos
 from . import sync
 from . import config
 from . import people
@@ -34,6 +35,7 @@ __all__ = [
     "people",
     "dropbox",
     "gdrive",
+    "gphotos",
     "sync",
     "config",
     "nl_search",

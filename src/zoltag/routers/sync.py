@@ -8,11 +8,17 @@ from sqlalchemy.orm import Session
 
 from zoltag.dependencies import get_db, get_secret, get_tenant
 from zoltag.image import is_supported_media_file
-from zoltag.integrations import TenantIntegrationRepository, normalize_sync_folders
+from zoltag.integrations import (
+    TenantIntegrationRepository,
+    normalize_picker_session_id,
+    normalize_selection_mode,
+    normalize_sync_folders,
+    normalize_sync_items,
+)
 from zoltag.metadata import Asset, Tenant as TenantModel
 from zoltag.settings import settings
 from zoltag.storage import ProviderEntry, create_storage_provider
-from zoltag.sync_pipeline import process_storage_entry
+from zoltag.sync_pipeline import GLOBAL_SOURCE_KEY_DEDUPE_PROVIDERS, process_storage_entry
 from zoltag.tenant import Tenant
 from zoltag.tenant_scope import tenant_column_filter
 
@@ -28,6 +34,10 @@ def _normalize_provider(provider: str) -> str:
         return "dropbox"
     if value in {"gdrive", "google-drive", "google_drive", "drive"}:
         return "gdrive"
+    if value in {"yt"}:
+        return "youtube"
+    if value in {"gphotos", "google-photos", "google_photos"}:
+        return "gphotos"
     return value
 
 
@@ -44,6 +54,10 @@ def _patch_tenant_from_record(tenant: Tenant, provider_name: str, record) -> Non
         tenant.youtube_token_secret = record.youtube_token_secret_name
         sync_folders = list((record.config_json or {}).get("sync_folders") or [])
         tenant.youtube_sync_folders = sync_folders
+    elif provider_name == "gphotos":
+        tenant.gphotos_token_secret = record.gphotos_token_secret_name
+        sync_folders = list((record.config_json or {}).get("sync_folders") or [])
+        tenant.gphotos_sync_folders = sync_folders
 
 
 @router.post("/sync", response_model=dict)
@@ -52,7 +66,7 @@ async def trigger_sync(
     db: Session = Depends(get_db),
     model: str = Query("siglip", description="'clip' or 'siglip'"),
     reprocess_existing: bool = Query(False, description="Reprocess entries even if already ingested"),
-    provider: str | None = Query(None, description="Storage provider: dropbox, gdrive, or youtube"),
+    provider: str | None = Query(None, description="Storage provider: dropbox, gdrive, youtube, or gphotos"),
     provider_id: str | None = Query(None, description="Specific provider integration UUID (omit for primary)"),
 ):
     """Trigger one-item sync for the requested storage provider."""
@@ -67,6 +81,7 @@ async def trigger_sync(
         # When provider_id is given, resolve the specific integration record directly.
         # Otherwise fall back to the primary record via build_runtime_context.
         record_provider_id: str | None = None
+        selected_record = None
         if provider_id:
             try:
                 specific_record = repo.get_provider_record_by_id(tenant_row, provider_id)
@@ -82,6 +97,7 @@ async def trigger_sync(
             provider_name = _normalize_provider(specific_record.provider_type)
             sync_folders = normalize_sync_folders(list((specific_record.config_json or {}).get("sync_folders") or []))
             record_provider_id = str(specific_record.id)
+            selected_record = specific_record
             # Patch tenant with this record's token secret so create_storage_provider can find it
             _patch_tenant_from_record(tenant, provider_name, specific_record)
         else:
@@ -107,6 +123,15 @@ async def trigger_sync(
                     )
                 sync_folders = normalize_sync_folders(youtube_runtime.get("sync_folders"))
                 tenant.youtube_sync_folders = list(sync_folders)
+            elif provider_name == "gphotos":
+                gphotos_runtime = runtime_context.get("gphotos") or {}
+                if not bool(gphotos_runtime.get("is_active")):
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Google Photos integration is inactive. Activate this provider in Admin -> Providers before syncing.",
+                    )
+                sync_folders = normalize_sync_folders(gphotos_runtime.get("sync_folders"))
+                tenant.gphotos_sync_folders = list(sync_folders)
             else:
                 gdrive_runtime = runtime_context.get("gdrive") or {}
                 if not bool(gdrive_runtime.get("is_active")):
@@ -121,6 +146,8 @@ async def trigger_sync(
             try:
                 primary_record = repo.get_provider_record(tenant_row, provider_name)
                 record_provider_id = str(primary_record.id) if primary_record.id else None
+                selected_record = primary_record
+                _patch_tenant_from_record(tenant, provider_name, primary_record)
             except Exception:
                 record_provider_id = None
 
@@ -143,12 +170,39 @@ async def trigger_sync(
                     Asset.source_provider == storage_provider.provider_name,
                 )
             )
-            if _pid_uuid is not None:
+            if _pid_uuid is not None and storage_provider.provider_name not in GLOBAL_SOURCE_KEY_DEDUPE_PROVIDERS:
                 q = q.filter(Asset.provider_id == _pid_uuid)
             processed_paths = set(row[0] for row in q.all() if row[0])
 
         try:
-            file_entries = storage_provider.list_image_entries(sync_folders=sync_folders)
+            if provider_name == "gphotos" and selected_record is not None:
+                config_json = dict(selected_record.config_json or {})
+                selection_mode = normalize_selection_mode("gphotos", config_json.get("selection_mode"))
+                if selection_mode == "picker":
+                    picker_session_id = normalize_picker_session_id(config_json.get("picker_session_id"))
+                    if not picker_session_id:
+                        raise HTTPException(
+                            status_code=409,
+                            detail="Google Photos picker sync requires a saved picker session. Launch picker, refresh selected media items, then save.",
+                        )
+                    sync_items = normalize_sync_items(config_json.get("sync_items"))
+                    selected_item_ids = [
+                        str(item.get("id") or "").strip()
+                        for item in sync_items
+                        if str(item.get("id") or "").strip()
+                    ]
+                    if not hasattr(storage_provider, "list_picker_entries"):
+                        raise HTTPException(status_code=400, detail="Google Photos picker sync is not supported by storage provider")
+                    file_entries = storage_provider.list_picker_entries(
+                        picker_session_id,
+                        picked_media_item_ids=selected_item_ids or None,
+                    )
+                else:
+                    file_entries = storage_provider.list_image_entries(sync_folders=sync_folders)
+            else:
+                file_entries = storage_provider.list_image_entries(sync_folders=sync_folders)
+        except HTTPException:
+            raise
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Failed to list {storage_provider.provider_name} files: {exc}")
 

@@ -6,6 +6,7 @@ State is encoded as a short-lived signed token so it survives:
 - stateless deployments
 """
 
+import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -18,31 +19,29 @@ _STATE_TTL = timedelta(minutes=10)
 _STATE_AUDIENCE = "zoltag-oauth-state"
 _STATE_ALGORITHM = "HS256"
 
+logger = logging.getLogger(__name__)
 
-def _state_secret_candidates() -> list[str]:
-    """Resolve candidate signing secrets from most stable/preferred to fallback."""
-    raw_candidates = [
-        settings.oauth_state_secret,
-        settings.database_url,
-        settings.supabase_service_role_key,
-        settings.supabase_anon_key,
-    ]
-    seen: set[str] = set()
-    candidates: list[str] = []
-    for raw in raw_candidates:
-        value = str(raw or "").strip()
-        if not value or value in seen:
-            continue
-        seen.add(value)
-        candidates.append(value)
-    return candidates
+# Resolved once at import time. If OAUTH_STATE_SECRET is not configured we
+# generate a random secret for this process. This is safe: state tokens are
+# short-lived (10 min TTL) so the only consequence of a process restart is
+# that any in-flight OAuth flow needs to be restarted by the user.
+def _resolve_state_secret() -> str:
+    explicit = str(settings.oauth_state_secret or "").strip()
+    if explicit:
+        return explicit
+    generated = secrets.token_hex(32)
+    logger.warning(
+        "OAUTH_STATE_SECRET is not configured. A random secret has been generated "
+        "for this process. Set OAUTH_STATE_SECRET in your environment to a stable "
+        "random value to avoid breaking OAuth flows on restart."
+    )
+    return generated
+
+_SIGNING_SECRET: str = _resolve_state_secret()
 
 
 def _state_signing_secret() -> str:
-    candidates = _state_secret_candidates()
-    if not candidates:
-        raise RuntimeError("OAuth state secret is not configured")
-    return candidates[0]
+    return _SIGNING_SECRET
 
 
 def generate_with_context(tenant_id: str, context: dict[str, Any] | None = None) -> str:
@@ -63,22 +62,20 @@ def generate_with_context(tenant_id: str, context: dict[str, Any] | None = None)
 def consume_with_context(nonce: str) -> dict[str, Any] | None:
     """Validate signed state token. Returns payload on success, None on failure."""
     payload = None
-    for secret in _state_secret_candidates():
-        try:
-            payload = jwt.decode(
-                nonce,
-                secret,
-                algorithms=[_STATE_ALGORITHM],
-                audience=_STATE_AUDIENCE,
-                options={
-                    "verify_signature": True,
-                    "verify_aud": True,
-                    "verify_exp": True,
-                },
-            )
-            break
-        except JWTError:
-            continue
+    try:
+        payload = jwt.decode(
+            nonce,
+            _state_signing_secret(),
+            algorithms=[_STATE_ALGORITHM],
+            audience=_STATE_AUDIENCE,
+            options={
+                "verify_signature": True,
+                "verify_aud": True,
+                "verify_exp": True,
+            },
+        )
+    except JWTError:
+        pass
     if payload is None:
         return None
 

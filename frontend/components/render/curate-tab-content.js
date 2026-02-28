@@ -176,6 +176,19 @@ export function renderCurateTabContent(host, { formatCurateDate }) {
               host.curateSimilarityAssetUuid = e?.detail?.assetUuid || null;
             }}
             @list-filter-exclude=${host._handleCurateListExcludeFromRightPanel}
+            @curate-images-optimistic-remove=${(e) => {
+              const ids = Array.isArray(e?.detail?.ids) ? e.detail.ids : [];
+              const beforeCount = Array.isArray(host.curateImages) ? host.curateImages.length : 0;
+              host._removeCurateImagesByIds(ids);
+              const afterCount = Array.isArray(host.curateImages) ? host.curateImages.length : 0;
+              const removedCount = Math.max(0, beforeCount - afterCount);
+              if (removedCount > 0 && Number.isFinite(Number(host.curateTotal))) {
+                host.curateTotal = Math.max(0, Number(host.curateTotal) - removedCount);
+              }
+            }}
+            @curate-list-drop-refresh=${() => {
+              host._applyCurateFilters();
+            }}
             @open-similar-in-search=${host._handleOpenSimilarInSearch}
           ></curate-explore-tab>
         </div>

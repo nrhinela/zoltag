@@ -3,7 +3,11 @@
 import uuid
 
 from zoltag.auth.models import UserProfile
-from zoltag.integrations import TenantIntegrationRepository
+from zoltag.integrations import (
+    TenantIntegrationRepository,
+    normalize_selection_mode,
+    normalize_sync_items,
+)
 from zoltag.metadata import Tenant as TenantModel
 
 # Force auth table registration on metadata before test_db creates schema.
@@ -73,3 +77,44 @@ def test_runtime_context_keeps_inactive_provider_config(test_db):
     assert runtime["dropbox"]["is_active"] is False
     assert runtime["dropbox"]["app_key"] == "app-key-1"
     assert runtime["dropbox"]["sync_folders"] == ["/One", "/Two"]
+
+
+def test_gphotos_defaults_to_picker_mode(test_db):
+    tenant_row = _create_tenant_row(test_db)
+    repo = TenantIntegrationRepository(test_db)
+
+    record = repo.create_provider(tenant_row, "gphotos")
+
+    assert record.config_json.get("selection_mode") == "picker"
+    assert record.config_json.get("sync_items") == []
+
+
+def test_update_provider_normalizes_sync_items(test_db):
+    tenant_row = _create_tenant_row(test_db)
+    repo = TenantIntegrationRepository(test_db)
+
+    created = repo.create_provider(tenant_row, "gphotos")
+    updated = repo.update_provider(
+        tenant_row,
+        "gphotos",
+        provider_id=created.id,
+        selection_mode="picker",
+        picker_session_id="abc123",
+        sync_items=[
+            {"id": "x1", "name": "One", "mimeType": "image/jpeg"},
+            {"id": "x1", "name": "Duplicate"},
+            "x2",
+        ],
+    )
+
+    assert updated.config_json.get("selection_mode") == "picker"
+    assert updated.config_json.get("picker_session_id") == "abc123"
+    assert normalize_sync_items(updated.config_json.get("sync_items")) == [
+        {"id": "x1", "name": "One", "mime_type": "image/jpeg"},
+        {"id": "x2"},
+    ]
+
+
+def test_gphotos_selection_mode_forces_picker() -> None:
+    assert normalize_selection_mode("gphotos", "catalog") == "picker"
+    assert normalize_selection_mode("gphotos", "picker") == "picker"

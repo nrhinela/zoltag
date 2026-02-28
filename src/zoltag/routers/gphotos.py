@@ -1,4 +1,4 @@
-"""Router for Google Drive OAuth handlers."""
+"""Router for Google Photos OAuth handlers."""
 
 from urllib.parse import urlencode
 
@@ -8,7 +8,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
 from zoltag import oauth_state
-from zoltag.dependencies import get_db, get_secret, store_secret
+from zoltag.dependencies import get_db, store_secret
 from zoltag.dropbox_oauth import append_query_params, is_allowed_redirect_origin, sanitize_redirect_origin, sanitize_return_path
 from zoltag.integrations import TenantIntegrationRepository
 from zoltag.metadata import Tenant as TenantModel
@@ -16,21 +16,17 @@ from zoltag.settings import settings
 from zoltag.tenant_scope import tenant_reference_filter
 
 router = APIRouter(
-    tags=["gdrive"],
+    tags=["gphotos"],
 )
 
+# Google Photos Picker API scope (full-library scopes were sunset in 2025).
+_GPHOTOS_SCOPE = "https://www.googleapis.com/auth/photospicker.mediaitems.readonly"
 
-def _resolve_gdrive_credentials(record) -> tuple[str, str]:
-    """Return (client_id, client_secret), preferring env vars over per-record config."""
-    client_id = str(settings.zoltag_gdrive_connector_client_id or "").strip() or str(
-        (record.config_json or {}).get("client_id") or ""
-    ).strip()
+
+def _resolve_gphotos_credentials() -> tuple[str, str]:
+    """Return (client_id, client_secret) from shared Google connector env vars."""
+    client_id = str(settings.zoltag_gdrive_connector_client_id or "").strip()
     client_secret = str(settings.zoltag_gdrive_connector_secret or "").strip()
-    if not client_secret:
-        try:
-            client_secret = get_secret(record.gdrive_client_secret_name) or ""
-        except Exception:
-            client_secret = ""
     return client_id, client_secret
 
 
@@ -63,8 +59,8 @@ def _resolve_redirect_origin(request: Request, explicit_origin: str | None = Non
     raise HTTPException(status_code=400, detail="OAuth redirect origin is not permitted")
 
 
-@router.get("/oauth/gdrive/authorize")
-async def gdrive_authorize(
+@router.get("/oauth/gphotos/authorize")
+async def gphotos_authorize(
     request: Request,
     tenant: str,
     flow: str = "popup",
@@ -73,7 +69,7 @@ async def gdrive_authorize(
     return_to: str | None = None,
     db: Session = Depends(get_db),
 ):
-    """Redirect user to Google OAuth consent for Drive access."""
+    """Redirect user to Google OAuth consent for Photos access."""
     flow = "redirect" if flow == "redirect" else "popup"
     resolved_return_to = sanitize_return_path(return_to)
     tenant_obj = _resolve_tenant(db, tenant)
@@ -82,16 +78,16 @@ async def gdrive_authorize(
 
     repo = TenantIntegrationRepository(db)
     try:
-        provider_record = repo.get_provider_record(tenant_obj, "gdrive", provider_id=provider_id)
+        provider_record = repo.get_provider_record(tenant_obj, "gphotos", provider_id=provider_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    client_id, _client_secret = _resolve_gdrive_credentials(provider_record)
+    client_id, _client_secret = _resolve_gphotos_credentials()
     if not client_id:
-        raise HTTPException(status_code=400, detail="Google Drive client ID not configured")
+        raise HTTPException(status_code=400, detail="Google Photos client ID not configured")
 
     resolved_origin = _resolve_redirect_origin(request, redirect_origin)
-    redirect_uri = f"{resolved_origin}/oauth/gdrive/callback"
+    redirect_uri = f"{resolved_origin}/oauth/gphotos/callback"
     state = oauth_state.generate_with_context(
         str(tenant_obj.id),
         {
@@ -105,7 +101,7 @@ async def gdrive_authorize(
         "client_id": client_id,
         "redirect_uri": redirect_uri,
         "response_type": "code",
-        "scope": "https://www.googleapis.com/auth/drive.readonly",
+        "scope": _GPHOTOS_SCOPE,
         "access_type": "offline",
         "include_granted_scopes": "true",
         "prompt": "consent",
@@ -115,14 +111,14 @@ async def gdrive_authorize(
     return RedirectResponse(oauth_url)
 
 
-@router.get("/oauth/gdrive/callback")
-async def gdrive_callback(
+@router.get("/oauth/gphotos/callback")
+async def gphotos_callback(
     request: Request,
     code: str,
     state: str,
     db: Session = Depends(get_db),
 ):
-    """Handle Google OAuth callback and persist refresh token."""
+    """Handle Google OAuth callback and persist Google Photos refresh token."""
     state_payload = oauth_state.consume_with_context(state)
     state_context: dict = {}
     if state_payload:
@@ -140,20 +136,20 @@ async def gdrive_callback(
     provider_id = str(state_context.get("provider_id") or "").strip() or None
     repo = TenantIntegrationRepository(db)
     try:
-        provider_record = repo.get_provider_record(tenant_obj, "gdrive", provider_id=provider_id)
+        provider_record = repo.get_provider_record(tenant_obj, "gphotos", provider_id=provider_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    token_secret = provider_record.gdrive_token_secret_name
-    client_id, client_secret = _resolve_gdrive_credentials(provider_record)
+    token_secret = provider_record.gphotos_token_secret_name
+    client_id, client_secret = _resolve_gphotos_credentials()
 
     if not client_id:
-        raise HTTPException(status_code=400, detail="Google Drive client ID not configured")
+        raise HTTPException(status_code=400, detail="Google Photos client ID not configured")
     if not client_secret:
-        raise HTTPException(status_code=400, detail="Google Drive client secret not configured")
+        raise HTTPException(status_code=400, detail="Google Photos client secret not configured")
 
     resolved_origin = _resolve_redirect_origin(request, state_context.get("redirect_origin"))
-    redirect_uri = f"{resolved_origin}/oauth/gdrive/callback"
+    redirect_uri = f"{resolved_origin}/oauth/gphotos/callback"
 
     with httpx.Client(timeout=30) as client:
         response = client.post(
@@ -182,10 +178,8 @@ async def gdrive_callback(
 
     repo.update_provider(
         tenant_obj,
-        "gdrive",
+        "gphotos",
         provider_id=provider_record.id,
-        client_id=client_id,
-        client_secret_name=provider_record.gdrive_client_secret_name,
         token_secret_name=token_secret,
         config_json_patch={"token_stored": True},
     )
@@ -197,7 +191,7 @@ async def gdrive_callback(
         redirect_target = append_query_params(
             return_to,
             {
-                "integration": "gdrive",
+                "integration": "gphotos",
                 "result": "connected",
                 "provider_id": str(provider_record.id),
                 "configure_step": "2",
@@ -209,7 +203,7 @@ async def gdrive_callback(
         """
         <html>
             <body>
-                <h1>Google Drive Connected</h1>
+                <h1>Google Photos Connected</h1>
                 <p>You can close this window and return to Zoltag.</p>
                 <script>window.close();</script>
             </body>

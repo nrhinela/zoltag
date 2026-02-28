@@ -1,7 +1,5 @@
 """YouTube synchronization command."""
 
-import uuid as _uuid_mod
-
 import click
 from google.cloud import storage
 
@@ -127,16 +125,12 @@ class SyncYoutubeCommand(CliCommand):
         else:
             click.echo("No sync playlists configured — listing all uploads from channel")
 
-        _pid = _uuid_mod.UUID(str(record_provider_id)) if record_provider_id else None
-
         processed_keys: set[str] = set()
         if not self.reprocess_existing:
             q = self.db.query(Asset.source_key).filter(
                 self.tenant_filter(Asset),
                 Asset.source_provider == "youtube",
             )
-            if _pid is not None:
-                q = q.filter(Asset.provider_id == _pid)
             processed_keys = set(row[0] for row in q.all() if row[0])
 
         click.echo("Listing videos from YouTube...")

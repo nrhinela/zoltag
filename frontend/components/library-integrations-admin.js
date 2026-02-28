@@ -8,6 +8,8 @@ import {
   getIntegrationPickerSession,
   getIntegrationProviders,
   getIntegrationStatus,
+  getJob,
+  getJobAttempts,
   getLiveDropboxFolders,
   getLiveGdriveFolders,
   getLiveGphotosAlbums,
@@ -18,6 +20,7 @@ import {
   listIntegrationPickerItems,
   updateIntegrationProvider,
 } from '../services/api.js';
+import { migrateLocalStorageKey } from '../services/app-storage.js';
 
 const PROVIDER_LABELS = {
   dropbox: 'Dropbox',
@@ -27,6 +30,11 @@ const PROVIDER_LABELS = {
 };
 
 const PROVIDER_TYPES = ['dropbox', 'gdrive', 'youtube', 'gphotos'];
+const PROVIDERS_WIZARD_HELP_VISIBILITY_STORAGE_KEY = 'zoltag:app:providers:wizardHelpVisible';
+const LEGACY_PROVIDERS_WIZARD_HELP_VISIBILITY_STORAGE_KEYS = [
+  'providersWizardHelpVisible',
+  'wizardHelpVisible:providers',
+];
 
 function normalizeProviderId(value) {
   const normalized = String(value || '').trim().toLowerCase();
@@ -72,7 +80,6 @@ export class LibraryIntegrationsAdmin extends LitElement {
     selectionModeByProvider: { type: Object },
     newSyncFolder: { type: String },
     _catalogFilter: { type: String },
-    _showAllOverflow: { type: Boolean },
     folderCatalogLoading: { type: Boolean },
     folderCatalogLoaded: { type: Boolean },
     folderCatalogError: { type: String },
@@ -102,6 +109,17 @@ export class LibraryIntegrationsAdmin extends LitElement {
     _addPickerOpen: { type: Boolean },
     _addPickerType: { type: String },
     _addingProvider: { type: Boolean },
+    _wizardHelpVisible: { type: Boolean },
+    _wizardHelpVisibleStep3: { type: Boolean },
+    _providerListTab: { type: String },
+    _listSyncingProviderId: { type: String },
+    _listSyncAllRunning: { type: Boolean },
+    _listSyncAllSummary: { type: String },
+    _manualRefreshRunning: { type: Boolean },
+    _lastRefreshedAt: { type: String },
+    _providerSyncOutputById: { type: Object },
+    _providerSyncOutputOpenId: { type: String },
+    _providerSyncOutputLoadingId: { type: String },
   };
 
   static styles = [
@@ -126,6 +144,12 @@ export class LibraryIntegrationsAdmin extends LitElement {
         margin-bottom: 14px;
       }
 
+      .header-actions {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+      }
+
       .title {
         margin: 0;
         color: #111827;
@@ -139,16 +163,71 @@ export class LibraryIntegrationsAdmin extends LitElement {
         font-size: 13px;
       }
 
+      .provider-list-toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 10px;
+      }
+
+      .provider-tabs {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        border: 1px solid #d1d5db;
+        border-radius: 10px;
+        padding: 4px;
+        background: #f9fafb;
+      }
+
+      .provider-tab {
+        border: none;
+        border-radius: 8px;
+        background: transparent;
+        color: #4b5563;
+        font-size: 12px;
+        font-weight: 700;
+        padding: 6px 10px;
+        cursor: pointer;
+      }
+
+      .provider-tab-active {
+        background: #2563eb;
+        color: #ffffff;
+      }
+
       .provider-list {
         border: 1px solid #e5e7eb;
         border-radius: 10px;
         overflow: hidden;
+        --provider-grid-columns: minmax(220px, 1.8fr) minmax(150px, 1.1fr) minmax(140px, 1fr) minmax(140px, 1fr) minmax(120px, 1fr) 220px;
+      }
+
+      .provider-list-header {
+        display: grid;
+        grid-template-columns: var(--provider-grid-columns);
+        align-items: center;
+        column-gap: 12px;
+        padding: 8px 14px;
+        border-bottom: 1px solid #e5e7eb;
+        background: #f9fafb;
+        color: #6b7280;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+
+      .provider-list-header > :last-child {
+        justify-self: end;
       }
 
       .provider-row {
-        display: flex;
+        display: grid;
+        grid-template-columns: var(--provider-grid-columns);
         align-items: center;
-        gap: 12px;
+        column-gap: 12px;
         padding: 10px 14px;
         border-bottom: 1px solid #f3f4f6;
         background: #ffffff;
@@ -162,21 +241,127 @@ export class LibraryIntegrationsAdmin extends LitElement {
         background: #f9fafb;
       }
 
+      .provider-row-dimmed {
+        background: #f3f4f6;
+      }
+
+      .provider-row-dimmed:hover {
+        background: #f3f4f6;
+      }
+
       .provider-title {
-        flex: 1;
         display: flex;
         align-items: center;
-        gap: 8px;
         color: #111827;
         font-size: 14px;
         font-weight: 600;
         min-width: 0;
       }
 
+      .provider-label-cell {
+        color: #111827;
+        font-size: 14px;
+        font-weight: 600;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
       .provider-meta {
         color: #6b7280;
-        font-size: 12px;
+        font-size: 13px;
         white-space: nowrap;
+      }
+
+      .provider-status-cell {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        color: #4b5563;
+        font-size: 13px;
+        white-space: nowrap;
+      }
+
+      .provider-sync-status {
+        color: #4b5563;
+        font-size: 13px;
+        white-space: normal;
+        overflow-wrap: anywhere;
+        line-height: 1.35;
+      }
+
+      .provider-sync-status-running {
+        color: #92400e;
+        font-weight: 600;
+      }
+
+      .provider-sync-status-queued {
+        color: #1d4ed8;
+        font-weight: 600;
+      }
+
+      .provider-sync-status-failed {
+        color: #991b1b;
+        font-weight: 600;
+      }
+
+      .provider-sync-status-actions {
+        margin-top: 6px;
+      }
+
+      .provider-row-output {
+        background: #f8fafc;
+      }
+
+      .provider-row-output:hover {
+        background: #f8fafc;
+      }
+
+      .provider-sync-output-panel {
+        grid-column: 1 / -1;
+        border: 1px solid #d1d5db;
+        border-radius: 10px;
+        background: #ffffff;
+        padding: 10px;
+      }
+
+      .provider-sync-output-meta {
+        color: #374151;
+        font-size: 12px;
+        margin-bottom: 8px;
+      }
+
+      .provider-sync-output-pre {
+        margin: 0;
+        max-height: 260px;
+        overflow: auto;
+        border: 1px solid #e5e7eb;
+        border-radius: 8px;
+        padding: 8px;
+        background: #f9fafb;
+        color: #111827;
+        white-space: pre-wrap;
+        word-break: break-word;
+        font-size: 12px;
+        line-height: 1.35;
+      }
+
+      .provider-status-toggle {
+        border: 1px solid #d1d5db;
+        border-radius: 8px;
+        background: #ffffff;
+        color: #374151;
+        font-size: 12px;
+        font-weight: 700;
+        line-height: 1;
+        padding: 4px 7px;
+        cursor: pointer;
+      }
+
+      .provider-status-toggle:disabled {
+        opacity: 0.55;
+        cursor: not-allowed;
       }
 
       .provider-actions {
@@ -184,6 +369,55 @@ export class LibraryIntegrationsAdmin extends LitElement {
         align-items: center;
         gap: 6px;
         flex-shrink: 0;
+        justify-self: end;
+      }
+
+      .provider-label-type {
+        color: #6b7280;
+        font-size: 12px;
+        font-weight: 600;
+      }
+
+      .provider-label-scope {
+        color: #6b7280;
+        font-size: 12px;
+        font-weight: 500;
+      }
+
+      .provider-age-cell {
+        color: #4b5563;
+        font-size: 13px;
+        white-space: nowrap;
+      }
+
+      @media (max-width: 900px) {
+        .provider-list-toolbar {
+          flex-direction: column;
+          align-items: stretch;
+        }
+
+        .provider-list-header {
+          display: none;
+        }
+
+        .provider-row {
+          grid-template-columns: minmax(0, 1fr) auto;
+          row-gap: 8px;
+        }
+
+        .provider-label-cell,
+        .provider-title,
+        .provider-status-cell,
+        .provider-meta,
+        .provider-sync-status {
+          grid-column: 1 / 2;
+        }
+
+        .provider-actions {
+          grid-column: 2 / 3;
+          grid-row: 1 / span 5;
+          align-self: start;
+        }
       }
 
       .status-row {
@@ -314,6 +548,34 @@ export class LibraryIntegrationsAdmin extends LitElement {
         min-width: 0;
       }
 
+      .wizard-steps-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+      }
+
+      .wizard-help-toggle {
+        flex: 0 0 auto;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        white-space: nowrap;
+      }
+
+      .wizard-help-toggle-icon {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 16px;
+        height: 16px;
+        border-radius: 999px;
+        border: 1px solid #9ca3af;
+        font-size: 11px;
+        font-weight: 700;
+        line-height: 1;
+      }
+
       .wizard-step {
         border: 1px solid #d1d5db;
         border-radius: 10px;
@@ -384,6 +646,10 @@ export class LibraryIntegrationsAdmin extends LitElement {
         flex: 0 0 auto;
       }
 
+      .wizard-step-main-col > .wizard-steps-row {
+        flex: 0 0 auto;
+      }
+
       .wizard-step-main-col > .configure-section {
         margin-top: 0;
         flex: 1 1 auto;
@@ -445,6 +711,10 @@ export class LibraryIntegrationsAdmin extends LitElement {
         overflow-y: auto;
       }
 
+      .wizard-step-layout-help-collapsed {
+        grid-template-columns: minmax(0, 1fr);
+      }
+
       .wizard-help-title {
         margin: 0 0 8px;
         color: #1e40af;
@@ -473,6 +743,15 @@ export class LibraryIntegrationsAdmin extends LitElement {
         .wizard-step-layout {
           grid-template-columns: 1fr;
           height: auto;
+        }
+
+        .wizard-steps-row {
+          flex-direction: column;
+          align-items: stretch;
+        }
+
+        .wizard-help-toggle {
+          align-self: flex-end;
         }
 
         .wizard-step-main-col {
@@ -504,6 +783,27 @@ export class LibraryIntegrationsAdmin extends LitElement {
         color: #1f2937;
         font-size: 14px;
         font-weight: 700;
+      }
+
+      .step-guide {
+        margin-bottom: 10px;
+        border: 1px solid #bfdbfe;
+        border-radius: 10px;
+        background: #eff6ff;
+        padding: 10px 12px;
+      }
+
+      .step-guide-title {
+        margin: 0;
+        color: #1e40af;
+        font-size: 14px;
+        font-weight: 700;
+      }
+
+      .step-guide-message {
+        margin-top: 6px;
+        color: #1f2937;
+        font-size: 13px;
       }
 
       .muted {
@@ -623,19 +923,49 @@ export class LibraryIntegrationsAdmin extends LitElement {
         margin-top: 10px;
         flex: 1 1 auto;
         min-height: 0;
-        display: flex;
-        flex-direction: column;
+        display: grid;
+        grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
         gap: 10px;
       }
 
-      .scope-section-title {
-        margin: 0 0 8px;
+      .scope-mode-bar {
+        margin-top: 10px;
+        padding: 8px 10px;
+        border: 1px solid #e5e7eb;
+        border-radius: 10px;
+        background: #f9fafb;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      .scope-mode-pill {
+        display: inline-flex;
+        align-items: center;
+        border: 1px solid #d1d5db;
+        border-radius: 999px;
+        padding: 4px 10px;
         color: #374151;
-        font-size: 13px;
+        background: #ffffff;
+        font-size: 12px;
         font-weight: 700;
       }
 
-      .scope-saved-block {
+      .scope-mode-pill-active {
+        border-color: #2563eb;
+        color: #1e40af;
+        background: #eff6ff;
+      }
+
+      .scope-mode-status {
+        margin-left: auto;
+        color: #4b5563;
+        font-size: 12px;
+        font-weight: 600;
+      }
+
+      .scope-pane {
         min-height: 0;
         display: flex;
         flex-direction: column;
@@ -645,7 +975,7 @@ export class LibraryIntegrationsAdmin extends LitElement {
         overflow: hidden;
       }
 
-      .scope-saved-header {
+      .scope-pane-header {
         display: flex;
         align-items: center;
         justify-content: space-between;
@@ -655,6 +985,30 @@ export class LibraryIntegrationsAdmin extends LitElement {
         background: #f9fafb;
       }
 
+      .scope-pane-title {
+        color: #374151;
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .scope-pane-content {
+        min-height: 0;
+        flex: 1 1 auto;
+        overflow-y: auto;
+        padding: 8px;
+      }
+
+      .scope-saved-block {
+        min-height: 0;
+      }
+
+      .scope-saved-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
       .scope-saved-title {
         color: #374151;
         font-size: 12px;
@@ -662,62 +1016,24 @@ export class LibraryIntegrationsAdmin extends LitElement {
       }
 
       .scope-saved-list {
-        max-height: 240px;
+        min-height: 0;
         overflow-y: auto;
-        padding: 8px;
+        padding: 0;
       }
 
       .scope-saved-list .folder-list {
         margin-top: 0;
       }
 
-      .scope-folder-mode {
-        margin-top: 10px;
-        display: flex;
-        align-items: center;
-        gap: 14px;
-        flex-wrap: wrap;
-      }
-
-      .scope-folder-mode-option {
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-        color: #374151;
-        font-size: 13px;
-        font-weight: 600;
-        border: 1px solid #d1d5db;
-        border-radius: 999px;
-        padding: 4px 10px;
-        background: #ffffff;
-      }
-
-      .scope-folder-mode-option-active {
-        border-color: #2563eb;
-        background: #eff6ff;
-        color: #1e40af;
-      }
-
-      .scope-folder-mode-note {
-        margin-top: 6px;
-        color: #6b7280;
-        font-size: 12px;
-      }
-
       .scope-discovery-block {
         min-height: 0;
-        display: flex;
-        flex-direction: column;
-        border: 1px solid #e5e7eb;
-        border-radius: 10px;
-        background: #ffffff;
-        padding: 10px;
       }
 
       .scope-discovery-scroll {
-        max-height: 320px;
+        flex: 1 1 auto;
+        min-height: 0;
         overflow-y: auto;
-        padding-right: 4px;
+        padding-right: 2px;
       }
 
       .folder-typeahead-eight {
@@ -729,6 +1045,44 @@ export class LibraryIntegrationsAdmin extends LitElement {
         flex-direction: column;
         gap: 8px;
         margin-top: 10px;
+      }
+
+      .picker-intro-box {
+        border: 1px solid #bfdbfe;
+        border-radius: 10px;
+        background: #eff6ff;
+        padding: 12px;
+      }
+
+      .picker-intro-title {
+        margin: 0;
+        color: #1e40af;
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      .picker-intro-text {
+        margin-top: 6px;
+        color: #1f2937;
+        font-size: 13px;
+        line-height: 1.45;
+      }
+
+      .picker-intro-actions {
+        margin-top: 10px;
+        display: flex;
+        justify-content: center;
+      }
+
+      .picker-return-cta {
+        margin-top: 10px;
+        border: 1px dashed #93c5fd;
+        border-radius: 10px;
+        background: #f8fbff;
+        padding: 8px 10px;
+        color: #1e3a8a;
+        font-size: 12px;
+        font-weight: 600;
       }
 
       .folder-item {
@@ -792,6 +1146,17 @@ export class LibraryIntegrationsAdmin extends LitElement {
         from { transform: rotate(0deg); }
         to { transform: rotate(360deg); }
       }
+
+      @media (max-width: 1000px) {
+        .scope-two-panel {
+          grid-template-columns: 1fr;
+        }
+
+        .scope-mode-status {
+          margin-left: 0;
+          width: 100%;
+        }
+      }
     `,
   ];
 
@@ -815,7 +1180,6 @@ export class LibraryIntegrationsAdmin extends LitElement {
     this.selectionModeByProvider = {};
     this.newSyncFolder = '';
     this._catalogFilter = '';
-    this._showAllOverflow = false;
     this.folderCatalogLoading = false;
     this.folderCatalogLoaded = false;
     this.folderCatalogError = '';
@@ -847,6 +1211,17 @@ export class LibraryIntegrationsAdmin extends LitElement {
     this._addingProvider = false;
     this._editingLabel = '';
     this._savingLabel = false;
+    this._wizardHelpVisible = this._loadWizardHelpVisibility();
+    this._wizardHelpVisibleStep3 = false;
+    this._providerListTab = 'active';
+    this._listSyncingProviderId = '';
+    this._listSyncAllRunning = false;
+    this._listSyncAllSummary = '';
+    this._manualRefreshRunning = false;
+    this._lastRefreshedAt = '';
+    this._providerSyncOutputById = {};
+    this._providerSyncOutputOpenId = '';
+    this._providerSyncOutputLoadingId = '';
     this._oauthRestoreProviderId = '';
     this._oauthRestoreStep = 0;
     this._boundSyncWizardLayout = () => this._syncWizardHelpHeight();
@@ -896,6 +1271,47 @@ export class LibraryIntegrationsAdmin extends LitElement {
     });
   }
 
+  _loadWizardHelpVisibility() {
+    if (typeof window === 'undefined' || !window.localStorage) return true;
+    try {
+      migrateLocalStorageKey(
+        PROVIDERS_WIZARD_HELP_VISIBILITY_STORAGE_KEY,
+        LEGACY_PROVIDERS_WIZARD_HELP_VISIBILITY_STORAGE_KEYS,
+      );
+      const raw = window.localStorage.getItem(PROVIDERS_WIZARD_HELP_VISIBILITY_STORAGE_KEY);
+      if (raw === null) return true;
+      return raw === '1';
+    } catch (_error) {
+      return true;
+    }
+  }
+
+  _persistWizardHelpVisibility(visible) {
+    if (typeof window === 'undefined' || !window.localStorage) return;
+    try {
+      window.localStorage.setItem(PROVIDERS_WIZARD_HELP_VISIBILITY_STORAGE_KEY, visible ? '1' : '0');
+    } catch (_error) {
+      // ignore storage failures
+    }
+  }
+
+  _toggleWizardHelp() {
+    const currentStep = Math.max(1, Math.min(Math.trunc(Number(this.configureStep) || 1), 4));
+    if (currentStep === 3) {
+      // Step 3 help visibility is session-only and does not persist.
+      this._wizardHelpVisibleStep3 = !this._wizardHelpVisibleStep3;
+      return;
+    }
+    this._wizardHelpVisible = !this._wizardHelpVisible;
+    this._persistWizardHelpVisibility(this._wizardHelpVisible);
+  }
+
+  _isWizardHelpVisibleForStep(step) {
+    const currentStep = Math.max(1, Math.min(Math.trunc(Number(step) || 1), 4));
+    if (currentStep === 3) return !!this._wizardHelpVisibleStep3;
+    return !!this._wizardHelpVisible;
+  }
+
   _applyOauthResultFromQuery() {
     try {
       const params = new URLSearchParams(window.location.search || '');
@@ -926,7 +1342,29 @@ export class LibraryIntegrationsAdmin extends LitElement {
     }
   }
 
-  async _loadStatus() {
+  _formatRefreshTime(value) {
+    if (!value) return '';
+    try {
+      const parsed = new Date(value);
+      if (!Number.isFinite(parsed.getTime())) return '';
+      return parsed.toLocaleTimeString();
+    } catch (_error) {
+      return '';
+    }
+  }
+
+  async _refreshProviders() {
+    if (this._manualRefreshRunning) return;
+    this._manualRefreshRunning = true;
+    try {
+      await this._loadStatus({ force: true });
+      this._lastRefreshedAt = new Date().toISOString();
+    } finally {
+      this._manualRefreshRunning = false;
+    }
+  }
+
+  async _loadStatus({ force = false } = {}) {
     const tenantId = String(this.tenant || '').trim();
     if (!tenantId) {
       this._allProviderInstances = [];
@@ -941,9 +1379,13 @@ export class LibraryIntegrationsAdmin extends LitElement {
     this.loading = true;
     this.errorMessage = '';
     try {
+      let providerListError = '';
       const [statusResult, providersResult] = await Promise.all([
-        getIntegrationStatus(tenantId),
-        getIntegrationProviders(tenantId).catch(() => ({ providers: [] })),
+        getIntegrationStatus(tenantId, { force }),
+        getIntegrationProviders(tenantId, { force }).catch((error) => {
+          providerListError = String(error?.message || 'Failed to load providers').trim();
+          return { providers: [] };
+        }),
       ]);
 
       // Build UUID → connection status map from status.providers (which has connected/can_connect)
@@ -956,6 +1398,16 @@ export class LibraryIntegrationsAdmin extends LitElement {
 
       const instances = Array.isArray(providersResult?.providers) ? providersResult.providers : [];
       this._allProviderInstances = instances;
+      const validIds = new Set(instances.map((inst) => String(inst?.id || '').trim()).filter(Boolean));
+      this._providerSyncOutputById = Object.fromEntries(
+        Object.entries(this._providerSyncOutputById || {}).filter(([id]) => validIds.has(id))
+      );
+      if (this._providerSyncOutputOpenId && !validIds.has(this._providerSyncOutputOpenId)) {
+        this._providerSyncOutputOpenId = '';
+      }
+      if (this._providerSyncOutputLoadingId && !validIds.has(this._providerSyncOutputLoadingId)) {
+        this._providerSyncOutputLoadingId = '';
+      }
 
       // Build sync folders map keyed by UUID
       const foldersByUuid = {};
@@ -990,6 +1442,10 @@ export class LibraryIntegrationsAdmin extends LitElement {
       this.syncFoldersByProvider = foldersByUuid;
       this.syncItemsByProvider = itemsByUuid;
       this.selectionModeByProvider = selectionModeByUuid;
+
+      if (providerListError) {
+        this.errorMessage = providerListError;
+      }
 
       // If the instance being configured was deleted, go back to list
       if (this.configureProviderId && !instances.find((i) => i.id === this.configureProviderId)) {
@@ -1050,7 +1506,6 @@ export class LibraryIntegrationsAdmin extends LitElement {
     const next = { ...(this.syncFoldersByProvider || {}) };
     next[uuid] = Array.isArray(folders) ? [...folders] : [];
     this.syncFoldersByProvider = next;
-    this._showAllOverflow = false;
   }
 
   _setProviderItems(uuid, items) {
@@ -1096,6 +1551,207 @@ export class LibraryIntegrationsAdmin extends LitElement {
     const next = { ...(this.selectionModeByProvider || {}) };
     next[uuid] = mode;
     this.selectionModeByProvider = next;
+  }
+
+  _formatSyncStatusTimestamp(value) {
+    if (!value) return '';
+    try {
+      const parsed = new Date(value);
+      if (!Number.isFinite(parsed.getTime())) return '';
+      return parsed.toLocaleString();
+    } catch (_error) {
+      return '';
+    }
+  }
+
+  _getSyncStatusDisplay(inst) {
+    const sync = inst?.sync_status || {};
+    const state = String(sync?.state || '').trim().toLowerCase();
+    if (state === 'running') {
+      const when = this._formatSyncStatusTimestamp(sync.started_at) || this._formatSyncStatusTimestamp(sync.queued_at);
+      return {
+        text: when ? `In progress - started ${when}` : 'In progress',
+        className: 'provider-sync-status provider-sync-status-running',
+      };
+    }
+    if (state === 'queued') {
+      const when = this._formatSyncStatusTimestamp(sync.queued_at);
+      return {
+        text: when ? `Queued at ${when}` : 'Queued',
+        className: 'provider-sync-status provider-sync-status-queued',
+      };
+    }
+    const lastCompletedAt = this._formatSyncStatusTimestamp(sync.last_completed_at);
+    const lastCompletedStatus = String(sync.last_completed_status || '').trim().toLowerCase();
+    if (lastCompletedAt) {
+      if (lastCompletedStatus && lastCompletedStatus !== 'succeeded') {
+        const statusText = lastCompletedStatus.replaceAll('_', ' ');
+        return {
+          text: `Last sync ${statusText} at ${lastCompletedAt}`,
+          className: `provider-sync-status ${lastCompletedStatus === 'failed' || lastCompletedStatus === 'dead_letter' ? 'provider-sync-status-failed' : ''}`.trim(),
+        };
+      }
+      return {
+        text: `Last sync ${lastCompletedAt}`,
+        className: 'provider-sync-status',
+      };
+    }
+    return {
+      text: 'No completed sync yet',
+      className: 'provider-sync-status',
+    };
+  }
+
+  _getProviderSyncLogJobId(inst) {
+    const sync = inst?.sync_status || {};
+    const state = String(sync?.state || '').trim().toLowerCase();
+    if ((state === 'running' || state === 'queued') && sync?.job_id) {
+      return String(sync.job_id);
+    }
+    if (sync?.last_completed_job_id) {
+      return String(sync.last_completed_job_id);
+    }
+    return '';
+  }
+
+  _formatSyncAge(inst) {
+    const sync = inst?.sync_status || {};
+    const sourceTime = sync?.last_completed_at || sync?.last_succeeded_at || '';
+    if (!sourceTime) return 'Never';
+    try {
+      const parsed = new Date(sourceTime);
+      const ts = parsed.getTime();
+      if (!Number.isFinite(ts)) return 'Never';
+      const deltaMs = Math.max(0, Date.now() - ts);
+      const totalMinutes = Math.floor(deltaMs / 60000);
+      const days = Math.floor(totalMinutes / (24 * 60));
+      const hours = Math.floor((totalMinutes % (24 * 60)) / 60);
+      const minutes = totalMinutes % 60;
+      if (days > 0) return `${days}d ${hours}h ago`;
+      if (hours > 0) return `${hours}h ${minutes}m ago`;
+      if (minutes > 0) return `${minutes}m ago`;
+      return 'Just now';
+    } catch (_error) {
+      return 'Never';
+    }
+  }
+
+  _buildProviderSyncOutputText(job, attempts = []) {
+    const lines = [];
+    const jobId = String(job?.id || '').trim();
+    const status = String(job?.status || '').trim() || 'unknown';
+    const queuedAt = this._formatSyncStatusTimestamp(job?.queued_at);
+    const startedAt = this._formatSyncStatusTimestamp(job?.started_at);
+    const finishedAt = this._formatSyncStatusTimestamp(job?.finished_at);
+    lines.push(`Job ${jobId || 'unknown'}`);
+    lines.push(`Status: ${status}`);
+    if (queuedAt) lines.push(`Queued: ${queuedAt}`);
+    if (startedAt) lines.push(`Started: ${startedAt}`);
+    if (finishedAt) lines.push(`Finished: ${finishedAt}`);
+    if (job?.last_error) {
+      lines.push('');
+      lines.push(`Last error: ${job.last_error}`);
+    }
+
+    const attemptRows = Array.isArray(attempts) ? [...attempts] : [];
+    attemptRows.sort((a, b) => Number(a?.attempt_no || 0) - Number(b?.attempt_no || 0));
+    if (!attemptRows.length) {
+      lines.push('');
+      lines.push('No attempt output available yet.');
+      return lines.join('\n');
+    }
+
+    for (const attempt of attemptRows) {
+      lines.push('');
+      lines.push(`=== Attempt ${attempt?.attempt_no ?? '—'} (${attempt?.status || 'unknown'}) ===`);
+      const attemptStarted = this._formatSyncStatusTimestamp(attempt?.started_at);
+      const attemptFinished = this._formatSyncStatusTimestamp(attempt?.finished_at);
+      if (attemptStarted) lines.push(`Started: ${attemptStarted}`);
+      if (attemptFinished) lines.push(`Finished: ${attemptFinished}`);
+      if (attempt?.exit_code !== null && attempt?.exit_code !== undefined) {
+        lines.push(`Exit code: ${attempt.exit_code}`);
+      }
+      if (attempt?.error_text) {
+        lines.push(`Error: ${attempt.error_text}`);
+      }
+      const stdout = String(attempt?.stdout_tail || '').trim();
+      const stderr = String(attempt?.stderr_tail || '').trim();
+      if (stdout) {
+        lines.push('');
+        lines.push('--- stdout ---');
+        lines.push(stdout);
+      }
+      if (stderr) {
+        lines.push('');
+        lines.push('--- stderr ---');
+        lines.push(stderr);
+      }
+      if (!stdout && !stderr && !attempt?.error_text) {
+        lines.push('No output captured for this attempt.');
+      }
+    }
+
+    return lines.join('\n');
+  }
+
+  async _handleToggleProviderSyncOutput(uuid) {
+    const providerId = String(uuid || '').trim();
+    if (!providerId) return;
+    if (this._providerSyncOutputOpenId === providerId && this._providerSyncOutputLoadingId !== providerId) {
+      this._providerSyncOutputOpenId = '';
+      return;
+    }
+    const tenantId = String(this.tenant || '').trim();
+    if (!tenantId) return;
+    const inst = this._getInstance(providerId);
+    const jobId = this._getProviderSyncLogJobId(inst);
+    if (!jobId) {
+      this._providerSyncOutputById = {
+        ...(this._providerSyncOutputById || {}),
+        [providerId]: {
+          jobId: '',
+          error: '',
+          text: 'No sync job output available yet.',
+          loadedAt: new Date().toISOString(),
+        },
+      };
+      this._providerSyncOutputOpenId = providerId;
+      return;
+    }
+
+    this._providerSyncOutputOpenId = providerId;
+    this._providerSyncOutputLoadingId = providerId;
+    try {
+      const [jobResult, attemptsResult] = await Promise.all([
+        getJob(tenantId, jobId),
+        getJobAttempts(tenantId, jobId, { limit: 200, offset: 0 }),
+      ]);
+      const attempts = Array.isArray(attemptsResult?.attempts) ? attemptsResult.attempts : [];
+      const text = this._buildProviderSyncOutputText(jobResult, attempts);
+      this._providerSyncOutputById = {
+        ...(this._providerSyncOutputById || {}),
+        [providerId]: {
+          jobId,
+          error: '',
+          text,
+          loadedAt: new Date().toISOString(),
+        },
+      };
+    } catch (error) {
+      this._providerSyncOutputById = {
+        ...(this._providerSyncOutputById || {}),
+        [providerId]: {
+          jobId,
+          error: String(error?.message || 'Failed to load job output'),
+          text: '',
+          loadedAt: new Date().toISOString(),
+        },
+      };
+    } finally {
+      if (this._providerSyncOutputLoadingId === providerId) {
+        this._providerSyncOutputLoadingId = '';
+      }
+    }
   }
 
   _sortFolderPaths(paths) {
@@ -1151,13 +1807,13 @@ export class LibraryIntegrationsAdmin extends LitElement {
     }
     if (!silent) this.errorMessage = '';
     this.configureStep = target;
+    if (target === 3) this._wizardHelpVisibleStep3 = false;
   }
 
   _resetEditorState() {
     this._folderLoadRunId += 1;
     this.newSyncFolder = '';
     this._catalogFilter = '';
-    this._showAllOverflow = false;
     this.folderCatalogLoading = false;
     this.folderCatalogLoaded = false;
     this.folderCatalogError = '';
@@ -1357,11 +2013,17 @@ export class LibraryIntegrationsAdmin extends LitElement {
 
   // ── Active toggle ─────────────────────────────────────────────────────────
 
-  async _handleToggleProviderActive(nextActive) {
+  async _handleToggleProviderActive(nextActive, targetUuid = this.configureProviderId) {
     const tenantId = String(this.tenant || '').trim();
-    const uuid = this.configureProviderId;
+    const uuid = String(targetUuid || '').trim();
     const inst = this._getInstance(uuid);
+    const status = this._getInstanceStatus(uuid);
     if (!tenantId || !uuid || this.updatingProviderState) return;
+    if (nextActive && !status?.connected) {
+      const typeLabel = PROVIDER_LABELS[normalizeProviderId(inst?.provider_type)] || inst?.provider_type || 'provider';
+      this.errorMessage = `Connect ${typeLabel} before activating.`;
+      return;
+    }
     const label = PROVIDER_LABELS[normalizeProviderId(inst?.provider_type)] || inst?.label || 'provider';
     this.updatingProviderState = true;
     this.errorMessage = '';
@@ -1375,6 +2037,14 @@ export class LibraryIntegrationsAdmin extends LitElement {
     } finally {
       this.updatingProviderState = false;
     }
+  }
+
+  async _handleToggleProviderActiveFromList(uuid) {
+    const target = String(uuid || '').trim();
+    if (!target) return;
+    const inst = this._getInstance(target);
+    if (!inst) return;
+    await this._handleToggleProviderActive(!inst.is_active, target);
   }
 
   async _handleSyncNow() {
@@ -1413,11 +2083,98 @@ export class LibraryIntegrationsAdmin extends LitElement {
     }
   }
 
+  async _handleSyncProviderFromList(uuid) {
+    const tenantId = String(this.tenant || '').trim();
+    const targetUuid = String(uuid || '').trim();
+    const inst = this._getInstance(targetUuid);
+    const status = this._getInstanceStatus(targetUuid);
+    const providerType = normalizeProviderId(inst?.provider_type);
+    const typeLabel = PROVIDER_LABELS[providerType] || inst?.provider_type || 'provider';
+    if (!tenantId || !targetUuid || this._listSyncAllRunning || this._listSyncingProviderId) return;
+    if (!status?.connected) {
+      this.errorMessage = `Connect ${typeLabel} first.`;
+      return;
+    }
+    if (!inst?.is_active) {
+      this.errorMessage = `Activate ${typeLabel} before syncing.`;
+      return;
+    }
+
+    this._listSyncingProviderId = targetUuid;
+    this.errorMessage = '';
+    this.successMessage = '';
+    try {
+      const result = await queueIntegrationProviderSync(tenantId, targetUuid, {});
+      const queuedState = String(result?.status || '').trim().toLowerCase();
+      const queuedJobId = String(result?.job_id || '').trim();
+      if (queuedState === 'already_queued') {
+        this.successMessage = `A sync job is already queued or running for ${typeLabel}.${queuedJobId ? ` Job: ${queuedJobId}.` : ''}`;
+      } else {
+        this.successMessage = `Sync job queued for ${typeLabel}.${queuedJobId ? ` Job: ${queuedJobId}.` : ''}`;
+      }
+    } catch (error) {
+      this.errorMessage = error?.message || `Failed to queue sync for ${typeLabel}`;
+    } finally {
+      this._listSyncingProviderId = '';
+    }
+  }
+
+  async _handleSyncAllProvidersFromList(instances = []) {
+    const tenantId = String(this.tenant || '').trim();
+    if (!tenantId || this._listSyncAllRunning || this._listSyncingProviderId) return;
+    const targets = (instances || []).filter((inst) => {
+      const uuid = String(inst?.id || '').trim();
+      const status = this._getInstanceStatus(uuid);
+      return uuid && !!inst?.is_active && !!status?.connected;
+    });
+    if (!targets.length) return;
+
+    this._listSyncAllRunning = true;
+    this.errorMessage = '';
+    this.successMessage = '';
+    this._listSyncAllSummary = '';
+    let failed = 0;
+    let queued = 0;
+    let alreadyQueued = 0;
+    let firstError = '';
+    const failedDetails = [];
+    for (const inst of targets) {
+      const uuid = String(inst?.id || '').trim();
+      const providerType = normalizeProviderId(inst?.provider_type);
+      const label = String(inst?.label || '').trim() || PROVIDER_LABELS[providerType] || inst?.provider_type || 'provider';
+      try {
+        const result = await queueIntegrationProviderSync(tenantId, uuid, {});
+        const queuedState = String(result?.status || '').trim().toLowerCase();
+        if (queuedState === 'already_queued') {
+          alreadyQueued += 1;
+        } else {
+          queued += 1;
+        }
+      } catch (error) {
+        failed += 1;
+        const message = String(error?.message || '').trim();
+        if (!firstError) firstError = message;
+        failedDetails.push(`${label}: ${message || 'Request failed'}`);
+      }
+    }
+    const summaryParts = [`${queued} queued`];
+    if (alreadyQueued > 0) summaryParts.push(`${alreadyQueued} already queued/running`);
+    if (failed > 0) summaryParts.push(`${failed} failed`);
+    this._listSyncAllSummary = `Sync all summary: ${summaryParts.join(', ')}.`;
+    if (failed > 0) {
+      const visibleFailures = failedDetails.slice(0, 2).join(' | ');
+      const hiddenCount = Math.max(0, failedDetails.length - 2);
+      const hiddenSuffix = hiddenCount > 0 ? ` (+${hiddenCount} more)` : '';
+      this.errorMessage = `${this._listSyncAllSummary}${visibleFailures ? ` ${visibleFailures}${hiddenSuffix}` : ''}`;
+    }
+    this._listSyncAllRunning = false;
+  }
+
   // ── Delete ────────────────────────────────────────────────────────────────
 
-  async _handleDeleteProvider() {
+  async _handleDeleteProvider(targetUuid = this.configureProviderId) {
     const tenantId = String(this.tenant || '').trim();
-    const uuid = this.configureProviderId;
+    const uuid = String(targetUuid || '').trim();
     const inst = this._getInstance(uuid);
     if (!tenantId || !uuid || this.deletingProvider) return;
     const label = inst?.label || PROVIDER_LABELS[normalizeProviderId(inst?.provider_type)] || 'this provider';
@@ -1427,8 +2184,10 @@ export class LibraryIntegrationsAdmin extends LitElement {
     this.successMessage = '';
     try {
       await deleteIntegrationProvider(tenantId, uuid);
-      this.configureProviderId = '';
-      this._resetEditorState();
+      if (this.configureProviderId === uuid) {
+        this.configureProviderId = '';
+        this._resetEditorState();
+      }
       await this._loadStatus();
       this.successMessage = `${label} deleted.`;
     } catch (error) {
@@ -1436,6 +2195,10 @@ export class LibraryIntegrationsAdmin extends LitElement {
     } finally {
       this.deletingProvider = false;
     }
+  }
+
+  async _handleDeleteProviderFromList(uuid) {
+    await this._handleDeleteProvider(uuid);
   }
 
   // ── Save label ────────────────────────────────────────────────────────────
@@ -1526,7 +2289,7 @@ export class LibraryIntegrationsAdmin extends LitElement {
 
     const latest = this._getInstance(uuid);
     if (latest?.is_active) {
-      this._setConfigureStep(1, { silent: true });
+      this._setConfigureStep(4, { silent: true });
     }
   }
 
@@ -2007,7 +2770,7 @@ export class LibraryIntegrationsAdmin extends LitElement {
 
   // ── Render helpers ────────────────────────────────────────────────────────
 
-  _renderProviderStatusRow(status, inst) {
+  _renderProviderStatusRow(status, inst, { showIntegrationStatus = true } = {}) {
     const connected = !!status?.connected;
     const isActive = !!inst?.is_active;
     return html`
@@ -2016,15 +2779,45 @@ export class LibraryIntegrationsAdmin extends LitElement {
           <span class="status-dot ${connected ? 'status-dot-connected' : 'status-dot-disconnected'}"></span>
           Connection: ${connected ? 'Connected' : 'Not connected'}
         </span>
-        <span class="status-chip">
-          <span class="status-dot ${isActive ? 'status-dot-active' : 'status-dot-inactive'}"></span>
-          Integration: ${isActive ? 'Active' : 'Inactive'}
-        </span>
+        ${showIntegrationStatus ? html`
+          <span class="status-chip">
+            <span class="status-dot ${isActive ? 'status-dot-active' : 'status-dot-inactive'}"></span>
+            Integration: ${isActive ? 'Active' : 'Inactive'}
+          </span>
+        ` : ''}
       </div>
     `;
   }
 
-  _renderStepHelpCard({ step, typeLabel, connected, isActive, selectionMode, resourceLabelPlural }) {
+  _renderInlineStepGuide({ step, typeLabel, connected, selectionMode, resourceLabelPlural }) {
+    const currentStep = Math.max(1, Math.min(Math.trunc(Number(step) || 1), 4));
+    let screenName = 'Screen 1: Edit Label';
+    let message = `Set a clear label for this ${typeLabel} source for internal use only. This is useful when you have multiple ${typeLabel} connections. Save, then continue to connection.`;
+
+    if (currentStep === 2) {
+      screenName = 'Screen 2: Connection';
+      message = connected
+        ? `Your ${typeLabel} connection is ready. Continue to Scope to select how much content you want to allow Zoltag to sync.`
+        : `Connect to your provider. This will open a new screen with prompts. When done you will be returned to this screen. You can then continue to 'Scope' to select how much content you want to allow Zoltag to sync.`;
+    } else if (currentStep === 3) {
+      screenName = 'Screen 3: Scope';
+      message = selectionMode === 'picker'
+        ? `Click Launch Picker to open a new screen with prompts. Select the ${resourceLabelPlural} you want, finish in that screen, return here, then click Refresh Selected ${resourceLabelPlural.charAt(0).toUpperCase()}${resourceLabelPlural.slice(1)}.`
+        : `You can leave this blank to read the entire ${typeLabel} folder, or add specific folders. If you add folders, only those folders will be read. When done, proceed.`;
+    } else if (currentStep === 4) {
+      screenName = 'Screen 4: Save + Activate';
+      message = `Apply your configuration with Save + Reactivate. When done, click Finished to return to providers.`;
+    }
+
+    return html`
+      <div class="step-guide" role="note" aria-label="Step guidance">
+        <p class="step-guide-title">${screenName}</p>
+        <div class="step-guide-message">${message}</div>
+      </div>
+    `;
+  }
+
+  _renderStepHelpCard({ step, typeLabel, connected, selectionMode, resourceLabelPlural }) {
     const currentStep = Math.max(1, Math.min(Math.trunc(Number(step) || 1), 4));
     const modeLabel = selectionMode === 'picker'
       ? `selected ${resourceLabelPlural}`
@@ -2047,9 +2840,7 @@ export class LibraryIntegrationsAdmin extends LitElement {
       items = [
         `Connect or reconnect ${typeLabel} and complete OAuth.`,
         connected ? 'Connection is complete. You can continue.' : 'After OAuth returns, verify status shows Connected.',
-        isActive
-          ? 'Deactivate before moving to scope editing.'
-          : 'Leave integration inactive while you configure scope in the next step.',
+        'Use Continue to Scope to move to step 3.',
       ];
       note = connected
         ? 'Continue to Scope becomes available when the connection is valid.'
@@ -2059,7 +2850,7 @@ export class LibraryIntegrationsAdmin extends LitElement {
       items = [
         `Choose exactly what to sync by setting ${modeLabel}.`,
         selectionMode === 'picker'
-          ? `Launch Picker, select ${resourceLabelPlural}, then refresh selected items.`
+          ? `Launch Picker to open a separate screen, complete the prompts, return here, then refresh selected items.`
           : `Load available ${resourceLabelPlural}, then add the ones you want synced (or leave empty to sync all).`,
         'Review and reorder or remove entries as needed.',
       ];
@@ -2067,11 +2858,11 @@ export class LibraryIntegrationsAdmin extends LitElement {
     } else {
       title = 'Step 4: Finalize + Run';
       items = [
-        'Save Configuration to persist scope changes.',
-        'Use Save + Reactivate to enable ingestion with the new scope.',
-        'Use Sync Now to enqueue a background sync job after activation.',
+        'Use Save + Reactivate to apply scope and enable ingestion.',
+        'Use Back if you need to adjust scope before finalizing.',
+        'Use Finished to return to the providers list.',
       ];
-      note = 'After Save + Reactivate, the wizard returns to step 1 so you can review or adjust.';
+      note = 'You stay on step 4 after Save + Reactivate.';
     }
 
     return html`
@@ -2139,26 +2930,46 @@ export class LibraryIntegrationsAdmin extends LitElement {
 
   _renderScopeDiscoveryContent({ selectionMode, isGdrive, isYoutube, isGphotos, disabled, resourceLabelPlural, folderOptions }) {
     if (selectionMode === 'picker') {
+      const hasPickerSession = !!String(this.pickerSessionId || '').trim();
       return html`
-        <div class="actions" style="margin-top: 0;">
-          <button type="button" class="btn btn-secondary"
-            ?disabled=${disabled || this.pickerBusy}
-            @click=${this._handleLaunchPicker}>
-            ${this.pickerBusy
-              ? html`<span class="btn-content"><span class="btn-spinner" aria-hidden="true"></span><span>Starting…</span></span>`
-              : (this._getInstanceStatus(this.configureProviderId)?.selection_capabilities?.picker_start_label || 'Launch Picker')}
-          </button>
-          <button type="button" class="btn btn-secondary"
-            ?disabled=${disabled || this.pickerBusy || !String(this.pickerSessionId || '').trim()}
-            @click=${this._handleRefreshPickerItems}>
-            ${this.pickerBusy
-              ? html`<span class="btn-content"><span class="btn-spinner" aria-hidden="true"></span><span>Refreshing…</span></span>`
-              : `Refresh Selected ${resourceLabelPlural.charAt(0).toUpperCase()}${resourceLabelPlural.slice(1)}`}
-          </button>
-        </div>
-        ${this.pickerStatusMessage ? html`<div class="folder-typeahead-meta">${this.pickerStatusMessage}</div>` : ''}
-        ${this.pickerSessionId ? html`<div class="folder-typeahead-meta">Session: ${this.pickerSessionId}</div>` : ''}
-        ${this.pickerSessionExpireTime ? html`<div class="folder-typeahead-meta">Session expires: ${this.pickerSessionExpireTime}</div>` : ''}
+        ${!hasPickerSession ? html`
+          <div class="picker-intro-box">
+            <p class="picker-intro-title">Launch picker to choose media</p>
+            <div class="picker-intro-text">
+              Press Launch Picker to open a separate window with Google prompts. Select media there and finish, then return to this screen.
+            </div>
+            <div class="picker-intro-actions">
+              <button type="button" class="btn btn-secondary"
+                ?disabled=${disabled || this.pickerBusy}
+                @click=${this._handleLaunchPicker}>
+                ${this.pickerBusy
+                  ? html`<span class="btn-content"><span class="btn-spinner" aria-hidden="true"></span><span>Starting…</span></span>`
+                  : (this._getInstanceStatus(this.configureProviderId)?.selection_capabilities?.picker_start_label || 'Launch Picker')}
+              </button>
+            </div>
+            <div class="picker-return-cta">After you return here, use Refresh Selected ${resourceLabelPlural.charAt(0).toUpperCase()}${resourceLabelPlural.slice(1)}.</div>
+          </div>
+        ` : html`
+          <div class="picker-return-cta" style="margin-top:0; margin-bottom:8px;">
+            Returned from picker? Click refresh to load your selected ${resourceLabelPlural}.
+          </div>
+          <div class="actions" style="margin-top: 0;">
+            <button type="button" class="btn btn-secondary"
+              ?disabled=${disabled || this.pickerBusy}
+              @click=${this._handleLaunchPicker}>
+              ${this.pickerBusy
+                ? html`<span class="btn-content"><span class="btn-spinner" aria-hidden="true"></span><span>Starting…</span></span>`
+                : (this._getInstanceStatus(this.configureProviderId)?.selection_capabilities?.picker_start_label || 'Launch Picker Again')}
+            </button>
+            <button type="button" class="btn btn-secondary"
+              ?disabled=${disabled || this.pickerBusy}
+              @click=${this._handleRefreshPickerItems}>
+              ${this.pickerBusy
+                ? html`<span class="btn-content"><span class="btn-spinner" aria-hidden="true"></span><span>Refreshing…</span></span>`
+                : `Refresh Selected ${resourceLabelPlural.charAt(0).toUpperCase()}${resourceLabelPlural.slice(1)}`}
+            </button>
+          </div>
+        `}
         ${this._getProviderItems(this.configureProviderId).length
           ? html`<div class="folder-typeahead-meta">Loaded ${this._getProviderItems(this.configureProviderId).length} selected ${resourceLabelPlural}.</div>`
           : html`<div class="muted" style="margin-top:8px;">Launch picker, select media, then click refresh.</div>`}
@@ -2184,33 +2995,34 @@ export class LibraryIntegrationsAdmin extends LitElement {
         ${this.folderCatalogError ? html`<div class="folder-typeahead-meta" style="color:#b91c1c;">${this.folderCatalogError}</div>` : ''}
         ${this.folderCatalogLoaded ? html`
           <div style="margin-top: 10px;">
-            <div class="field-label" style="min-width:0; margin-bottom:6px;">Add Playlist</div>
-            <div class="folder-input-shell" style="width:100%; max-width:none;">
-              <div class="folder-input-add-row">
-                <input class="field-input" type="text" style="width:100%;"
-                  placeholder="Type to filter playlists…"
-                  .value=${this.newSyncFolder}
-                  ?disabled=${disabled}
-                  @input=${this._handleFolderInputChange}
-                  @keydown=${(e) => { if (e.key === 'Enter') { e.preventDefault(); this._handleAddFolder(); } }} />
-                <button type="button" class="btn btn-secondary btn-sm"
-                  ?disabled=${disabled} @click=${this._handleAddFolder}>Add</button>
-              </div>
-              <div class="folder-typeahead-meta">
-                Showing ${folderOptions.length} match${folderOptions.length === 1 ? '' : 'es'}.
-              </div>
-              ${folderOptions.length ? html`
-                <div class="folder-typeahead folder-typeahead-eight">
-                  ${folderOptions.map((id) => html`
-                    <div class="folder-typeahead-row">
-                      <button type="button" class="folder-typeahead-btn"
-                        @click=${() => this._handleFolderSuggestionSelect(id)}>
-                        ${this._youtubeKnownNames?.[id] || id}
-                      </button>
-                    </div>
-                  `)}
-                </div>
-              ` : ''}
+            <input class="field-input" type="text" style="width:100%; margin-bottom:6px;"
+              placeholder="Filter playlists…"
+              .value=${this._catalogFilter}
+              ?disabled=${disabled}
+              @input=${(e) => { this._catalogFilter = e.target.value || ''; }} />
+            <div class="folder-typeahead-meta">
+              Showing ${folderOptions.length} match${folderOptions.length === 1 ? '' : 'es'}.
+            </div>
+            <div class="folder-typeahead folder-typeahead-eight">
+              ${folderOptions.length === 0 ? html`<div class="muted" style="padding:8px;">No matches.</div>` : folderOptions.map((id) => {
+                const isSelected = this._getProviderFolders(this.configureProviderId).includes(id);
+                const label = this._youtubeKnownNames?.[id] || id;
+                return html`
+                  <div class="folder-typeahead-row" style="display:flex; align-items:center; gap:6px; ${isSelected ? 'background:#f0fdf4;' : ''}">
+                    <button type="button" class="folder-typeahead-btn" style="flex:1; text-align:left;"
+                      ?disabled=${disabled}
+                      @click=${() => {
+                        if (isSelected) {
+                          this._handleRemoveFolder(id);
+                        } else {
+                          this._tryAddFolderValue(this.configureProviderId, id);
+                        }
+                      }}>
+                      ${isSelected ? html`<span style="color:#16a34a; margin-right:4px;">✓</span>` : html`<span style="color:#9ca3af; margin-right:4px;">+ Add</span>`}${label}
+                    </button>
+                  </div>
+                `;
+              })}
             </div>
           </div>
         ` : html`<div class="muted" style="margin-top:8px;">Load playlists to enable selection.</div>`}
@@ -2232,33 +3044,34 @@ export class LibraryIntegrationsAdmin extends LitElement {
         ${this.folderCatalogError ? html`<div class="folder-typeahead-meta" style="color:#b91c1c;">${this.folderCatalogError}</div>` : ''}
         ${this.folderCatalogLoaded ? html`
           <div style="margin-top: 10px;">
-            <div class="field-label" style="min-width:0; margin-bottom:6px;">Add Album</div>
-            <div class="folder-input-shell" style="width:100%; max-width:none;">
-              <div class="folder-input-add-row">
-                <input class="field-input" type="text" style="width:100%;"
-                  placeholder="Type to filter albums…"
-                  .value=${this.newSyncFolder}
-                  ?disabled=${disabled}
-                  @input=${this._handleFolderInputChange}
-                  @keydown=${(e) => { if (e.key === 'Enter') { e.preventDefault(); this._handleAddFolder(); } }} />
-                <button type="button" class="btn btn-secondary btn-sm"
-                  ?disabled=${disabled} @click=${this._handleAddFolder}>Add</button>
-              </div>
-              <div class="folder-typeahead-meta">
-                Showing ${folderOptions.length} match${folderOptions.length === 1 ? '' : 'es'}.
-              </div>
-              ${folderOptions.length ? html`
-                <div class="folder-typeahead folder-typeahead-eight">
-                  ${folderOptions.map((id) => html`
-                    <div class="folder-typeahead-row">
-                      <button type="button" class="folder-typeahead-btn"
-                        @click=${() => this._handleFolderSuggestionSelect(id)}>
-                        ${this._gphotosKnownNames?.[id] || id}
-                      </button>
-                    </div>
-                  `)}
-                </div>
-              ` : ''}
+            <input class="field-input" type="text" style="width:100%; margin-bottom:6px;"
+              placeholder="Filter albums…"
+              .value=${this._catalogFilter}
+              ?disabled=${disabled}
+              @input=${(e) => { this._catalogFilter = e.target.value || ''; }} />
+            <div class="folder-typeahead-meta">
+              Showing ${folderOptions.length} match${folderOptions.length === 1 ? '' : 'es'}.
+            </div>
+            <div class="folder-typeahead folder-typeahead-eight">
+              ${folderOptions.length === 0 ? html`<div class="muted" style="padding:8px;">No matches.</div>` : folderOptions.map((id) => {
+                const isSelected = this._getProviderFolders(this.configureProviderId).includes(id);
+                const label = this._gphotosKnownNames?.[id] || id;
+                return html`
+                  <div class="folder-typeahead-row" style="display:flex; align-items:center; gap:6px; ${isSelected ? 'background:#f0fdf4;' : ''}">
+                    <button type="button" class="folder-typeahead-btn" style="flex:1; text-align:left;"
+                      ?disabled=${disabled}
+                      @click=${() => {
+                        if (isSelected) {
+                          this._handleRemoveFolder(id);
+                        } else {
+                          this._tryAddFolderValue(this.configureProviderId, id);
+                        }
+                      }}>
+                      ${isSelected ? html`<span style="color:#16a34a; margin-right:4px;">✓</span>` : html`<span style="color:#9ca3af; margin-right:4px;">+ Add</span>`}${label}
+                    </button>
+                  </div>
+                `;
+              })}
             </div>
           </div>
         ` : html`<div class="muted" style="margin-top:8px;">Load albums to enable selection.</div>`}
@@ -2289,7 +3102,7 @@ export class LibraryIntegrationsAdmin extends LitElement {
             placeholder="Filter folders…"
             .value=${this._catalogFilter}
             ?disabled=${disabled}
-            @input=${(e) => { this._catalogFilter = e.target.value || ''; this._showAllOverflow = false; }} />
+            @input=${(e) => { this._catalogFilter = e.target.value || ''; }} />
                 <div class="folder-typeahead folder-typeahead-eight">
                   ${folderOptions.length === 0 ? html`<div class="muted" style="padding:8px;">No matches.</div>` : folderOptions.map((folder) => {
                     const isSelected = this._getProviderFolders(this.configureProviderId).includes(folder);
@@ -2318,7 +3131,17 @@ export class LibraryIntegrationsAdmin extends LitElement {
   // ── List view ─────────────────────────────────────────────────────────────
 
   _renderProviderList() {
-    const instances = Array.isArray(this._allProviderInstances) ? this._allProviderInstances : [];
+    const allInstances = Array.isArray(this._allProviderInstances) ? this._allProviderInstances : [];
+    const activeInstances = allInstances.filter((inst) => {
+      const uuid = String(inst?.id || '').trim();
+      const status = this._getInstanceStatus(uuid);
+      return !!inst?.is_active && !!status?.connected;
+    });
+    const showActiveOnly = this._providerListTab === 'active';
+    const instances = showActiveOnly ? activeInstances : allInstances;
+    const listGridColumns = showActiveOnly
+      ? 'minmax(260px, 1.05fr) minmax(130px, 0.35fr) minmax(360px, 50%) minmax(120px, 0.35fr)'
+      : 'minmax(220px, 1.8fr) minmax(150px, 1.1fr) minmax(140px, 1fr) minmax(140px, 1fr) minmax(120px, 1fr) 220px';
 
     return html`
       <div class="header">
@@ -2326,17 +3149,57 @@ export class LibraryIntegrationsAdmin extends LitElement {
           <h3 class="title">Provider Sources</h3>
           <p class="subtitle">Connect with the following providers to securely scan and import your content.</p>
         </div>
-        <button type="button" class="btn btn-primary btn-sm" ?disabled=${this.loading || this._addingProvider}
-          @click=${this._handleOpenAddPicker}>
-          + Add Provider
-        </button>
+        <div class="header-actions">
+          <button type="button" class="btn btn-secondary btn-sm"
+            ?disabled=${this.loading || this._addingProvider || this._manualRefreshRunning}
+            @click=${this._refreshProviders}>
+            ${this._manualRefreshRunning ? 'Refreshing...' : 'Refresh'}
+          </button>
+          ${!showActiveOnly ? html`
+            <button type="button" class="btn btn-primary btn-sm" ?disabled=${this.loading || this._addingProvider}
+              @click=${this._handleOpenAddPicker}>
+              + Add Provider
+            </button>
+          ` : null}
+        </div>
       </div>
+      ${this._lastRefreshedAt ? html`
+        <div class="muted" style="margin: -8px 0 10px 0;">Last refreshed ${this._formatRefreshTime(this._lastRefreshedAt)}</div>
+      ` : ''}
+
+      <div class="provider-list-toolbar">
+        <div class="provider-tabs" role="tablist" aria-label="Provider filters">
+          <button type="button"
+            class="provider-tab ${showActiveOnly ? 'provider-tab-active' : ''}"
+            role="tab"
+            aria-selected=${showActiveOnly ? 'true' : 'false'}
+            @click=${() => { this._providerListTab = 'active'; }}>
+            Active (${activeInstances.length})
+          </button>
+          <button type="button"
+            class="provider-tab ${showActiveOnly ? '' : 'provider-tab-active'}"
+            role="tab"
+            aria-selected=${showActiveOnly ? 'false' : 'true'}
+            @click=${() => { this._providerListTab = 'all'; }}>
+            All (${allInstances.length})
+          </button>
+        </div>
+        ${showActiveOnly ? html`
+          <button type="button" class="btn btn-secondary btn-sm"
+            ?disabled=${this.loading || this._listSyncAllRunning || this._listSyncingProviderId || activeInstances.length === 0}
+            @click=${() => this._handleSyncAllProvidersFromList(activeInstances)}>
+            ${this._listSyncAllRunning ? 'Queueing Sync...' : 'Sync all'}
+          </button>
+        ` : ''}
+      </div>
+      ${showActiveOnly && this._listSyncAllSummary ? html`
+        <div class="muted" style="margin: -2px 0 10px 0;">${this._listSyncAllSummary}</div>
+      ` : ''}
 
       ${this.errorMessage ? html`<div class="notice notice-error">${this.errorMessage}</div>` : ''}
-      ${this.successMessage ? html`<div class="notice notice-success">${this.successMessage}</div>` : ''}
       ${this.loading ? html`<div class="loading-row"><span class="spinner"></span>Loading…</div>` : ''}
 
-      ${this._addPickerOpen ? html`
+      ${!showActiveOnly && this._addPickerOpen ? html`
         <div class="add-picker">
           <p class="add-picker-label">Add Provider</p>
           <div class="actions" style="margin-top: 0; align-items: center;">
@@ -2357,9 +3220,28 @@ export class LibraryIntegrationsAdmin extends LitElement {
       ` : ''}
 
       ${instances.length === 0 && !this.loading ? html`
-        <div class="muted" style="padding: 16px 0; text-align: center;">No providers configured yet. Click "+ Add Provider" to get started.</div>
+        <div class="muted" style="padding: 16px 0; text-align: center;">
+          ${showActiveOnly
+            ? 'No active and connected providers yet.'
+            : 'No providers configured yet. Click "+ Add Provider" to get started.'}
+        </div>
       ` : html`
-        <div class="provider-list">
+        <div class="provider-list" style=${`--provider-grid-columns:${listGridColumns};`}>
+          <div class="provider-list-header">
+            ${showActiveOnly ? html`
+              <div>Provider</div>
+              <div>Age</div>
+              <div>Sync Status</div>
+              <div>Sync</div>
+            ` : html`
+              <div>Provider Label</div>
+              <div>Provider Type</div>
+              <div>Connection</div>
+              <div>Status</div>
+              <div>Scope</div>
+              <div>Actions</div>
+            `}
+          </div>
           ${instances.map((inst) => {
             const uuid = String(inst.id || '');
             const providerType = normalizeProviderId(inst.provider_type);
@@ -2372,27 +3254,96 @@ export class LibraryIntegrationsAdmin extends LitElement {
             const resourceLabelPlural = String(status?.selection_capabilities?.resource_label_plural || (selectionMode === 'picker' ? 'items' : 'folders'));
             const selectionCount = selectionMode === 'picker' ? items.length : folders.length;
             const typeLabel = PROVIDER_LABELS[providerType] || inst.provider_type || '';
-            const displayLabel = inst.label && inst.label !== typeLabel ? `${typeLabel} · ${inst.label}` : typeLabel;
+            const providerLabel = String(inst.label || '').trim() || typeLabel;
+            const scopeLabel = selectionCount > 0 ? `${selectionCount} ${resourceLabelPlural}` : 'All files';
+            const syncAgeLabel = this._formatSyncAge(inst);
+            const canToggleFromList = isActive || connected;
+            const rowClass = `provider-row ${(!connected || !isActive) ? 'provider-row-dimmed' : ''}`;
+            const syncStatus = this._getSyncStatusDisplay(inst);
+            const syncOutputJobId = this._getProviderSyncLogJobId(inst);
+            const syncOutputOpen = this._providerSyncOutputOpenId === uuid;
+            const syncOutputLoading = this._providerSyncOutputLoadingId === uuid;
+            const syncOutputData = this._providerSyncOutputById?.[uuid] || null;
+            const syncOutputLoadedAt = this._formatSyncStatusTimestamp(syncOutputData?.loadedAt);
             return html`
-              <div class="provider-row">
-                <div class="provider-title">
-                  <span class="status-dot ${connected ? 'status-dot-connected' : 'status-dot-disconnected'}"></span>
-                  ${displayLabel}
-                </div>
-                <div class="provider-meta" style="display:flex;align-items:center;gap:10px;">
-                  <span style="display:flex;align-items:center;gap:5px;">
-                    <span class="status-dot ${isActive ? 'status-dot-active' : 'status-dot-inactive'}"></span>
-                    <span>${isActive ? 'Active' : 'Inactive'}</span>
-                  </span>
-                  <span>${selectionCount} ${resourceLabelPlural}</span>
-                </div>
-                <div class="provider-actions">
-                  <button type="button" class="btn btn-secondary btn-sm"
-                    ?disabled=${this.loading} @click=${() => this._handleConfigureProvider(uuid)}>
-                    Configure
-                  </button>
-                </div>
+              <div class=${rowClass}>
+                ${showActiveOnly
+                  ? html`
+                    <div class="provider-label-cell" title=${`${providerLabel} (${typeLabel}) · ${scopeLabel}`}>
+                      ${providerLabel}
+                      <span class="provider-label-type">(${typeLabel})</span>
+                      <span class="provider-label-scope"> · ${scopeLabel}</span>
+                    </div>
+                    <div class="provider-age-cell">${syncAgeLabel}</div>
+                    <div>
+                      <div class=${syncStatus.className} title=${syncStatus.text}>${syncStatus.text}</div>
+                      ${syncOutputJobId ? html`
+                        <div class="provider-sync-status-actions">
+                          <button type="button" class="btn btn-secondary btn-sm"
+                            ?disabled=${this.loading || syncOutputLoading}
+                            @click=${() => this._handleToggleProviderSyncOutput(uuid)}>
+                            ${syncOutputLoading ? 'Loading…' : (syncOutputOpen ? 'Hide output' : 'Load more')}
+                          </button>
+                        </div>
+                      ` : ''}
+                    </div>
+                    <div class="provider-actions">
+                      <button type="button" class="btn btn-secondary btn-sm"
+                        ?disabled=${this.loading || this._listSyncAllRunning || this._listSyncingProviderId === uuid || this.deletingProvider || this.updatingProviderState}
+                        @click=${() => this._handleSyncProviderFromList(uuid)}>
+                        ${this._listSyncingProviderId === uuid ? 'Queueing...' : 'Sync'}
+                      </button>
+                    </div>
+                  `
+                  : html`
+                    <div class="provider-label-cell" title=${providerLabel}>${providerLabel}</div>
+                    <div class="provider-title">
+                      ${typeLabel}
+                    </div>
+                    <div class="provider-status-cell">
+                      <span class="status-dot ${connected ? 'status-dot-connected' : 'status-dot-disconnected'}"></span>
+                      <span>${connected ? 'Connected' : 'Disconnected'}</span>
+                    </div>
+                    <div class="provider-status-cell">
+                      <span class="status-dot ${isActive ? 'status-dot-active' : 'status-dot-inactive'}"></span>
+                      <span>${isActive ? 'Active' : 'Paused'}</span>
+                      <button type="button"
+                        class="provider-status-toggle"
+                        ?disabled=${this.loading || this.updatingProviderState || this.deletingProvider || !canToggleFromList}
+                        title=${isActive
+                          ? 'Pause this provider'
+                          : (connected ? 'Activate this provider' : 'Connect provider before activating')}
+                        @click=${() => this._handleToggleProviderActiveFromList(uuid)}>
+                        ${isActive ? '⏸' : '▶'}
+                      </button>
+                    </div>
+                    <div class="provider-meta">${scopeLabel}</div>
+                    <div class="provider-actions">
+                      <button type="button" class="btn btn-secondary btn-sm"
+                        ?disabled=${this.loading} @click=${() => this._handleConfigureProvider(uuid)}>
+                        Configure
+                      </button>
+                      <button type="button" class="btn btn-danger btn-sm"
+                        ?disabled=${this.loading || this.deletingProvider || this.updatingProviderState}
+                        @click=${() => this._handleDeleteProviderFromList(uuid)}>
+                        Remove
+                      </button>
+                    </div>
+                  `}
               </div>
+              ${showActiveOnly && syncOutputOpen ? html`
+                <div class="provider-row provider-row-output">
+                  <div class="provider-sync-output-panel">
+                    <div class="provider-sync-output-meta">
+                      ${syncOutputData?.jobId ? html`Job ${syncOutputData.jobId}` : 'Job output'}
+                      ${syncOutputLoadedAt ? html` · Loaded ${syncOutputLoadedAt}` : ''}
+                    </div>
+                    ${syncOutputData?.error
+                      ? html`<div class="notice notice-error" style="margin: 0;">${syncOutputData.error}</div>`
+                      : html`<pre class="provider-sync-output-pre">${syncOutputData?.text || 'No output loaded yet.'}</pre>`}
+                  </div>
+                </div>
+              ` : ''}
             `;
           })}
         </div>
@@ -2431,22 +3382,47 @@ export class LibraryIntegrationsAdmin extends LitElement {
     const selectionCaps = this._getSelectionCapabilities(providerType, status);
     const resourceLabelPlural = String(status?.selection_capabilities?.resource_label_plural
       || (isYoutube ? 'playlists' : isGphotos ? 'albums' : 'folders'));
-    const hasScopedFolders = syncFolders.length > 0;
     const selectionCount = selectionMode === 'picker' ? syncItems.length : syncFolders.length;
+    const hasScopedSelections = selectionCount > 0;
     const scopeDiscoveryTitle = selectionMode === 'picker'
-      ? `Select ${resourceLabelPlural}`
-      : `Limit load to the following ${resourceLabelPlural}:`;
+      ? `Discover ${resourceLabelPlural}`
+      : `Available ${resourceLabelPlural}`;
     const scopeAddedTitle = `Added ${resourceLabelPlural}`;
-    const folderLabel = selectionMode === 'picker'
-      ? `Sync ${resourceLabelPlural.charAt(0).toUpperCase()}${resourceLabelPlural.slice(1)}`
-      : (isYoutube ? 'Sync Playlists' : isGphotos ? 'Sync Albums' : 'Sync Folders');
+    const scopeAllModeText = isYoutube
+      ? 'No playlists selected - all uploads will be synced.'
+      : isGphotos
+      ? 'No albums selected - all media will be synced.'
+      : 'No folders selected - all files will be synced.';
+    const scopeLimitedModeText = selectionMode === 'picker'
+      ? `${selectionCount} selected ${resourceLabelPlural} will be synced.`
+      : isYoutube
+      ? `${selectionCount} playlist${selectionCount === 1 ? '' : 's'} selected - only selected playlists will be synced.`
+      : isGphotos
+      ? `${selectionCount} album${selectionCount === 1 ? '' : 's'} selected - only selected albums will be synced.`
+      : `${selectionCount} folder${selectionCount === 1 ? '' : 's'} selected - only selected folders will be synced.`;
+    const scopeModeAllLabel = isYoutube
+      ? 'Load all uploads'
+      : isGphotos
+      ? 'Load all media'
+      : 'Load all files';
+    const scopeModeSelectedLabel = `Limit to selected ${resourceLabelPlural}`;
+    const scopeIntroText = selectionMode === 'picker'
+      ? (hasScopedSelections
+        ? scopeLimitedModeText
+        : `No ${resourceLabelPlural} selected - nothing will sync until items are selected.`)
+      : (hasScopedSelections ? scopeLimitedModeText : scopeAllModeText);
+    const scopeModeSummaryText = selectionMode === 'picker'
+      ? scopeIntroText
+      : (hasScopedSelections
+        ? `Currently syncing only selected ${resourceLabelPlural}.`
+        : (isYoutube ? 'Currently syncing all uploads.' : isGphotos ? 'Currently syncing all media.' : 'Currently syncing all files.'));
     const disabled = this.loading || this.savingConfig || this.updatingProviderState || this.syncNowRunning;
     const configureStep = Math.max(1, Math.min(Math.trunc(Number(this.configureStep) || 1), 4));
     const canProceedToStep3 = connected && !isActive;
     const stepSubtitle = configureStep === 1
       ? 'Step 1 of 4: Set the provider label.'
       : configureStep === 2
-        ? 'Step 2 of 4: Connect or reconnect, then leave this integration inactive for configuration.'
+        ? 'Step 2 of 4: Connect or reconnect this provider.'
         : configureStep === 3
           ? `Step 3 of 4: Configure ${selectionMode === 'picker' ? `selected ${resourceLabelPlural}` : (isYoutube ? 'playlists' : isGphotos ? 'albums' : 'folders')}.`
           : 'Step 4 of 4: Save configuration and reactivate.';
@@ -2454,7 +3430,14 @@ export class LibraryIntegrationsAdmin extends LitElement {
       step: configureStep,
       typeLabel,
       connected,
-      isActive,
+      selectionMode,
+      resourceLabelPlural,
+    });
+    const helpVisible = this._isWizardHelpVisibleForStep(configureStep);
+    const inlineStepGuide = this._renderInlineStepGuide({
+      step: configureStep,
+      typeLabel,
+      connected,
       selectionMode,
       resourceLabelPlural,
     });
@@ -2469,37 +3452,46 @@ export class LibraryIntegrationsAdmin extends LitElement {
       </div>
 
       ${this.errorMessage ? html`<div class="notice notice-error">${this.errorMessage}</div>` : ''}
-      ${this.successMessage ? html`<div class="notice notice-success">${this.successMessage}</div>` : ''}
       ${this.loading ? html`<div class="loading-row"><span class="spinner"></span>Loading…</div>` : ''}
 
       <div class="configure-shell">
-        <div class="wizard-step-layout">
+        <div class="wizard-step-layout ${helpVisible ? '' : 'wizard-step-layout-help-collapsed'}">
           <div class="wizard-step-main-col">
-            <div class="wizard-steps">
-              <button type="button" class="wizard-step ${configureStep === 1 ? 'wizard-step-active' : ''}"
-                @click=${() => this._setConfigureStep(1)}>
-                1. Label
-              </button>
-              <button type="button" class="wizard-step ${configureStep === 2 ? 'wizard-step-active' : ''}"
-                @click=${() => this._setConfigureStep(2)}>
-                2. Connection
-              </button>
-              <button type="button" class="wizard-step ${configureStep === 3 ? 'wizard-step-active' : ''}"
-                ?disabled=${!connected || isActive}
-                @click=${() => this._setConfigureStep(3)}>
-                3. Scope
-              </button>
-              <button type="button" class="wizard-step ${configureStep === 4 ? 'wizard-step-active' : ''}"
-                ?disabled=${!connected}
-                @click=${() => this._setConfigureStep(4)}>
-                4. Save + Activate
+            <div class="wizard-steps-row">
+              <div class="wizard-steps">
+                <button type="button" class="wizard-step ${configureStep === 1 ? 'wizard-step-active' : ''}"
+                  @click=${() => this._setConfigureStep(1)}>
+                  1. Label
+                </button>
+                <button type="button" class="wizard-step ${configureStep === 2 ? 'wizard-step-active' : ''}"
+                  @click=${() => this._setConfigureStep(2)}>
+                  2. Connection
+                </button>
+                <button type="button" class="wizard-step ${configureStep === 3 ? 'wizard-step-active' : ''}"
+                  ?disabled=${!connected || isActive}
+                  @click=${() => this._setConfigureStep(3)}>
+                  3. Scope
+                </button>
+                <button type="button" class="wizard-step ${configureStep === 4 ? 'wizard-step-active' : ''}"
+                  ?disabled=${!connected}
+                  @click=${() => this._setConfigureStep(4)}>
+                  4. Save + Activate
+                </button>
+              </div>
+              <button type="button"
+                class="btn btn-secondary btn-sm wizard-help-toggle"
+                title=${helpVisible ? 'Hide help panel' : 'Show help panel'}
+                aria-pressed=${helpVisible ? 'true' : 'false'}
+                @click=${this._toggleWizardHelp}>
+                <span class="wizard-help-toggle-icon" aria-hidden="true">?</span>
+                <span>${helpVisible ? 'Hide Help' : 'Show Help'}</span>
               </button>
             </div>
         ${configureStep === 1 ? html`
           <div class="configure-section">
             <div class="wizard-main">
               <div class="wizard-main-content">
-                <h5 class="section-title">Screen 1: Edit Label</h5>
+                ${inlineStepGuide}
                 <div class="field-row" style="align-items:center;">
                   <label class="field-label">Label</label>
                   <input class="field-input" type="text"
@@ -2529,9 +3521,8 @@ export class LibraryIntegrationsAdmin extends LitElement {
           <div class="configure-section">
             <div class="wizard-main">
               <div class="wizard-main-content">
-                <h5 class="section-title">Screen 2: Connection</h5>
-                <div class="muted" style="margin-bottom:8px;">Connect, reconnect, or disconnect. Leave this integration inactive before moving to scope configuration.</div>
-                ${this._renderProviderStatusRow(status, inst)}
+                ${inlineStepGuide}
+                ${this._renderProviderStatusRow(status, inst, { showIntegrationStatus: false })}
                 <div class="actions">
                   <button type="button" class="btn btn-primary"
                     ?disabled=${disabled || this.connecting || !canConnect}
@@ -2595,6 +3586,7 @@ export class LibraryIntegrationsAdmin extends LitElement {
             <div class="wizard-main">
               <div class="wizard-main-content wizard-main-content-scope">
                 <div class="scope-step-stack">
+                ${inlineStepGuide}
                 ${selectionCaps.supportsCatalog && selectionCaps.supportsPicker ? html`
                 <div class="configure-section" style="padding-bottom:0;">
                   <div class="field-row" style="align-items:center;">
@@ -2611,16 +3603,6 @@ export class LibraryIntegrationsAdmin extends LitElement {
               ` : ''}
 
               <div class="configure-section scope-configure-section">
-                <h5 class="section-title">Screen 3: ${folderLabel}</h5>
-                <div class="muted" style="margin-bottom: 8px;">
-                  ${selectionMode === 'picker'
-                    ? `Optional. Sync only the ${resourceLabelPlural} the user selects in picker mode.`
-                    : isYoutube
-                    ? 'Optional. Limit which YouTube playlists Zoltag ingests. Leave empty to ingest all uploads.'
-                    : `Optional. Limit which ${typeLabel} folders Zoltag ingests. Leave empty to ingest all files.`}
-                </div>
-
-
                 ${connected && isActive ? html`
                   <div class="notice notice-error" style="margin-top: 8px;">
                     Deactivate this source in Screen 2 before editing ${selectionMode === 'picker'
@@ -2630,10 +3612,23 @@ export class LibraryIntegrationsAdmin extends LitElement {
                 ` : ''}
 
                 ${connected ? html`
+                  ${(selectionMode !== 'picker' || selectionCaps.supportsCatalog) ? html`
+                    <div class="scope-mode-bar">
+                      ${selectionMode === 'picker' ? html`
+                        <span class="scope-mode-pill scope-mode-pill-active">Picker mode</span>
+                      ` : html`
+                        <span class="scope-mode-pill ${hasScopedSelections ? '' : 'scope-mode-pill-active'}">${scopeModeAllLabel}</span>
+                        <span class="scope-mode-pill ${hasScopedSelections ? 'scope-mode-pill-active' : ''}">${scopeModeSelectedLabel}</span>
+                      `}
+                      <span class="scope-mode-status">${scopeModeSummaryText}</span>
+                    </div>
+                  ` : ''}
                   <div class="scope-two-panel">
-                    <div class="scope-discovery-block">
-                      <p class="scope-section-title">${scopeDiscoveryTitle}</p>
-                      <div class="scope-discovery-scroll">
+                    <div class="scope-pane scope-discovery-block">
+                      <div class="scope-pane-header">
+                        <span class="scope-pane-title">${scopeDiscoveryTitle}</span>
+                      </div>
+                      <div class="scope-pane-content scope-discovery-scroll">
                     ${!isActive
                       ? this._renderScopeDiscoveryContent({
                         selectionMode,
@@ -2648,8 +3643,8 @@ export class LibraryIntegrationsAdmin extends LitElement {
                       </div>
                     </div>
 
-                    <div class="scope-saved-block">
-                      <div class="scope-saved-header">
+                    <div class="scope-pane scope-saved-block">
+                      <div class="scope-pane-header scope-saved-header">
                         <span class="scope-saved-title">${scopeAddedTitle} (${selectionCount})</span>
                         ${!isActive && selectionCount > 0 ? html`
                           <button type="button" class="btn btn-secondary btn-sm"
@@ -2659,7 +3654,7 @@ export class LibraryIntegrationsAdmin extends LitElement {
                           </button>
                         ` : ''}
                       </div>
-                      <div class="scope-saved-list">
+                      <div class="scope-pane-content scope-saved-list">
                         <div class="folder-list">
                     ${selectionMode === 'picker'
                       ? (syncItems.length ? syncItems.map((item, index) => html`
@@ -2678,36 +3673,30 @@ export class LibraryIntegrationsAdmin extends LitElement {
                               ?disabled=${disabled} @click=${() => this._removePickerItem(index)}>Remove</button>
                           ` : ''}
                         </div>
-                      `) : html`<div class="muted">No selected ${resourceLabelPlural} configured yet.</div>`)
+                      `) : html`<div class="muted">No ${resourceLabelPlural} selected - nothing will sync until items are selected.</div>`)
                       : (() => {
-                          if (!syncFolders.length) return html`<div class="muted">No sync ${isYoutube ? 'playlists' : isGphotos ? 'albums' : 'folders'} configured yet.</div>`;
+                          if (!syncFolders.length) return html`<div class="muted">${scopeAllModeText}</div>`;
                           const knownNames = { ...this._gdriveKnownNames, ...this._youtubeKnownNames, ...this._gphotosKnownNames };
-                          const PILL_VISIBLE = 5;
-                          const visible = this._showAllOverflow ? syncFolders : syncFolders.slice(0, PILL_VISIBLE);
-                          const overflow = syncFolders.length - PILL_VISIBLE;
-                          return html`
-                            <div style="display:flex; flex-wrap:wrap; gap:6px; align-items:center;">
-                              ${visible.map((folder, index) => {
-                                const label = knownNames[folder] || folder;
-                                return html`
-                                  <span style="display:inline-flex; align-items:center; gap:4px; background:#f1f5f9; border:1px solid #cbd5e1; border-radius:9999px; padding:2px 10px 2px 8px; font-size:13px; max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${folder}">
-                                    <span style="overflow:hidden; text-overflow:ellipsis;">${label}</span>
-                                    ${!isActive ? html`
-                                      <button type="button" style="background:none; border:none; cursor:pointer; color:#64748b; padding:0 0 0 2px; font-size:14px; line-height:1;"
-                                        ?disabled=${disabled} @click=${() => this._handleRemoveFolder(folder)} title="Remove">×</button>
-                                    ` : ''}
-                                  </span>
-                                `;
-                              })}
-                              ${!this._showAllOverflow && overflow > 0 ? html`
-                                <button type="button" class="btn btn-secondary btn-sm"
-                                  @click=${() => { this._showAllOverflow = true; }}>+${overflow} more</button>
-                              ` : this._showAllOverflow && syncFolders.length > PILL_VISIBLE ? html`
-                                <button type="button" class="btn btn-secondary btn-sm"
-                                  @click=${() => { this._showAllOverflow = false; }}>Show less</button>
-                              ` : ''}
-                            </div>
-                          `;
+                          return syncFolders.map((folder, index) => {
+                            const label = knownNames[folder] || folder;
+                            return html`
+                              <div class="folder-item">
+                                <div class="folder-index">${index + 1}</div>
+                                <div class="folder-value">
+                                  <span title="${folder}">${label}</span>
+                                  ${label !== folder ? html`<span class="muted" style="margin-left:8px;">${folder}</span>` : ''}
+                                </div>
+                                ${!isActive ? html`
+                                  <button type="button" class="btn btn-secondary btn-sm"
+                                    ?disabled=${index === 0 || disabled} @click=${() => this._moveFolder(index, -1)}>Up</button>
+                                  <button type="button" class="btn btn-secondary btn-sm"
+                                    ?disabled=${index === syncFolders.length - 1 || disabled} @click=${() => this._moveFolder(index, 1)}>Down</button>
+                                  <button type="button" class="btn btn-danger btn-sm"
+                                    ?disabled=${disabled} @click=${() => this._removeFolder(index)}>Remove</button>
+                                ` : ''}
+                              </div>
+                            `;
+                          });
                         })()}
                         </div>
                       </div>
@@ -2739,11 +3728,8 @@ export class LibraryIntegrationsAdmin extends LitElement {
           <div class="configure-section">
             <div class="wizard-main">
               <div class="wizard-main-content">
-                <h5 class="section-title">Screen 4: Save and Re-Activate</h5>
+                ${inlineStepGuide}
                 ${this._renderProviderStatusRow(status, inst)}
-                <div class="muted" style="margin-top:8px;">
-                  Save your configuration, then reactivate this source to resume ingestion.
-                </div>
               </div>
               <div class="actions wizard-nav-actions">
                 <button type="button" class="btn btn-secondary" ?disabled=${disabled} @click=${() => this._setConfigureStep(3)}>
@@ -2754,12 +3740,17 @@ export class LibraryIntegrationsAdmin extends LitElement {
                   @click=${this._handleSaveAndReactivate}>
                   ${this.savingConfig || this.updatingProviderState ? 'Applying...' : 'Save + Reactivate'}
                 </button>
+                <button type="button" class="btn btn-secondary"
+                  ?disabled=${disabled}
+                  @click=${this._handleBackToProviders}>
+                  Finished
+                </button>
               </div>
             </div>
           </div>
         ` : ''}
           </div>
-          ${helpCard}
+          ${helpVisible ? helpCard : ''}
         </div>
       </div>
     `;

@@ -44,11 +44,33 @@ class ProcessResult:
 
 
 MAX_VIDEO_THUMBNAIL_DOWNLOAD_BYTES = 250 * 1024 * 1024
+GLOBAL_SOURCE_KEY_DEDUPE_PROVIDERS = frozenset({"youtube", "gdrive", "gphotos", "dropbox"})
 
 
 def _log(log: Optional[Callable[[str], None]], message: str) -> None:
     if log:
         log(message)
+
+
+def _asset_identity_filters(
+    *,
+    provider_name: str,
+    source_key: str,
+    provider_uuid: Optional[_uuid_module.UUID],
+) -> list[Any]:
+    """Build Asset identity filters for dedupe checks.
+
+    For providers that expose a globally stable source key (YouTube video ID,
+    Google Drive file ID, Google Photos media item ID), dedupe is
+    tenant+source_provider+source_key regardless of provider integration ID.
+    """
+    filters: list[Any] = [
+        Asset.source_provider == provider_name,
+        Asset.source_key == source_key,
+    ]
+    if provider_uuid is not None and provider_name not in GLOBAL_SOURCE_KEY_DEDUPE_PROVIDERS:
+        filters.append(Asset.provider_id == provider_uuid)
+    return filters
 
 
 def _to_int(value: Any) -> Optional[int]:
@@ -114,9 +136,10 @@ def _infer_format_from_name(name: str) -> Optional[str]:
 
 
 def _entry_from_dropbox_raw(entry: Any) -> ProviderEntry:
-    source_key = getattr(entry, "path_display", None) or getattr(entry, "path_lower", None)
+    file_id = str(getattr(entry, "id", "") or "").strip()
+    source_key = file_id or getattr(entry, "path_display", None) or getattr(entry, "path_lower", None)
     if not source_key:
-        raise ValueError("Dropbox entry is missing path metadata")
+        raise ValueError("Dropbox entry is missing file id/path metadata")
     modified_time = getattr(entry, "server_modified", None)
     if isinstance(modified_time, str):
         try:
@@ -126,7 +149,7 @@ def _entry_from_dropbox_raw(entry: Any) -> ProviderEntry:
     return ProviderEntry(
         provider="dropbox",
         source_key=source_key,
-        file_id=getattr(entry, "id", None),
+        file_id=file_id or None,
         display_path=getattr(entry, "path_display", None),
         name=getattr(entry, "name", source_key.rsplit("/", 1)[-1]),
         modified_time=modified_time,
@@ -150,15 +173,18 @@ def _create_asset_record_only(
 ) -> ProcessResult:
     """Create Asset + ImageMetadata without downloading file bytes (YouTube, etc.)."""
     provider_uuid = _uuid_module.UUID(str(provider_id)) if provider_id else None
+    identity_filters = _asset_identity_filters(
+        provider_name=provider.provider_name,
+        source_key=entry.source_key,
+        provider_uuid=provider_uuid,
+    )
     existing = (
         db.query(ImageMetadata)
         .join(Asset, Asset.id == ImageMetadata.asset_id)
         .filter(
             tenant_column_filter(ImageMetadata, tenant),
             tenant_column_filter(Asset, tenant),
-            Asset.source_provider == provider.provider_name,
-            Asset.source_key == entry.source_key,
-            *([Asset.provider_id == provider_uuid] if provider_uuid is not None else []),
+            *identity_filters,
         )
         .order_by(ImageMetadata.id.asc())
         .first()
@@ -170,9 +196,7 @@ def _create_asset_record_only(
         db.query(Asset)
         .filter(
             tenant_column_filter(Asset, tenant),
-            Asset.source_provider == provider.provider_name,
-            Asset.source_key == entry.source_key,
-            *([Asset.provider_id == provider_uuid] if provider_uuid is not None else []),
+            *identity_filters,
         )
         .order_by(Asset.created_at.asc(), Asset.id.asc())
         .first()
@@ -414,15 +438,18 @@ def process_storage_entry(
     lens_model = parse_exif_str(get_exif_value(exif, "LensModel", "Lens"))
 
     provider_uuid = _uuid_module.UUID(str(provider_id)) if provider_id else None
+    identity_filters = _asset_identity_filters(
+        provider_name=provider.provider_name,
+        source_key=entry.source_key,
+        provider_uuid=provider_uuid,
+    )
     existing = (
         db.query(ImageMetadata)
         .join(Asset, Asset.id == ImageMetadata.asset_id)
         .filter(
             tenant_column_filter(ImageMetadata, tenant),
             tenant_column_filter(Asset, tenant),
-            Asset.source_provider == provider.provider_name,
-            Asset.source_key == entry.source_key,
-            *([Asset.provider_id == provider_uuid] if provider_uuid is not None else []),
+            *identity_filters,
         )
         .order_by(ImageMetadata.id.asc())
         .first()
@@ -439,9 +466,7 @@ def process_storage_entry(
         db.query(Asset)
         .filter(
             tenant_column_filter(Asset, tenant),
-            Asset.source_provider == provider.provider_name,
-            Asset.source_key == entry.source_key,
-            *([Asset.provider_id == provider_uuid] if provider_uuid is not None else []),
+            *identity_filters,
         )
         .order_by(Asset.created_at.asc(), Asset.id.asc())
         .first()

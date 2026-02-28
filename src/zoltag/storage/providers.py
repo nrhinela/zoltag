@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import mimetypes
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-import mimetypes
 from typing import Any, Callable, Dict, Optional, Sequence
 
 import httpx
@@ -120,9 +120,12 @@ class DropboxStorageProvider(StorageProvider):
         raise RuntimeError("Dropbox client does not support cursor continuation")
 
     def _entry_from_dropbox_metadata(self, metadata: Any) -> ProviderEntry:
-        source_key = getattr(metadata, "path_display", None) or getattr(metadata, "path_lower", None)
+        file_id = str(getattr(metadata, "id", "") or "").strip()
+        path_display = getattr(metadata, "path_display", None)
+        path_lower = getattr(metadata, "path_lower", None)
+        source_key = file_id or path_display or path_lower
         if not source_key:
-            raise ValueError("Dropbox metadata missing path")
+            raise ValueError("Dropbox metadata missing file id/path")
         modified_time = getattr(metadata, "server_modified", None)
         if modified_time and isinstance(modified_time, str):
             modified_time = _parse_iso_datetime(modified_time)
@@ -134,8 +137,8 @@ class DropboxStorageProvider(StorageProvider):
         return ProviderEntry(
             provider=self.provider_name,
             source_key=source_key,
-            file_id=getattr(metadata, "id", None),
-            display_path=getattr(metadata, "path_display", None),
+            file_id=file_id or None,
+            display_path=path_display,
             name=getattr(metadata, "name", source_key.rsplit("/", 1)[-1]),
             modified_time=modified_time,
             size=size,
@@ -901,6 +904,466 @@ class YouTubeStorageProvider(StorageProvider):
         return access_token
 
 
+class GooglePhotosStorageProvider(StorageProvider):
+    """Google Photos-backed storage provider (OAuth refresh-token flow, read-only)."""
+
+    provider_name = "gphotos"
+
+    _photos_base_url = "https://photoslibrary.googleapis.com/v1"
+    _picker_base_url = "https://photospicker.googleapis.com/v1"
+    _token_url = "https://oauth2.googleapis.com/token"
+
+    def __init__(self, *, client_id: str, client_secret: str, refresh_token: str):
+        if not client_id or not client_secret or not refresh_token:
+            raise ValueError("GooglePhotosStorageProvider requires client_id, client_secret, and refresh_token")
+        self._client_id = client_id
+        self._client_secret = client_secret
+        self._refresh_token = refresh_token
+        self._access_token: Optional[str] = None
+        self._access_token_expires_at: Optional[datetime] = None
+        self._picker_session_id: Optional[str] = None
+        self._picker_media_cache: Dict[str, Dict[str, Any]] = {}
+
+    def list_image_entries(self, sync_folders: Optional[Sequence[str]] = None) -> list[ProviderEntry]:
+        """List media items. sync_folders = album IDs (empty = all media items)."""
+        album_ids = [a.strip() for a in (sync_folders or []) if isinstance(a, str) and a.strip()]
+        deduped: Dict[str, ProviderEntry] = {}
+
+        if not album_ids:
+            for entry in self._list_media_items():
+                deduped[entry.source_key] = entry
+        else:
+            for album_id in album_ids:
+                try:
+                    album_title = self._get_album_title(album_id)
+                except Exception:
+                    album_title = album_id
+                for entry in self._list_album_items(album_id, album_title=album_title):
+                    deduped[entry.source_key] = entry
+
+        entries = list(deduped.values())
+        entries.sort(key=lambda e: e.modified_time or datetime.min, reverse=True)
+        return entries
+
+    def _list_media_items(self) -> list[ProviderEntry]:
+        """Page through all media items in the library."""
+        entries: list[ProviderEntry] = []
+        next_page_token: Optional[str] = None
+        while True:
+            params: Dict[str, str] = {"pageSize": "100"}
+            if next_page_token:
+                params["pageToken"] = next_page_token
+            response = self._request("GET", "/mediaItems", params=params)
+            payload = response.json()
+            for item in payload.get("mediaItems") or []:
+                entry = self._entry_from_item(item)
+                if entry:
+                    entries.append(entry)
+            next_page_token = payload.get("nextPageToken")
+            if not next_page_token:
+                break
+        return entries
+
+    def _list_album_items(self, album_id: str, *, album_title: str) -> list[ProviderEntry]:
+        """Page through all media items in one album."""
+        entries: list[ProviderEntry] = []
+        next_page_token: Optional[str] = None
+        while True:
+            body: Dict[str, Any] = {"albumId": album_id, "pageSize": 100}
+            if next_page_token:
+                body["pageToken"] = next_page_token
+            response = self._request("POST", "/mediaItems:search", json=body)
+            payload = response.json()
+            for item in payload.get("mediaItems") or []:
+                entry = self._entry_from_item(item, album_title=album_title)
+                if entry:
+                    entries.append(entry)
+            next_page_token = payload.get("nextPageToken")
+            if not next_page_token:
+                break
+        return entries
+
+    def _get_album_title(self, album_id: str) -> str:
+        try:
+            response = self._request("GET", f"/albums/{album_id}")
+            return response.json().get("title", album_id)
+        except Exception:
+            return album_id
+
+    def _entry_from_item(self, item: Dict[str, Any], *, album_title: Optional[str] = None) -> Optional[ProviderEntry]:
+        media_id = item.get("id")
+        if not media_id:
+            return None
+        filename = item.get("filename") or media_id
+        metadata = item.get("mediaMetadata") or {}
+        creation_time = _parse_iso_datetime(metadata.get("creationTime"))
+        mime_type = item.get("mimeType")
+        width = metadata.get("width")
+        height = metadata.get("height")
+        size_str: Optional[int] = None
+        if width and height:
+            try:
+                size_str = int(width) * int(height)
+            except Exception:
+                size_str = None
+        display_path = f"/{album_title}/{filename}" if album_title else f"/{filename}"
+        return ProviderEntry(
+            provider=self.provider_name,
+            source_key=media_id,
+            file_id=media_id,
+            name=filename,
+            display_path=display_path,
+            modified_time=creation_time,
+            size=size_str,
+            mime_type=mime_type,
+        )
+
+    def _entry_from_picker_item(self, item: Dict[str, Any]) -> Optional[ProviderEntry]:
+        media_id = str(item.get("id") or "").strip()
+        if not media_id:
+            return None
+        filename = str(item.get("name") or media_id).strip() or media_id
+        creation_time = _parse_iso_datetime(str(item.get("creation_time") or "").strip())
+        mime_type = str(item.get("mime_type") or "").strip() or None
+        width = item.get("width")
+        height = item.get("height")
+        size_str: Optional[int] = None
+        if width and height:
+            try:
+                size_str = int(width) * int(height)
+            except Exception:
+                size_str = None
+        return ProviderEntry(
+            provider=self.provider_name,
+            source_key=media_id,
+            file_id=media_id,
+            name=filename,
+            display_path=f"/picker/{filename}",
+            modified_time=creation_time,
+            size=size_str,
+            mime_type=mime_type,
+        )
+
+    def _metadata_from_provider_item(self, metadata: Dict[str, Any]) -> ProviderMediaMetadata:
+        exif_overrides: Dict[str, Any] = {}
+        provider_properties: Dict[str, Any] = {}
+
+        creation_time = metadata.get("creationTime")
+        if creation_time:
+            exif_overrides["DateTimeOriginal"] = creation_time
+            exif_overrides["DateTime"] = creation_time
+
+        width = metadata.get("width")
+        height = metadata.get("height")
+        if width is not None:
+            exif_overrides["ImageWidth"] = width
+        if height is not None:
+            exif_overrides["ImageLength"] = height
+
+        photo_meta = metadata.get("photo") or {}
+        if photo_meta.get("cameraMake"):
+            exif_overrides["Make"] = photo_meta["cameraMake"]
+        if photo_meta.get("cameraModel"):
+            exif_overrides["Model"] = photo_meta["cameraModel"]
+        if photo_meta.get("focalLength") is not None:
+            exif_overrides["FocalLength"] = photo_meta["focalLength"]
+        if photo_meta.get("apertureFNumber") is not None:
+            exif_overrides["FNumber"] = photo_meta["apertureFNumber"]
+        if photo_meta.get("isoEquivalent") is not None:
+            exif_overrides["ISOSpeedRatings"] = photo_meta["isoEquivalent"]
+        if photo_meta.get("exposureTime"):
+            exif_overrides["ExposureTime"] = photo_meta["exposureTime"]
+
+        video_meta = metadata.get("video") or {}
+        duration_ms = _coerce_duration_to_ms(video_meta.get("durationMillis"), assume_ms=True)
+        if duration_ms is not None:
+            provider_properties["media.duration_ms"] = duration_ms
+
+        return ProviderMediaMetadata(
+            exif_overrides=exif_overrides,
+            provider_properties=provider_properties,
+        )
+
+    @staticmethod
+    def _normalize_picker_session_id(raw_session_id: str) -> str:
+        value = str(raw_session_id or "").strip()
+        if "/" not in value:
+            return value
+        return value.rsplit("/", 1)[-1]
+
+    def _normalize_picker_media_item(self, raw_item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        media_id = str(raw_item.get("id") or "").strip()
+        if not media_id:
+            return None
+        media_file = raw_item.get("mediaFile") or {}
+        media_meta = media_file.get("mediaFileMetadata") or {}
+        normalized = {
+            "id": media_id,
+            "name": str(media_file.get("filename") or raw_item.get("filename") or media_id).strip() or media_id,
+            "mime_type": str(media_file.get("mimeType") or raw_item.get("mimeType") or "").strip() or None,
+            "base_url": str(media_file.get("baseUrl") or raw_item.get("baseUrl") or "").strip() or None,
+            "creation_time": str(media_meta.get("creationTime") or raw_item.get("createTime") or "").strip() or None,
+            "width": media_meta.get("width"),
+            "height": media_meta.get("height"),
+            "raw": raw_item,
+        }
+        return normalized
+
+    def _list_picker_media_items_raw(self, session_id: str, *, limit: int = 2000) -> list[Dict[str, Any]]:
+        normalized_session_id = self._normalize_picker_session_id(session_id)
+        if not normalized_session_id:
+            raise ValueError("Picker session id is required")
+        items: list[Dict[str, Any]] = []
+        next_page_token: Optional[str] = None
+        while True:
+            remaining = max(0, int(limit) - len(items))
+            if remaining == 0:
+                break
+            params: Dict[str, str] = {
+                "sessionId": normalized_session_id,
+                "pageSize": str(min(100, max(1, remaining))),
+            }
+            if next_page_token:
+                params["pageToken"] = next_page_token
+            response = self._picker_request("GET", "/mediaItems", params=params)
+            payload = response.json()
+            for raw_item in payload.get("mediaItems") or []:
+                normalized = self._normalize_picker_media_item(raw_item)
+                if not normalized:
+                    continue
+                media_id = normalized["id"]
+                self._picker_media_cache[media_id] = normalized
+                items.append(normalized)
+            next_page_token = payload.get("nextPageToken")
+            if not next_page_token:
+                break
+        self._picker_session_id = normalized_session_id
+        return items[: max(1, int(limit))]
+
+    def create_picker_session(self, *, max_item_count: int = 2000) -> dict:
+        """Create a Google Photos Picker session."""
+        _ = max_item_count  # Reserved for future picker config use.
+        response = self._picker_request("POST", "/sessions", json={})
+        payload = response.json()
+        session_id = self._normalize_picker_session_id(payload.get("id") or payload.get("name") or "")
+        self._picker_session_id = session_id or None
+        return {
+            "session_id": session_id,
+            "picker_uri": str(payload.get("pickerUri") or "").strip(),
+            "expire_time": str(payload.get("expireTime") or "").strip(),
+            "polling_config": payload.get("pollingConfig") or {},
+        }
+
+    def get_picker_session(self, session_id: str) -> dict:
+        """Fetch Google Photos Picker session metadata."""
+        normalized_session_id = self._normalize_picker_session_id(session_id)
+        if not normalized_session_id:
+            raise ValueError("Picker session id is required")
+        response = self._picker_request("GET", f"/sessions/{normalized_session_id}")
+        payload = response.json()
+        resolved_session_id = self._normalize_picker_session_id(payload.get("id") or payload.get("name") or normalized_session_id)
+        self._picker_session_id = resolved_session_id or normalized_session_id
+        return {
+            "session_id": resolved_session_id,
+            "picker_uri": str(payload.get("pickerUri") or "").strip(),
+            "expire_time": str(payload.get("expireTime") or "").strip(),
+            "polling_config": payload.get("pollingConfig") or {},
+            "picked_items_count": int((payload.get("pollingConfig") or {}).get("pickedItemsCount") or 0),
+        }
+
+    def list_picker_media_items(self, session_id: str, *, limit: int = 2000) -> list[dict]:
+        """List user-selected media items from an active picker session."""
+        raw_items = self._list_picker_media_items_raw(session_id, limit=limit)
+        return [
+            {
+                "id": str(item.get("id") or "").strip(),
+                "name": str(item.get("name") or item.get("id") or "").strip(),
+                "mime_type": str(item.get("mime_type") or "").strip(),
+                "creation_time": str(item.get("creation_time") or "").strip(),
+            }
+            for item in raw_items
+            if str(item.get("id") or "").strip()
+        ]
+
+    def list_picker_entries(
+        self,
+        session_id: str,
+        *,
+        picked_media_item_ids: Optional[Sequence[str]] = None,
+        limit: int = 2000,
+    ) -> list[ProviderEntry]:
+        """Build sync entries from picker-selected media items."""
+        target_ids = {
+            str(item_id or "").strip()
+            for item_id in (picked_media_item_ids or [])
+            if str(item_id or "").strip()
+        }
+        raw_items = self._list_picker_media_items_raw(session_id, limit=limit)
+        entries: list[ProviderEntry] = []
+        for item in raw_items:
+            media_id = str(item.get("id") or "").strip()
+            if not media_id:
+                continue
+            if target_ids and media_id not in target_ids:
+                continue
+            entry = self._entry_from_picker_item(item)
+            if entry:
+                entries.append(entry)
+        entries.sort(key=lambda e: e.modified_time or datetime.min, reverse=True)
+        return entries
+
+    def get_entry(self, source_key: str) -> ProviderEntry:
+        cached = self._picker_media_cache.get(str(source_key or "").strip())
+        if cached:
+            entry = self._entry_from_picker_item(cached)
+            if entry:
+                return entry
+        response = self._request("GET", f"/mediaItems/{source_key}")
+        item = response.json()
+        entry = self._entry_from_item(item)
+        if not entry:
+            raise ValueError(f"Google Photos item not found: {source_key}")
+        return entry
+
+    def get_media_metadata(self, source_key: str) -> ProviderMediaMetadata:
+        cached = self._picker_media_cache.get(str(source_key or "").strip())
+        if cached:
+            return self._metadata_from_provider_item(
+                {
+                    "creationTime": cached.get("creation_time"),
+                    "width": cached.get("width"),
+                    "height": cached.get("height"),
+                }
+            )
+        response = self._request("GET", f"/mediaItems/{source_key}")
+        item = response.json()
+        metadata = item.get("mediaMetadata") or {}
+        return self._metadata_from_provider_item(metadata)
+
+    def download_file(self, source_key: str) -> bytes:
+        """Download full-resolution bytes via the baseUrl."""
+        cached = self._picker_media_cache.get(str(source_key or "").strip())
+        item = cached
+        if item is None:
+            response = self._request("GET", f"/mediaItems/{source_key}")
+            item = response.json()
+        base_url = item.get("base_url") or item.get("baseUrl")
+        if not base_url:
+            raise RuntimeError(f"Google Photos item has no baseUrl: {source_key}")
+        mime_type = str(item.get("mime_type") or item.get("mimeType") or "").strip().lower()
+        download_suffix = "dv" if mime_type.startswith("video/") else "d"
+        download_url = f"{base_url}={download_suffix}"
+        headers = {"Authorization": f"Bearer {self._get_access_token()}"}
+        with httpx.Client(timeout=120, follow_redirects=True) as client:
+            dl_response = client.get(download_url, headers=headers)
+            if dl_response.status_code >= 400:
+                dl_response = client.get(download_url)
+        if dl_response.status_code >= 400:
+            raise RuntimeError(f"Failed to download Google Photos item: HTTP {dl_response.status_code}")
+        return dl_response.content
+
+    def get_thumbnail(self, source_key: str, size: str = "w640h480") -> Optional[bytes]:
+        """Return None — thumbnails are proxied via the thumbnail endpoint."""
+        return None
+
+    def list_albums(self, limit: int = 200) -> list[dict]:
+        """List all albums in the user's Google Photos library."""
+        albums: list[dict] = []
+        next_page_token: Optional[str] = None
+        while True:
+            params: Dict[str, str] = {"pageSize": str(min(max(1, limit), 50))}
+            if next_page_token:
+                params["pageToken"] = next_page_token
+            response = self._request("GET", "/albums", params=params)
+            payload = response.json()
+            for album in payload.get("albums") or []:
+                if album.get("id"):
+                    albums.append({"id": album["id"], "name": album.get("title", album["id"])})
+            next_page_token = payload.get("nextPageToken")
+            if not next_page_token or len(albums) >= limit:
+                break
+        return albums[:limit]
+
+    def _picker_request(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: Optional[Dict[str, str]] = None,
+        json: Optional[Dict[str, Any]] = None,
+        timeout: int = 60,
+    ) -> httpx.Response:
+        access_token = self._get_access_token()
+        headers = {"Authorization": f"Bearer {access_token}"}
+        with httpx.Client(timeout=timeout) as client:
+            response = client.request(
+                method,
+                f"{self._picker_base_url}{path}",
+                headers=headers,
+                params=params,
+                json=json,
+            )
+        if response.status_code >= 400:
+            raise RuntimeError(
+                f"Google Photos Picker API error {response.status_code} for {path}: {response.text}"
+            )
+        return response
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: Optional[Dict[str, str]] = None,
+        json: Optional[Dict[str, Any]] = None,
+        timeout: int = 60,
+    ) -> httpx.Response:
+        access_token = self._get_access_token()
+        headers = {"Authorization": f"Bearer {access_token}"}
+        with httpx.Client(timeout=timeout) as client:
+            response = client.request(
+                method,
+                f"{self._photos_base_url}{path}",
+                headers=headers,
+                params=params,
+                json=json,
+            )
+        if response.status_code >= 400:
+            raise RuntimeError(
+                f"Google Photos API error {response.status_code} for {path}: {response.text}"
+            )
+        return response
+
+    def _get_access_token(self) -> str:
+        if self._access_token and self._access_token_expires_at:
+            if datetime.utcnow() + timedelta(seconds=30) < self._access_token_expires_at:
+                return self._access_token
+
+        with httpx.Client(timeout=30) as client:
+            response = client.post(
+                self._token_url,
+                data={
+                    "client_id": self._client_id,
+                    "client_secret": self._client_secret,
+                    "refresh_token": self._refresh_token,
+                    "grant_type": "refresh_token",
+                },
+            )
+
+        if response.status_code >= 400:
+            raise RuntimeError(f"Failed to refresh Google Photos access token: {response.text}")
+
+        payload = response.json()
+        access_token = payload.get("access_token")
+        expires_in = int(payload.get("expires_in") or 3600)
+        if not access_token:
+            raise RuntimeError("Google Photos token response missing access_token")
+
+        self._access_token = access_token
+        self._access_token_expires_at = datetime.utcnow() + timedelta(seconds=expires_in)
+        return access_token
+
+
 class ManagedStorageProvider(StorageProvider):
     """Zoltag-managed objects stored directly in tenant GCS bucket."""
 
@@ -1056,6 +1519,29 @@ def create_storage_provider(
             refresh_token=refresh_token,
         )
 
+    if normalized in {"gphotos", "google-photos", "google_photos"}:
+        from zoltag.settings import settings as _settings
+        client_id = str(_settings.zoltag_gdrive_connector_client_id or "").strip()
+        if not client_id:
+            raise ValueError("Google Photos client ID not configured (uses ZOLTAG_GDRIVE_CONNECTOR_CLIENT_ID)")
+        token_secret = getattr(tenant, "gphotos_token_secret", None)
+        if not token_secret:
+            raise ValueError("Google Photos token secret not configured for tenant")
+        try:
+            refresh_token = get_secret(token_secret)
+        except Exception as exc:
+            raise ValueError(f"No Google Photos refresh token found ({exc})") from exc
+        if not refresh_token:
+            raise ValueError("Google Photos is not connected for this tenant")
+        client_secret = str(_settings.zoltag_gdrive_connector_secret or "").strip()
+        if not client_secret:
+            raise ValueError("Google Photos client secret not configured (uses ZOLTAG_GDRIVE_CONNECTOR_SECRET)")
+        return GooglePhotosStorageProvider(
+            client_id=client_id,
+            client_secret=client_secret,
+            refresh_token=refresh_token,
+        )
+
     if normalized in {"managed"}:
         bucket_name = tenant.get_storage_bucket(settings)
         return ManagedStorageProvider(
@@ -1065,6 +1551,7 @@ def create_storage_provider(
 
     if normalized == "local":
         from pathlib import Path
+
         from zoltag.storage.local_provider import LocalFilesystemProvider
         thumbnail_dir = Path(settings.local_data_dir) / "thumbnails"
         return LocalFilesystemProvider(thumbnail_dir=thumbnail_dir)

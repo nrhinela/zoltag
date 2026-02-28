@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from zoltag import oauth_state
 from zoltag.dependencies import get_db, get_secret, store_secret
-from zoltag.dropbox_oauth import append_query_params, sanitize_redirect_origin, sanitize_return_path
+from zoltag.dropbox_oauth import append_query_params, is_allowed_redirect_origin, sanitize_redirect_origin, sanitize_return_path
 from zoltag.integrations import TenantIntegrationRepository
 from zoltag.metadata import Tenant as TenantModel
 from zoltag.settings import settings
@@ -51,9 +51,9 @@ def _resolve_redirect_origin(request: Request, explicit_origin: str | None = Non
 
     for candidate in candidates:
         normalized = sanitize_redirect_origin(candidate)
-        if normalized:
+        if normalized and is_allowed_redirect_origin(normalized):
             return normalized
-    raise HTTPException(status_code=500, detail="Unable to resolve OAuth redirect origin")
+    raise HTTPException(status_code=400, detail="OAuth redirect origin is not permitted")
 
 
 @router.get("/oauth/youtube/authorize")
@@ -190,6 +190,8 @@ async def youtube_callback(
             {
                 "integration": "youtube",
                 "result": "connected",
+                "provider_id": str(provider_record.id),
+                "configure_step": "2",
             },
         )
         return RedirectResponse(redirect_target)

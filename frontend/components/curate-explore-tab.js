@@ -219,6 +219,7 @@ export class CurateExploreTab extends LitElement {
     this._listTargetCounter = 1;
     this._curateDropboxFetchTimer = null;
     this._curateDropboxQuery = '';
+    this._curateListDropRefreshTimer = null;
 
     try {
       const storedTool = localStorage.getItem('rightPanelTool:curate-explore');
@@ -313,6 +314,10 @@ export class CurateExploreTab extends LitElement {
     // Cancel any active press timers
     if (this._curatePressTimer) {
       clearTimeout(this._curatePressTimer);
+    }
+    if (this._curateListDropRefreshTimer) {
+      clearTimeout(this._curateListDropRefreshTimer);
+      this._curateListDropRefreshTimer = null;
     }
   }
 
@@ -962,6 +967,50 @@ export class CurateExploreTab extends LitElement {
         items: nextItems,
       };
     });
+
+    this._excludeAddedImagesFromVisibleResults(uniqueIds);
+    this._scheduleCurateRefreshAfterListDrop();
+  }
+
+  _excludeAddedImagesFromVisibleResults(ids) {
+    const removeSet = new Set((ids || []).map((id) => Number(id)).filter(Number.isFinite));
+    if (!removeSet.size) {
+      return;
+    }
+    const removedIds = Array.from(removeSet);
+
+    if (Array.isArray(this.images) && this.images.length) {
+      const before = this.images.length;
+      this.images = this.images.filter((image) => !removeSet.has(Number(image?.id)));
+      const removedCount = before - this.images.length;
+      if (removedCount > 0 && Number.isFinite(this.total)) {
+        this.total = Math.max(0, Number(this.total) - removedCount);
+      }
+    }
+
+    this.dragSelection = (this.dragSelection || []).filter((id) => !removeSet.has(Number(id)));
+
+    // Mirror optimistic removals into parent curate state so they survive re-renders.
+    this.dispatchEvent(new CustomEvent('curate-images-optimistic-remove', {
+      detail: { ids: removedIds },
+      bubbles: true,
+      composed: true,
+    }));
+  }
+
+  _scheduleCurateRefreshAfterListDrop() {
+    if (this._curateListDropRefreshTimer) {
+      clearTimeout(this._curateListDropRefreshTimer);
+      this._curateListDropRefreshTimer = null;
+    }
+
+    this._curateListDropRefreshTimer = setTimeout(() => {
+      this._curateListDropRefreshTimer = null;
+      this.dispatchEvent(new CustomEvent('curate-list-drop-refresh', {
+        bubbles: true,
+        composed: true,
+      }));
+    }, 1200);
   }
 
   _parseCurateDragIds(event) {

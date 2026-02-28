@@ -2,23 +2,30 @@
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass
 from typing import Any, Iterable
-import uuid
 
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
 from zoltag.metadata import Tenant, TenantProviderIntegration
 
-ALLOWED_PROVIDER_TYPES = ("dropbox", "gdrive", "youtube")
+ALLOWED_PROVIDER_TYPES = ("dropbox", "gdrive", "youtube", "gphotos")
 DEFAULT_PROVIDER_LABELS = {
     "dropbox": "Default Dropbox",
     "gdrive": "Default Google Drive",
     "youtube": "Default YouTube",
+    "gphotos": "Default Google Photos",
 }
 
 _UNSET = object()
+_SELECTION_MODES_BY_PROVIDER: dict[str, tuple[str, ...]] = {
+    "dropbox": ("catalog",),
+    "gdrive": ("catalog",),
+    "youtube": ("catalog",),
+    "gphotos": ("picker",),
+}
 
 
 def normalize_provider_type(value: str | None) -> str:
@@ -29,6 +36,8 @@ def normalize_provider_type(value: str | None) -> str:
         provider = "dropbox"
     if provider in {"yt"}:
         provider = "youtube"
+    if provider in {"google-photos", "google_photos"}:
+        provider = "gphotos"
     if provider not in ALLOWED_PROVIDER_TYPES:
         raise ValueError("Invalid provider type")
     return provider
@@ -48,6 +57,55 @@ def normalize_sync_folders(raw_value: Any) -> list[str]:
         seen.add(folder)
         normalized.append(folder)
     return normalized
+
+
+def normalize_selection_mode(provider_type: str, raw_value: Any) -> str:
+    normalized_provider = normalize_provider_type(provider_type)
+    allowed_modes = _SELECTION_MODES_BY_PROVIDER.get(normalized_provider, ("catalog",))
+    default_mode = allowed_modes[0] if allowed_modes else "catalog"
+    value = str(raw_value or "").strip().lower()
+    if value not in {"catalog", "picker"}:
+        return default_mode
+    if value not in allowed_modes:
+        return default_mode
+    return value
+
+
+def normalize_sync_items(raw_value: Any) -> list[dict[str, str]]:
+    if raw_value is None:
+        return []
+    if not isinstance(raw_value, list):
+        return []
+    normalized: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for item in raw_value:
+        if isinstance(item, dict):
+            item_id = str(item.get("id") or item.get("source_key") or "").strip()
+            if not item_id or item_id in seen:
+                continue
+            seen.add(item_id)
+            payload: dict[str, str] = {"id": item_id}
+            item_name = str(item.get("name") or "").strip()
+            if item_name:
+                payload["name"] = item_name
+            item_mime_type = str(item.get("mime_type") or item.get("mimeType") or "").strip()
+            if item_mime_type:
+                payload["mime_type"] = item_mime_type
+            item_created = str(item.get("creation_time") or item.get("creationTime") or "").strip()
+            if item_created:
+                payload["creation_time"] = item_created
+            normalized.append(payload)
+            continue
+        item_id = str(item or "").strip()
+        if not item_id or item_id in seen:
+            continue
+        seen.add(item_id)
+        normalized.append({"id": item_id})
+    return normalized
+
+
+def normalize_picker_session_id(raw_value: Any) -> str:
+    return str(raw_value or "").strip()
 
 
 @dataclass
@@ -84,6 +142,10 @@ class ProviderIntegrationRecord:
     def youtube_token_secret_name(self) -> str:
         return str(self.config_json.get("token_secret_name") or f"youtube-token-{self.secret_scope}").strip()
 
+    @property
+    def gphotos_token_secret_name(self) -> str:
+        return str(self.config_json.get("token_secret_name") or f"gphotos-token-{self.secret_scope}").strip()
+
 
 class TenantIntegrationRepository:
     """CRUD repository for provider integration config."""
@@ -99,17 +161,31 @@ class TenantIntegrationRepository:
         if normalized == "dropbox":
             return {
                 "oauth_mode": "managed",
+                "selection_mode": "catalog",
                 "sync_folders": [],
+                "sync_items": [],
                 "token_secret_name": f"dropbox-token-{secret_scope}",
                 "app_secret_name": f"dropbox-app-secret-{secret_scope}",
             }
         if normalized == "youtube":
             return {
+                "selection_mode": "catalog",
                 "sync_folders": [],
+                "sync_items": [],
                 "token_secret_name": f"youtube-token-{secret_scope}",
             }
+        if normalized == "gphotos":
+            return {
+                "selection_mode": "picker",
+                "sync_folders": [],
+                "sync_items": [],
+                "picker_session_id": "",
+                "token_secret_name": f"gphotos-token-{secret_scope}",
+            }
         return {
+            "selection_mode": "catalog",
             "sync_folders": [],
+            "sync_items": [],
             "client_id": "",
             "client_secret_name": f"gdrive-client-secret-{secret_scope}",
             "token_secret_name": f"gdrive-token-{secret_scope}",
@@ -369,6 +445,9 @@ class TenantIntegrationRepository:
         is_active: bool | None = None,
         is_default_sync_source: bool | None = None,
         sync_folders: list[str] | object = _UNSET,
+        sync_items: list[dict[str, Any]] | object = _UNSET,
+        selection_mode: str | object = _UNSET,
+        picker_session_id: str | object = _UNSET,
         oauth_mode: str | object = _UNSET,
         app_key: str | object = _UNSET,
         client_id: str | object = _UNSET,
@@ -394,6 +473,15 @@ class TenantIntegrationRepository:
 
         if sync_folders is not _UNSET:
             config_payload["sync_folders"] = normalize_sync_folders(sync_folders)
+
+        if sync_items is not _UNSET:
+            config_payload["sync_items"] = normalize_sync_items(sync_items)
+
+        if selection_mode is not _UNSET:
+            config_payload["selection_mode"] = normalize_selection_mode(row.provider_type, selection_mode)
+
+        if picker_session_id is not _UNSET:
+            config_payload["picker_session_id"] = normalize_picker_session_id(picker_session_id)
 
         if oauth_mode is not _UNSET:
             mode = str(oauth_mode or "").strip().lower()
@@ -478,6 +566,10 @@ class TenantIntegrationRepository:
         if config_json:
             for key, value in config_json.items():
                 merged_config[str(key)] = value
+        merged_config["sync_folders"] = normalize_sync_folders(merged_config.get("sync_folders"))
+        merged_config["sync_items"] = normalize_sync_items(merged_config.get("sync_items"))
+        merged_config["selection_mode"] = normalize_selection_mode(normalized, merged_config.get("selection_mode"))
+        merged_config["picker_session_id"] = normalize_picker_session_id(merged_config.get("picker_session_id"))
 
         row = TenantProviderIntegration(
             tenant_id=tenant_row.id,
@@ -601,6 +693,7 @@ class TenantIntegrationRepository:
         dropbox_record = primary["dropbox"]
         gdrive_record = primary["gdrive"]
         youtube_record = primary["youtube"]
+        gphotos_record = primary["gphotos"]
 
         return {
             "default_source_provider": default_record.provider_type,
@@ -611,7 +704,10 @@ class TenantIntegrationRepository:
                 "is_active": bool(dropbox_record.is_active),
                 "secret_scope": dropbox_record.secret_scope,
                 "oauth_mode": str(dropbox_record.config_json.get("oauth_mode") or "").strip().lower(),
+                "selection_mode": normalize_selection_mode("dropbox", dropbox_record.config_json.get("selection_mode")),
                 "sync_folders": normalize_sync_folders(dropbox_record.config_json.get("sync_folders")),
+                "sync_items": normalize_sync_items(dropbox_record.config_json.get("sync_items")),
+                "picker_session_id": normalize_picker_session_id(dropbox_record.config_json.get("picker_session_id")),
                 "app_key": str(dropbox_record.config_json.get("app_key") or "").strip(),
                 "token_secret_name": dropbox_record.dropbox_token_secret_name,
                 "app_secret_name": dropbox_record.dropbox_app_secret_name,
@@ -622,7 +718,10 @@ class TenantIntegrationRepository:
                 "source": gdrive_record.source,
                 "is_active": bool(gdrive_record.is_active),
                 "secret_scope": gdrive_record.secret_scope,
+                "selection_mode": normalize_selection_mode("gdrive", gdrive_record.config_json.get("selection_mode")),
                 "sync_folders": normalize_sync_folders(gdrive_record.config_json.get("sync_folders")),
+                "sync_items": normalize_sync_items(gdrive_record.config_json.get("sync_items")),
+                "picker_session_id": normalize_picker_session_id(gdrive_record.config_json.get("picker_session_id")),
                 "client_id": str(gdrive_record.config_json.get("client_id") or "").strip(),
                 "token_secret_name": gdrive_record.gdrive_token_secret_name,
                 "client_secret_name": gdrive_record.gdrive_client_secret_name,
@@ -633,8 +732,23 @@ class TenantIntegrationRepository:
                 "source": youtube_record.source,
                 "is_active": bool(youtube_record.is_active),
                 "secret_scope": youtube_record.secret_scope,
+                "selection_mode": normalize_selection_mode("youtube", youtube_record.config_json.get("selection_mode")),
                 "sync_folders": normalize_sync_folders(youtube_record.config_json.get("sync_folders")),
+                "sync_items": normalize_sync_items(youtube_record.config_json.get("sync_items")),
+                "picker_session_id": normalize_picker_session_id(youtube_record.config_json.get("picker_session_id")),
                 "token_secret_name": youtube_record.youtube_token_secret_name,
+            },
+            "gphotos": {
+                "provider_id": gphotos_record.id,
+                "label": gphotos_record.label,
+                "source": gphotos_record.source,
+                "is_active": bool(gphotos_record.is_active),
+                "secret_scope": gphotos_record.secret_scope,
+                "selection_mode": normalize_selection_mode("gphotos", gphotos_record.config_json.get("selection_mode")),
+                "sync_folders": normalize_sync_folders(gphotos_record.config_json.get("sync_folders")),
+                "sync_items": normalize_sync_items(gphotos_record.config_json.get("sync_items")),
+                "picker_session_id": normalize_picker_session_id(gphotos_record.config_json.get("picker_session_id")),
+                "token_secret_name": gphotos_record.gphotos_token_secret_name,
             },
             "resolution_source": "new_table" if any(record.source == "new_table" for record in records) else "synthetic",
         }

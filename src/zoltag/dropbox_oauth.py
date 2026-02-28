@@ -126,6 +126,29 @@ def sanitize_redirect_origin(origin: str | None) -> str | None:
     return f"{parsed.scheme}://{parsed.netloc}"
 
 
+def is_allowed_redirect_origin(origin: str | None) -> bool:
+    """Return True if origin is trusted for OAuth callbacks.
+
+    Trusted origins:
+    - The configured app_url (always)
+    - localhost / 127.0.0.1 on any port (dev only)
+    """
+    normalized = sanitize_redirect_origin(origin)
+    if not normalized:
+        return False
+
+    app_origin = sanitize_redirect_origin(settings.app_url)
+    if normalized == app_origin:
+        return True
+
+    if settings.is_development:
+        parsed = urlsplit(normalized)
+        if parsed.hostname in {"localhost", "127.0.0.1", "::1"}:
+            return True
+
+    return False
+
+
 def append_query_params(url_path: str, params: dict[str, str]) -> str:
     """Append query params to a same-origin path."""
     parsed = urlsplit(url_path)

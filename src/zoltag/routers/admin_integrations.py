@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from zoltag.auth.dependencies import require_tenant_permission_from_header
 from zoltag.auth.models import UserProfile
+from zoltag.cli.introspection import normalize_queue_payload
 from zoltag.database import get_db
 from zoltag.dependencies import delete_secret, get_secret, get_tenant, store_secret
 from zoltag.dropbox_oauth import (
@@ -514,6 +515,110 @@ def _serialize_provider_record(record) -> dict:
     }
 
 
+def _to_iso(value) -> str | None:
+    if not value:
+        return None
+    try:
+        return value.isoformat()
+    except Exception:
+        return str(value)
+
+
+def _build_provider_sync_status_map(db: Session, *, tenant_id: str, provider_ids: list[str]) -> dict[str, dict]:
+    normalized_ids = [str(pid or "").strip() for pid in (provider_ids or []) if str(pid or "").strip()]
+    if not normalized_ids:
+        return {}
+
+    result: dict[str, dict] = {
+        pid: {
+            "state": "idle",
+            "job_id": None,
+            "queued_at": None,
+            "started_at": None,
+            "last_completed_job_id": None,
+            "last_completed_status": None,
+            "last_completed_at": None,
+            "last_succeeded_at": None,
+            "_open_rank": 0,
+            "_open_ts": None,
+            "_terminal_ts": None,
+            "_last_success_ts": None,
+        }
+        for pid in normalized_ids
+    }
+
+    def _finalize(status_map: dict[str, dict]) -> dict[str, dict]:
+        for pid in normalized_ids:
+            entry = status_map.get(pid)
+            if not entry:
+                continue
+            entry.pop("_open_rank", None)
+            entry.pop("_open_ts", None)
+            entry.pop("_terminal_ts", None)
+            entry.pop("_last_success_ts", None)
+        return status_map
+
+    dedupe_to_provider = {f"provider-sync:{pid}": pid for pid in normalized_ids}
+    try:
+        tenant_filter_value = UUID(str(tenant_id))
+    except Exception:
+        # Some local/dev datasets use non-UUID tenant ids; avoid hard-failing
+        # provider listing and simply omit sync-history enrichment.
+        return _finalize(result)
+
+    rows = db.query(Job).filter(
+        Job.tenant_id == tenant_filter_value,
+        Job.dedupe_key.in_(list(dedupe_to_provider.keys())),
+        Job.status.in_(("queued", "running", "succeeded", "failed", "canceled", "dead_letter")),
+    ).order_by(Job.queued_at.desc(), Job.id.desc()).all()
+
+    for row in rows:
+        dedupe_key = str(getattr(row, "dedupe_key", "") or "").strip()
+        provider_id = dedupe_to_provider.get(dedupe_key)
+        if not provider_id:
+            continue
+
+        status = str(getattr(row, "status", "") or "").strip().lower()
+        entry = result.get(provider_id)
+        if not entry:
+            continue
+
+        queued_at = getattr(row, "queued_at", None)
+        started_at = getattr(row, "started_at", None)
+        finished_at = getattr(row, "finished_at", None)
+
+        if status in {"queued", "running"}:
+            rank = 2 if status == "running" else 1
+            status_ts = started_at if status == "running" else queued_at
+            current_rank = int(entry.get("_open_rank") or 0)
+            current_ts = entry.get("_open_ts")
+            should_replace = rank > current_rank or (rank == current_rank and status_ts and (current_ts is None or status_ts > current_ts))
+            if should_replace:
+                entry["state"] = status
+                entry["job_id"] = str(getattr(row, "id", "") or "") or None
+                entry["queued_at"] = _to_iso(queued_at)
+                entry["started_at"] = _to_iso(started_at)
+                entry["_open_rank"] = rank
+                entry["_open_ts"] = status_ts
+            continue
+
+        terminal_ts = finished_at or started_at or queued_at
+        current_terminal_ts = entry.get("_terminal_ts")
+        if terminal_ts and (current_terminal_ts is None or terminal_ts > current_terminal_ts):
+            entry["last_completed_job_id"] = str(getattr(row, "id", "") or "") or None
+            entry["last_completed_status"] = status
+            entry["last_completed_at"] = _to_iso(terminal_ts)
+            entry["_terminal_ts"] = terminal_ts
+
+        if status == "succeeded":
+            current_success_ts = entry.get("_last_success_ts")
+            if terminal_ts and (current_success_ts is None or terminal_ts > current_success_ts):
+                entry["last_succeeded_at"] = _to_iso(terminal_ts)
+                entry["_last_success_ts"] = terminal_ts
+
+    return _finalize(result)
+
+
 @router.get("/status")
 async def get_integrations_status(
     tenant: Tenant = Depends(get_tenant),
@@ -810,9 +915,30 @@ async def list_integration_providers(
 
     repo = TenantIntegrationRepository(db)
     records = repo.list_provider_records(tenant_row, include_inactive=True, include_placeholders=False)
+    provider_ids = [str(getattr(record, "id", "") or "").strip() for record in records]
+    sync_status_by_provider = _build_provider_sync_status_map(
+        db,
+        tenant_id=str(tenant_row.id),
+        provider_ids=provider_ids,
+    )
     return {
         "tenant_id": str(tenant_row.id),
-        "providers": [_serialize_provider_record(record) for record in records],
+        "providers": [
+            {
+                **_serialize_provider_record(record),
+                "sync_status": sync_status_by_provider.get(str(getattr(record, "id", "") or "").strip(), {
+                    "state": "idle",
+                    "job_id": None,
+                    "queued_at": None,
+                    "started_at": None,
+                    "last_completed_job_id": None,
+                    "last_completed_status": None,
+                    "last_completed_at": None,
+                    "last_succeeded_at": None,
+                }),
+            }
+            for record in records
+        ],
     }
 
 
@@ -1104,6 +1230,17 @@ async def enqueue_provider_sync(
         job_payload["count"] = count
     if bool(requested_payload.get("reprocess_existing")):
         job_payload["reprocess_existing"] = True
+
+    try:
+        job_payload = normalize_queue_payload(definition_key, job_payload)
+    except ValueError as exc:
+        detail = str(exc).strip() or "Invalid sync payload"
+        if "unsupported arguments" in detail.lower() and "provider_id" in detail:
+            detail = (
+                f"{detail}. This worker runtime does not support provider-scoped sync yet. "
+                "Restart API/worker with latest code, then retry."
+            )
+        raise HTTPException(status_code=409, detail=detail)
 
     tenant_uuid = UUID(str(tenant.id))
     dedupe_key = f"provider-sync:{record.id}"
