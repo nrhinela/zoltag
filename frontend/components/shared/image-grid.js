@@ -13,6 +13,9 @@
 import { html } from 'lit';
 import { formatDateTime, formatDurationMs } from './formatting.js';
 
+const LIST_META_TABS = new Set(['info', 'timeline', 'tags']);
+const listMetaTabState = new Map();
+
 function inferMediaType(image) {
   const mediaType = String(image?.media_type || '').trim().toLowerCase();
   if (mediaType === 'video' || mediaType === 'image') {
@@ -25,29 +28,6 @@ function inferMediaType(image) {
   return 'image';
 }
 
-function collectTagLabels(image) {
-  const labels = [];
-  const add = (value) => {
-    const normalized = String(value || '').trim();
-    if (normalized) labels.push(normalized);
-  };
-
-  const calculated = Array.isArray(image?.calculated_tags) ? image.calculated_tags : [];
-  calculated.forEach((tag) => add(tag?.keyword || tag?.name || tag));
-
-  const permatags = Array.isArray(image?.permatags) ? image.permatags : [];
-  permatags.forEach((tag) => {
-    if (Number(tag?.signum) === 1) {
-      add(tag?.keyword || tag?.name || tag);
-    }
-  });
-
-  const machineTags = Array.isArray(image?.tags) ? image.tags : [];
-  machineTags.forEach((tag) => add(tag?.keyword || tag?.name || tag));
-
-  return Array.from(new Set(labels));
-}
-
 function formatDimensions(image) {
   const width = Number(image?.width);
   const height = Number(image?.height);
@@ -57,33 +37,227 @@ function formatDimensions(image) {
   return 'Unknown';
 }
 
-function renderDefaultListDetails(image, mediaType, videoDuration) {
-  const sourcePath = String(
+function resolveSourcePath(image) {
+  return String(
     image?.source_display_path
     || image?.dropbox_path
     || image?.source_key
     || image?.filename
     || ''
   ).trim() || 'Unknown';
+}
+
+function formatProviderLabel(value) {
+  const normalized = String(value || '').trim();
+  if (!normalized) return 'Unknown';
+  return normalized
+    .split(/[_\-\s]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function formatFileSize(value) {
+  const bytes = Number(value);
+  if (!Number.isFinite(bytes) || bytes < 0) {
+    return 'Unknown';
+  }
+  if (bytes < 1024) {
+    return `${Math.round(bytes)} B`;
+  }
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let scaled = bytes / 1024;
+  let unitIndex = 0;
+  while (scaled >= 1024 && unitIndex < units.length - 1) {
+    scaled /= 1024;
+    unitIndex += 1;
+  }
+  const precision = scaled >= 100 ? 0 : 1;
+  return `${scaled.toFixed(precision)} ${units[unitIndex]}`;
+}
+
+function normalizeCategory(value) {
+  const normalized = String(value || '').trim();
+  return normalized || 'Uncategorized';
+}
+
+function collectTagsByCategory(image) {
+  const groups = new Map();
+  const add = (rawTag, fallbackCategory = 'Uncategorized') => {
+    const keyword = String(rawTag?.keyword || rawTag?.name || rawTag || '').trim();
+    if (!keyword) return;
+    const category = normalizeCategory(rawTag?.category || fallbackCategory);
+    if (!groups.has(category)) {
+      groups.set(category, new Set());
+    }
+    groups.get(category).add(keyword);
+  };
+
+  const permatags = Array.isArray(image?.permatags) ? image.permatags : [];
+  permatags
+    .filter((tag) => Number(tag?.signum) === 1)
+    .forEach((tag) => add(tag, tag?.category || 'Uncategorized'));
+
+  return Array.from(groups.entries())
+    .map(([category, keywords]) => ({
+      category,
+      keywords: Array.from(keywords).sort((a, b) => a.localeCompare(b)),
+    }))
+    .sort((a, b) => a.category.localeCompare(b.category));
+}
+
+function getListMetaKey(image) {
+  const assetId = String(image?.asset_id || '').trim();
+  if (assetId) return `asset:${assetId}`;
+  const imageId = Number(image?.id);
+  if (Number.isFinite(imageId)) return `image:${imageId}`;
+  return '';
+}
+
+function getActiveListMetaTab(metaKey) {
+  if (!metaKey) return 'info';
+  const value = listMetaTabState.get(metaKey);
+  return LIST_META_TABS.has(value) ? value : 'info';
+}
+
+function stopListMetaPropagation(event) {
+  event.stopPropagation();
+}
+
+function handleListMetaTabClick(event) {
+  event.preventDefault();
+  event.stopPropagation();
+  const tab = String(event?.currentTarget?.dataset?.tab || '').toLowerCase();
+  if (!LIST_META_TABS.has(tab)) return;
+  const root = event.currentTarget?.closest?.('.curate-list-meta');
+  const metaKey = String(root?.dataset?.listMetaKey || '').trim();
+  if (!root) return;
+  if (metaKey) {
+    listMetaTabState.set(metaKey, tab);
+  }
+  const tabs = Array.from(root.querySelectorAll('.curate-list-meta-tab'));
+  tabs.forEach((button) => {
+    const active = String(button?.dataset?.tab || '').toLowerCase() === tab;
+    button.classList.toggle('is-active', active);
+    button.setAttribute('aria-selected', active ? 'true' : 'false');
+  });
+  const panels = Array.from(root.querySelectorAll('.curate-list-meta-panel'));
+  panels.forEach((panel) => {
+    const active = String(panel?.dataset?.panel || '').toLowerCase() === tab;
+    panel.classList.toggle('is-active', active);
+    panel.setAttribute('aria-hidden', active ? 'false' : 'true');
+  });
+}
+
+function renderListMetaRow(label, value, { className = '' } = {}) {
+  return html`
+    <div class=${`curate-list-meta-row ${className}`.trim()}>
+      <span class="curate-list-meta-label">${label}:</span>
+      <span class="curate-list-meta-value">${value}</span>
+    </div>
+  `;
+}
+
+export function renderCanonicalListDetails(image, { mediaType = null, videoDuration = '' } = {}) {
+  const resolvedMediaType = mediaType || inferMediaType(image);
+  const resolvedVideoDuration = videoDuration || (resolvedMediaType === 'video' ? formatDurationMs(image?.duration_ms) : '');
+  const sourcePath = resolveSourcePath(image);
   const ratingValue = image?.rating === null || image?.rating === undefined || image?.rating === ''
     ? 'Unrated'
     : String(image.rating);
-  const tags = collectTagLabels(image);
-  const mediaLabel = mediaType === 'video'
-    ? `Video${videoDuration ? ` (${videoDuration})` : ''}`
-    : 'Image';
+  const groupedTags = collectTagsByCategory(image);
+  const mediaLabel = resolvedMediaType === 'video'
+    ? `Video${resolvedVideoDuration ? ` (${resolvedVideoDuration})` : ''}`
+    : `Image (${formatDimensions(image)})`;
+  const photoTaken = formatDateTime(image?.capture_timestamp || image?.photo_creation || image?.modified_time);
+  const ingestedAt = formatDateTime(image?.created_at || image?.last_processed || image?.processed_at);
+  const providerLabel = formatProviderLabel(image?.source_provider || image?.provider);
+  const fileSizeLabel = formatFileSize(image?.file_size ?? image?.filesize ?? image?.size_bytes);
+  const metaKey = getListMetaKey(image);
+  const activeTab = getActiveListMetaTab(metaKey);
 
   return html`
-    <div class="curate-list-meta-grid">
-      <div><span class="curate-list-meta-label">asset.id:</span> ${String(image?.asset_id || '—')}</div>
-      <div><span class="curate-list-meta-label">image_metadata.id:</span> ${String(image?.id || '—')}</div>
-      <div><span class="curate-list-meta-label">Photo date:</span> ${formatDateTime(image?.capture_timestamp || image?.photo_creation)}</div>
-      <div><span class="curate-list-meta-label">Ingested date:</span> ${formatDateTime(image?.created_at || image?.last_processed)}</div>
-      <div class="curate-list-meta-span"><span class="curate-list-meta-label">Filepath:</span> ${sourcePath}</div>
-      <div><span class="curate-list-meta-label">Dimensions:</span> ${formatDimensions(image)}</div>
-      <div><span class="curate-list-meta-label">Type:</span> ${mediaLabel}</div>
-      <div><span class="curate-list-meta-label">Rating:</span> ${ratingValue}</div>
-      <div class="curate-list-meta-span"><span class="curate-list-meta-label">Tags:</span> ${tags.length ? tags.join(', ') : 'None'}</div>
+    <div
+      class="curate-list-meta"
+      data-list-meta-key=${metaKey}
+    >
+      <div class="curate-list-meta-tabs" role="tablist" aria-label="Metadata sections" @pointerdown=${stopListMetaPropagation}>
+        <button
+          type="button"
+          class="curate-list-meta-tab ${activeTab === 'info' ? 'is-active' : ''}"
+          role="tab"
+          aria-selected=${activeTab === 'info' ? 'true' : 'false'}
+          data-tab="info"
+          @pointerdown=${stopListMetaPropagation}
+          @click=${handleListMetaTabClick}
+        >Info</button>
+        <button
+          type="button"
+          class="curate-list-meta-tab ${activeTab === 'timeline' ? 'is-active' : ''}"
+          role="tab"
+          aria-selected=${activeTab === 'timeline' ? 'true' : 'false'}
+          data-tab="timeline"
+          @pointerdown=${stopListMetaPropagation}
+          @click=${handleListMetaTabClick}
+        >Timeline</button>
+        <button
+          type="button"
+          class="curate-list-meta-tab ${activeTab === 'tags' ? 'is-active' : ''}"
+          role="tab"
+          aria-selected=${activeTab === 'tags' ? 'true' : 'false'}
+          data-tab="tags"
+          @pointerdown=${stopListMetaPropagation}
+          @click=${handleListMetaTabClick}
+        >Tags</button>
+      </div>
+      <div class="curate-list-meta-panels">
+        <div
+          class="curate-list-meta-panel ${activeTab === 'info' ? 'is-active' : ''}"
+          data-panel="info"
+          aria-hidden=${activeTab === 'info' ? 'false' : 'true'}
+        >
+          <div class="curate-list-meta-grid">
+            ${renderListMetaRow('asset.id', String(image?.asset_id || '—'))}
+            ${renderListMetaRow('metadata.id', String(image?.id || '—'))}
+            ${renderListMetaRow('provider', providerLabel)}
+            ${renderListMetaRow('sourcepath', sourcePath, { className: 'curate-list-meta-row--path' })}
+            ${renderListMetaRow('media', mediaLabel)}
+            ${renderListMetaRow('filesize', fileSizeLabel)}
+          </div>
+        </div>
+        <div
+          class="curate-list-meta-panel ${activeTab === 'timeline' ? 'is-active' : ''}"
+          data-panel="timeline"
+          aria-hidden=${activeTab === 'timeline' ? 'false' : 'true'}
+        >
+          <div class="curate-list-meta-grid">
+            ${renderListMetaRow('photo taken', photoTaken)}
+            ${renderListMetaRow('ingested', ingestedAt)}
+          </div>
+        </div>
+        <div
+          class="curate-list-meta-panel ${activeTab === 'tags' ? 'is-active' : ''}"
+          data-panel="tags"
+          aria-hidden=${activeTab === 'tags' ? 'false' : 'true'}
+        >
+          <div class="curate-list-meta-grid">
+            ${renderListMetaRow('rating', ratingValue)}
+            ${renderListMetaRow(
+              'tags',
+              groupedTags.length ? html`
+                <div class="curate-list-tag-groups">
+                  ${groupedTags.map((group) => html`
+                    <div class="curate-list-tag-group">
+                      <span class="curate-list-tag-group-name">${group.category}:</span>
+                      <span class="curate-list-tag-group-values">${group.keywords.join(', ')}</span>
+                    </div>
+                  `)}
+                </div>
+              ` : 'None'
+            )}
+          </div>
+        </div>
+      </div>
     </div>
   `;
 }
@@ -244,7 +418,7 @@ export function renderImageGrid(config) {
         if (isListMode) {
           const details = typeof renderListDetails === 'function'
             ? renderListDetails(image)
-            : renderDefaultListDetails(image, mediaType, videoDuration);
+            : renderCanonicalListDetails(image, { mediaType, videoDuration });
           return html`
             <div
               class="curate-thumb-wrapper curate-list-row ${isSelected ? 'selected' : ''} ${isPinned ? 'pinned-source' : ''}"
@@ -282,6 +456,34 @@ export function renderImageGrid(config) {
                     </svg>
                   </span>
                 ` : html``}
+                ${renderCurateRatingWidget ? renderCurateRatingWidget(image) : ''}
+                ${renderCurateRatingStatic ? renderCurateRatingStatic(image) : ''}
+                ${isVideo ? html`
+                  <div class="curate-thumb-media-pill ${hasRating ? 'has-rating' : ''}">
+                    <span class="curate-thumb-media-pill-label">VIDEO</span>
+                    ${videoDuration ? html`<span class="curate-thumb-media-pill-duration">${videoDuration}</span>` : html``}
+                  </div>
+                ` : html``}
+                <button
+                  type="button"
+                  class="curate-thumb-similar-link"
+                  title="Similar"
+                  aria-label="Similar"
+                  draggable="false"
+                  tabindex="-1"
+                  @pointerdown=${(event) => event.stopPropagation()}
+                  @click=${emitOpenSimilarInSearch}
+                >
+                  <span class="curate-thumb-similar-link-icon" aria-hidden="true">≈</span>
+                </button>
+                ${showAiScore && renderCurateAiMLScore ? renderCurateAiMLScore(image) : ''}
+                ${showPermatags && renderCuratePermatagSummary ? renderCuratePermatagSummary(image) : ''}
+                ${formatCurateDate && formatCurateDate(image) ? html`
+                  <div class="curate-thumb-date">
+                    <span class="curate-thumb-id">#${image.id}</span>
+                    <span class="curate-thumb-icon" aria-hidden="true">${isVideo ? '🎬' : '📷'}</span>${formatCurateDate(image)}
+                  </div>
+                ` : ''}
               </div>
               <div class="curate-list-details">
                 ${details}

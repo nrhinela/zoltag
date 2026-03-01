@@ -13,7 +13,8 @@ import {
   getKeywordsByCategory,
   getKeywordsByCategoryFromList,
 } from './shared/keyword-utils.js';
-import { formatDateTime, formatDurationMs, formatStatNumber } from './shared/formatting.js';
+import { formatStatNumber } from './shared/formatting.js';
+import { renderCanonicalListDetails } from './shared/image-grid.js';
 import { createSelectionHandlers } from './shared/selection-handlers.js';
 import { renderResultsPagination } from './shared/pagination-controls.js';
 import { renderSelectableImageGrid } from './shared/selectable-image-grid.js';
@@ -2275,79 +2276,8 @@ export class SearchTab extends LitElement {
     `;
   }
 
-  _formatSearchListDate(value) {
-    return formatDateTime(value);
-  }
-
-  _collectSearchListTags(image) {
-    const labels = [];
-    const add = (value) => {
-      const normalized = String(value || '').trim();
-      if (normalized) labels.push(normalized);
-    };
-
-    (Array.isArray(image?.calculated_tags) ? image.calculated_tags : [])
-      .forEach((tag) => add(tag?.keyword || tag?.name || tag));
-    (Array.isArray(image?.permatags) ? image.permatags : [])
-      .forEach((tag) => {
-        if (Number(tag?.signum) === 1) {
-          add(tag?.keyword || tag?.name || tag);
-        }
-      });
-    (Array.isArray(image?.tags) ? image.tags : [])
-      .forEach((tag) => add(tag?.keyword || tag?.name || tag));
-
-    return Array.from(new Set(labels));
-  }
-
-  _resolveSearchListFilepath(image) {
-    const candidates = [
-      image?.source_display_path,
-      image?.dropbox_path,
-      image?.source_key,
-      image?.filename,
-    ];
-    for (const candidate of candidates) {
-      const normalized = String(candidate || '').trim();
-      if (normalized) return normalized;
-    }
-    return 'Unknown';
-  }
-
-  _formatSearchListDimensions(image) {
-    const width = Number(image?.width);
-    const height = Number(image?.height);
-    if (Number.isFinite(width) && width > 0 && Number.isFinite(height) && height > 0) {
-      return `${width} × ${height}`;
-    }
-    return 'Unknown';
-  }
-
   _renderSearchListDetails(image) {
-    const photoDate = image?.capture_timestamp || image?.photo_creation || image?.modified_time;
-    const ingestedDate = image?.created_at || image?.last_processed || image?.processed_at;
-    const tags = this._collectSearchListTags(image);
-    const rating = image?.rating === null || image?.rating === undefined || image?.rating === ''
-      ? 'Unrated'
-      : String(image.rating);
-    const durationLabel = formatDurationMs(image?.duration_ms);
-    const mediaType = String(image?.media_type || '').toLowerCase() === 'video'
-      ? `Video${durationLabel ? ` (${durationLabel})` : ''}`
-      : 'Image';
-
-    return html`
-      <div class="curate-list-meta-grid">
-        <div><span class="curate-list-meta-label">asset.id:</span> ${String(image?.asset_id || '—')}</div>
-        <div><span class="curate-list-meta-label">image_metadata.id:</span> ${String(image?.id || '—')}</div>
-        <div><span class="curate-list-meta-label">Photo date:</span> ${this._formatSearchListDate(photoDate)}</div>
-        <div><span class="curate-list-meta-label">Ingested date:</span> ${this._formatSearchListDate(ingestedDate)}</div>
-        <div class="curate-list-meta-span"><span class="curate-list-meta-label">Filepath:</span> ${this._resolveSearchListFilepath(image)}</div>
-        <div><span class="curate-list-meta-label">File dimensions:</span> ${this._formatSearchListDimensions(image)}</div>
-        <div><span class="curate-list-meta-label">Type:</span> ${mediaType}</div>
-        <div><span class="curate-list-meta-label">Ratings:</span> ${rating}</div>
-        <div class="curate-list-meta-span"><span class="curate-list-meta-label">Tags:</span> ${tags.length ? tags.join(', ') : 'None'}</div>
-      </div>
-    `;
+    return renderCanonicalListDetails(image);
   }
 
   _buildDropboxHref(path) {

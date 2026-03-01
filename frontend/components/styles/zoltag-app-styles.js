@@ -1384,25 +1384,113 @@ export const zoltagAppStyles = css`
     .curate-list-details {
         min-width: 0;
         display: flex;
-        align-items: center;
+        align-items: flex-start;
         color: #111827;
-        font-size: 12px;
-        line-height: 1.45;
+        font-size: 11px;
+        line-height: 1.35;
+    }
+    .curate-list-meta {
+        width: 100%;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+    }
+    .curate-list-meta-tabs {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 2px;
+        border-radius: 8px;
+        border: 1px solid #e5e7eb;
+        background: #f8fafc;
+    }
+    .curate-list-meta-tab {
+        border: none;
+        background: transparent;
+        color: #6b7280;
+        font-size: 10px;
+        font-weight: 600;
+        line-height: 1;
+        padding: 3px 8px;
+        border-radius: 6px;
+        cursor: pointer;
+    }
+    .curate-list-meta-tab.is-active {
+        color: #111827;
+        background: #ffffff;
+        box-shadow: inset 0 0 0 1px #d1d5db;
+    }
+    .curate-list-meta-panels {
+        min-width: 0;
+    }
+    .curate-list-meta-panel {
+        display: none;
+        min-width: 0;
+    }
+    .curate-list-meta-panel.is-active {
+        display: block;
     }
     .curate-list-meta-grid {
         width: 100%;
         display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 6px 14px;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 0;
+        border: 1px solid #e5e7eb;
+        border-radius: 8px;
+        overflow: hidden;
+        background: #ffffff;
     }
-    .curate-list-meta-span {
-        grid-column: 1 / -1;
-        word-break: break-word;
+    .curate-list-meta-row {
+        display: grid;
+        grid-template-columns: minmax(88px, max-content) minmax(0, 1fr);
+        gap: 8px;
+        align-items: start;
+        padding: 4px 8px;
+        border-top: 1px solid #e5e7eb;
+    }
+    .curate-list-meta-row:first-child {
+        border-top: none;
+    }
+    .curate-list-meta-row:nth-child(odd) {
+        background: #f8fafc;
+    }
+    .curate-list-meta-row:nth-child(even) {
+        background: #ffffff;
     }
     .curate-list-meta-label {
         color: #4b5563;
         font-weight: 600;
-        margin-right: 4px;
+        white-space: nowrap;
+    }
+    .curate-list-meta-value {
+        color: #111827;
+        min-width: 0;
+        overflow-wrap: anywhere;
+        border-left: 1px solid #e5e7eb;
+        padding-left: 8px;
+    }
+    .curate-list-meta-row--path .curate-list-meta-value {
+        word-break: break-word;
+    }
+    .curate-list-tag-groups {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        margin-top: 2px;
+    }
+    .curate-list-tag-group {
+        display: grid;
+        grid-template-columns: minmax(72px, auto) minmax(0, 1fr);
+        gap: 6px;
+    }
+    .curate-list-tag-group-name {
+        color: #4b5563;
+        font-weight: 600;
+    }
+    .curate-list-tag-group-values {
+        color: #111827;
+        min-width: 0;
+        word-break: break-word;
     }
     @media (max-width: 900px) {
         .curate-list-row {
@@ -1413,8 +1501,8 @@ export const zoltagAppStyles = css`
         .curate-list-thumb {
             width: 100px;
         }
-        .curate-list-meta-grid {
-            grid-template-columns: minmax(0, 1fr);
+        .curate-list-meta-tab {
+            padding: 2px 7px;
         }
     }
     .curate-thumb {
