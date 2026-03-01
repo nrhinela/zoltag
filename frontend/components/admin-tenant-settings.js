@@ -1,7 +1,12 @@
 import { LitElement, html, css } from 'lit';
 import { tailwind } from './tailwind-lit.js';
 import './admin-form-group.js';
-import { updateTenant, deleteTenant, getTenantPhotoCount } from '../services/api.js';
+import {
+  updateTenant,
+  deleteTenant,
+  getTenantPhotoCount,
+  getTenantPurgePreview,
+} from '../services/api.js';
 
 /**
  * Admin Tenant Settings Component
@@ -18,7 +23,11 @@ export class AdminTenantSettings extends LitElement {
     successMessage: { type: String },
     isSaving: { type: Boolean },
     isDeleting: { type: Boolean },
-    computedBucketName: { type: String }
+    computedBucketName: { type: String },
+    deletePreview: { type: Object },
+    deletePreviewLoading: { type: Boolean },
+    deletePreviewError: { type: String },
+    deletePreviewLoadedAt: { type: String },
   };
 
   static styles = [
@@ -224,6 +233,86 @@ export class AdminTenantSettings extends LitElement {
         margin-bottom: 15px;
       }
 
+      .danger-actions {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+
+      .btn-secondary {
+        background: #e2e8f0;
+        color: #1f2937;
+        border: 1px solid #cbd5e1;
+      }
+
+      .btn-secondary:hover {
+        background: #cbd5e1;
+      }
+
+      .btn-secondary:disabled {
+        opacity: 0.7;
+        cursor: not-allowed;
+      }
+
+      .btn-danger:disabled {
+        background: #e2a0a7;
+        cursor: not-allowed;
+      }
+
+      .delete-preview {
+        margin-top: 14px;
+        padding: 12px;
+        background: #ffffff;
+        border: 1px solid #fca5a5;
+        border-radius: 6px;
+      }
+
+      .delete-preview-title {
+        margin: 0 0 8px 0;
+        color: #7f1d1d;
+        font-size: 14px;
+        font-weight: 700;
+      }
+
+      .delete-preview-meta {
+        color: #4b5563;
+        font-size: 12px;
+        margin-bottom: 8px;
+      }
+
+      .delete-preview-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+        gap: 8px;
+        margin-bottom: 10px;
+      }
+
+      .delete-preview-stat {
+        background: #fff5f5;
+        border: 1px solid #fecaca;
+        border-radius: 6px;
+        padding: 8px 10px;
+      }
+
+      .delete-preview-stat-label {
+        font-size: 11px;
+        color: #7f1d1d;
+      }
+
+      .delete-preview-stat-value {
+        font-size: 16px;
+        font-weight: 700;
+        color: #991b1b;
+        margin-top: 2px;
+      }
+
+      .delete-preview-list {
+        margin: 0;
+        padding-left: 18px;
+        color: #7f1d1d;
+        font-size: 12px;
+      }
+
       small {
         display: block;
         color: #666;
@@ -245,6 +334,10 @@ export class AdminTenantSettings extends LitElement {
     this.isSaving = false;
     this.isDeleting = false;
     this.computedBucketName = '';
+    this.deletePreview = null;
+    this.deletePreviewLoading = false;
+    this.deletePreviewError = '';
+    this.deletePreviewLoadedAt = '';
   }
 
   updated(changedProperties) {
@@ -256,6 +349,10 @@ export class AdminTenantSettings extends LitElement {
       };
       this.useDedicatedBucket = !!(this.tenant?.thumbnail_bucket);
       this.updateBucketDisplay();
+      this.deletePreview = null;
+      this.deletePreviewError = '';
+      this.deletePreviewLoadedAt = '';
+      this.deleteConfirmation = '';
     }
   }
 
@@ -292,6 +389,12 @@ export class AdminTenantSettings extends LitElement {
 
   handleDeleteConfirmationChange(e) {
     this.deleteConfirmation = e.detail.value;
+  }
+
+  _formatNumber(value) {
+    const parsed = Number(value || 0);
+    if (!Number.isFinite(parsed)) return '0';
+    return parsed.toLocaleString();
   }
 
   async handleSaveTenantSettings(e) {
@@ -349,20 +452,19 @@ export class AdminTenantSettings extends LitElement {
       return;
     }
 
-    // Check photo count before deleting
+    if (!this.deletePreview) {
+      this.errorMessage = 'Load and review the delete preview before deleting this tenant';
+      return;
+    }
+
     this.isDeleting = true;
     this.errorMessage = '';
 
     try {
-      // Check photo count before allowing deletion
-      const photoCount = await getTenantPhotoCount(this.tenant.id);
-      if (photoCount > 0) {
-        this.errorMessage = `Cannot delete tenant: ${photoCount} photo(s) owned. Delete all photos first.`;
-        this.isDeleting = false;
-        return;
-      }
-
-      await deleteTenant(this.tenant.id);
+      await deleteTenant(this.tenant.id, {
+        purge_gcs: true,
+        purge_secrets: true,
+      });
 
       // Close the editor
       this.dispatchEvent(
@@ -376,6 +478,37 @@ export class AdminTenantSettings extends LitElement {
       this.errorMessage = error.message || 'Failed to delete tenant';
     } finally {
       this.isDeleting = false;
+    }
+  }
+
+  async handleLoadDeletePreview() {
+    if (!this.tenant?.id) {
+      this.errorMessage = 'No tenant selected';
+      return;
+    }
+    this.deletePreviewLoading = true;
+    this.deletePreviewError = '';
+    this.errorMessage = '';
+    this.successMessage = '';
+    try {
+      const preview = await getTenantPurgePreview(this.tenant.id, {
+        include_gcs_counts: true,
+        gcs_max_objects_per_prefix: 200000,
+      });
+      this.deletePreview = preview || null;
+      this.deletePreviewLoadedAt = new Date().toISOString();
+      const photoCount = await getTenantPhotoCount(this.tenant.id);
+      if (Number(photoCount || 0) > 0) {
+        this.successMessage = `Preview loaded. Tenant currently has ${this._formatNumber(photoCount)} assets.`;
+      } else {
+        this.successMessage = 'Preview loaded. Review the impact summary below before deleting.';
+      }
+    } catch (error) {
+      console.error('Error loading tenant delete preview:', error);
+      this.deletePreviewError = error.message || 'Failed to load delete preview';
+      this.deletePreview = null;
+    } finally {
+      this.deletePreviewLoading = false;
     }
   }
 
@@ -494,7 +627,7 @@ export class AdminTenantSettings extends LitElement {
 
         <div class="danger-zone">
           <h4 style="margin-top: 0;">⚠️ Danger Zone</h4>
-          <p>Deleting a tenant is permanent and will remove all associated data including keywords, people, and image metadata.</p>
+          <p>Deleting a tenant is permanent. Use the preview to inspect DB/GCS impact before confirming.</p>
 
           <admin-form-group
             label="Type 'I really mean it' to confirm deletion:"
@@ -504,14 +637,76 @@ export class AdminTenantSettings extends LitElement {
             @input-changed="${this.handleDeleteConfirmationChange}"
           ></admin-form-group>
 
-          <button
-            type="button"
-            class="btn btn-danger"
-            @click="${this.handleDeleteTenant}"
-            ?disabled="${this.isDeleting}"
-          >
-            ${this.isDeleting ? 'Deleting...' : html`<i class="fas fa-trash"></i> Delete Tenant`}
-          </button>
+          <div class="danger-actions">
+            <button
+              type="button"
+              class="btn btn-secondary"
+              @click="${this.handleLoadDeletePreview}"
+              ?disabled="${this.deletePreviewLoading || this.isDeleting}"
+            >
+              ${this.deletePreviewLoading ? 'Loading Preview...' : 'Load Delete Preview'}
+            </button>
+            <button
+              type="button"
+              class="btn btn-danger"
+              @click="${this.handleDeleteTenant}"
+              ?disabled="${this.isDeleting || this.deletePreviewLoading || !this.deletePreview || this.deleteConfirmation !== 'I really mean it'}"
+            >
+              ${this.isDeleting ? 'Deleting...' : html`<i class="fas fa-trash"></i> Delete Tenant`}
+            </button>
+          </div>
+
+          ${this.deletePreviewError
+            ? html`<div class="error show" style="margin-top: 10px;">${this.deletePreviewError}</div>`
+            : ''}
+
+          ${this.deletePreview
+            ? (() => {
+                const preview = this.deletePreview || {};
+                const tableCounts = Object.entries(preview.db_table_counts || {})
+                  .filter(([, count]) => Number(count || 0) > 0)
+                  .sort((a, b) => Number(b[1] || 0) - Number(a[1] || 0))
+                  .slice(0, 8);
+                const gcs = preview.gcs || {};
+                const gcsObjectCountText = Number.isFinite(Number(gcs.total_objects))
+                  ? this._formatNumber(gcs.total_objects)
+                  : 'Not counted';
+                return html`
+                  <div class="delete-preview">
+                    <h5 class="delete-preview-title">Purge Preview</h5>
+                    <div class="delete-preview-meta">
+                      Loaded: ${this.deletePreviewLoadedAt ? new Date(this.deletePreviewLoadedAt).toLocaleString() : 'now'}
+                    </div>
+                    <div class="delete-preview-grid">
+                      <div class="delete-preview-stat">
+                        <div class="delete-preview-stat-label">Estimated DB Rows</div>
+                        <div class="delete-preview-stat-value">${this._formatNumber(preview.db_total_rows_estimate)}</div>
+                      </div>
+                      <div class="delete-preview-stat">
+                        <div class="delete-preview-stat-label">Assets</div>
+                        <div class="delete-preview-stat-value">${this._formatNumber((preview.db_table_counts || {}).assets)}</div>
+                      </div>
+                      <div class="delete-preview-stat">
+                        <div class="delete-preview-stat-label">GCS Objects</div>
+                        <div class="delete-preview-stat-value">${gcsObjectCountText}</div>
+                      </div>
+                      <div class="delete-preview-stat">
+                        <div class="delete-preview-stat-label">Secrets</div>
+                        <div class="delete-preview-stat-value">${this._formatNumber(preview.secret_count)}</div>
+                      </div>
+                    </div>
+                    ${tableCounts.length > 0
+                      ? html`
+                        <div style="font-size: 12px; color: #7f1d1d; font-weight: 600; margin-bottom: 4px;">Largest tenant tables to delete:</div>
+                        <ul class="delete-preview-list">
+                          ${tableCounts.map(([tableName, count]) => html`<li><code>${tableName}</code>: ${this._formatNumber(count)}</li>`)}
+                        </ul>
+                      `
+                      : html`<div style="font-size: 12px; color: #7f1d1d;">No tenant rows were found in tracked tables.</div>`}
+                  </div>
+                `;
+              })()
+            : ''}
         </div>
       </div>
     `;

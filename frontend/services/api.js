@@ -812,10 +812,21 @@ export async function updateTenant(tenantId, data) {
 /**
  * Delete a tenant
  * @param {string} tenantId - Tenant ID
+ * @param {{dry_run?: boolean, purge_gcs?: boolean, purge_secrets?: boolean, include_gcs_counts?: boolean, gcs_max_objects_per_prefix?: number}} options
  * @returns {Promise<void>}
  */
-export async function deleteTenant(tenantId) {
-    return fetchWithAuth(`/admin/tenants/${tenantId}`, {
+export async function deleteTenant(tenantId, options = {}) {
+    const params = new URLSearchParams();
+    if (options?.dry_run === true) params.set('dry_run', 'true');
+    if (options?.purge_gcs === false) params.set('purge_gcs', 'false');
+    if (options?.purge_secrets === false) params.set('purge_secrets', 'false');
+    if (options?.include_gcs_counts === true) params.set('include_gcs_counts', 'true');
+    if (Number.isFinite(Number(options?.gcs_max_objects_per_prefix))) {
+      params.set('gcs_max_objects_per_prefix', String(Number(options.gcs_max_objects_per_prefix)));
+    }
+    const suffix = params.toString() ? `?${params.toString()}` : '';
+
+    return fetchWithAuth(`/admin/tenants/${tenantId}${suffix}`, {
         method: 'DELETE'
     }).catch(error => {
         const err = new Error(error.message);
@@ -823,6 +834,22 @@ export async function deleteTenant(tenantId) {
     }).finally(() => {
         invalidateQueries(['tenants']);
     });
+}
+
+/**
+ * Preview tenant purge impact (DB rows, GCS prefixes/object counts, secrets)
+ * @param {string} tenantId - Tenant ID
+ * @param {{include_gcs_counts?: boolean, gcs_max_objects_per_prefix?: number}} options
+ * @returns {Promise<Object>} Purge preview
+ */
+export async function getTenantPurgePreview(tenantId, options = {}) {
+    const params = new URLSearchParams();
+    if (options?.include_gcs_counts === false) params.set('include_gcs_counts', 'false');
+    if (Number.isFinite(Number(options?.gcs_max_objects_per_prefix))) {
+      params.set('gcs_max_objects_per_prefix', String(Number(options.gcs_max_objects_per_prefix)));
+    }
+    const suffix = params.toString() ? `?${params.toString()}` : '';
+    return fetchWithAuth(`/admin/tenants/${tenantId}/purge_preview${suffix}`);
 }
 
 /**
