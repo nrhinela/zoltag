@@ -11,6 +11,7 @@ import {
   getJob,
   getJobAttempts,
   getLiveDropboxFolders,
+  getLiveFlickrAlbums,
   getLiveGdriveFolders,
   getLiveGphotosAlbums,
   getLiveYoutubePlaylists,
@@ -27,9 +28,10 @@ const PROVIDER_LABELS = {
   gdrive: 'Google Drive',
   youtube: 'YouTube',
   gphotos: 'Google Photos',
+  flickr: 'Flickr',
 };
 
-const PROVIDER_TYPES = ['dropbox', 'gdrive', 'youtube', 'gphotos'];
+const PROVIDER_TYPES = ['dropbox', 'gdrive', 'youtube', 'gphotos', 'flickr'];
 const PROVIDERS_WIZARD_HELP_VISIBILITY_STORAGE_KEY = 'zoltag:app:providers:wizardHelpVisible';
 const LEGACY_PROVIDERS_WIZARD_HELP_VISIBILITY_STORAGE_KEYS = [
   'providersWizardHelpVisible',
@@ -47,7 +49,10 @@ function normalizeProviderId(value) {
   if (normalized === 'google-photos' || normalized === 'google_photos') {
     return 'gphotos';
   }
-  if (normalized === 'dropbox' || normalized === 'gdrive' || normalized === 'youtube' || normalized === 'gphotos') {
+  if (normalized === 'flickr-photos' || normalized === 'flickr_photos') {
+    return 'flickr';
+  }
+  if (normalized === 'dropbox' || normalized === 'gdrive' || normalized === 'youtube' || normalized === 'gphotos' || normalized === 'flickr') {
     return normalized;
   }
   return '';
@@ -97,6 +102,7 @@ export class LibraryIntegrationsAdmin extends LitElement {
     _gdriveKnownNames: { type: Object },
     _youtubeKnownNames: { type: Object },
     _gphotosKnownNames: { type: Object },
+    _flickrKnownNames: { type: Object },
     _gdriveCredClientId: { type: String },
     _gdriveCredClientSecret: { type: String },
     _gdriveCredSaving: { type: Boolean },
@@ -1198,6 +1204,7 @@ export class LibraryIntegrationsAdmin extends LitElement {
     this._gdriveKnownNames = {};
     this._youtubeKnownNames = {};
     this._gphotosKnownNames = {};
+    this._flickrKnownNames = {};
     this._gdriveCredClientId = '';
     this._gdriveCredClientSecret = '';
     this._gdriveCredSaving = false;
@@ -1770,7 +1777,7 @@ export class LibraryIntegrationsAdmin extends LitElement {
     if (!this.folderCatalogLoaded) return [];
     const current = new Set(this._getProviderFolders(uuid));
     const query = String(this._catalogFilter || '').trim().toLowerCase();
-    const knownNames = { ...this._gdriveKnownNames, ...this._youtubeKnownNames, ...this._gphotosKnownNames };
+    const knownNames = { ...this._gdriveKnownNames, ...this._youtubeKnownNames, ...this._gphotosKnownNames, ...this._flickrKnownNames };
     const matches = (f) => {
       if (!query) return true;
       if (f.toLowerCase().includes(query)) return true;
@@ -1891,6 +1898,15 @@ export class LibraryIntegrationsAdmin extends LitElement {
           if (a.id && a.name) names[a.id] = a.name;
         }
         this._gphotosKnownNames = names;
+        this.requestUpdate();
+      }).catch(() => {});
+    } else if (providerType === 'flickr') {
+      getLiveFlickrAlbums(tenantId, { provider_id: uuid }).then((result) => {
+        const names = { ...this._flickrKnownNames };
+        for (const a of (result?.albums || [])) {
+          if (a.id && a.name) names[a.id] = a.name;
+        }
+        this._flickrKnownNames = names;
         this.requestUpdate();
       }).catch(() => {});
     } else if (providerType === 'gphotos') {
@@ -2410,6 +2426,35 @@ export class LibraryIntegrationsAdmin extends LitElement {
       return;
     }
 
+    if (providerType === 'flickr') {
+      if (!status?.connected) { this.errorMessage = 'Connect Flickr first.'; return; }
+      this.folderCatalogLoading = true;
+      this.folderCatalogLoaded = false;
+      this.folderCatalogError = '';
+      this.folderCatalogStatus = '';
+      this.folderCatalog = [];
+      this.errorMessage = '';
+      try {
+        const result = await getLiveFlickrAlbums(tenantId, { provider_id: uuid });
+        const albums = Array.isArray(result?.albums) ? result.albums : [];
+        const names = { ...this._flickrKnownNames };
+        for (const a of albums) {
+          if (a.id && a.name) names[a.id] = a.name;
+        }
+        this._flickrKnownNames = names;
+        this.folderCatalog = albums.map((a) => a.id).filter(Boolean);
+        this.folderCatalogLoaded = true;
+        if (!this.folderCatalog.length) {
+          this.folderCatalogError = 'No albums found in this Flickr account.';
+        }
+      } catch (error) {
+        this.folderCatalogError = error?.message || 'Failed to load Flickr albums.';
+      } finally {
+        this.folderCatalogLoading = false;
+      }
+      return;
+    }
+
     if (providerType === 'gphotos') {
       this.errorMessage = 'Google Photos is configured for picker mode. Use Launch Picker instead.';
       return;
@@ -2803,7 +2848,7 @@ export class LibraryIntegrationsAdmin extends LitElement {
       screenName = 'Screen 3: Scope';
       message = selectionMode === 'picker'
         ? `Click Launch Picker to open a new screen with prompts. Select the ${resourceLabelPlural} you want, finish in that screen, return here, then click Refresh Selected ${resourceLabelPlural.charAt(0).toUpperCase()}${resourceLabelPlural.slice(1)}.`
-        : `You can leave this blank to read the entire ${typeLabel} folder, or add specific folders. If you add folders, only those folders will be read. When done, proceed.`;
+        : `You can leave this blank to read all ${resourceLabelPlural}, or add specific ${resourceLabelPlural}. If you add ${resourceLabelPlural}, only those will be read. When done, proceed.`;
     } else if (currentStep === 4) {
       screenName = 'Screen 4: Save + Activate';
       message = `Apply your configuration with Save + Reactivate. When done, click Finished to return to providers.`;
@@ -2928,7 +2973,7 @@ export class LibraryIntegrationsAdmin extends LitElement {
     `;
   }
 
-  _renderScopeDiscoveryContent({ selectionMode, isGdrive, isYoutube, isGphotos, disabled, resourceLabelPlural, folderOptions }) {
+  _renderScopeDiscoveryContent({ selectionMode, isGdrive, isYoutube, isGphotos, isFlickr, disabled, resourceLabelPlural, folderOptions }) {
     if (selectionMode === 'picker') {
       const hasPickerSession = !!String(this.pickerSessionId || '').trim();
       return html`
@@ -3029,7 +3074,7 @@ export class LibraryIntegrationsAdmin extends LitElement {
       `;
     }
 
-    if (isGphotos) {
+    if (isGphotos || isFlickr) {
       return html`
         <div class="actions" style="margin-top: 0;">
           <button type="button" class="btn btn-secondary"
@@ -3037,7 +3082,7 @@ export class LibraryIntegrationsAdmin extends LitElement {
             @click=${this._handleLoadFolderCatalog}>
             ${this.folderCatalogLoading
               ? html`<span class="btn-content"><span class="btn-spinner" aria-hidden="true"></span><span>Loading…</span></span>`
-              : 'Load Albums'}
+              : (isFlickr ? 'Load Flickr Albums' : 'Load Albums')}
           </button>
           ${this.folderCatalogLoaded ? html`<span class="muted">Loaded ${this.folderCatalog.length} album${this.folderCatalog.length === 1 ? '' : 's'}</span>` : ''}
         </div>
@@ -3055,7 +3100,7 @@ export class LibraryIntegrationsAdmin extends LitElement {
             <div class="folder-typeahead folder-typeahead-eight">
               ${folderOptions.length === 0 ? html`<div class="muted" style="padding:8px;">No matches.</div>` : folderOptions.map((id) => {
                 const isSelected = this._getProviderFolders(this.configureProviderId).includes(id);
-                const label = this._gphotosKnownNames?.[id] || id;
+                const label = (isFlickr ? this._flickrKnownNames?.[id] : this._gphotosKnownNames?.[id]) || id;
                 return html`
                   <div class="folder-typeahead-row" style="display:flex; align-items:center; gap:6px; ${isSelected ? 'background:#f0fdf4;' : ''}">
                     <button type="button" class="folder-typeahead-btn" style="flex:1; text-align:left;"
@@ -3378,10 +3423,11 @@ export class LibraryIntegrationsAdmin extends LitElement {
     const isYoutube = providerType === 'youtube';
     const isGdrive = providerType === 'gdrive';
     const isGphotos = providerType === 'gphotos';
+    const isFlickr = providerType === 'flickr';
     const selectionMode = this._getSelectionMode(inst, status);
     const selectionCaps = this._getSelectionCapabilities(providerType, status);
     const resourceLabelPlural = String(status?.selection_capabilities?.resource_label_plural
-      || (isYoutube ? 'playlists' : isGphotos ? 'albums' : 'folders'));
+      || (isYoutube ? 'playlists' : (isGphotos || isFlickr) ? 'albums' : 'folders'));
     const selectionCount = selectionMode === 'picker' ? syncItems.length : syncFolders.length;
     const hasScopedSelections = selectionCount > 0;
     const scopeDiscoveryTitle = selectionMode === 'picker'
@@ -3392,6 +3438,8 @@ export class LibraryIntegrationsAdmin extends LitElement {
       ? 'No playlists selected - all uploads will be synced.'
       : isGphotos
       ? 'No albums selected - all media will be synced.'
+      : isFlickr
+      ? 'No albums selected - all photos will be synced.'
       : 'No folders selected - all files will be synced.';
     const scopeLimitedModeText = selectionMode === 'picker'
       ? `${selectionCount} selected ${resourceLabelPlural} will be synced.`
@@ -3404,6 +3452,8 @@ export class LibraryIntegrationsAdmin extends LitElement {
       ? 'Load all uploads'
       : isGphotos
       ? 'Load all media'
+      : isFlickr
+      ? 'Load all photos'
       : 'Load all files';
     const scopeModeSelectedLabel = `Limit to selected ${resourceLabelPlural}`;
     const scopeIntroText = selectionMode === 'picker'
@@ -3415,7 +3465,7 @@ export class LibraryIntegrationsAdmin extends LitElement {
       ? scopeIntroText
       : (hasScopedSelections
         ? `Currently syncing only selected ${resourceLabelPlural}.`
-        : (isYoutube ? 'Currently syncing all uploads.' : isGphotos ? 'Currently syncing all media.' : 'Currently syncing all files.'));
+        : (isYoutube ? 'Currently syncing all uploads.' : (isGphotos || isFlickr) ? 'Currently syncing all media.' : 'Currently syncing all files.'));
     const disabled = this.loading || this.savingConfig || this.updatingProviderState || this.syncNowRunning;
     const configureStep = Math.max(1, Math.min(Math.trunc(Number(this.configureStep) || 1), 4));
     const canProceedToStep3 = connected && !isActive;
@@ -3424,7 +3474,7 @@ export class LibraryIntegrationsAdmin extends LitElement {
       : configureStep === 2
         ? 'Step 2 of 4: Connect or reconnect this provider.'
         : configureStep === 3
-          ? `Step 3 of 4: Configure ${selectionMode === 'picker' ? `selected ${resourceLabelPlural}` : (isYoutube ? 'playlists' : isGphotos ? 'albums' : 'folders')}.`
+          ? `Step 3 of 4: Configure ${selectionMode === 'picker' ? `selected ${resourceLabelPlural}` : (isYoutube ? 'playlists' : (isGphotos || isFlickr) ? 'albums' : 'folders')}.`
           : 'Step 4 of 4: Save configuration and reactivate.';
     const helpCard = this._renderStepHelpCard({
       step: configureStep,
@@ -3607,7 +3657,7 @@ export class LibraryIntegrationsAdmin extends LitElement {
                   <div class="notice notice-error" style="margin-top: 8px;">
                     Deactivate this source in Screen 2 before editing ${selectionMode === 'picker'
                       ? `selected ${resourceLabelPlural}`
-                      : (isYoutube ? 'sync playlists' : isGphotos ? 'sync albums' : 'sync folders')}.
+                      : (isYoutube ? 'sync playlists' : (isGphotos || isFlickr) ? 'sync albums' : 'sync folders')}.
                   </div>
                 ` : ''}
 
@@ -3635,6 +3685,7 @@ export class LibraryIntegrationsAdmin extends LitElement {
                         isGdrive,
                         isYoutube,
                         isGphotos,
+                        isFlickr,
                         disabled,
                         resourceLabelPlural,
                         folderOptions,
@@ -3676,7 +3727,7 @@ export class LibraryIntegrationsAdmin extends LitElement {
                       `) : html`<div class="muted">No ${resourceLabelPlural} selected - nothing will sync until items are selected.</div>`)
                       : (() => {
                           if (!syncFolders.length) return html`<div class="muted">${scopeAllModeText}</div>`;
-                          const knownNames = { ...this._gdriveKnownNames, ...this._youtubeKnownNames, ...this._gphotosKnownNames };
+                          const knownNames = { ...this._gdriveKnownNames, ...this._youtubeKnownNames, ...this._gphotosKnownNames, ...this._flickrKnownNames };
                           return syncFolders.map((folder, index) => {
                             const label = knownNames[folder] || folder;
                             return html`
@@ -3707,7 +3758,7 @@ export class LibraryIntegrationsAdmin extends LitElement {
                 ${!connected ? html`
                   <div class="muted">Complete Screen 2 first, then ${selectionMode === 'picker'
                     ? `launch picker to choose ${resourceLabelPlural}`
-                    : `load ${isYoutube ? 'playlists' : 'folders'} to configure sync scope`}.</div>
+                    : `load ${isYoutube ? 'playlists' : (isGphotos || isFlickr) ? 'albums' : 'folders'} to configure sync scope`}.</div>
                 ` : ''}
               </div>
                 </div>

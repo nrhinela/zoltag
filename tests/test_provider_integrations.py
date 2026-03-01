@@ -5,6 +5,7 @@ import uuid
 from zoltag.auth.models import UserProfile
 from zoltag.integrations import (
     TenantIntegrationRepository,
+    normalize_provider_type,
     normalize_selection_mode,
     normalize_sync_items,
 )
@@ -118,3 +119,40 @@ def test_update_provider_normalizes_sync_items(test_db):
 def test_gphotos_selection_mode_forces_picker() -> None:
     assert normalize_selection_mode("gphotos", "catalog") == "picker"
     assert normalize_selection_mode("gphotos", "picker") == "picker"
+
+
+def test_flickr_defaults_to_catalog_mode(test_db):
+    tenant_row = _create_tenant_row(test_db)
+    repo = TenantIntegrationRepository(test_db)
+
+    record = repo.create_provider(tenant_row, "flickr")
+
+    assert record.config_json.get("selection_mode") == "catalog"
+    assert record.config_json.get("sync_folders") == []
+    assert str(record.config_json.get("token_secret_name") or "").startswith("flickr-token-")
+
+
+def test_flickr_runtime_context_contains_sync_folders(test_db):
+    tenant_row = _create_tenant_row(test_db)
+    repo = TenantIntegrationRepository(test_db)
+
+    created = repo.create_provider(tenant_row, "flickr")
+    repo.update_provider(
+        tenant_row,
+        "flickr",
+        provider_id=created.id,
+        is_active=True,
+        sync_folders=["72157700000000001", "72157700000000002"],
+    )
+    runtime = repo.build_runtime_context(tenant_row)
+
+    assert runtime["flickr"]["is_active"] is True
+    assert runtime["flickr"]["sync_folders"] == ["72157700000000001", "72157700000000002"]
+    assert str(runtime["flickr"]["token_secret_name"] or "").startswith("flickr-token-")
+
+
+def test_flickr_provider_alias_normalization() -> None:
+    assert normalize_provider_type("flickr") == "flickr"
+    assert normalize_provider_type("flickr-photos") == "flickr"
+    assert normalize_provider_type("flickr_photos") == "flickr"
+    assert normalize_selection_mode("flickr", "picker") == "catalog"

@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     db_keepalives_idle: int = 30
     db_keepalives_interval: int = 10
     db_keepalives_count: int = 5
+    # Applies to all Postgres sessions (API + worker). Helps kill leaked idle transactions.
+    db_idle_in_transaction_session_timeout_ms: int = 30000
     # Worker-only Postgres safety rails (milliseconds).
     # Applied when WORKER_MODE=true to bound lock waits and long/stuck queries.
     worker_db_statement_timeout_ms: int = 45000
@@ -113,6 +115,9 @@ class Settings(BaseSettings):
     # Google Drive connector (shared across all tenants)
     zoltag_gdrive_connector_client_id: Optional[str] = None
     zoltag_gdrive_connector_secret: Optional[str] = None
+    # Flickr connector (shared across all tenants, OAuth 1.0a app credentials)
+    zoltag_flickr_connector_api_key: Optional[str] = None
+    zoltag_flickr_connector_api_secret: Optional[str] = None
 
     # Gemini API (Natural language search)
     gemini_api_key: Optional[str] = None

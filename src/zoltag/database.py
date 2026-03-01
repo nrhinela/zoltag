@@ -51,17 +51,27 @@ def _patch_uuid_for_sqlite():
     PgUUID.result_processor = _patched_result
 
 
-def _worker_postgres_options() -> str:
-    """Build Postgres session options for worker-mode safety rails."""
+def _postgres_session_options() -> str:
+    """Build Postgres session options for API/worker safety rails."""
     options: list[str] = []
-    if settings.worker_db_statement_timeout_ms > 0:
-        options.append(f"-c statement_timeout={int(settings.worker_db_statement_timeout_ms)}")
-    if settings.worker_db_lock_timeout_ms > 0:
-        options.append(f"-c lock_timeout={int(settings.worker_db_lock_timeout_ms)}")
-    if settings.worker_db_idle_in_transaction_session_timeout_ms > 0:
+
+    # Global guardrail: apply to all app sessions (API + worker).
+    idle_timeout_ms = int(settings.db_idle_in_transaction_session_timeout_ms or 0)
+
+    # Worker mode can override idle timeout and adds tighter statement/lock limits.
+    if settings.worker_mode:
+        worker_idle_timeout_ms = int(settings.worker_db_idle_in_transaction_session_timeout_ms or 0)
+        if worker_idle_timeout_ms > 0:
+            idle_timeout_ms = worker_idle_timeout_ms
+        if settings.worker_db_statement_timeout_ms > 0:
+            options.append(f"-c statement_timeout={int(settings.worker_db_statement_timeout_ms)}")
+        if settings.worker_db_lock_timeout_ms > 0:
+            options.append(f"-c lock_timeout={int(settings.worker_db_lock_timeout_ms)}")
+
+    if idle_timeout_ms > 0:
         options.append(
             "-c idle_in_transaction_session_timeout="
-            f"{int(settings.worker_db_idle_in_transaction_session_timeout_ms)}"
+            f"{idle_timeout_ms}"
         )
     return " ".join(options).strip()
 
@@ -88,11 +98,9 @@ def get_engine_kwargs() -> dict:
             "keepalives_interval": settings.db_keepalives_interval,
             "keepalives_count": settings.db_keepalives_count,
         }
-        # Apply strict DB guardrails only for dedicated worker processes.
-        if settings.worker_mode:
-            worker_options = _worker_postgres_options()
-            if worker_options:
-                connect_args["options"] = worker_options
+        session_options = _postgres_session_options()
+        if session_options:
+            connect_args["options"] = session_options
         kwargs["connect_args"] = connect_args
 
     return kwargs

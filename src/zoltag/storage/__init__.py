@@ -7,6 +7,7 @@ from .providers import (
     DropboxStorageProvider,
     GoogleDriveStorageProvider,
     YouTubeStorageProvider,
+    FlickrStorageProvider,
     ManagedStorageProvider,
     create_storage_provider,
 )
@@ -18,6 +19,7 @@ __all__ = [
     "DropboxStorageProvider",
     "GoogleDriveStorageProvider",
     "YouTubeStorageProvider",
+    "FlickrStorageProvider",
     "ManagedStorageProvider",
     "create_storage_provider",
 ]

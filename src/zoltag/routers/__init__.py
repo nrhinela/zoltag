@@ -14,6 +14,8 @@ from . import admin_roles
 from . import dropbox
 from . import gdrive
 from . import gphotos
+from . import youtube
+from . import flickr
 from . import sync
 from . import config
 from . import people
@@ -36,6 +38,8 @@ __all__ = [
     "dropbox",
     "gdrive",
     "gphotos",
+    "youtube",
+    "flickr",
     "sync",
     "config",
     "nl_search",

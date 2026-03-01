@@ -61,6 +61,7 @@ class AssetsAdmin extends LitElement {
     filenameInput: { type: String },
     selectedIds: { type: Array },
     batchDeleting: { type: Boolean },
+    browserTimeZone: { type: String },
   };
 
   constructor() {
@@ -82,6 +83,7 @@ class AssetsAdmin extends LitElement {
     this.filenameInput = '';
     this.selectedIds = [];
     this.batchDeleting = false;
+    this.browserTimeZone = this._resolveBrowserTimeZone();
   }
 
   connectedCallback() {
@@ -160,12 +162,38 @@ class AssetsAdmin extends LitElement {
     }
   }
 
+  _resolveBrowserTimeZone() {
+    try {
+      const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      return String(timezone || '').trim() || 'Local';
+    } catch (_error) {
+      return 'Local';
+    }
+  }
+
+  _parseBackendTimestamp(value) {
+    if (!value) return null;
+    if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
+    const raw = String(value || '').trim();
+    if (!raw) return null;
+    const normalized = raw.includes('T') ? raw : raw.replace(' ', 'T');
+    const hasExplicitTimezone = /(?:[zZ]|[+\-]\d{2}:?\d{2})$/.test(normalized);
+    const parseValue = hasExplicitTimezone ? normalized : `${normalized}Z`;
+    const parsed = new Date(parseValue);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+
   _formatCreatedAt(asset) {
-    const raw = asset?.created_at;
-    if (!raw) return 'Unknown';
-    const date = new Date(raw);
-    if (Number.isNaN(date.getTime())) return 'Unknown';
-    return date.toLocaleString();
+    const date = this._parseBackendTimestamp(asset?.created_at);
+    if (!date) return 'Unknown';
+    return date.toLocaleString(undefined, {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
   }
 
   _formatSource(asset) {
@@ -439,7 +467,7 @@ class AssetsAdmin extends LitElement {
                   <tr>
                     <th class="px-3 py-2 w-8"></th>
                     <th class="px-3 py-2 text-left font-semibold">Filename</th>
-                    <th class="px-3 py-2 text-left font-semibold">Date Created</th>
+                    <th class="px-3 py-2 text-left font-semibold">Date Created (${this.browserTimeZone})</th>
                     <th class="px-3 py-2 text-left font-semibold">Source</th>
                     <th class="px-3 py-2 text-left font-semibold">Counts</th>
                     <th class="px-3 py-2 text-left font-semibold">Thumbnail</th>

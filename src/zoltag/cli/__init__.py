@@ -19,6 +19,7 @@ def _register_commands_once() -> None:
         inspect,
         metadata,
         sync,
+        sync_flickr,
         sync_gdrive,
         sync_gphotos,
         sync_youtube,
@@ -39,6 +40,7 @@ def _register_commands_once() -> None:
     cli.add_command(face_recognition.recompute_face_detections_command, name="recompute-face-detections")
     cli.add_command(face_recognition.recompute_face_recognition_tags_command, name="recompute-face-recognition-tags")
     cli.add_command(sync.sync_dropbox_command, name="sync-dropbox")
+    cli.add_command(sync_flickr.sync_flickr_command, name="sync-flickr")
     cli.add_command(sync_gdrive.sync_gdrive_command, name="sync-gdrive")
     cli.add_command(sync_gphotos.sync_gphotos_command, name="sync-gphotos")
     cli.add_command(sync_youtube.sync_youtube_command, name="sync-youtube")

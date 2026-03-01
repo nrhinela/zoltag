@@ -38,6 +38,8 @@ def _normalize_provider(provider: str) -> str:
         return "youtube"
     if value in {"gphotos", "google-photos", "google_photos"}:
         return "gphotos"
+    if value in {"flickr", "flickr-photos", "flickr_photos"}:
+        return "flickr"
     return value
 
 
@@ -58,6 +60,10 @@ def _patch_tenant_from_record(tenant: Tenant, provider_name: str, record) -> Non
         tenant.gphotos_token_secret = record.gphotos_token_secret_name
         sync_folders = list((record.config_json or {}).get("sync_folders") or [])
         tenant.gphotos_sync_folders = sync_folders
+    elif provider_name == "flickr":
+        tenant.flickr_token_secret = record.flickr_token_secret_name
+        sync_folders = list((record.config_json or {}).get("sync_folders") or [])
+        tenant.flickr_sync_folders = sync_folders
 
 
 @router.post("/sync", response_model=dict)
@@ -66,7 +72,7 @@ async def trigger_sync(
     db: Session = Depends(get_db),
     model: str = Query("siglip", description="'clip' or 'siglip'"),
     reprocess_existing: bool = Query(False, description="Reprocess entries even if already ingested"),
-    provider: str | None = Query(None, description="Storage provider: dropbox, gdrive, youtube, or gphotos"),
+    provider: str | None = Query(None, description="Storage provider: dropbox, gdrive, youtube, gphotos, or flickr"),
     provider_id: str | None = Query(None, description="Specific provider integration UUID (omit for primary)"),
 ):
     """Trigger one-item sync for the requested storage provider."""
@@ -132,6 +138,15 @@ async def trigger_sync(
                     )
                 sync_folders = normalize_sync_folders(gphotos_runtime.get("sync_folders"))
                 tenant.gphotos_sync_folders = list(sync_folders)
+            elif provider_name == "flickr":
+                flickr_runtime = runtime_context.get("flickr") or {}
+                if not bool(flickr_runtime.get("is_active")):
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Flickr integration is inactive. Activate this provider in Admin -> Providers before syncing.",
+                    )
+                sync_folders = normalize_sync_folders(flickr_runtime.get("sync_folders"))
+                tenant.flickr_sync_folders = list(sync_folders)
             else:
                 gdrive_runtime = runtime_context.get("gdrive") or {}
                 if not bool(gdrive_runtime.get("is_active")):

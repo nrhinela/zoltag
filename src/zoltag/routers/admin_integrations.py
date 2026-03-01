@@ -1,5 +1,6 @@
 """Tenant-admin integrations endpoints."""
 
+import json
 from datetime import datetime
 from urllib.parse import urlencode, urlsplit
 from uuid import UUID
@@ -36,12 +37,14 @@ _PROVIDER_LABELS = {
     "gdrive": "Google Drive",
     "youtube": "YouTube",
     "gphotos": "Google Photos",
+    "flickr": "Flickr",
 }
 _PROVIDER_SYNC_DEFINITION_KEYS = {
     "dropbox": "sync-dropbox",
     "gdrive": "sync-gdrive",
     "youtube": "sync-youtube",
     "gphotos": "sync-gphotos",
+    "flickr": "sync-flickr",
 }
 
 
@@ -84,6 +87,14 @@ def _selection_capabilities(provider_type: str) -> dict:
             "catalog_load_label": "Browse Folders",
             "picker_start_label": "",
             "resource_label_plural": "folders",
+        }
+    if normalized == "flickr":
+        return {
+            "supports_catalog": True,
+            "supports_picker": False,
+            "catalog_load_label": "Load Albums",
+            "picker_start_label": "",
+            "resource_label_plural": "albums",
         }
     return {
         "supports_catalog": True,
@@ -242,6 +253,36 @@ def _build_youtube_status(record) -> dict:
         "sync_folder_key": "youtube_sync_folders",
         "sync_folders": normalize_sync_folders(config_json.get("sync_folders")),
         **_selection_state("youtube", config_json),
+        "source": record.source,
+    }
+
+
+def _build_flickr_status(record) -> dict:
+    config_json = record.config_json or {}
+    connected = bool(config_json.get("token_stored"))
+    api_key = str(_settings.zoltag_flickr_connector_api_key or "").strip()
+    api_secret = str(_settings.zoltag_flickr_connector_api_secret or "").strip()
+    issues: list[str] = []
+    if not connected:
+        if not api_key:
+            issues.append("flickr_api_key_not_configured")
+        if not api_secret:
+            issues.append("flickr_api_secret_not_configured")
+    can_connect = bool(api_key and api_secret and not issues)
+    return {
+        "id": "flickr",
+        "provider_id": record.id,
+        "provider_type": "flickr",
+        "label": _PROVIDER_LABELS["flickr"],
+        "integration_label": record.label,
+        "is_active": bool(record.is_active),
+        "connected": connected,
+        "can_connect": can_connect,
+        "mode": "tenant_oauth",
+        "issues": issues,
+        "sync_folder_key": "flickr_sync_folders",
+        "sync_folders": normalize_sync_folders(config_json.get("sync_folders")),
+        **_selection_state("flickr", config_json),
         "source": record.source,
     }
 
@@ -425,7 +466,8 @@ def _backfill_token_stored(all_records, repo, tenant_row, db: Session) -> None:
     _secret_fn = {"dropbox": lambda r: r.dropbox_token_secret_name,
                   "gdrive": lambda r: r.gdrive_token_secret_name,
                   "youtube": lambda r: r.youtube_token_secret_name,
-                  "gphotos": lambda r: r.gphotos_token_secret_name}
+                  "gphotos": lambda r: r.gphotos_token_secret_name,
+                  "flickr": lambda r: r.flickr_token_secret_name}
     dirty = False
     for rec in all_records:
         if "token_stored" in (rec.config_json or {}):
@@ -454,7 +496,8 @@ def _build_integrations_status(tenant_row: TenantModel, db: Session) -> dict:
     gdrive_status = _build_gdrive_status(primary_records["gdrive"])
     youtube_status = _build_youtube_status(primary_records["youtube"])
     gphotos_status = _build_gphotos_status(primary_records["gphotos"])
-    providers = [dropbox_status, gdrive_status, youtube_status, gphotos_status]
+    flickr_status = _build_flickr_status(primary_records["flickr"])
+    providers = [dropbox_status, gdrive_status, youtube_status, gphotos_status, flickr_status]
 
     default_provider = repo.resolve_default_sync_provider(tenant_row)
     default_source_provider = default_provider.provider_type
@@ -466,6 +509,7 @@ def _build_integrations_status(tenant_row: TenantModel, db: Session) -> dict:
         "gdrive": _build_gdrive_status,
         "youtube": _build_youtube_status,
         "gphotos": _build_gphotos_status,
+        "flickr": _build_flickr_status,
     }
     all_providers_status = []
     for rec in all_records:
@@ -484,6 +528,7 @@ def _build_integrations_status(tenant_row: TenantModel, db: Session) -> dict:
             {"id": "gdrive", "label": _PROVIDER_LABELS["gdrive"]},
             {"id": "youtube", "label": _PROVIDER_LABELS["youtube"]},
             {"id": "gphotos", "label": _PROVIDER_LABELS["gphotos"]},
+            {"id": "flickr", "label": _PROVIDER_LABELS["flickr"]},
         ],
         # Backward-compatible fields for existing UI callers.
         "source_provider": default_source_provider,
@@ -1131,6 +1176,18 @@ async def start_provider_connect(
             "mode": gphotos_status["mode"],
         }
 
+    if record.provider_type == "flickr":
+        flickr_status = _build_flickr_status(record)
+        if not flickr_status["can_connect"]:
+            raise HTTPException(status_code=400, detail="Flickr OAuth is not configured for this provider")
+        return {
+            "tenant_id": tenant.id,
+            "provider": "flickr",
+            "provider_id": provider_id,
+            "authorize_url": f"/oauth/flickr/authorize?{urlencode(query_payload)}",
+            "mode": flickr_status["mode"],
+        }
+
     raise HTTPException(status_code=400, detail="Unsupported provider type")
 
 
@@ -1160,6 +1217,8 @@ async def disconnect_provider_connection(
         delete_secret(record.youtube_token_secret_name)
     elif record.provider_type == "gphotos":
         delete_secret(record.gphotos_token_secret_name)
+    elif record.provider_type == "flickr":
+        delete_secret(record.flickr_token_secret_name)
     else:
         raise HTTPException(status_code=400, detail="Unsupported provider type")
 
@@ -1601,3 +1660,61 @@ async def list_live_youtube_playlists(
         raise
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"YouTube playlist lookup failed: {exc}")
+
+
+@router.get("/flickr/albums")
+async def list_live_flickr_albums(
+    provider_id: str | None = None,
+    tenant: Tenant = Depends(get_tenant),
+    _admin: UserProfile = Depends(require_tenant_permission_from_header("provider.view")),
+    db: Session = Depends(get_db),
+):
+    """List the authenticated Flickr account's albums (photosets)."""
+    from zoltag.storage.providers import FlickrStorageProvider
+
+    tenant_row = db.query(TenantModel).filter(TenantModel.id == tenant.id).first()
+    if not tenant_row:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    repo = TenantIntegrationRepository(db)
+    try:
+        record = repo.get_provider_record(tenant_row, "flickr", provider_id=provider_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    token_payload_raw = _read_secret_value(record.flickr_token_secret_name)
+    if not token_payload_raw:
+        raise HTTPException(status_code=400, detail="Flickr is not connected for this tenant")
+
+    try:
+        token_payload = json.loads(token_payload_raw)
+    except Exception:
+        token_payload = None
+    if not isinstance(token_payload, dict):
+        raise HTTPException(status_code=400, detail="Flickr token payload is invalid")
+
+    oauth_token = str(token_payload.get("oauth_token") or token_payload.get("token") or "").strip()
+    oauth_token_secret = str(token_payload.get("oauth_token_secret") or "").strip()
+    user_nsid = str(token_payload.get("user_nsid") or token_payload.get("user_id") or "").strip() or None
+    if not oauth_token or not oauth_token_secret:
+        raise HTTPException(status_code=400, detail="Flickr token payload is invalid")
+
+    api_key = str(_settings.zoltag_flickr_connector_api_key or "").strip()
+    api_secret = str(_settings.zoltag_flickr_connector_api_secret or "").strip()
+    if not api_key or not api_secret:
+        raise HTTPException(status_code=400, detail="Flickr client credentials are not configured")
+
+    try:
+        provider = FlickrStorageProvider(
+            api_key=api_key,
+            api_secret=api_secret,
+            oauth_token=oauth_token,
+            oauth_token_secret=oauth_token_secret,
+            user_nsid=user_nsid,
+        )
+        albums = provider.list_albums()
+        return {"albums": albums}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Flickr album lookup failed: {exc}")

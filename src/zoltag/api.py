@@ -43,6 +43,7 @@ from zoltag.routers import (
     gdrive,
     gphotos,
     youtube,
+    flickr,
     sync,
     config,
     nl_search,
@@ -180,6 +181,7 @@ app.include_router(dropbox.router)
 app.include_router(gdrive.router)
 app.include_router(gphotos.router)
 app.include_router(youtube.router)
+app.include_router(flickr.router)
 app.include_router(sync.router)
 app.include_router(config.router)
 app.include_router(nl_search.router)

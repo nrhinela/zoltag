@@ -11,12 +11,13 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from zoltag.metadata import Tenant, TenantProviderIntegration
 
-ALLOWED_PROVIDER_TYPES = ("dropbox", "gdrive", "youtube", "gphotos")
+ALLOWED_PROVIDER_TYPES = ("dropbox", "gdrive", "youtube", "gphotos", "flickr")
 DEFAULT_PROVIDER_LABELS = {
     "dropbox": "Default Dropbox",
     "gdrive": "Default Google Drive",
     "youtube": "Default YouTube",
     "gphotos": "Default Google Photos",
+    "flickr": "Default Flickr",
 }
 
 _UNSET = object()
@@ -25,6 +26,7 @@ _SELECTION_MODES_BY_PROVIDER: dict[str, tuple[str, ...]] = {
     "gdrive": ("catalog",),
     "youtube": ("catalog",),
     "gphotos": ("picker",),
+    "flickr": ("catalog",),
 }
 
 
@@ -38,6 +40,8 @@ def normalize_provider_type(value: str | None) -> str:
         provider = "youtube"
     if provider in {"google-photos", "google_photos"}:
         provider = "gphotos"
+    if provider in {"flickr-photos", "flickr_photos"}:
+        provider = "flickr"
     if provider not in ALLOWED_PROVIDER_TYPES:
         raise ValueError("Invalid provider type")
     return provider
@@ -146,6 +150,10 @@ class ProviderIntegrationRecord:
     def gphotos_token_secret_name(self) -> str:
         return str(self.config_json.get("token_secret_name") or f"gphotos-token-{self.secret_scope}").strip()
 
+    @property
+    def flickr_token_secret_name(self) -> str:
+        return str(self.config_json.get("token_secret_name") or f"flickr-token-{self.secret_scope}").strip()
+
 
 class TenantIntegrationRepository:
     """CRUD repository for provider integration config."""
@@ -181,6 +189,13 @@ class TenantIntegrationRepository:
                 "sync_items": [],
                 "picker_session_id": "",
                 "token_secret_name": f"gphotos-token-{secret_scope}",
+            }
+        if normalized == "flickr":
+            return {
+                "selection_mode": "catalog",
+                "sync_folders": [],
+                "sync_items": [],
+                "token_secret_name": f"flickr-token-{secret_scope}",
             }
         return {
             "selection_mode": "catalog",
@@ -694,6 +709,7 @@ class TenantIntegrationRepository:
         gdrive_record = primary["gdrive"]
         youtube_record = primary["youtube"]
         gphotos_record = primary["gphotos"]
+        flickr_record = primary["flickr"]
 
         return {
             "default_source_provider": default_record.provider_type,
@@ -749,6 +765,18 @@ class TenantIntegrationRepository:
                 "sync_items": normalize_sync_items(gphotos_record.config_json.get("sync_items")),
                 "picker_session_id": normalize_picker_session_id(gphotos_record.config_json.get("picker_session_id")),
                 "token_secret_name": gphotos_record.gphotos_token_secret_name,
+            },
+            "flickr": {
+                "provider_id": flickr_record.id,
+                "label": flickr_record.label,
+                "source": flickr_record.source,
+                "is_active": bool(flickr_record.is_active),
+                "secret_scope": flickr_record.secret_scope,
+                "selection_mode": normalize_selection_mode("flickr", flickr_record.config_json.get("selection_mode")),
+                "sync_folders": normalize_sync_folders(flickr_record.config_json.get("sync_folders")),
+                "sync_items": normalize_sync_items(flickr_record.config_json.get("sync_items")),
+                "picker_session_id": normalize_picker_session_id(flickr_record.config_json.get("picker_session_id")),
+                "token_secret_name": flickr_record.flickr_token_secret_name,
             },
             "resolution_source": "new_table" if any(record.source == "new_table" for record in records) else "synthetic",
         }

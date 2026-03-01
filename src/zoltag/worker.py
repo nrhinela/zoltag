@@ -16,6 +16,7 @@ from threading import Event, Lock, Thread
 from typing import Any, Callable, Optional
 
 from cronsim import CronSim
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import joinedload
 from zoltag.cli.introspection import build_queue_command_argv
 from zoltag.database import SessionLocal
@@ -122,6 +123,10 @@ def _is_non_retryable_command_failure(stdout_tail: Optional[str], stderr_tail: O
         "google drive client id not configured",
         "google drive client secret not configured",
         "no google drive refresh token found",
+        "flickr api key not configured",
+        "flickr api secret not configured",
+        "no flickr token found",
+        "flickr is not connected for this provider",
     )
     return any(marker in text for marker in markers)
 
@@ -131,6 +136,31 @@ def _to_bool(value: Any) -> bool:
         return value
     text = str(value or "").strip().lower()
     return text in {"1", "true", "yes", "y", "on"}
+
+
+def _is_transient_db_disconnect_error(exc: Exception) -> bool:
+    if not isinstance(exc, OperationalError):
+        return False
+    text = str(exc).lower()
+    markers = (
+        "ssl connection has been closed unexpectedly",
+        "server closed the connection unexpectedly",
+        "connection not open",
+        "terminating connection due to administrator command",
+        "could not receive data from server",
+        "connection reset by peer",
+    )
+    return any(marker in text for marker in markers)
+
+
+def _dispose_session_bind() -> None:
+    bind = SessionLocal.kw.get("bind")
+    if bind is None:
+        return
+    try:
+        bind.dispose()
+    except Exception:  # pragma: no cover - best effort cleanup
+        pass
 
 
 def _build_command_argv(job: ClaimedJob) -> list[str]:
@@ -886,8 +916,15 @@ def run_loop(
                 lease_seconds=lease_seconds,
                 queues=queues,
             )
-        except Exception:
-            logger.exception("Worker claim loop failed")
+        except Exception as exc:
+            if _is_transient_db_disconnect_error(exc):
+                _dispose_session_bind()
+                logger.warning(
+                    "Worker claim query lost DB connection; recycled pool and will retry: %s",
+                    exc,
+                )
+            else:
+                logger.exception("Worker claim loop failed")
             if once:
                 break
             stop.wait(max(1.0, poll_seconds))

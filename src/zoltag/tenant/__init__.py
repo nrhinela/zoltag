@@ -40,6 +40,8 @@ class Tenant:
     gdrive_client_secret: Optional[str] = None  # Secret Manager reference
     youtube_token_secret: Optional[str] = None  # Secret Manager reference
     youtube_sync_folders: Optional[list] = None
+    flickr_token_secret: Optional[str] = None  # Secret Manager reference
+    flickr_sync_folders: Optional[list] = None
     storage_bucket: Optional[str] = None  # GCS bucket for full-size images
     thumbnail_bucket: Optional[str] = None  # GCS bucket for thumbnails
     settings: Optional[dict[str, Any]] = None  # Tenant-level settings JSON

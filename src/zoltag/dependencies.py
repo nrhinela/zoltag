@@ -68,6 +68,7 @@ async def get_tenant(
     dropbox_runtime = runtime_context.get("dropbox") or {}
     gdrive_runtime = runtime_context.get("gdrive") or {}
     youtube_runtime = runtime_context.get("youtube") or {}
+    flickr_runtime = runtime_context.get("flickr") or {}
     dropbox_app_key = str(dropbox_runtime.get("app_key") or "").strip() or None
 
     # Convert database row to Tenant dataclass
@@ -92,6 +93,8 @@ async def get_tenant(
         gdrive_client_secret=str(gdrive_runtime.get("client_secret_name") or f"gdrive-client-secret-{key_prefix}").strip(),
         youtube_token_secret=str(youtube_runtime.get("token_secret_name") or f"youtube-token-{key_prefix}").strip(),
         youtube_sync_folders=list(youtube_runtime.get("sync_folders") or []),
+        flickr_token_secret=str(flickr_runtime.get("token_secret_name") or f"flickr-token-{key_prefix}").strip(),
+        flickr_sync_folders=list(flickr_runtime.get("sync_folders") or []),
         storage_bucket=tenant_row.storage_bucket,
         thumbnail_bucket=tenant_row.thumbnail_bucket,
         settings=tenant_settings,

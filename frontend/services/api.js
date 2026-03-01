@@ -929,6 +929,13 @@ export async function getLiveGphotosAlbums(tenantId, options = {}) {
   return fetchWithAuth(`/admin/integrations/gphotos/albums${qs ? `?${qs}` : ''}`, { tenantId });
 }
 
+export async function getLiveFlickrAlbums(tenantId, options = {}) {
+  const params = new URLSearchParams();
+  if (options.provider_id) params.set('provider_id', options.provider_id);
+  const qs = params.toString();
+  return fetchWithAuth(`/admin/integrations/flickr/albums${qs ? `?${qs}` : ''}`, { tenantId });
+}
+
 export async function startIntegrationPickerSession(tenantId, providerUuid, options = {}) {
   if (!providerUuid) throw new Error('Missing provider UUID');
   return fetchWithAuth(`/admin/integrations/providers/${providerUuid}/picker/session`, {

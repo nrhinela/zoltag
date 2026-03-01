@@ -44,7 +44,7 @@ class ProcessResult:
 
 
 MAX_VIDEO_THUMBNAIL_DOWNLOAD_BYTES = 250 * 1024 * 1024
-GLOBAL_SOURCE_KEY_DEDUPE_PROVIDERS = frozenset({"youtube", "gdrive", "gphotos", "dropbox"})
+GLOBAL_SOURCE_KEY_DEDUPE_PROVIDERS = frozenset({"youtube", "gdrive", "gphotos", "dropbox", "flickr"})
 
 
 def _log(log: Optional[Callable[[str], None]], message: str) -> None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import mimetypes
+import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -1364,6 +1365,351 @@ class GooglePhotosStorageProvider(StorageProvider):
         return access_token
 
 
+class FlickrStorageProvider(StorageProvider):
+    """Flickr-backed storage provider (OAuth 1.0a, read-only)."""
+
+    provider_name = "flickr"
+
+    _rest_base_url = "https://api.flickr.com/services/rest"
+
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        api_secret: str,
+        oauth_token: str,
+        oauth_token_secret: str,
+        user_nsid: Optional[str] = None,
+    ):
+        if not api_key or not api_secret or not oauth_token or not oauth_token_secret:
+            raise ValueError(
+                "FlickrStorageProvider requires api_key, api_secret, oauth_token, and oauth_token_secret"
+            )
+        self._api_key = api_key
+        self._api_secret = api_secret
+        self._oauth_token = oauth_token
+        self._oauth_token_secret = oauth_token_secret
+        self._user_nsid = str(user_nsid or "").strip() or None
+
+    def list_image_entries(self, sync_folders: Optional[Sequence[str]] = None) -> list[ProviderEntry]:
+        album_ids = [str(album_id or "").strip() for album_id in (sync_folders or []) if str(album_id or "").strip()]
+        deduped: Dict[str, ProviderEntry] = {}
+
+        if not album_ids:
+            for entry in self._list_user_photos():
+                deduped[entry.source_key] = entry
+        else:
+            for album_id in album_ids:
+                album_title = self._album_title(album_id) or album_id
+                for entry in self._list_album_photos(album_id, album_title=album_title):
+                    deduped[entry.source_key] = entry
+
+        entries = list(deduped.values())
+        entries.sort(key=lambda e: e.modified_time or datetime.min, reverse=True)
+        return entries
+
+    def list_albums(self, *, limit: int = 2000) -> list[dict]:
+        user_id = self._resolve_user_nsid()
+        page = 1
+        albums: list[dict] = []
+        while True:
+            payload = self._api_call(
+                "flickr.photosets.getList",
+                user_id=user_id,
+                page=page,
+                per_page=min(500, max(1, int(limit))),
+            )
+            photosets = (payload.get("photosets") or {}).get("photoset") or []
+            for row in photosets:
+                album_id = str(row.get("id") or "").strip()
+                if not album_id:
+                    continue
+                title_obj = row.get("title")
+                title = title_obj.get("_content") if isinstance(title_obj, dict) else title_obj
+                albums.append({"id": album_id, "name": str(title or album_id).strip() or album_id})
+                if len(albums) >= limit:
+                    return albums[:limit]
+
+            pages = int(((payload.get("photosets") or {}).get("pages") or 1))
+            if page >= pages:
+                break
+            page += 1
+        return albums[:limit]
+
+    def get_entry(self, source_key: str) -> ProviderEntry:
+        info = self._api_call("flickr.photos.getInfo", photo_id=source_key)
+        photo = info.get("photo") or {}
+        if not photo:
+            raise ValueError(f"Flickr photo not found: {source_key}")
+        return self._entry_from_photo(photo, album_title=None)
+
+    def get_media_metadata(self, source_key: str) -> ProviderMediaMetadata:
+        exif_overrides: Dict[str, Any] = {}
+        provider_properties: Dict[str, Any] = {}
+
+        info = self._api_call("flickr.photos.getInfo", photo_id=source_key)
+        photo = info.get("photo") or {}
+        dates = photo.get("dates") or {}
+        datetaken = str(dates.get("taken") or "").strip()
+        if datetaken:
+            exif_overrides["DateTimeOriginal"] = datetaken
+            exif_overrides["DateTime"] = datetaken
+        owner = photo.get("owner") or {}
+        if owner.get("nsid"):
+            provider_properties["flickr.owner_nsid"] = str(owner.get("nsid"))
+        if owner.get("username"):
+            provider_properties["flickr.owner_username"] = str(owner.get("username"))
+        if photo.get("views") is not None:
+            provider_properties["flickr.view_count"] = str(photo.get("views"))
+
+        try:
+            exif_payload = self._api_call("flickr.photos.getExif", photo_id=source_key)
+            for entry in (exif_payload.get("photo") or {}).get("exif") or []:
+                tag = str(entry.get("tag") or "").strip()
+                raw_value = (entry.get("raw") or {}).get("_content")
+                if not tag or raw_value in (None, ""):
+                    continue
+                if tag == "Model":
+                    exif_overrides["Model"] = raw_value
+                elif tag == "Make":
+                    exif_overrides["Make"] = raw_value
+                elif tag == "ISOSpeed":
+                    exif_overrides["ISOSpeedRatings"] = raw_value
+                elif tag == "ExposureTime":
+                    exif_overrides["ExposureTime"] = raw_value
+                elif tag == "FNumber":
+                    exif_overrides["FNumber"] = raw_value
+                elif tag in {"FocalLength", "FocalLengthIn35mmFilm"}:
+                    exif_overrides["FocalLength"] = raw_value
+        except Exception:
+            # EXIF may be unavailable depending on Flickr permissions/photo settings.
+            pass
+
+        return ProviderMediaMetadata(
+            exif_overrides=exif_overrides,
+            provider_properties=provider_properties,
+        )
+
+    def download_file(self, source_key: str) -> bytes:
+        download_url = self._select_photo_url(source_key, purpose="download")
+        if not download_url:
+            raise RuntimeError(f"Flickr photo has no downloadable URL: {source_key}")
+        with httpx.Client(timeout=120, follow_redirects=True) as client:
+            response = client.get(download_url)
+        if response.status_code >= 400:
+            raise RuntimeError(f"Flickr download failed ({response.status_code}): {source_key}")
+        return response.content
+
+    def get_thumbnail(self, source_key: str, size: str = "w640h480") -> Optional[bytes]:
+        _ = size
+        thumb_url = self._select_photo_url(source_key, purpose="thumbnail")
+        if not thumb_url:
+            return None
+        with httpx.Client(timeout=60, follow_redirects=True) as client:
+            response = client.get(thumb_url)
+        if response.status_code >= 400:
+            return None
+        return response.content
+
+    def _list_user_photos(self) -> list[ProviderEntry]:
+        user_id = self._resolve_user_nsid()
+        page = 1
+        entries: list[ProviderEntry] = []
+        while True:
+            payload = self._api_call(
+                "flickr.people.getPhotos",
+                user_id=user_id,
+                page=page,
+                per_page=500,
+                extras=self._photo_extras(),
+            )
+            photos_obj = payload.get("photos") or {}
+            photo_rows = photos_obj.get("photo") or []
+            for photo in photo_rows:
+                entry = self._entry_from_photo(photo, album_title=None)
+                if entry:
+                    entries.append(entry)
+            pages = int(photos_obj.get("pages") or 1)
+            if page >= pages:
+                break
+            page += 1
+        return entries
+
+    def _list_album_photos(self, album_id: str, *, album_title: str) -> list[ProviderEntry]:
+        user_id = self._resolve_user_nsid()
+        page = 1
+        entries: list[ProviderEntry] = []
+        while True:
+            payload = self._api_call(
+                "flickr.photosets.getPhotos",
+                photoset_id=album_id,
+                user_id=user_id,
+                page=page,
+                per_page=500,
+                extras=self._photo_extras(),
+            )
+            photoset_obj = payload.get("photoset") or {}
+            photo_rows = photoset_obj.get("photo") or []
+            for photo in photo_rows:
+                entry = self._entry_from_photo(photo, album_title=album_title)
+                if entry:
+                    entries.append(entry)
+            pages = int(photoset_obj.get("pages") or 1)
+            if page >= pages:
+                break
+            page += 1
+        return entries
+
+    def _album_title(self, album_id: str) -> Optional[str]:
+        try:
+            payload = self._api_call("flickr.photosets.getInfo", photoset_id=album_id)
+        except Exception:
+            return None
+        title_obj = ((payload.get("photoset") or {}).get("title") or {})
+        if isinstance(title_obj, dict):
+            value = str(title_obj.get("_content") or "").strip()
+            return value or None
+        value = str(title_obj or "").strip()
+        return value or None
+
+    def _entry_from_photo(self, photo: Dict[str, Any], *, album_title: Optional[str]) -> Optional[ProviderEntry]:
+        photo_id = str(photo.get("id") or "").strip()
+        if not photo_id:
+            return None
+        title = str(photo.get("title") or "").strip() or photo_id
+        datetaken = _parse_iso_datetime(str(photo.get("datetaken") or "").replace(" ", "T"))
+        if datetaken is None:
+            dateupload = str(photo.get("dateupload") or "").strip()
+            if dateupload:
+                try:
+                    datetaken = datetime.fromtimestamp(int(dateupload), tz=timezone.utc).replace(tzinfo=None)
+                except Exception:
+                    datetaken = None
+        extension = self._guess_extension(photo)
+        filename = title if title.lower().endswith(f".{extension}") else f"{title}.{extension}"
+        display_root = album_title or "photostream"
+        display_path = f"/{display_root}/{filename}"
+        lastupdate = str(photo.get("lastupdate") or "").strip()
+        revision = lastupdate or None
+        mime_type = mimetypes.guess_type(filename)[0] or "image/jpeg"
+        return ProviderEntry(
+            provider=self.provider_name,
+            source_key=photo_id,
+            file_id=photo_id,
+            display_path=display_path,
+            name=filename,
+            modified_time=datetaken,
+            size=None,
+            content_hash=None,
+            revision=revision,
+            mime_type=mime_type,
+        )
+
+    def _guess_extension(self, photo: Dict[str, Any]) -> str:
+        original_format = str(photo.get("originalformat") or "").strip().lower()
+        if original_format:
+            return original_format
+        mime = str(photo.get("media") or "").strip().lower()
+        if mime == "video":
+            return "mp4"
+        return "jpg"
+
+    def _select_photo_url(self, photo_id: str, *, purpose: str) -> Optional[str]:
+        payload = self._api_call("flickr.photos.getSizes", photo_id=photo_id)
+        sizes = ((payload.get("sizes") or {}).get("size") or [])
+        if not sizes:
+            return None
+        ranked = []
+        for item in sizes:
+            source = str(item.get("source") or "").strip()
+            if not source:
+                continue
+            label = str(item.get("label") or "").strip().lower()
+            width = int(item.get("width") or 0)
+            ranked.append((label, width, source))
+
+        if not ranked:
+            return None
+
+        if purpose == "thumbnail":
+            preferred = [
+                "medium 640",
+                "medium 800",
+                "large square",
+                "small 320",
+                "medium",
+                "small",
+                "thumbnail",
+            ]
+        else:
+            preferred = [
+                "original",
+                "large 2048",
+                "large 1600",
+                "large",
+                "medium 800",
+                "medium 640",
+                "medium",
+            ]
+
+        for preferred_label in preferred:
+            for label, _width, source in ranked:
+                if label == preferred_label:
+                    return source
+
+        ranked.sort(key=lambda item: item[1], reverse=True)
+        return ranked[0][2]
+
+    def _resolve_user_nsid(self) -> str:
+        if self._user_nsid:
+            return self._user_nsid
+        payload = self._api_call("flickr.test.login")
+        user_obj = payload.get("user") or {}
+        nsid = str(user_obj.get("id") or "").strip()
+        if not nsid:
+            raise RuntimeError("Flickr OAuth token is valid but user id was not returned")
+        self._user_nsid = nsid
+        return nsid
+
+    def _photo_extras(self) -> str:
+        return ",".join([
+            "date_upload",
+            "date_taken",
+            "last_update",
+            "media",
+            "original_format",
+        ])
+
+    def _oauth_session(self):
+        from requests_oauthlib import OAuth1Session
+
+        return OAuth1Session(
+            client_key=self._api_key,
+            client_secret=self._api_secret,
+            resource_owner_key=self._oauth_token,
+            resource_owner_secret=self._oauth_token_secret,
+        )
+
+    def _api_call(self, method_name: str, **params: Any) -> Dict[str, Any]:
+        query_params: Dict[str, Any] = {
+            "method": method_name,
+            "api_key": self._api_key,
+            "format": "json",
+            "nojsoncallback": 1,
+        }
+        query_params.update(params)
+        session = self._oauth_session()
+        response = session.get(self._rest_base_url, params=query_params, timeout=60)
+        if response.status_code >= 400:
+            raise RuntimeError(f"Flickr API HTTP {response.status_code} for {method_name}: {response.text}")
+        payload = response.json()
+        if str(payload.get("stat") or "").strip().lower() != "ok":
+            code = payload.get("code")
+            message = payload.get("message") or "Unknown Flickr API error"
+            raise RuntimeError(f"Flickr API error {code} for {method_name}: {message}")
+        return payload
+
+
 class ManagedStorageProvider(StorageProvider):
     """Zoltag-managed objects stored directly in tenant GCS bucket."""
 
@@ -1540,6 +1886,48 @@ def create_storage_provider(
             client_id=client_id,
             client_secret=client_secret,
             refresh_token=refresh_token,
+        )
+
+    if normalized in {"flickr", "flickr-photos", "flickr_photos"}:
+        from zoltag.settings import settings as _settings
+
+        api_key = str(_settings.zoltag_flickr_connector_api_key or "").strip()
+        api_secret = str(_settings.zoltag_flickr_connector_api_secret or "").strip()
+        if not api_key:
+            raise ValueError("Flickr API key not configured (uses ZOLTAG_FLICKR_CONNECTOR_API_KEY)")
+        if not api_secret:
+            raise ValueError("Flickr API secret not configured (uses ZOLTAG_FLICKR_CONNECTOR_API_SECRET)")
+
+        token_secret_name = getattr(tenant, "flickr_token_secret", None)
+        if not token_secret_name:
+            raise ValueError("Flickr token secret not configured for tenant")
+        try:
+            raw_token_payload = str(get_secret(token_secret_name) or "").strip()
+        except Exception as exc:
+            raise ValueError(f"No Flickr token found ({exc})") from exc
+        if not raw_token_payload:
+            raise ValueError("Flickr is not connected for this tenant")
+
+        oauth_token = ""
+        oauth_token_secret = ""
+        user_nsid = None
+        try:
+            token_payload = json.loads(raw_token_payload)
+        except Exception:
+            token_payload = None
+        if isinstance(token_payload, dict):
+            oauth_token = str(token_payload.get("oauth_token") or token_payload.get("token") or "").strip()
+            oauth_token_secret = str(token_payload.get("oauth_token_secret") or "").strip()
+            user_nsid = str(token_payload.get("user_nsid") or token_payload.get("user_id") or "").strip() or None
+        if not oauth_token or not oauth_token_secret:
+            raise ValueError("Invalid Flickr token payload (missing oauth_token / oauth_token_secret)")
+
+        return FlickrStorageProvider(
+            api_key=api_key,
+            api_secret=api_secret,
+            oauth_token=oauth_token,
+            oauth_token_secret=oauth_token_secret,
+            user_nsid=user_nsid,
         )
 
     if normalized in {"managed"}:

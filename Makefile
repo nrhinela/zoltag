@@ -3,7 +3,7 @@
 .PHONY: help install test lint format clean deploy migrate dev worker dev-backend dev-frontend dev-css dev-clean
 .PHONY: db-dev db-prod db-migrate-prod db-migrate-dev db-create-migration
 .PHONY: deploy-api deploy-worker deploy-all status logs-api logs-worker env-check
-.PHONY: train-and-recompute daily sync-gdrive sync-youtube verify-video-rollout
+.PHONY: train-and-recompute daily sync-gdrive sync-youtube verify-video-rollout db-pressure db-pressure-clean
 
 # Default environment
 ENV ?= prod
@@ -48,6 +48,8 @@ help:
 	@echo "  daily              Sync Dropbox then train + recompute tags"
 	@echo "  verify-video-rollout Verify video-thumbnail rollout (DB + optional API smoke checks)"
 	@echo "                      Use VERIFY_ARGS='--skip-api' etc to pass script flags"
+	@echo "  db-pressure        Print DB pressure snapshot (jobs/sessions/workers/top SQL)"
+	@echo "  db-pressure-clean  Snapshot + delete stale worker heartbeat rows"
 	@echo ""
 	@echo "Environment variables:"
 	@echo "  ENV=dev|prod       Target environment (default: dev)"
@@ -207,6 +209,32 @@ worker:
 # ============================================================================
 # Database Management
 # ============================================================================
+
+db-pressure:
+	@echo "Running DB pressure snapshot..."
+	@if [ ! -f .env ]; then \
+		echo "ERROR: .env file not found."; \
+		exit 1; \
+	fi
+	@PY_CMD=".venv/bin/python"; \
+	if [ ! -x "$$PY_CMD" ]; then \
+		PY_CMD="python3"; \
+	fi; \
+	set -a && . ./.env && set +a && \
+	PYTHONPATH=src "$$PY_CMD" scripts/db_pressure_snapshot.py $(DB_PRESSURE_ARGS)
+
+db-pressure-clean:
+	@echo "Running DB pressure snapshot + stale-worker cleanup..."
+	@if [ ! -f .env ]; then \
+		echo "ERROR: .env file not found."; \
+		exit 1; \
+	fi
+	@PY_CMD=".venv/bin/python"; \
+	if [ ! -x "$$PY_CMD" ]; then \
+		PY_CMD="python3"; \
+	fi; \
+	set -a && . ./.env && set +a && \
+	PYTHONPATH=src "$$PY_CMD" scripts/db_pressure_snapshot.py --cleanup-stale-workers $(DB_PRESSURE_ARGS)
 
 db-dev:
 	@echo "Connecting to database (DATABASE_URL)..."
