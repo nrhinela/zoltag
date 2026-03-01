@@ -11,7 +11,7 @@
  */
 
 import { html } from 'lit';
-import { formatDurationMs } from './formatting.js';
+import { formatDateTime, formatDurationMs } from './formatting.js';
 
 function inferMediaType(image) {
   const mediaType = String(image?.media_type || '').trim().toLowerCase();
@@ -23,6 +23,69 @@ function inferMediaType(image) {
     return 'video';
   }
   return 'image';
+}
+
+function collectTagLabels(image) {
+  const labels = [];
+  const add = (value) => {
+    const normalized = String(value || '').trim();
+    if (normalized) labels.push(normalized);
+  };
+
+  const calculated = Array.isArray(image?.calculated_tags) ? image.calculated_tags : [];
+  calculated.forEach((tag) => add(tag?.keyword || tag?.name || tag));
+
+  const permatags = Array.isArray(image?.permatags) ? image.permatags : [];
+  permatags.forEach((tag) => {
+    if (Number(tag?.signum) === 1) {
+      add(tag?.keyword || tag?.name || tag);
+    }
+  });
+
+  const machineTags = Array.isArray(image?.tags) ? image.tags : [];
+  machineTags.forEach((tag) => add(tag?.keyword || tag?.name || tag));
+
+  return Array.from(new Set(labels));
+}
+
+function formatDimensions(image) {
+  const width = Number(image?.width);
+  const height = Number(image?.height);
+  if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
+    return `${width} × ${height}`;
+  }
+  return 'Unknown';
+}
+
+function renderDefaultListDetails(image, mediaType, videoDuration) {
+  const sourcePath = String(
+    image?.source_display_path
+    || image?.dropbox_path
+    || image?.source_key
+    || image?.filename
+    || ''
+  ).trim() || 'Unknown';
+  const ratingValue = image?.rating === null || image?.rating === undefined || image?.rating === ''
+    ? 'Unrated'
+    : String(image.rating);
+  const tags = collectTagLabels(image);
+  const mediaLabel = mediaType === 'video'
+    ? `Video${videoDuration ? ` (${videoDuration})` : ''}`
+    : 'Image';
+
+  return html`
+    <div class="curate-list-meta-grid">
+      <div><span class="curate-list-meta-label">asset.id:</span> ${String(image?.asset_id || '—')}</div>
+      <div><span class="curate-list-meta-label">image_metadata.id:</span> ${String(image?.id || '—')}</div>
+      <div><span class="curate-list-meta-label">Photo date:</span> ${formatDateTime(image?.capture_timestamp || image?.photo_creation)}</div>
+      <div><span class="curate-list-meta-label">Ingested date:</span> ${formatDateTime(image?.created_at || image?.last_processed)}</div>
+      <div class="curate-list-meta-span"><span class="curate-list-meta-label">Filepath:</span> ${sourcePath}</div>
+      <div><span class="curate-list-meta-label">Dimensions:</span> ${formatDimensions(image)}</div>
+      <div><span class="curate-list-meta-label">Type:</span> ${mediaLabel}</div>
+      <div><span class="curate-list-meta-label">Rating:</span> ${ratingValue}</div>
+      <div class="curate-list-meta-span"><span class="curate-list-meta-label">Tags:</span> ${tags.length ? tags.join(', ') : 'None'}</div>
+    </div>
+  `;
 }
 
 /**
@@ -53,6 +116,8 @@ function inferMediaType(image) {
  * @param {boolean} config.options.showAiScore - Show AI/ML score (default: false)
  * @param {string} config.options.emptyMessage - Message when no images (default: "No images available.")
  * @param {Function} config.options.renderItemFooter - Optional render function for per-item footer content
+ * @param {string} config.options.viewMode - 'thumb' (default) or 'list'
+ * @param {Function} config.options.renderListDetails - Optional custom details renderer for list rows
  *
  * @returns {TemplateResult} Lit HTML template
  *
@@ -115,7 +180,10 @@ export function renderImageGrid(config) {
     renderItemFooter,
     pinnedImageIds = null,
     pinnedLabel = 'Source',
+    viewMode = 'thumb',
+    renderListDetails = null,
   } = options;
+  const isListMode = viewMode === 'list';
 
   const pinnedIdSet = pinnedImageIds instanceof Set
     ? pinnedImageIds
@@ -126,6 +194,11 @@ export function renderImageGrid(config) {
     const id = Number(image.id);
     return Number.isFinite(id) && id > 0;
   });
+  const selectedKeySet = new Set(
+    (Array.isArray(selection) ? selection : [])
+      .filter((value) => value !== null && value !== undefined && value !== '')
+      .map((value) => String(value))
+  );
 
   if (!safeImages.length) {
     return html`
@@ -136,10 +209,11 @@ export function renderImageGrid(config) {
   }
 
   return html`
-    <div class="curate-grid">
+    <div class="${isListMode ? 'curate-list' : 'curate-grid'}">
       ${safeImages.map((image, index) => {
         const imageId = Number(image.id);
-        const isSelected = selection.includes(imageId) || selection.includes(image.id);
+        const imageIdKey = String(image.id);
+        const isSelected = selectedKeySet.has(String(imageId)) || selectedKeySet.has(imageIdKey);
         const isFlashing = flashSelectionIds?.has(image.id);
         const isPinned = pinnedIdSet.has(imageId) || pinnedIdSet.has(image.id);
         const mediaType = inferMediaType(image);
@@ -166,6 +240,55 @@ export function renderImageGrid(config) {
             },
           }));
         };
+
+        if (isListMode) {
+          const details = typeof renderListDetails === 'function'
+            ? renderListDetails(image)
+            : renderDefaultListDetails(image, mediaType, videoDuration);
+          return html`
+            <div
+              class="curate-thumb-wrapper curate-list-row ${isSelected ? 'selected' : ''} ${isPinned ? 'pinned-source' : ''}"
+              data-image-id="${imageId}"
+              draggable="true"
+              @dragstart=${(event) => onDragStart?.(event, image)}
+              @dragover=${enableReordering ? (event) => onDragOver?.(event, imageId) : null}
+              @dragend=${enableReordering ? (event) => onDragEnd?.(event) : null}
+              @click=${(event) => onImageClick?.(event, image)}
+              @pointerdown=${(event) => onPointerDown?.(event, index, imageId)}
+              @pointermove=${(event) => onPointerMove?.(event)}
+              @pointerenter=${() => onPointerEnter?.(index)}
+            >
+              <div class="curate-list-thumb-shell">
+                <img
+                  src=${image.thumbnail_url || `/api/v1/images/${imageId}/thumbnail`}
+                  alt=${image.filename}
+                  class="curate-thumb curate-list-thumb ${isSelected ? 'selected' : ''} ${isFlashing ? 'flash' : ''}"
+                  draggable="false"
+                  @error=${(e) => { const fallback = `/api/v1/images/${imageId}/thumbnail`; if (e.target.src !== fallback) e.target.src = fallback; }}
+                >
+                ${isPinned ? html`
+                  <span class="curate-thumb-pin-badge" aria-label="${pinnedLabel} image">
+                    ${pinnedLabel}
+                  </span>
+                ` : html``}
+                ${isVideo ? html`
+                  <span class="curate-thumb-play-overlay" aria-hidden="true">
+                    <svg
+                      class="curate-thumb-play-icon"
+                      viewBox="0 0 24 24"
+                      focusable="false"
+                    >
+                      <path d="M8 6v12l10-6z"></path>
+                    </svg>
+                  </span>
+                ` : html``}
+              </div>
+              <div class="curate-list-details">
+                ${details}
+              </div>
+            </div>
+          `;
+        }
         const thumb = html`
           <div
             class="curate-thumb-wrapper ${isSelected ? 'selected' : ''} ${isPinned ? 'pinned-source' : ''}"

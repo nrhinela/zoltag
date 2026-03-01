@@ -13,7 +13,7 @@ import {
   getKeywordsByCategory,
   getKeywordsByCategoryFromList,
 } from './shared/keyword-utils.js';
-import { formatStatNumber } from './shared/formatting.js';
+import { formatDateTime, formatDurationMs, formatStatNumber } from './shared/formatting.js';
 import { createSelectionHandlers } from './shared/selection-handlers.js';
 import { renderResultsPagination } from './shared/pagination-controls.js';
 import { renderSelectableImageGrid } from './shared/selectable-image-grid.js';
@@ -42,6 +42,9 @@ import FolderBrowserPanel from './folder-browser-panel.js';
 const VECTORSTORE_DEFAULT_LEXICAL_WEIGHT = 1.0;
 const SEARCH_RIGHT_PANEL_TOOL_STORAGE_KEY = 'zoltan:app:rightPanelTool:search';
 const LEGACY_SEARCH_RIGHT_PANEL_TOOL_STORAGE_KEYS = ['rightPanelTool:search'];
+const SEARCH_RESULTS_LAYOUT_STORAGE_KEY = 'zoltag:app:search:resultsLayout';
+const LEGACY_SEARCH_RESULTS_LAYOUT_STORAGE_KEYS = ['searchResultsLayout'];
+const EXPLORE_RIGHT_PANEL_COLLAPSED_STORAGE_KEY = 'zoltag:app:rightPanelCollapsed:explore';
 
 /**
  * Search Tab Component
@@ -138,6 +141,8 @@ export class SearchTab extends LitElement {
     searchDragEndIndex: { type: Number },
     searchSavedDragTarget: { type: Boolean },
     rightPanelTool: { type: String },
+    rightPanelCollapsed: { type: Boolean, state: true },
+    searchResultsLayout: { type: String, state: true },
     canCurate: { type: Boolean },
     searchHotspotTargets: { type: Array },
     searchHotspotRatingEnabled: { type: Boolean },
@@ -211,6 +216,8 @@ export class SearchTab extends LitElement {
     this.searchDragEndIndex = null;
     this.searchSavedDragTarget = false;
     this.rightPanelTool = 'lists';
+    this.rightPanelCollapsed = false;
+    this.searchResultsLayout = 'thumb';
     this.canCurate = true;
     this.searchHotspotTargets = [{ id: 1, type: 'keyword', count: 0 }];
     this.searchHotspotRatingEnabled = false;
@@ -260,11 +267,19 @@ export class SearchTab extends LitElement {
       SEARCH_RIGHT_PANEL_TOOL_STORAGE_KEY,
       LEGACY_SEARCH_RIGHT_PANEL_TOOL_STORAGE_KEYS,
     );
+    migrateLocalStorageKey(
+      SEARCH_RESULTS_LAYOUT_STORAGE_KEY,
+      LEGACY_SEARCH_RESULTS_LAYOUT_STORAGE_KEYS,
+    );
     try {
       const storedTool = localStorage.getItem(SEARCH_RIGHT_PANEL_TOOL_STORAGE_KEY);
       this.rightPanelTool = this._resolveRightPanelTool(storedTool);
+      const storedLayout = localStorage.getItem(SEARCH_RESULTS_LAYOUT_STORAGE_KEY);
+      this.searchResultsLayout = this._normalizeSearchResultsLayout(storedLayout);
+      this.rightPanelCollapsed = localStorage.getItem(EXPLORE_RIGHT_PANEL_COLLAPSED_STORAGE_KEY) === 'true';
     } catch {
       this.rightPanelTool = this._resolveRightPanelTool(this.rightPanelTool);
+      this.searchResultsLayout = this._normalizeSearchResultsLayout(this.searchResultsLayout);
     }
     this._searchSuppressClick = false;
     this._searchFlashSelectionIds = new Set();
@@ -569,6 +584,20 @@ export class SearchTab extends LitElement {
         // ignore storage errors
       }
     }
+    if (changedProps.has('searchResultsLayout')) {
+      try {
+        localStorage.setItem(SEARCH_RESULTS_LAYOUT_STORAGE_KEY, this.searchResultsLayout);
+      } catch {
+        // ignore storage errors
+      }
+    }
+    if (changedProps.has('rightPanelCollapsed')) {
+      try {
+        localStorage.setItem(EXPLORE_RIGHT_PANEL_COLLAPSED_STORAGE_KEY, String(this.rightPanelCollapsed));
+      } catch {
+        // ignore storage errors
+      }
+    }
 
     if (changedProps.has('canCurate')) {
       const normalizedTool = this._resolveRightPanelTool(this.rightPanelTool);
@@ -761,6 +790,15 @@ export class SearchTab extends LitElement {
     }
   }
 
+  _handleRightPanelCollapseChanged(collapsed) {
+    this.rightPanelCollapsed = Boolean(collapsed);
+    try {
+      localStorage.setItem(EXPLORE_RIGHT_PANEL_COLLAPSED_STORAGE_KEY, String(this.rightPanelCollapsed));
+    } catch {
+      // ignore storage errors
+    }
+  }
+
   _getRightPanelTools() {
     if (this.canCurate) {
       return [
@@ -780,6 +818,14 @@ export class SearchTab extends LitElement {
       return nextTool;
     }
     return tools[0]?.id || 'lists';
+  }
+
+  _normalizeSearchResultsLayout(candidateMode) {
+    return String(candidateMode || '').trim().toLowerCase() === 'list' ? 'list' : 'thumb';
+  }
+
+  _setSearchResultsLayout(nextMode) {
+    this.searchResultsLayout = this._normalizeSearchResultsLayout(nextMode);
   }
 
   _handleSearchRatingChange(targetId, value) {
@@ -2229,6 +2275,81 @@ export class SearchTab extends LitElement {
     `;
   }
 
+  _formatSearchListDate(value) {
+    return formatDateTime(value);
+  }
+
+  _collectSearchListTags(image) {
+    const labels = [];
+    const add = (value) => {
+      const normalized = String(value || '').trim();
+      if (normalized) labels.push(normalized);
+    };
+
+    (Array.isArray(image?.calculated_tags) ? image.calculated_tags : [])
+      .forEach((tag) => add(tag?.keyword || tag?.name || tag));
+    (Array.isArray(image?.permatags) ? image.permatags : [])
+      .forEach((tag) => {
+        if (Number(tag?.signum) === 1) {
+          add(tag?.keyword || tag?.name || tag);
+        }
+      });
+    (Array.isArray(image?.tags) ? image.tags : [])
+      .forEach((tag) => add(tag?.keyword || tag?.name || tag));
+
+    return Array.from(new Set(labels));
+  }
+
+  _resolveSearchListFilepath(image) {
+    const candidates = [
+      image?.source_display_path,
+      image?.dropbox_path,
+      image?.source_key,
+      image?.filename,
+    ];
+    for (const candidate of candidates) {
+      const normalized = String(candidate || '').trim();
+      if (normalized) return normalized;
+    }
+    return 'Unknown';
+  }
+
+  _formatSearchListDimensions(image) {
+    const width = Number(image?.width);
+    const height = Number(image?.height);
+    if (Number.isFinite(width) && width > 0 && Number.isFinite(height) && height > 0) {
+      return `${width} × ${height}`;
+    }
+    return 'Unknown';
+  }
+
+  _renderSearchListDetails(image) {
+    const photoDate = image?.capture_timestamp || image?.photo_creation || image?.modified_time;
+    const ingestedDate = image?.created_at || image?.last_processed || image?.processed_at;
+    const tags = this._collectSearchListTags(image);
+    const rating = image?.rating === null || image?.rating === undefined || image?.rating === ''
+      ? 'Unrated'
+      : String(image.rating);
+    const durationLabel = formatDurationMs(image?.duration_ms);
+    const mediaType = String(image?.media_type || '').toLowerCase() === 'video'
+      ? `Video${durationLabel ? ` (${durationLabel})` : ''}`
+      : 'Image';
+
+    return html`
+      <div class="curate-list-meta-grid">
+        <div><span class="curate-list-meta-label">asset.id:</span> ${String(image?.asset_id || '—')}</div>
+        <div><span class="curate-list-meta-label">image_metadata.id:</span> ${String(image?.id || '—')}</div>
+        <div><span class="curate-list-meta-label">Photo date:</span> ${this._formatSearchListDate(photoDate)}</div>
+        <div><span class="curate-list-meta-label">Ingested date:</span> ${this._formatSearchListDate(ingestedDate)}</div>
+        <div class="curate-list-meta-span"><span class="curate-list-meta-label">Filepath:</span> ${this._resolveSearchListFilepath(image)}</div>
+        <div><span class="curate-list-meta-label">File dimensions:</span> ${this._formatSearchListDimensions(image)}</div>
+        <div><span class="curate-list-meta-label">Type:</span> ${mediaType}</div>
+        <div><span class="curate-list-meta-label">Ratings:</span> ${rating}</div>
+        <div class="curate-list-meta-span"><span class="curate-list-meta-label">Tags:</span> ${tags.length ? tags.join(', ') : 'None'}</div>
+      </div>
+    `;
+  }
+
   _buildDropboxHref(path) {
     if (!path) return '';
     const encodedPath = path.split('/').map((part) => encodeURIComponent(part)).join('/');
@@ -2624,6 +2745,8 @@ export class SearchTab extends LitElement {
                 enableReordering: false,
                 showPermatags: true,
                 showAiScore: false,
+                viewMode: this.searchResultsLayout,
+                renderListDetails: (image) => this._renderSearchListDetails(image),
                 emptyMessage: 'No images in this batch.',
               },
             })}
@@ -2857,7 +2980,7 @@ export class SearchTab extends LitElement {
     const activeVectorstoreQuery = String(activeFilterState.textQuery || this.vectorstoreQuery || '').trim();
     const shouldShowVectorstoreResults = this.searchSubTab !== 'results' || this.vectorstoreHasSearched;
     const visibleSearchImages = shouldShowVectorstoreResults ? (this.searchImages || []) : [];
-    const searchPagination = (this.searchSubTab === 'advanced' || this.searchSubTab === 'results')
+    const searchPaginationTop = (this.searchSubTab === 'advanced' || this.searchSubTab === 'results')
       ? (() => {
         if (this.searchSubTab === 'results' && !this.vectorstoreHasSearched) {
           return html``;
@@ -2871,6 +2994,30 @@ export class SearchTab extends LitElement {
           onPrev: () => this._handleSearchPagePrev(),
           onNext: () => this._handleSearchPageNext(),
           onLimitChange: (event) => this._handleSearchPageLimitChange(event),
+          viewMode: this.searchResultsLayout,
+          onViewModeChange: (mode) => this._setSearchResultsLayout(mode),
+          showViewModeToggle: true,
+          disabled: this.searchRefreshing,
+        });
+      })()
+      : html``;
+    const searchPaginationBottom = (this.searchSubTab === 'advanced' || this.searchSubTab === 'results')
+      ? (() => {
+        if (this.searchSubTab === 'results' && !this.vectorstoreHasSearched) {
+          return html``;
+        }
+        const { offset, limit, total, count } = this._getSearchPaginationState();
+        return renderResultsPagination({
+          offset,
+          limit,
+          total,
+          count,
+          onPrev: () => this._handleSearchPagePrev(),
+          onNext: () => this._handleSearchPageNext(),
+          onLimitChange: (event) => this._handleSearchPageLimitChange(event),
+          viewMode: this.searchResultsLayout,
+          onViewModeChange: (mode) => this._setSearchResultsLayout(mode),
+          showViewModeToggle: false,
           disabled: this.searchRefreshing,
         });
       })()
@@ -2886,6 +3033,9 @@ export class SearchTab extends LitElement {
           onPrev: () => this._handleBrowseByFolderPagePrev(),
           onNext: () => this._handleBrowseByFolderPageNext(),
           onLimitChange: (event) => this._handleBrowseByFolderPageLimitChange(event),
+          viewMode: this.searchResultsLayout,
+          onViewModeChange: (mode) => this._setSearchResultsLayout(mode),
+          showViewModeToggle: true,
           disabled: this.browseByFolderLoading,
         });
       })()
@@ -2930,7 +3080,10 @@ export class SearchTab extends LitElement {
       <right-panel
         .tools=${rightPanelTools}
         .activeTool=${this.rightPanelTool}
+        .collapsible=${true}
+        .collapsed=${this.rightPanelCollapsed}
         @tool-changed=${(event) => this._handleRightPanelToolChange(event.detail.tool)}
+        @collapse-changed=${(event) => this._handleRightPanelCollapseChanged(event.detail.collapsed)}
       >
         ${this.canCurate ? html`
           <div slot="header-right" class="curate-rating-checkbox">
@@ -3209,7 +3362,7 @@ export class SearchTab extends LitElement {
             ></filter-chips>
 
             <!-- Image Grid Layout -->
-            <div class="curate-layout search-layout results-hotspot-layout" style="--curate-thumb-size: ${this.curateThumbSize}px; ${browseByFolderBlurStyle}">
+            <div class="curate-layout search-layout results-hotspot-layout ${this.rightPanelCollapsed ? 'right-panel-layout-collapsed' : ''}" style="--curate-thumb-size: ${this.curateThumbSize}px; ${browseByFolderBlurStyle}">
               <div class="curate-pane" @dragover=${this._handleSearchAvailableDragOver} @drop=${this._handleSearchAvailableDrop}>
                 ${this.searchRefreshing ? html`
                   <div class="curate-loading-overlay" aria-label="Loading">
@@ -3217,11 +3370,11 @@ export class SearchTab extends LitElement {
                   </div>
                 ` : html``}
                 <div class="curate-pane-body">
-                  ${this.searchResultsView === 'history' ? html`
+                    ${this.searchResultsView === 'history' ? html`
                     ${this._renderSearchHistoryPane()}
                   ` : html`
                     <div class="p-2">
-                      ${searchPagination}
+                      ${searchPaginationTop}
                     </div>
                     ${visibleSearchImages && visibleSearchImages.length > 0 ? html`
                       ${renderSelectableImageGrid({
@@ -3246,6 +3399,8 @@ export class SearchTab extends LitElement {
                           enableReordering: false,
                           showPermatags: true,
                           showAiScore: false,
+                          viewMode: this.searchResultsLayout,
+                          renderListDetails: (image) => this._renderSearchListDetails(image),
                           pinnedImageIds: Number.isFinite(Number(this.searchPinnedImageId))
                             ? new Set([Number(this.searchPinnedImageId)])
                             : null,
@@ -3261,7 +3416,7 @@ export class SearchTab extends LitElement {
                       </div>
                     `}
                     <div class="p-2">
-                      ${searchPagination}
+                      ${searchPaginationBottom}
                     </div>
                   `}
                 </div>
@@ -3276,7 +3431,7 @@ export class SearchTab extends LitElement {
         <!-- Browse by Folder Subtab -->
         ${this.searchSubTab === 'browse-by-folder' ? html`
           <div>
-            <div class="curate-layout search-layout results-hotspot-layout" style="--curate-thumb-size: ${this.curateThumbSize}px;">
+            <div class="curate-layout search-layout results-hotspot-layout ${this.rightPanelCollapsed ? 'right-panel-layout-collapsed' : ''}" style="--curate-thumb-size: ${this.curateThumbSize}px;">
               <div class="curate-pane" @dragover=${this._handleSearchAvailableDragOver} @drop=${this._handleSearchAvailableDrop}>
                 <div class="curate-pane-header">
                   <div class="curate-pane-header-row">
@@ -3386,6 +3541,12 @@ export class SearchTab extends LitElement {
                   </div>
 
                   ${this.browseByFolderAccordionOpen ? '' : html`
+                    <div class="p-2 border-b bg-white">
+                      ${browsePagination}
+                    </div>
+                  `}
+
+                  ${this.browseByFolderAccordionOpen ? '' : html`
                   <div class="relative">
                     ${showBrowseByFolderOverlay ? html`
                       <div class="absolute inset-0 z-10 bg-white/80 backdrop-blur-sm"></div>
@@ -3437,6 +3598,8 @@ export class SearchTab extends LitElement {
                                   enableReordering: false,
                                   showPermatags: true,
                                   showAiScore: false,
+                                  viewMode: this.searchResultsLayout,
+                                  renderListDetails: (image) => this._renderSearchListDetails(image),
                                   emptyMessage: 'No images available.',
                                 },
                               }) : html`

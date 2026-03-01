@@ -1,6 +1,7 @@
 import { LitElement, html } from 'lit';
 import { enqueueCommand } from '../services/command-queue.js';
 import { getDropboxFolders, getLists, createList, getListItems } from '../services/api.js';
+import { migrateLocalStorageKey } from '../services/app-storage.js';
 import { createSelectionHandlers } from './shared/selection-handlers.js';
 import { renderResultsPagination } from './shared/pagination-controls.js';
 import { renderSelectableImageGrid } from './shared/selectable-image-grid.js';
@@ -28,6 +29,10 @@ import './shared/widgets/right-panel.js';
 import './shared/widgets/list-targets-panel.js';
 import './shared/widgets/hotspot-targets-panel.js';
 import './shared/widgets/rating-target-panel.js';
+
+const CURATE_RESULTS_LAYOUT_STORAGE_KEY = 'zoltag:app:curate:resultsLayout';
+const LEGACY_CURATE_RESULTS_LAYOUT_STORAGE_KEYS = ['curateResultsLayout'];
+const CURATE_RIGHT_PANEL_COLLAPSED_STORAGE_KEY = 'zoltag:app:rightPanelCollapsed:curate';
 
 /**
  * Curate Explore Tab Component
@@ -131,6 +136,8 @@ export class CurateExploreTab extends LitElement {
     curateExploreRatingCount: { type: Number },
     curateExploreRatingTargets: { type: Array },
     rightPanelTool: { type: String },
+    rightPanelCollapsed: { type: Boolean, state: true },
+    curateResultsLayout: { type: String, state: true },
     _listTargets: { type: Array, state: true },
     _lists: { type: Array, state: true },
     _listsLoading: { type: Boolean, state: true },
@@ -202,6 +209,8 @@ export class CurateExploreTab extends LitElement {
     this.curateExploreRatingTargets = [{ id: 'rating-1', rating: '', count: 0 }];
     this._curateExploreRatingNextId = 2;
     this.rightPanelTool = 'tags';
+    this.rightPanelCollapsed = false;
+    this.curateResultsLayout = 'thumb';
     this._listTargets = [{
       id: 'list-target-1',
       listId: '',
@@ -220,14 +229,22 @@ export class CurateExploreTab extends LitElement {
     this._curateDropboxFetchTimer = null;
     this._curateDropboxQuery = '';
     this._curateListDropRefreshTimer = null;
+    migrateLocalStorageKey(
+      CURATE_RESULTS_LAYOUT_STORAGE_KEY,
+      LEGACY_CURATE_RESULTS_LAYOUT_STORAGE_KEYS,
+    );
 
     try {
       const storedTool = localStorage.getItem('rightPanelTool:curate-explore');
       if (storedTool) {
         this.rightPanelTool = storedTool === 'hotspots' ? 'tags' : storedTool;
       }
+      const storedLayout = localStorage.getItem(CURATE_RESULTS_LAYOUT_STORAGE_KEY);
+      this.curateResultsLayout = this._normalizeCurateResultsLayout(storedLayout);
+      this.rightPanelCollapsed = localStorage.getItem(CURATE_RIGHT_PANEL_COLLAPSED_STORAGE_KEY) === 'true';
     } catch {
       // ignore storage errors
+      this.curateResultsLayout = this._normalizeCurateResultsLayout(this.curateResultsLayout);
     }
 
     // Internal state
@@ -260,6 +277,8 @@ export class CurateExploreTab extends LitElement {
       pressImageIdProperty: '_curatePressImageId',
       pressTimerProperty: '_curatePressTimer',
       longPressTriggeredProperty: '_curateLongPressTriggered',
+      suppressClickProperty: '_curateSuppressClick',
+      dragSelectOnMove: true,
       getOrder: () => this._curateLeftOrder || [],
       flashSelection: (imageId) => this._flashCurateSelection(imageId),
     });
@@ -268,6 +287,15 @@ export class CurateExploreTab extends LitElement {
     this._curateSelectionHandlers.updateSelection = () => {
       const before = Array.isArray(this.dragSelection) ? [...this.dragSelection] : [];
       originalUpdateSelection();
+      const after = Array.isArray(this.dragSelection) ? [...this.dragSelection] : [];
+      if (before.length !== after.length || before.some((id, idx) => id !== after[idx])) {
+        this._emitSelectionChanged(after);
+      }
+    };
+    const originalStartSelection = this._curateSelectionHandlers.startSelection.bind(this._curateSelectionHandlers);
+    this._curateSelectionHandlers.startSelection = (index, imageId) => {
+      const before = Array.isArray(this.dragSelection) ? [...this.dragSelection] : [];
+      originalStartSelection(index, imageId);
       const after = Array.isArray(this.dragSelection) ? [...this.dragSelection] : [];
       if (before.length !== after.length || before.some((id, idx) => id !== after[idx])) {
         this._emitSelectionChanged(after);
@@ -293,6 +321,7 @@ export class CurateExploreTab extends LitElement {
       this._curateSelectionHandlers.cancelPressState();
       if (hadLongPress) {
         this._curateSuppressClick = true;
+        this._emitSelectionChanged(Array.isArray(this.dragSelection) ? [...this.dragSelection] : []);
       }
     };
   }
@@ -434,7 +463,7 @@ export class CurateExploreTab extends LitElement {
       event.preventDefault();
       return;
     }
-    if (this._curatePressActive) {
+    if (this._curatePressActive && this.curateResultsView !== 'history') {
       this._cancelCuratePressState();
     }
 
@@ -574,6 +603,23 @@ export class CurateExploreTab extends LitElement {
     }
   }
 
+  _handleRightPanelCollapseChanged(collapsed) {
+    this.rightPanelCollapsed = Boolean(collapsed);
+    try {
+      localStorage.setItem(CURATE_RIGHT_PANEL_COLLAPSED_STORAGE_KEY, String(this.rightPanelCollapsed));
+    } catch {
+      // ignore storage errors
+    }
+  }
+
+  _normalizeCurateResultsLayout(candidateMode) {
+    return String(candidateMode || '').trim().toLowerCase() === 'list' ? 'list' : 'thumb';
+  }
+
+  _setCurateResultsLayout(nextMode) {
+    this.curateResultsLayout = this._normalizeCurateResultsLayout(nextMode);
+  }
+
   updated(changedProperties) {
     if (changedProperties.has('tenant')) {
       this._lists = [];
@@ -600,6 +646,20 @@ export class CurateExploreTab extends LitElement {
     }
     if (changedProperties.has('rightPanelTool') && this.rightPanelTool === 'lists') {
       this._ensureListsLoaded();
+    }
+    if (changedProperties.has('curateResultsLayout')) {
+      try {
+        localStorage.setItem(CURATE_RESULTS_LAYOUT_STORAGE_KEY, this.curateResultsLayout);
+      } catch {
+        // ignore storage errors
+      }
+    }
+    if (changedProperties.has('rightPanelCollapsed')) {
+      try {
+        localStorage.setItem(CURATE_RIGHT_PANEL_COLLAPSED_STORAGE_KEY, String(this.rightPanelCollapsed));
+      } catch {
+        // ignore storage errors
+      }
     }
     if (changedProperties.has('curateSimilarityAssetUuid')) {
       const previousValue = String(changedProperties.get('curateSimilarityAssetUuid') || '').trim();
@@ -1461,6 +1521,7 @@ export class CurateExploreTab extends LitElement {
                 enableReordering: false,
                 showPermatags: true,
                 showAiScore: true,
+                viewMode: this.curateResultsLayout,
                 emptyMessage: 'No images in this batch.',
               },
             })}
@@ -1563,7 +1624,7 @@ export class CurateExploreTab extends LitElement {
           @lists-requested=${this._handleListsRequested}
         ></filter-chips>
 
-        <div class="curate-layout results-hotspot-layout" style="--curate-thumb-size: ${this.thumbSize}px;">
+        <div class="curate-layout results-hotspot-layout ${this.rightPanelCollapsed ? 'right-panel-layout-collapsed' : ''}" style="--curate-thumb-size: ${this.thumbSize}px;">
           <div class="curate-pane">
               ${this.loading ? html`
                 <div class="curate-loading-overlay" aria-label="Loading">
@@ -1583,6 +1644,9 @@ export class CurateExploreTab extends LitElement {
                         onPrev: this._handleCuratePagePrev,
                         onNext: this._handleCuratePageNext,
                         onLimitChange: (e) => this._handleCurateLimitChange(Number(e.target.value)),
+                        viewMode: this.curateResultsLayout,
+                        onViewModeChange: (mode) => this._setCurateResultsLayout(mode),
+                        showViewModeToggle: true,
                         disabled: this.loading,
                       })}
                     </div>
@@ -1615,6 +1679,7 @@ export class CurateExploreTab extends LitElement {
                         enableReordering: true,
                         showPermatags: true,
                         showAiScore: true,
+                        viewMode: this.curateResultsLayout,
                         pinnedImageIds: Number.isFinite(Number(this.curatePinnedImageId))
                           ? new Set([Number(this.curatePinnedImageId)])
                           : null,
@@ -1630,6 +1695,9 @@ export class CurateExploreTab extends LitElement {
                       onPrev: this._handleCuratePagePrev,
                       onNext: this._handleCuratePageNext,
                       onLimitChange: (e) => this._handleCurateLimitChange(Number(e.target.value)),
+                      viewMode: this.curateResultsLayout,
+                      onViewModeChange: (mode) => this._setCurateResultsLayout(mode),
+                      showViewModeToggle: false,
                       disabled: this.loading,
                     })}
                   `}
@@ -1642,7 +1710,10 @@ export class CurateExploreTab extends LitElement {
               { id: 'lists', label: 'Lists' },
             ]}
             .activeTool=${this.rightPanelTool}
+            .collapsible=${true}
+            .collapsed=${this.rightPanelCollapsed}
             @tool-changed=${(event) => this._handleRightPanelToolChange(event.detail.tool)}
+            @collapse-changed=${(event) => this._handleRightPanelCollapseChanged(event.detail.collapsed)}
           >
             <div slot="header-right" class="curate-rating-checkbox">
               <input

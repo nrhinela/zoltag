@@ -1,6 +1,7 @@
 import { LitElement, html } from 'lit';
 import { enqueueCommand } from '../services/command-queue.js';
 import { getLists, createList, getListItems } from '../services/api.js';
+import { migrateLocalStorageKey } from '../services/app-storage.js';
 import { createSelectionHandlers } from './shared/selection-handlers.js';
 import { createHotspotHandlers, parseUtilityKeywordValue } from './shared/hotspot-controls.js';
 import {
@@ -27,6 +28,10 @@ import './shared/widgets/right-panel.js';
 import './shared/widgets/list-targets-panel.js';
 import './shared/widgets/hotspot-targets-panel.js';
 import './shared/widgets/rating-target-panel.js';
+
+const CURATE_RESULTS_LAYOUT_STORAGE_KEY = 'zoltag:app:curate:resultsLayout';
+const LEGACY_CURATE_RESULTS_LAYOUT_STORAGE_KEYS = ['curateResultsLayout'];
+const CURATE_RIGHT_PANEL_COLLAPSED_STORAGE_KEY = 'zoltag:app:rightPanelCollapsed:curate';
 
 /**
  * Curate Browse By Folder Tab
@@ -71,6 +76,7 @@ export class CurateBrowseFolderTab extends LitElement {
     browseDragEndIndex: { type: Number },
 
     rightPanelTool: { type: String },
+    rightPanelCollapsed: { type: Boolean, state: true },
     browseHotspotTargets: { type: Array },
     browseRatingTargets: { type: Array },
 
@@ -83,6 +89,7 @@ export class CurateBrowseFolderTab extends LitElement {
     _browseRatingModalActive: { type: Boolean, state: true },
     _browseRatingModalImageIds: { type: Array, state: true },
     browseResultsView: { type: String, state: true },
+    browseResultsLayout: { type: String, state: true },
     _browseHotspotHistoryBatches: { type: Array, state: true },
     _browseHotspotHistoryVisibleBatches: { type: Number, state: true },
   };
@@ -131,6 +138,7 @@ export class CurateBrowseFolderTab extends LitElement {
     this.browseDragEndIndex = null;
 
     this.rightPanelTool = 'tags';
+    this.rightPanelCollapsed = false;
     this.browseHotspotTargets = [{ id: 1, type: 'keyword', count: 0 }];
     this.browseRatingTargets = [{ id: 'rating-1', rating: '', count: 0 }];
     this._browseHotspotNextId = 2;
@@ -167,6 +175,7 @@ export class CurateBrowseFolderTab extends LitElement {
     this._browseLongPressTriggered = false;
     this._browseSuppressClick = false;
     this.browseResultsView = 'results';
+    this.browseResultsLayout = 'thumb';
     this._browseHotspotHistoryBatches = [];
     this._browseHotspotHistoryVisibleBatches = 1;
 
@@ -199,14 +208,22 @@ export class CurateBrowseFolderTab extends LitElement {
       processTagDrop: (ids, target) => this._processBrowseHotspotTagDrop(ids, target),
       removeImages: () => {},
     });
+    migrateLocalStorageKey(
+      CURATE_RESULTS_LAYOUT_STORAGE_KEY,
+      LEGACY_CURATE_RESULTS_LAYOUT_STORAGE_KEYS,
+    );
 
     try {
       const storedTool = localStorage.getItem('rightPanelTool:curate-browse');
       if (storedTool) {
         this.rightPanelTool = storedTool;
       }
+      const storedLayout = localStorage.getItem(CURATE_RESULTS_LAYOUT_STORAGE_KEY);
+      this.browseResultsLayout = this._normalizeBrowseResultsLayout(storedLayout);
+      this.rightPanelCollapsed = localStorage.getItem(CURATE_RIGHT_PANEL_COLLAPSED_STORAGE_KEY) === 'true';
     } catch {
       // ignore storage errors
+      this.browseResultsLayout = this._normalizeBrowseResultsLayout(this.browseResultsLayout);
     }
   }
 
@@ -296,6 +313,20 @@ export class CurateBrowseFolderTab extends LitElement {
     ) {
       this._persistBrowseHistorySessionState();
     }
+    if (changedProps.has('browseResultsLayout')) {
+      try {
+        localStorage.setItem(CURATE_RESULTS_LAYOUT_STORAGE_KEY, this.browseResultsLayout);
+      } catch {
+        // ignore storage errors
+      }
+    }
+    if (changedProps.has('rightPanelCollapsed')) {
+      try {
+        localStorage.setItem(CURATE_RIGHT_PANEL_COLLAPSED_STORAGE_KEY, String(this.rightPanelCollapsed));
+      } catch {
+        // ignore storage errors
+      }
+    }
   }
 
   refresh() {
@@ -376,6 +407,23 @@ export class CurateBrowseFolderTab extends LitElement {
     if (tool === 'lists' && !(this._lists || []).length) {
       this._fetchLists();
     }
+  }
+
+  _handleRightPanelCollapseChanged(collapsed) {
+    this.rightPanelCollapsed = Boolean(collapsed);
+    try {
+      localStorage.setItem(CURATE_RIGHT_PANEL_COLLAPSED_STORAGE_KEY, String(this.rightPanelCollapsed));
+    } catch {
+      // ignore storage errors
+    }
+  }
+
+  _normalizeBrowseResultsLayout(candidateMode) {
+    return String(candidateMode || '').trim().toLowerCase() === 'list' ? 'list' : 'thumb';
+  }
+
+  _setBrowseResultsLayout(nextMode) {
+    this.browseResultsLayout = this._normalizeBrowseResultsLayout(nextMode);
   }
 
   _handleBrowseRatingChange(targetId, value) {
@@ -690,6 +738,7 @@ export class CurateBrowseFolderTab extends LitElement {
               },
               options: {
                 showPermatags: true,
+                viewMode: this.browseResultsLayout,
                 emptyMessage: 'No images in this batch.',
               },
             })}
@@ -871,6 +920,9 @@ export class CurateBrowseFolderTab extends LitElement {
       onPrev: () => this._handleBrowseByFolderPagePrev(),
       onNext: () => this._handleBrowseByFolderPageNext(),
       onLimitChange: (event) => this._handleBrowseByFolderPageLimitChange(event),
+      viewMode: this.browseResultsLayout,
+      onViewModeChange: (mode) => this._setBrowseResultsLayout(mode),
+      showViewModeToggle: true,
       disabled: this.browseByFolderLoading,
     });
   }
@@ -1323,7 +1375,7 @@ export class CurateBrowseFolderTab extends LitElement {
           ></filter-chips>
         </div>
       </div>
-      <div class="curate-layout search-layout results-hotspot-layout" style="--curate-thumb-size: ${this.thumbSize}px;">
+      <div class="curate-layout search-layout results-hotspot-layout ${this.rightPanelCollapsed ? 'right-panel-layout-collapsed' : ''}" style="--curate-thumb-size: ${this.thumbSize}px;">
         <div class="curate-pane">
           <div class="curate-pane-header">
             <div class="curate-pane-header-row">
@@ -1458,6 +1510,7 @@ export class CurateBrowseFolderTab extends LitElement {
                           },
                           options: {
                             showPermatags: true,
+                            viewMode: this.browseResultsLayout,
                           },
                         }) : html`
                           <div class="col-span-full flex items-center justify-center py-6">
@@ -1489,7 +1542,10 @@ export class CurateBrowseFolderTab extends LitElement {
             { id: 'lists', label: 'Lists' },
           ]}
           .activeTool=${this.rightPanelTool}
+          .collapsible=${true}
+          .collapsed=${this.rightPanelCollapsed}
           @tool-changed=${(event) => this._handleRightPanelToolChange(event.detail.tool)}
+          @collapse-changed=${(event) => this._handleRightPanelCollapseChanged(event.detail.collapsed)}
         >
           <div slot="header-right" class="curate-rating-checkbox">
             <input

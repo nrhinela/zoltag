@@ -26,6 +26,8 @@ const LEGACY_AUDIT_HELP_VISIBILITY_STORAGE_KEYS = [
   'curate-audit:help-visible',
   'zoltan:app:curate-audit:help-visible',
 ];
+const CURATE_RESULTS_LAYOUT_STORAGE_KEY = 'zoltag:app:curate:resultsLayout';
+const LEGACY_CURATE_RESULTS_LAYOUT_STORAGE_KEYS = ['curateResultsLayout'];
 
 /**
  * Curate Audit Tab Component
@@ -119,6 +121,7 @@ export class CurateAuditTab extends LitElement {
     _auditLeftOrder: { type: Array, state: true },
     _auditSuppressClick: { type: Boolean, state: true },
     auditResultsView: { type: String, state: true },
+    auditResultsLayout: { type: String, state: true },
     _auditHotspotHistoryBatches: { type: Array, state: true },
     _auditHotspotHistoryVisibleBatches: { type: Number, state: true },
     _showAiHelp: { type: Boolean, state: true },
@@ -188,13 +191,19 @@ export class CurateAuditTab extends LitElement {
     this._auditHistoryGroupKey = null;
     this._auditSuppressClick = false;
     this.auditResultsView = 'results';
+    this.auditResultsLayout = 'thumb';
     this._auditHotspotHistoryBatches = [];
     this._auditHotspotHistoryVisibleBatches = 1;
     migrateLocalStorageKey(
       AUDIT_HELP_VISIBILITY_STORAGE_KEY,
       LEGACY_AUDIT_HELP_VISIBILITY_STORAGE_KEYS,
     );
+    migrateLocalStorageKey(
+      CURATE_RESULTS_LAYOUT_STORAGE_KEY,
+      LEGACY_CURATE_RESULTS_LAYOUT_STORAGE_KEYS,
+    );
     this._showAiHelp = this._loadAiHelpVisibility();
+    this.auditResultsLayout = this._loadAuditResultsLayout();
 
     // Configure selection handlers
     this._auditSelectionHandlers = createSelectionHandlers(this, {
@@ -208,6 +217,8 @@ export class CurateAuditTab extends LitElement {
       pressImageIdProperty: '_auditPressImageId',
       pressTimerProperty: '_auditPressTimer',
       longPressTriggeredProperty: '_auditLongPressTriggered',
+      suppressClickProperty: '_auditSuppressClick',
+      dragSelectOnMove: true,
       getOrder: () => this._auditLeftOrder || [],
       flashSelection: (imageId) => this._flashAuditSelection(imageId),
     });
@@ -219,6 +230,15 @@ export class CurateAuditTab extends LitElement {
     this._auditSelectionHandlers.updateSelection = () => {
       const before = Array.isArray(this.dragSelection) ? [...this.dragSelection] : [];
       originalUpdateSelection();
+      const after = Array.isArray(this.dragSelection) ? [...this.dragSelection] : [];
+      if (before.length !== after.length || before.some((id, idx) => id !== after[idx])) {
+        this._emitSelectionChanged(after);
+      }
+    };
+    const originalStartSelection = this._auditSelectionHandlers.startSelection.bind(this._auditSelectionHandlers);
+    this._auditSelectionHandlers.startSelection = (index, imageId) => {
+      const before = Array.isArray(this.dragSelection) ? [...this.dragSelection] : [];
+      originalStartSelection(index, imageId);
       const after = Array.isArray(this.dragSelection) ? [...this.dragSelection] : [];
       if (before.length !== after.length || before.some((id, idx) => id !== after[idx])) {
         this._emitSelectionChanged(after);
@@ -245,6 +265,7 @@ export class CurateAuditTab extends LitElement {
       this._auditSelectionHandlers.cancelPressState();
       if (hadLongPress) {
         this._auditSuppressClick = true;
+        this._emitSelectionChanged(Array.isArray(this.dragSelection) ? [...this.dragSelection] : []);
       }
     };
   }
@@ -296,6 +317,9 @@ export class CurateAuditTab extends LitElement {
     }
     if (changedProperties.has('tenant')) {
       this.dragSelection = [];
+    }
+    if (changedProperties.has('auditResultsLayout')) {
+      this._persistAuditResultsLayout(this.auditResultsLayout);
     }
     if (
       changedProperties.has('keyword')
@@ -580,7 +604,7 @@ export class CurateAuditTab extends LitElement {
       event.preventDefault();
       return;
     }
-    if (this._auditPressActive) {
+    if (this._auditPressActive && this.auditResultsView !== 'history') {
       this._auditSelectionHandlers.cancelPressState();
     }
 
@@ -745,6 +769,7 @@ export class CurateAuditTab extends LitElement {
                 enableReordering: false,
                 showPermatags: true,
                 showAiScore: true,
+                viewMode: this.auditResultsLayout,
                 emptyMessage: 'No images in this batch.',
               },
             })}
@@ -1356,6 +1381,31 @@ export class CurateAuditTab extends LitElement {
     }
   }
 
+  _normalizeAuditResultsLayout(candidateMode) {
+    return String(candidateMode || '').trim().toLowerCase() === 'list' ? 'list' : 'thumb';
+  }
+
+  _loadAuditResultsLayout() {
+    try {
+      const raw = localStorage.getItem(CURATE_RESULTS_LAYOUT_STORAGE_KEY);
+      return this._normalizeAuditResultsLayout(raw);
+    } catch (_error) {
+      return 'thumb';
+    }
+  }
+
+  _persistAuditResultsLayout(mode) {
+    try {
+      localStorage.setItem(CURATE_RESULTS_LAYOUT_STORAGE_KEY, this._normalizeAuditResultsLayout(mode));
+    } catch (_error) {
+      // ignore storage errors in private browsing or restricted environments
+    }
+  }
+
+  _setAuditResultsLayout(nextMode) {
+    this.auditResultsLayout = this._normalizeAuditResultsLayout(nextMode);
+  }
+
   _getAuditEmptyStateMessage() {
     const fromBackend = String(this.emptyState?.message || '').trim();
     if (fromBackend) return fromBackend;
@@ -1415,6 +1465,7 @@ export class CurateAuditTab extends LitElement {
           enableReordering: false,
           showPermatags: true,
           showAiScore: true,
+          viewMode: this.auditResultsLayout,
           emptyMessage: this._getAuditEmptyStateMessage(),
         },
       });
@@ -1445,6 +1496,7 @@ export class CurateAuditTab extends LitElement {
           enableReordering: false,
           showPermatags: true,
           showAiScore: true,
+          viewMode: this.auditResultsLayout,
           emptyMessage: this._getAuditEmptyStateMessage(),
         },
       });
@@ -1488,6 +1540,7 @@ export class CurateAuditTab extends LitElement {
                   enableReordering: false,
                   showPermatags: true,
                   showAiScore: true,
+                  viewMode: this.auditResultsLayout,
                   pinnedImageIds,
                   pinnedLabel: 'Source',
                   emptyMessage: 'No images available.',
@@ -1722,6 +1775,9 @@ export class CurateAuditTab extends LitElement {
                         onPrev: this._handlePagePrev,
                         onNext: this._handlePageNext,
                         onLimitChange: this._handleLimitChange,
+                        viewMode: this.auditResultsLayout,
+                        onViewModeChange: (mode) => this._setAuditResultsLayout(mode),
+                        showViewModeToggle: true,
                         disabled: this.loading,
                       })}
                     </div>
@@ -1753,6 +1809,7 @@ export class CurateAuditTab extends LitElement {
                         enableReordering: false,
                         showPermatags: true,
                         showAiScore: true,
+                        viewMode: this.auditResultsLayout,
                         emptyMessage: auditEmptyMessage,
                       },
                     })}
@@ -1766,6 +1823,9 @@ export class CurateAuditTab extends LitElement {
                         onPrev: this._handlePagePrev,
                         onNext: this._handlePageNext,
                         onLimitChange: this._handleLimitChange,
+                        viewMode: this.auditResultsLayout,
+                        onViewModeChange: (mode) => this._setAuditResultsLayout(mode),
+                        showViewModeToggle: false,
                         disabled: this.loading,
                         showPageSize: false,
                       })}

@@ -11,6 +11,9 @@ import { formatStatNumber } from './formatting.js';
  * @param {Function} options.onPrev - Prev handler
  * @param {Function} options.onNext - Next handler
  * @param {Function} options.onLimitChange - Page size handler
+ * @param {string} [options.viewMode='thumb'] - Current results view mode ('thumb' | 'list')
+ * @param {Function} [options.onViewModeChange] - View mode toggle handler
+ * @param {boolean} [options.showViewModeToggle=false] - Show thumb/list icon buttons
  * @param {boolean} [options.disabled=false] - Disable controls
  * @param {boolean} [options.showPageSize=true] - Show page size selector
  * @returns {TemplateResult}
@@ -23,6 +26,9 @@ export function renderResultsPagination({
   onPrev,
   onNext,
   onLimitChange,
+  viewMode = 'thumb',
+  onViewModeChange = null,
+  showViewModeToggle = false,
   disabled = false,
   showPageSize = true,
 }) {
@@ -38,11 +44,49 @@ export function renderResultsPagination({
   const rangeLabel = totalCount
     ? (end === 0 ? `0 of ${formattedTotal}` : `${formatStatNumber(start)}-${formatStatNumber(end)} of ${formattedTotal}`)
     : '0 of 0';
+  const normalizedViewMode = viewMode === 'list' ? 'list' : 'thumb';
+  const showToggle = showViewModeToggle && typeof onViewModeChange === 'function';
 
   return html`
     <div class="flex flex-wrap items-center justify-between gap-2 text-xs text-gray-500">
       <span class="font-semibold tracking-wide">${formattedTotal} ITEMS</span>
       <div class="flex items-center gap-3">
+        ${showToggle ? html`
+          <div class="results-view-toggle" role="group" aria-label="Results view mode">
+            <button
+              type="button"
+              class="results-view-toggle-btn ${normalizedViewMode === 'thumb' ? 'active' : ''}"
+              @click=${() => onViewModeChange?.('thumb')}
+              ?disabled=${disabled}
+              aria-label="Thumbnail view"
+              aria-pressed=${normalizedViewMode === 'thumb' ? 'true' : 'false'}
+              title="Thumbnail view"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="4" y="4" width="6.5" height="6.5" rx="1"></rect>
+                <rect x="13.5" y="4" width="6.5" height="6.5" rx="1"></rect>
+                <rect x="4" y="13.5" width="6.5" height="6.5" rx="1"></rect>
+                <rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1"></rect>
+              </svg>
+            </button>
+            <button
+              type="button"
+              class="results-view-toggle-btn ${normalizedViewMode === 'list' ? 'active' : ''}"
+              @click=${() => onViewModeChange?.('list')}
+              ?disabled=${disabled}
+              aria-label="List view"
+              aria-pressed=${normalizedViewMode === 'list' ? 'true' : 'false'}
+              title="List view"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M7 6h13M7 12h13M7 18h13"></path>
+                <circle cx="4" cy="6" r="1.2"></circle>
+                <circle cx="4" cy="12" r="1.2"></circle>
+                <circle cx="4" cy="18" r="1.2"></circle>
+              </svg>
+            </button>
+          </div>
+        ` : html``}
         ${showPageSize ? html`
           <label class="inline-flex items-center gap-2 text-xs text-gray-500">
             <span>Results per page:</span>
@@ -104,6 +148,9 @@ export function renderPaginationControls(offset, limit, total, handlers, loading
     onPrev: handlers.onPrev,
     onNext: handlers.onNext,
     onLimitChange: handlers.onLimitChange,
+    viewMode: 'thumb',
+    onViewModeChange: null,
+    showViewModeToggle: false,
     disabled: loading,
     showPageSize: true,
   });

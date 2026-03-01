@@ -985,6 +985,30 @@ export const zoltagAppStyles = css`
     }
     .results-hotspot-layout {
         margin-top: 12px;
+        position: relative;
+    }
+    .results-hotspot-layout > right-panel {
+        display: block;
+        position: sticky;
+        top: 12px;
+        align-self: start;
+        z-index: 12;
+    }
+    .results-hotspot-layout.right-panel-layout-collapsed {
+        grid-template-columns: minmax(0, 1fr) 0 !important;
+        column-gap: 0 !important;
+    }
+    .results-hotspot-layout.right-panel-layout-collapsed > right-panel {
+        position: sticky;
+        top: 12px;
+        grid-column: 2;
+        grid-row: 1;
+        justify-self: end;
+        align-self: start;
+        width: 0;
+        margin-right: 0;
+        overflow: visible;
+        z-index: 14;
     }
     .curate-control-grid {
         display: grid;
@@ -1026,9 +1050,7 @@ export const zoltagAppStyles = css`
         position: relative;
     }
     .curate-pane.utility-targets {
-        position: sticky;
-        top: 12px;
-        align-self: start;
+        position: relative;
         max-height: calc(100vh - 160px);
     }
     .curate-pane-header {
@@ -1053,6 +1075,42 @@ export const zoltagAppStyles = css`
         top: 0;
         z-index: 2;
         background: #ffffff;
+    }
+    .right-panel-header-actions {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        margin-left: auto;
+    }
+    .right-panel-shell {
+        position: relative;
+    }
+    .right-panel-edge-toggle {
+        position: absolute;
+        top: 2px;
+        left: 100%;
+        right: auto;
+        margin-left: 4px;
+        width: 24px;
+        height: 24px;
+        border: 1px solid #d1d5db;
+        border-radius: 8px;
+        background: #ffffff;
+        color: #2563eb;
+        font-size: 18px;
+        line-height: 1;
+        font-weight: 600;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        box-shadow: none;
+        z-index: 16;
+    }
+    .right-panel-edge-toggle:hover {
+        background: #f8fafc;
+        border-color: #9ca3af;
+        color: #1d4ed8;
     }
     .curate-pane-header-row {
         display: flex;
@@ -1098,6 +1156,47 @@ export const zoltagAppStyles = css`
         color: #2563eb;
     }
     .curate-pane-action:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+    }
+    .results-view-toggle {
+        display: inline-flex;
+        align-items: center;
+        border: 1px solid #d1d5db;
+        border-radius: 8px;
+        overflow: hidden;
+        background: #ffffff;
+    }
+    .results-view-toggle-btn {
+        width: 28px;
+        height: 24px;
+        padding: 0;
+        border: none;
+        border-right: 1px solid #e5e7eb;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: #ffffff;
+        color: #6b7280;
+        cursor: pointer;
+    }
+    .results-view-toggle-btn:last-child {
+        border-right: none;
+    }
+    .results-view-toggle-btn svg {
+        width: 14px;
+        height: 14px;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 1.8;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+    }
+    .results-view-toggle-btn.active {
+        background: #eff6ff;
+        color: #1d4ed8;
+    }
+    .results-view-toggle-btn:disabled {
         opacity: 0.6;
         cursor: not-allowed;
     }
@@ -1228,6 +1327,95 @@ export const zoltagAppStyles = css`
         gap: 2px;
         grid-template-columns: repeat(auto-fill, minmax(var(--curate-thumb-size, 110px), 1fr));
         user-select: none;
+    }
+    .curate-list {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        user-select: none;
+    }
+    .curate-list-row {
+        display: grid;
+        grid-template-columns: minmax(100px, var(--curate-thumb-size, 110px)) minmax(0, 1fr);
+        gap: 12px;
+        align-items: stretch;
+        border: 1px solid #e5e7eb;
+        border-radius: 10px;
+        background: #ffffff;
+        padding: 8px;
+        position: relative;
+    }
+    .curate-list-row.selected {
+        border-color: #ea580c;
+        background: #fff7ed;
+        box-shadow:
+            0 0 0 2px rgba(234, 88, 12, 0.35),
+            0 6px 14px rgba(15, 23, 42, 0.12);
+    }
+    .curate-list-row.selected::after {
+        content: '✓';
+        position: absolute;
+        top: 6px;
+        left: 6px;
+        z-index: 14;
+        width: 22px;
+        height: 22px;
+        border-radius: 999px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 13px;
+        font-weight: 800;
+        color: #ffffff;
+        background: linear-gradient(135deg, #f97316 0%, #ea580c 100%);
+        box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.95), 0 6px 12px rgba(15, 23, 42, 0.28);
+        pointer-events: none;
+    }
+    .curate-list-thumb-shell {
+        position: relative;
+        width: var(--curate-thumb-size, 110px);
+        min-width: 100px;
+    }
+    .curate-list-thumb {
+        width: var(--curate-thumb-size, 110px);
+        min-width: 100px;
+        max-width: 100%;
+    }
+    .curate-list-details {
+        min-width: 0;
+        display: flex;
+        align-items: center;
+        color: #111827;
+        font-size: 12px;
+        line-height: 1.45;
+    }
+    .curate-list-meta-grid {
+        width: 100%;
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 6px 14px;
+    }
+    .curate-list-meta-span {
+        grid-column: 1 / -1;
+        word-break: break-word;
+    }
+    .curate-list-meta-label {
+        color: #4b5563;
+        font-weight: 600;
+        margin-right: 4px;
+    }
+    @media (max-width: 900px) {
+        .curate-list-row {
+            grid-template-columns: minmax(84px, 100px) minmax(0, 1fr);
+            gap: 10px;
+        }
+        .curate-list-thumb-shell,
+        .curate-list-thumb {
+            width: 100px;
+        }
+        .curate-list-meta-grid {
+            grid-template-columns: minmax(0, 1fr);
+        }
     }
     .curate-thumb {
         width: 100%;
