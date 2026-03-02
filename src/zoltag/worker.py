@@ -887,6 +887,7 @@ def run_loop(
         os.getenv("JOB_SCHEDULE_TICK_SECONDS") or _DEFAULT_SCHEDULE_TICK_SECONDS
     )
     lease_reclaim_interval = float(os.getenv("JOB_LEASE_RECLAIM_SECONDS") or _DEFAULT_LEASE_RECLAIM_SECONDS)
+    maintenance_enabled = _to_bool(os.getenv("JOB_WORKER_ENABLE_MAINTENANCE_TICKS") or "true")
     last_idle_heartbeat_at = 0.0
     last_workflow_reconcile_at = 0.0
     last_schedule_tick_at = 0.0
@@ -896,17 +897,18 @@ def run_loop(
 
     while not stop.is_set():
         now_monotonic = time.monotonic()
-        if now_monotonic - last_lease_reclaim_at >= lease_reclaim_interval:
-            last_lease_reclaim_at = now_monotonic
-            _reclaim_stale_leases()
+        if maintenance_enabled:
+            if now_monotonic - last_lease_reclaim_at >= lease_reclaim_interval:
+                last_lease_reclaim_at = now_monotonic
+                _reclaim_stale_leases()
 
-        if now_monotonic - last_workflow_reconcile_at >= workflow_reconcile_interval:
-            last_workflow_reconcile_at = now_monotonic
-            _reconcile_workflows_once(limit_runs=workflow_reconcile_limit)
+            if now_monotonic - last_workflow_reconcile_at >= workflow_reconcile_interval:
+                last_workflow_reconcile_at = now_monotonic
+                _reconcile_workflows_once(limit_runs=workflow_reconcile_limit)
 
-        if now_monotonic - last_schedule_tick_at >= schedule_tick_interval:
-            last_schedule_tick_at = now_monotonic
-            _fire_due_schedule_triggers()
+            if now_monotonic - last_schedule_tick_at >= schedule_tick_interval:
+                last_schedule_tick_at = now_monotonic
+                _fire_due_schedule_triggers()
 
         try:
             claimed_job = _claim_next_job(

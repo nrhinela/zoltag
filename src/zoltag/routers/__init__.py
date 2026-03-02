@@ -21,6 +21,7 @@ from . import config
 from . import people
 from . import nl_search
 from . import jobs
+from . import sentinel
 
 __all__ = [
     "auth",
@@ -44,4 +45,5 @@ __all__ = [
     "config",
     "nl_search",
     "jobs",
+    "sentinel",
 ]

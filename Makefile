@@ -3,6 +3,7 @@
 .PHONY: help install test lint format clean deploy migrate dev worker dev-backend dev-frontend dev-css dev-clean
 .PHONY: db-dev db-prod db-migrate-prod db-migrate-dev db-create-migration
 .PHONY: deploy-api deploy-worker deploy-all status logs-api logs-worker env-check
+.PHONY: configure-sentinel-workers
 .PHONY: train-and-recompute daily sync-gdrive sync-youtube verify-video-rollout db-pressure db-pressure-clean
 
 # Default environment
@@ -38,6 +39,7 @@ help:
 	@echo "  deploy-all         Deploy everything to production"
 	@echo "  deploy-api         Deploy API service only"
 	@echo "  deploy-worker      Deploy worker service only"
+	@echo "  configure-sentinel-workers Configure burst worker Cloud Run Job + sentinel service + scheduler tick"
 	@echo "  status             Show Cloud Run services status"
 	@echo "  logs-api           Tail API service logs"
 	@echo "  logs-worker        Tail worker service logs"
@@ -331,6 +333,10 @@ deploy-worker:
 		--timeout=900 \
 		--max-instances=10 \
 		--set-env-vars THUMBNAIL_CDN_BASE_URL=https://storage.googleapis.com/photocat-483622-prod-shared
+
+configure-sentinel-workers:
+	@echo "Configuring sentinel + burst workers..."
+	PROJECT_ID=$(PROJECT_ID) REGION=$(REGION) ./scripts/configure_sentinel_workers.sh
 
 status:
 	@echo "Cloud Run Services Status:"

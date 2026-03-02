@@ -48,6 +48,7 @@ from zoltag.routers import (
     config,
     nl_search,
     jobs,
+    sentinel,
     sharing,
     guest,
 )
@@ -117,6 +118,9 @@ async def audit_model_config_startup():
 @app.on_event("startup")
 async def start_worker_mode():
     """Start background queue worker when running in worker mode or local mode."""
+    if settings.sentinel_mode and not settings.local_mode:
+        logger.info("Sentinel mode enabled; skipping embedded worker thread startup")
+        return
     if not settings.worker_mode and not settings.local_mode:
         return
     try:
@@ -131,6 +135,8 @@ async def start_worker_mode():
 @app.on_event("shutdown")
 async def stop_worker_mode():
     """Stop background queue worker when service shuts down."""
+    if settings.sentinel_mode and not settings.local_mode:
+        return
     if not settings.worker_mode and not settings.local_mode:
         return
     try:
@@ -186,6 +192,7 @@ app.include_router(sync.router)
 app.include_router(config.router)
 app.include_router(nl_search.router)
 app.include_router(jobs.router)
+app.include_router(sentinel.router)
 app.include_router(sharing.router)
 app.include_router(guest.router)
 
