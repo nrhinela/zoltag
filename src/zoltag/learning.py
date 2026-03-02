@@ -295,6 +295,7 @@ def build_keyword_models(
     model_version: str,
     min_positive: int = 2,
     keyword_to_category: Optional[Dict[str, str]] = None,
+    progress: bool = False,
 ) -> Dict[str, int]:
     """Create or update keyword models using permatag labels.
 
@@ -302,10 +303,16 @@ def build_keyword_models(
     in the same category are used as implicit negative examples, dramatically
     improving model discrimination.
     """
+    def _log(message: str) -> None:
+        if progress:
+            print(message, flush=True)
+
+    _log(f"[train-keyword-models] Loading permatags for tenant {tenant_id}...")
     permatags = db.query(Permatag).filter(
         tenant_column_filter_for_values(Permatag, tenant_id),
         Permatag.asset_id.is_not(None),
     ).all()
+    _log(f"[train-keyword-models] Loaded {len(permatags)} permatag rows.")
 
     # Map keyword_id to keyword name and organize by name
     keyword_ids = {pt.keyword_id for pt in permatags}
@@ -313,6 +320,7 @@ def build_keyword_models(
     if keyword_ids:
         keywords = db.query(Keyword).filter(Keyword.id.in_(keyword_ids)).all()
         keyword_map = {kw.id: kw.keyword for kw in keywords}
+    _log(f"[train-keyword-models] Resolved {len(keyword_map)} keyword ids.")
 
     positive_ids: Dict[str, List[str]] = {}
     negative_ids: Dict[str, List[str]] = {}
@@ -323,9 +331,15 @@ def build_keyword_models(
         bucket = positive_ids if tag.signum == 1 else negative_ids
         bucket.setdefault(keyword_name, []).append(str(tag.asset_id))
 
+    total_keywords = len(positive_ids)
+    _log(
+        "[train-keyword-models] Candidate keywords with positives: "
+        f"{total_keywords} (min_positive={min_positive})."
+    )
+
     trained = 0
     skipped = 0
-    for keyword, pos_ids in positive_ids.items():
+    for index, (keyword, pos_ids) in enumerate(positive_ids.items(), start=1):
         # Start with explicit human-marked negatives
         neg_id_set: set = set(negative_ids.get(keyword, []))
 
@@ -342,14 +356,26 @@ def build_keyword_models(
                         neg_id_set.update(set(sibling_pos_ids) - pos_id_set)
 
         neg_ids = list(neg_id_set)
+        explicit_neg_set = set(negative_ids.get(keyword, []))
+        implicit_neg_set = set(neg_ids) - explicit_neg_set
+        explicit_neg_ids = list(explicit_neg_set)
+        implicit_neg_ids = list(implicit_neg_set)
+
+        if progress:
+            _log(
+                "[train-keyword-models] "
+                f"{index}/{total_keywords} keyword='{keyword}' "
+                f"pos={len(pos_ids)} "
+                f"neg_total={len(neg_ids)} "
+                f"neg_explicit={len(explicit_neg_set)} "
+                f"neg_implicit={len(implicit_neg_set)} "
+                f"trained={trained} skipped={skipped}"
+            )
 
         # Require minimum positive examples, but allow zero negative examples
         if len(pos_ids) < min_positive:
             skipped += 1
             continue
-
-        explicit_neg_ids = list(negative_ids.get(keyword, []))
-        implicit_neg_ids = [nid for nid in neg_ids if nid not in set(explicit_neg_ids)]
 
         pos_embeddings = _fetch_embeddings(db, tenant_id, pos_ids)
         explicit_neg_embeddings = _fetch_embeddings(db, tenant_id, explicit_neg_ids) if explicit_neg_ids else []
@@ -400,6 +426,10 @@ def build_keyword_models(
 
         trained += 1
 
+    _log(
+        "[train-keyword-models] Completed "
+        f"(trained={trained}, skipped={skipped}, total={total_keywords})."
+    )
     return {"trained": trained, "skipped": skipped}
 
 

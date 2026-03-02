@@ -90,6 +90,7 @@ class TrainKeywordModelsCommand(CliCommand):
             model_version=model_version,
             min_positive=self.min_positive or settings.keyword_model_min_positive,
             keyword_to_category=keyword_to_category,
+            progress=True,
         )
         self.db.commit()
         click.echo(f"✓ Trained: {result['trained']} · Skipped: {result['skipped']}")
