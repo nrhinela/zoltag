@@ -46,6 +46,7 @@ _PROVIDER_SYNC_DEFINITION_KEYS = {
     "gphotos": "sync-gphotos",
     "flickr": "sync-flickr",
 }
+_SYNC_ALL_DEFINITION_KEY = "sync-providers"
 
 
 def _normalize_provider_or_400(value: str | None) -> str:
@@ -1359,6 +1360,130 @@ async def enqueue_provider_sync(
         "provider_id": str(record.id),
         "provider_type": record.provider_type,
         "definition_key": definition_key,
+        "job_id": str(job.id),
+        "status": "queued",
+    }
+
+
+@router.post("/providers/sync-all")
+async def enqueue_all_provider_sync(
+    payload: dict | None = None,
+    tenant: Tenant = Depends(get_tenant),
+    admin: UserProfile = Depends(require_tenant_permission_from_header("provider.manage")),
+    db: Session = Depends(get_db),
+):
+    """Queue one tenant-scoped sync job that runs all active connected providers sequentially."""
+    tenant_row = db.query(TenantModel).filter(TenantModel.id == tenant.id).first()
+    if not tenant_row:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    repo = TenantIntegrationRepository(db)
+    active_records = repo.list_provider_records(
+        tenant_row,
+        include_inactive=False,
+        include_placeholders=False,
+    )
+    eligible_records = []
+    for record in active_records:
+        if record.provider_type == "dropbox":
+            _assert_dropbox_provider_scope_safe(tenant_row, record)
+        if not _provider_connected(record):
+            continue
+        eligible_records.append(record)
+
+    if not eligible_records:
+        raise HTTPException(
+            status_code=409,
+            detail="No active connected providers available to sync.",
+        )
+
+    definition = db.query(JobDefinition).filter(
+        JobDefinition.key == _SYNC_ALL_DEFINITION_KEY,
+        JobDefinition.is_active.is_(True),
+    ).first()
+    if not definition:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Sync job definition is missing or inactive: {_SYNC_ALL_DEFINITION_KEY}",
+        )
+
+    requested_payload = payload or {}
+    if not isinstance(requested_payload, dict):
+        raise HTTPException(status_code=400, detail="payload must be an object")
+
+    job_payload: dict[str, object] = {}
+    count_raw = requested_payload.get("count")
+    if count_raw not in (None, ""):
+        try:
+            count = int(count_raw)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="count must be an integer")
+        if count < 1 or count > 10000:
+            raise HTTPException(status_code=400, detail="count must be between 1 and 10000")
+        job_payload["count"] = count
+    if bool(requested_payload.get("reprocess_existing")):
+        job_payload["reprocess_existing"] = True
+
+    try:
+        job_payload = normalize_queue_payload(_SYNC_ALL_DEFINITION_KEY, job_payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc).strip() or "Invalid sync payload")
+
+    tenant_uuid = UUID(str(tenant.id))
+    dedupe_key = f"providers-sync:{tenant.id}"
+    existing = db.query(Job).filter(
+        Job.tenant_id == tenant_uuid,
+        Job.dedupe_key == dedupe_key,
+        Job.status.in_(("queued", "running")),
+    ).order_by(Job.queued_at.desc()).first()
+    if existing:
+        return {
+            "tenant_id": str(tenant.id),
+            "definition_key": _SYNC_ALL_DEFINITION_KEY,
+            "provider_count": len(eligible_records),
+            "job_id": str(existing.id),
+            "status": "already_queued",
+        }
+
+    now = datetime.utcnow()
+    job = Job(
+        tenant_id=tenant_uuid,
+        definition_id=definition.id,
+        source="manual",
+        status="queued",
+        priority=100,
+        payload=job_payload,
+        dedupe_key=dedupe_key,
+        scheduled_for=now,
+        queued_at=now,
+        max_attempts=int(definition.max_attempts or 3),
+        created_by=admin.supabase_uid,
+    )
+    db.add(job)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        existing = db.query(Job).filter(
+            Job.tenant_id == tenant_uuid,
+            Job.dedupe_key == dedupe_key,
+            Job.status.in_(("queued", "running")),
+        ).order_by(Job.queued_at.desc()).first()
+        if existing:
+            return {
+                "tenant_id": str(tenant.id),
+                "definition_key": _SYNC_ALL_DEFINITION_KEY,
+                "provider_count": len(eligible_records),
+                "job_id": str(existing.id),
+                "status": "already_queued",
+            }
+        raise HTTPException(status_code=409, detail="Sync job enqueue conflict")
+
+    db.refresh(job)
+    return {
+        "tenant_id": str(tenant.id),
+        "definition_key": _SYNC_ALL_DEFINITION_KEY,
+        "provider_count": len(eligible_records),
         "job_id": str(job.id),
         "status": "queued",
     }

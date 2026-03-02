@@ -2935,6 +2935,12 @@ async def get_image(
             tenant_column_filter(MemberComment, tenant),
         ).scalar() or 0
     )
+    text_index_row = None
+    if image.asset_id is not None:
+        text_index_row = db.query(AssetTextIndex).filter(
+            AssetTextIndex.asset_id == image.asset_id,
+            tenant_column_filter(AssetTextIndex, tenant),
+        ).first()
 
     storage_info = _resolve_storage_or_409(image=image, tenant=tenant, db=db)
     return {
@@ -2976,6 +2982,8 @@ async def get_image(
         "machine_tags_by_type": tags_by_type,
         "permatags": permatags_list,
         "calculated_tags": calculated_tags,
+        "search_index_components": text_index_row.components if text_index_row else None,
+        "search_index_updated_at": text_index_row.updated_at.isoformat() if text_index_row and text_index_row.updated_at else None,
         "exif_data": image.exif_data,
         "dropbox_properties": image.dropbox_properties,
     }

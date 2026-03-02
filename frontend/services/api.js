@@ -1111,6 +1111,23 @@ export async function queueIntegrationProviderSync(tenantId, providerUuid, paylo
 }
 
 /**
+ * Queue one tenant-scoped sync job that sequentially syncs all active connected providers
+ * @param {string} tenantId - Tenant ID
+ * @param {{count?: number, reprocess_existing?: boolean}} payload
+ * @returns {Promise<Object>}
+ */
+export async function queueIntegrationProvidersSyncAll(tenantId, payload = {}) {
+  const result = await fetchWithAuth('/admin/integrations/providers/sync-all', {
+    method: 'POST',
+    tenantId,
+    body: JSON.stringify(payload || {}),
+  });
+  invalidateQueries(['integrationStatus', tenantId]);
+  invalidateQueries(['integrationProviders', tenantId]);
+  return result;
+}
+
+/**
  * Update integration config for tenant-admin provider settings
  * @param {string} tenantId - Tenant ID
  * @param {{provider?: string, syncFolders?: string[], defaultSourceProvider?: string, isActive?: boolean}} payload

@@ -1190,6 +1190,21 @@ class ImageEditor extends LitElement {
       font-size: 12px;
       color: #9ca3af;
     }
+    .search-index-code {
+      margin: 0;
+      padding: 10px;
+      border-radius: 8px;
+      border: 1px solid #e5e7eb;
+      background: #f8fafc;
+      color: #0f172a;
+      font-size: 11px;
+      line-height: 1.4;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      max-height: 280px;
+      overflow: auto;
+    }
     .zoom-controls {
       position: sticky;
       bottom: 0;
@@ -3344,6 +3359,46 @@ class ImageEditor extends LitElement {
     `;
   }
 
+  _formatSearchIndexComponents(components) {
+    if (components === null || components === undefined) {
+      return '';
+    }
+    try {
+      return JSON.stringify(components, null, 2);
+    } catch (_error) {
+      return String(components);
+    }
+  }
+
+  _renderSearchIndexTab() {
+    const details = this.details;
+    if (!details) return html`<div class="empty-text">No search index data.</div>`;
+    const components = details.search_index_components;
+    const hasComponents = components !== null && components !== undefined;
+    const updatedAt = this._formatDateTime(details.search_index_updated_at);
+    const formatted = this._formatSearchIndexComponents(components);
+
+    return html`
+      <div class="prop-panel">
+        ${renderPropertySection({
+          title: 'Asset Text Index',
+          rows: [
+            { label: 'Asset ID', value: details.asset_id || 'Unknown' },
+            { label: 'Index updated', value: updatedAt || 'Unknown' },
+            { label: 'Status', value: hasComponents ? 'Indexed' : 'No index document found' },
+          ],
+        })}
+
+        ${renderPropertySection({
+          title: 'components',
+          body: hasComponents
+            ? html`<pre class="search-index-code">${formatted}</pre>`
+            : html`<div class="empty-text">No components found for this asset.</div>`,
+        })}
+      </div>
+    `;
+  }
+
   _renderRatingControl({ showHeading = true } = {}) {
     if (!this.details) return html``;
     const canRate = Boolean(this.canCurate);
@@ -3563,6 +3618,9 @@ class ImageEditor extends LitElement {
         </button>
         <button class="tab-button ${this.activeTab === 'metadata' ? 'active' : ''}" @click=${() => this._setTab('metadata')}>
           Metadata
+        </button>
+        <button class="tab-button ${this.activeTab === 'search-index' ? 'active' : ''}" @click=${() => this._setTab('search-index')}>
+          Search Index
         </button>
         <button class="tab-button ${this.activeTab === 'tags' ? 'active' : ''}" @click=${() => this._setTab('tags')}>
           Tags
@@ -4010,9 +4068,11 @@ class ImageEditor extends LitElement {
     const imageContainerClasses = `image-container ${this.isActualSize ? 'zoomed' : ''}`;
     const rightPaneContent = this.activeTab === 'metadata'
       ? this._renderMetadataTab()
+      : this.activeTab === 'search-index'
+        ? this._renderSearchIndexTab()
       : this.activeTab === 'tags'
         ? this._renderTagsReadOnly()
-        : this.activeTab === 'feedback'
+      : this.activeTab === 'feedback'
           ? this._renderFeedbackTab()
         : this._renderEditTab();
 

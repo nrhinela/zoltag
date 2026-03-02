@@ -16,6 +16,7 @@ import {
   getLiveGphotosAlbums,
   getLiveYoutubePlaylists,
   queueIntegrationProviderSync,
+  queueIntegrationProvidersSyncAll,
   saveGdriveCredentials,
   startIntegrationPickerSession,
   listIntegrationPickerItems,
@@ -2149,39 +2150,24 @@ export class LibraryIntegrationsAdmin extends LitElement {
     this.errorMessage = '';
     this.successMessage = '';
     this._listSyncAllSummary = '';
-    let failed = 0;
-    let queued = 0;
-    let alreadyQueued = 0;
-    let firstError = '';
-    const failedDetails = [];
-    for (const inst of targets) {
-      const uuid = String(inst?.id || '').trim();
-      const providerType = normalizeProviderId(inst?.provider_type);
-      const label = String(inst?.label || '').trim() || PROVIDER_LABELS[providerType] || inst?.provider_type || 'provider';
-      try {
-        const result = await queueIntegrationProviderSync(tenantId, uuid, {});
-        const queuedState = String(result?.status || '').trim().toLowerCase();
-        if (queuedState === 'already_queued') {
-          alreadyQueued += 1;
-        } else {
-          queued += 1;
-        }
-      } catch (error) {
-        failed += 1;
-        const message = String(error?.message || '').trim();
-        if (!firstError) firstError = message;
-        failedDetails.push(`${label}: ${message || 'Request failed'}`);
+    try {
+      const result = await queueIntegrationProvidersSyncAll(tenantId, {});
+      const queuedState = String(result?.status || '').trim().toLowerCase();
+      const queuedJobId = String(result?.job_id || '').trim();
+      const providerCountRaw = Number(result?.provider_count);
+      const providerCount = Number.isFinite(providerCountRaw) && providerCountRaw > 0
+        ? providerCountRaw
+        : targets.length;
+      if (queuedState === 'already_queued') {
+        this._listSyncAllSummary = `Sync all summary: already queued/running for ${providerCount} provider${providerCount === 1 ? '' : 's'}.`;
+        this.successMessage = `A sync-all job is already queued or running.${queuedJobId ? ` Job: ${queuedJobId}.` : ''}`;
+      } else {
+        this._listSyncAllSummary = `Sync all summary: queued for ${providerCount} provider${providerCount === 1 ? '' : 's'}.`;
+        this.successMessage = `Sync-all job queued.${queuedJobId ? ` Job: ${queuedJobId}.` : ''}`;
       }
-    }
-    const summaryParts = [`${queued} queued`];
-    if (alreadyQueued > 0) summaryParts.push(`${alreadyQueued} already queued/running`);
-    if (failed > 0) summaryParts.push(`${failed} failed`);
-    this._listSyncAllSummary = `Sync all summary: ${summaryParts.join(', ')}.`;
-    if (failed > 0) {
-      const visibleFailures = failedDetails.slice(0, 2).join(' | ');
-      const hiddenCount = Math.max(0, failedDetails.length - 2);
-      const hiddenSuffix = hiddenCount > 0 ? ` (+${hiddenCount} more)` : '';
-      this.errorMessage = `${this._listSyncAllSummary}${visibleFailures ? ` ${visibleFailures}${hiddenSuffix}` : ''}`;
+    } catch (error) {
+      this.errorMessage = error?.message || 'Failed to queue sync-all job';
+      this._listSyncAllSummary = '';
     }
     this._listSyncAllRunning = false;
   }
