@@ -20,6 +20,7 @@ import {
 const STATUS_OPTIONS = ['', 'queued', 'running', 'succeeded', 'failed', 'canceled', 'dead_letter'];
 const SOURCE_OPTIONS = ['', 'manual', 'event', 'schedule', 'system'];
 const RETRYABLE_STATUSES = new Set(['failed', 'dead_letter', 'canceled']);
+const JOBS_VIEW_LIMIT = 100;
 
 function normalizeTenantId(value) {
   return String(value || '').trim();
@@ -61,6 +62,7 @@ function parseJsonField(value, fieldName) {
 export class LibraryJobsAdmin extends LitElement {
   static properties = {
     tenant: { type: String },
+    tenantName: { type: String },
     isSuperAdmin: { type: Boolean },
     activeTab: { type: String },
     loading: { type: Boolean },
@@ -428,6 +430,7 @@ export class LibraryJobsAdmin extends LitElement {
   constructor() {
     super();
     this.tenant = '';
+    this.tenantName = '';
     this.isSuperAdmin = false;
     this.activeTab = 'queue';
     this.loading = false;
@@ -622,7 +625,7 @@ export class LibraryJobsAdmin extends LitElement {
         getJobs(tenantId, {
           status: this.statusFilter || undefined,
           source: this.sourceFilter || undefined,
-          limit: 100,
+          limit: JOBS_VIEW_LIMIT,
           offset: 0,
         }),
       ]);
@@ -1172,6 +1175,17 @@ export class LibraryJobsAdmin extends LitElement {
     return hasRunningAttempt ? 'running' : 'stalled';
   }
 
+  _getTenantDisplay(job) {
+    const rowTenantName = String(job?.tenant_name || '').trim();
+    if (rowTenantName) return rowTenantName;
+    const propTenantName = String(this.tenantName || '').trim();
+    if (propTenantName) return propTenantName;
+    const rowTenantId = String(job?.tenant_id || '').trim();
+    if (rowTenantId) return rowTenantId;
+    const selectedTenantId = normalizeTenantId(this.tenant);
+    return selectedTenantId || '—';
+  }
+
   async _loadAttemptsForJob(jobId, { markLoading = false, silentErrors = false } = {}) {
     const tenantId = normalizeTenantId(this.tenant);
     const normalizedJobId = String(jobId || '').trim();
@@ -1552,6 +1566,7 @@ export class LibraryJobsAdmin extends LitElement {
             <thead>
               <tr>
                 <th>Queued</th>
+                <th>Tenant</th>
                 <th>Definition</th>
                 <th>Profile</th>
                 <th>Status</th>
@@ -1569,6 +1584,7 @@ export class LibraryJobsAdmin extends LitElement {
                 return html`
                   <tr>
                     <td>${formatDateTime(job.queued_at)}</td>
+                    <td>${this._getTenantDisplay(job)}</td>
                     <td class="mono">${job.definition_key || job.definition_id}</td>
                     <td class="mono">${String(job.run_profile || 'light')}</td>
                     <td><span class="status-pill status-${this._getDisplayStatus(job)}">${this._getDisplayStatus(job)}</span></td>
@@ -1593,11 +1609,12 @@ export class LibraryJobsAdmin extends LitElement {
                   </tr>
                   ${attemptsExpanded ? html`
                     <tr class="expand-row">
-                      <td colspan="7">
+                      <td colspan="8">
                         ${attemptsLoading ? html`<div class="muted" style="padding: 8px;">Loading attempts...</div>` : html`
                           <div style="padding: 6px 4px;">
                             <div class="row" style="margin-bottom: 6px; flex-wrap: wrap; gap: 16px;">
                               <div><div class="muted" style="margin-bottom: 2px;">Job ID</div><div class="mono">${jobId}</div></div>
+                              <div><div class="muted" style="margin-bottom: 2px;">Tenant</div><div class="mono">${this._getTenantDisplay(job)}</div></div>
                               <div><div class="muted" style="margin-bottom: 2px;">Worker</div><div class="mono">${job.claimed_by_worker || '—'}</div></div>
                               <div><div class="muted" style="margin-bottom: 2px;">Profile</div><div class="mono">${String(job.run_profile || 'light')}</div></div>
                             </div>
@@ -1650,7 +1667,7 @@ export class LibraryJobsAdmin extends LitElement {
                   ` : ''}
                 `;
               })}
-              ${!this.jobs.length ? html`<tr><td colspan="6" class="muted">No jobs found.</td></tr>` : ''}
+              ${!this.jobs.length ? html`<tr><td colspan="8" class="muted">No jobs found.</td></tr>` : ''}
             </tbody>
           </table>
         </div>

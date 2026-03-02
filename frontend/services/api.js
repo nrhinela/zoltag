@@ -1509,6 +1509,23 @@ export async function deleteGlobalWorkflowDefinition(workflowId) {
 }
 
 /**
+ * List jobs across all tenants (super-admin)
+ * @param {Object} options
+ * @returns {Promise<Object>}
+ */
+export async function getAllJobs(options = {}) {
+  const params = new URLSearchParams();
+  if (options.status) params.set('status', options.status);
+  if (options.source) params.set('source', options.source);
+  if (options.limit !== undefined && options.limit !== null) params.set('limit', String(options.limit));
+  if (options.offset !== undefined && options.offset !== null) params.set('offset', String(options.offset));
+  if (options.createdAfter) params.set('created_after', options.createdAfter);
+  if (options.createdBefore) params.set('created_before', options.createdBefore);
+  const query = params.toString();
+  return fetchWithAuth(`/jobs/all${query ? `?${query}` : ''}`);
+}
+
+/**
  * List workflow runs across all tenants (super-admin)
  * @param {Object} options
  * @returns {Promise<Object>}

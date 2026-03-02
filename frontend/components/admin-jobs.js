@@ -11,6 +11,7 @@ import {
   getGlobalJobDefinitions,
   getGlobalJobTriggers,
   getGlobalWorkflowDefinitions,
+  getAllJobs,
   updateGlobalWorkflowDefinition,
   updateGlobalJobDefinition,
   updateGlobalJobTrigger,
@@ -48,6 +49,7 @@ const _TIMEZONES = [
   'Pacific/Auckland',
 ];
 const _RUN_PROFILES = ['light', 'ml'];
+const _QUEUE_VIEW_LIMIT = 100;
 
 function parseJsonObject(value, fieldName) {
   const text = String(value || '').trim();
@@ -112,6 +114,8 @@ export class AdminJobs extends LitElement {
     workflowEdits: { type: Object },
     workflowStepsRows: { type: Array },
     definitionDocsOpen: { type: Object },
+    allJobs: { type: Array },
+    allJobsLoading: { type: Boolean },
     allWorkflowRuns: { type: Array },
     allWorkflowRunsLoading: { type: Boolean },
     // in-page CRUD navigation: null=list, '__new__'=new form, '<id>'=edit form
@@ -231,6 +235,8 @@ export class AdminJobs extends LitElement {
     this.workflowEdits = {};
     this.workflowStepsRows = [{ step_key: '', definition_key: '', depends_on: [], payload: {} }];
     this.definitionDocsOpen = {};
+    this.allJobs = [];
+    this.allJobsLoading = false;
     this.allWorkflowRuns = [];
     this.allWorkflowRunsLoading = false;
     this._jobEditingId = null;
@@ -252,6 +258,15 @@ export class AdminJobs extends LitElement {
     if (this.selectedTenantId) return;
     const first = Array.isArray(this.tenants) ? this.tenants[0] : null;
     this.selectedTenantId = String(first?.id || '').trim();
+  }
+
+  _getSelectedTenantLabel() {
+    const selectedTenantId = String(this.selectedTenantId || '').trim();
+    if (!selectedTenantId) return '';
+    const selectedTenant = (Array.isArray(this.tenants) ? this.tenants : []).find(
+      (tenant) => String(tenant?.id || '').trim() === selectedTenantId
+    );
+    return String(selectedTenant?.identifier || selectedTenant?.name || selectedTenantId).trim();
   }
 
   _setError(message) {
@@ -719,7 +734,7 @@ export class AdminJobs extends LitElement {
 
         <div class="tabs">
           ${['jobs','workflows','triggers','queue'].map((tab) => html`
-            <button class="tab ${this.activeTab === tab ? 'active' : ''}" @click=${() => { this.activeTab = tab; if (tab === 'queue') this._loadAllWorkflowRuns(); }}>
+            <button class="tab ${this.activeTab === tab ? 'active' : ''}" @click=${() => { this.activeTab = tab; if (tab === 'queue') this._loadQueueOverview(); }}>
               ${tab.charAt(0).toUpperCase() + tab.slice(1)}
             </button>
           `)}
@@ -1413,7 +1428,7 @@ export class AdminJobs extends LitElement {
   async _loadAllWorkflowRuns() {
     this.allWorkflowRunsLoading = true;
     try {
-      const result = await getAllWorkflowRuns({ limit: 100 });
+      const result = await getAllWorkflowRuns({ limit: _QUEUE_VIEW_LIMIT });
       this.allWorkflowRuns = Array.isArray(result?.runs) ? result.runs : [];
     } catch (error) {
       this._setError(error?.message || 'Failed to load workflow runs');
@@ -1422,8 +1437,27 @@ export class AdminJobs extends LitElement {
     }
   }
 
+  async _loadAllJobs() {
+    this.allJobsLoading = true;
+    try {
+      const result = await getAllJobs({ limit: _QUEUE_VIEW_LIMIT });
+      this.allJobs = Array.isArray(result?.jobs) ? result.jobs : [];
+    } catch (error) {
+      this._setError(error?.message || 'Failed to load jobs');
+    } finally {
+      this.allJobsLoading = false;
+    }
+  }
+
+  async _loadQueueOverview() {
+    await Promise.all([
+      this._loadAllJobs(),
+      this._loadAllWorkflowRuns(),
+    ]);
+  }
+
   _renderQueue() {
-    const statusBadge = (status) => {
+    const workflowStatusBadge = (status) => {
       const colors = {
         completed: 'background:#dcfce7;color:#166534',
         failed: 'background:#fee2e2;color:#991b1b',
@@ -1434,12 +1468,67 @@ export class AdminJobs extends LitElement {
       const style = colors[status] || colors.pending;
       return html`<span style="display:inline-block;padding:2px 7px;border-radius:9999px;font-size:11px;font-weight:600;${style}">${status}</span>`;
     };
+    const jobStatusBadge = (status) => {
+      const normalized = String(status || '').toLowerCase();
+      const colors = {
+        queued: 'background:#e0e7ff;color:#3730a3',
+        running: 'background:#dbeafe;color:#1e40af',
+        succeeded: 'background:#dcfce7;color:#166534',
+        failed: 'background:#fee2e2;color:#991b1b',
+        canceled: 'background:#e5e7eb;color:#374151',
+        dead_letter: 'background:#f5d0fe;color:#6b21a8',
+      };
+      const style = colors[normalized] || 'background:#f3f4f6;color:#374151';
+      return html`<span style="display:inline-block;padding:2px 7px;border-radius:9999px;font-size:11px;font-weight:600;${style}">${normalized || 'pending'}</span>`;
+    };
 
     return html`
       <div class="section">
         <div class="row" style="margin-bottom:10px;">
+          <h3 class="section-title" style="margin:0;flex:1;">All Jobs</h3>
+          <button class="btn btn-secondary btn-sm" @click=${() => this._loadQueueOverview()}>
+            ${this.allJobsLoading ? 'Loading…' : 'Refresh'}
+          </button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Tenant</th>
+                <th>Definition</th>
+                <th>Profile</th>
+                <th>Status</th>
+                <th>Queued At</th>
+                <th>Attempts</th>
+                <th>Source</th>
+                <th>Error</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${this.allJobsLoading ? html`
+                <tr><td colspan="8" class="muted" style="text-align:center;padding:16px;">Loading…</td></tr>
+              ` : this.allJobs.length === 0 ? html`
+                <tr><td colspan="8" class="muted" style="text-align:center;padding:16px;">No jobs found.</td></tr>
+              ` : this.allJobs.map((job) => html`
+                <tr>
+                  <td class="mono">${job.tenant_name || job.tenant_id}</td>
+                  <td class="mono">${job.definition_key || job.definition_id}</td>
+                  <td class="mono">${job.run_profile || 'light'}</td>
+                  <td>${jobStatusBadge(job.status)}</td>
+                  <td class="muted">${job.queued_at ? new Date(job.queued_at).toLocaleString() : '—'}</td>
+                  <td>${Number(job.attempt_count || 0)} / ${Number(job.max_attempts || 0)}</td>
+                  <td>${job.source || '—'}</td>
+                  <td class="muted" style="max-width:260px;word-break:break-word;">${job.last_error || ''}</td>
+                </tr>
+              `)}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="section" style="margin-top:14px;">
+        <div class="row" style="margin-bottom:10px;">
           <h3 class="section-title" style="margin:0;flex:1;">All Workflow Runs</h3>
-          <button class="btn btn-secondary btn-sm" @click=${() => this._loadAllWorkflowRuns()}>
+          <button class="btn btn-secondary btn-sm" @click=${() => this._loadQueueOverview()}>
             ${this.allWorkflowRunsLoading ? 'Loading…' : 'Refresh'}
           </button>
         </div>
@@ -1463,7 +1552,7 @@ export class AdminJobs extends LitElement {
                 <tr>
                   <td class="mono">${run.tenant_name || run.tenant_id}</td>
                   <td class="mono">${run.workflow_key}</td>
-                  <td>${statusBadge(run.status)}</td>
+                  <td>${workflowStatusBadge(run.status)}</td>
                   <td class="muted">${run.queued_at ? new Date(run.queued_at).toLocaleString() : '—'}</td>
                   <td class="muted" style="max-width:260px;word-break:break-word;">${run.error_text || ''}</td>
                 </tr>
@@ -1482,7 +1571,11 @@ export class AdminJobs extends LitElement {
         </div>
         ${this.selectedTenantId ? html`
           <div style="margin-top:10px;">
-            <library-jobs-admin .tenant=${this.selectedTenantId} .isSuperAdmin=${true}></library-jobs-admin>
+            <library-jobs-admin
+              .tenant=${this.selectedTenantId}
+              .tenantName=${this._getSelectedTenantLabel()}
+              .isSuperAdmin=${true}
+            ></library-jobs-admin>
           </div>
         ` : ''}
       </div>

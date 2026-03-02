@@ -297,6 +297,7 @@ export function renderAuxTabContent(host, { formatCurateDate }) {
           <div class="mt-2">
             <library-jobs-admin
               .tenant=${host.tenant}
+              .tenantName=${tenantDisplayName}
               .isSuperAdmin=${isSuperAdmin}
             ></library-jobs-admin>
           </div>

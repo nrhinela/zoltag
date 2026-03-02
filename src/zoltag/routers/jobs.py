@@ -1625,6 +1625,59 @@ async def list_jobs(
     }
 
 
+@router.get("/all")
+async def list_all_jobs(
+    status: str | None = Query(default=None),
+    source: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    created_after: datetime | None = Query(default=None),
+    created_before: datetime | None = Query(default=None),
+    _admin: UserProfile = Depends(require_super_admin),
+    db: Session = Depends(get_db),
+):
+    """List jobs across all tenants (super-admin)."""
+    status_value = (status or "").strip().lower() or None
+    source_value = (source or "").strip().lower() or None
+    if status_value and status_value not in _VALID_JOB_STATUSES:
+        raise HTTPException(status_code=400, detail="Invalid status filter")
+    if source_value and source_value not in _VALID_JOB_SOURCES:
+        raise HTTPException(status_code=400, detail="Invalid source filter")
+
+    query = db.query(Job).options(joinedload(Job.definition))
+    if status_value:
+        query = query.filter(Job.status == status_value)
+    if source_value:
+        query = query.filter(Job.source == source_value)
+    if created_after:
+        query = query.filter(Job.queued_at >= created_after)
+    if created_before:
+        query = query.filter(Job.queued_at <= created_before)
+
+    total = int(query.order_by(None).count() or 0)
+    rows = query.order_by(Job.queued_at.desc(), Job.id.desc()).limit(limit).offset(offset).all()
+
+    tenant_ids = list({row.tenant_id for row in rows})
+    tenant_names = {}
+    if tenant_ids:
+        tenants = db.query(TenantModel.id, TenantModel.identifier).filter(TenantModel.id.in_(tenant_ids)).all()
+        tenant_names = {str(t.id): str(t.identifier or t.id) for t in tenants}
+
+    payload_jobs = []
+    for row in rows:
+        payload = _serialize_job(row)
+        tenant_id = str(payload.get("tenant_id") or "")
+        payload["tenant_name"] = tenant_names.get(tenant_id, tenant_id)
+        payload_jobs.append(payload)
+
+    return {
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "jobs": payload_jobs,
+    }
+
+
 @router.get("/summary")
 async def get_jobs_summary(
     tenant: Tenant = Depends(get_tenant),
