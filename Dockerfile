@@ -92,7 +92,7 @@ CMD uvicorn zoltag.api:app --host 0.0.0.0 --port ${PORT:-8080} --workers 2
 
 FROM runtime-base AS runtime-ml
 
-COPY --from=model-cache /app/.cache/huggingface /app/.cache/huggingface
+COPY --from=model-cache --chown=zoltag:zoltag /app/.cache/huggingface /app/.cache/huggingface
 
 ENV HF_HOME=/app/.cache/huggingface \
     TRANSFORMERS_CACHE=/app/.cache/huggingface/transformers
