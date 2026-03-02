@@ -14,6 +14,7 @@ from zoltag.auth.models import UserProfile
 from zoltag.cli.introspection import normalize_queue_payload
 from zoltag.database import get_db
 from zoltag.dependencies import delete_secret, get_secret, get_tenant, store_secret
+from zoltag.job_profiles import resolve_definition_run_profile
 from zoltag.dropbox_oauth import (
     load_dropbox_oauth_credentials,
     sanitize_redirect_origin,
@@ -1325,6 +1326,7 @@ async def enqueue_provider_sync(
         definition_id=definition.id,
         source="manual",
         status="queued",
+        run_profile=resolve_definition_run_profile(definition),
         priority=100,
         payload=job_payload,
         dedupe_key=dedupe_key,
@@ -1451,6 +1453,7 @@ async def enqueue_all_provider_sync(
         definition_id=definition.id,
         source="manual",
         status="queued",
+        run_profile=resolve_definition_run_profile(definition),
         priority=100,
         payload=job_payload,
         dedupe_key=dedupe_key,

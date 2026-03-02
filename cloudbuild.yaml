@@ -1,10 +1,14 @@
 # Cloud Build configuration for GCP deployment
 
 steps:
-  # Pull previous image for caching (continue if not found)
+  # Pull previous images for layer cache (continue if not found)
   - name: 'gcr.io/cloud-builders/docker'
     entrypoint: 'bash'
-    args: ['-c', 'docker pull gcr.io/$PROJECT_ID/zoltag:latest || echo "No cache found, building from scratch"']
+    args:
+      - '-c'
+      - |
+        docker pull gcr.io/$PROJECT_ID/zoltag:latest || echo "No light-image cache found"
+        docker pull gcr.io/$PROJECT_ID/zoltag-ml:latest || echo "No ml-image cache found"
     id: 'pull-cache'
   
   # Use Node 20 for Vite 7.x compatibility - clean install + build
@@ -15,29 +19,49 @@ steps:
       - 'SUPABASE_URL'
       - 'SUPABASE_ANON_KEY'
   
-  # Build the container image with BuildKit and cache
+  # Build light runtime image (API + sentinel + non-ML workers)
   - name: 'gcr.io/cloud-builders/docker'
     args: [
       'build',
+      '--target', 'runtime-light',
       '--build-arg', 'PRELOAD_SIGLIP=0',
       '--build-arg', 'BUILDKIT_INLINE_CACHE=1',
       '--cache-from', 'gcr.io/$PROJECT_ID/zoltag:latest',
-      '--cache-from', 'gcr.io/$PROJECT_ID/photocat:model-cache',
       '-t', 'gcr.io/$PROJECT_ID/zoltag:$_COMMIT_SHA',
       '-t', 'gcr.io/$PROJECT_ID/zoltag:latest',
       '.'
     ]
     env:
       - 'DOCKER_BUILDKIT=1'
-  
-  # Push the container image to Container Registry
+
+  # Build ML worker image (SigLIP baked in)
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [
+      'build',
+      '--target', 'runtime-ml',
+      '--build-arg', 'PRELOAD_SIGLIP=1',
+      '--build-arg', 'BUILDKIT_INLINE_CACHE=1',
+      '--cache-from', 'gcr.io/$PROJECT_ID/zoltag-ml:latest',
+      '-t', 'gcr.io/$PROJECT_ID/zoltag-ml:$_COMMIT_SHA',
+      '-t', 'gcr.io/$PROJECT_ID/zoltag-ml:latest',
+      '.'
+    ]
+    env:
+      - 'DOCKER_BUILDKIT=1'
+
+  # Push light image
   - name: 'gcr.io/cloud-builders/docker'
     args: ['push', 'gcr.io/$PROJECT_ID/zoltag:$_COMMIT_SHA']
-  
   - name: 'gcr.io/cloud-builders/docker'
     args: ['push', 'gcr.io/$PROJECT_ID/zoltag:latest']
-  
-  # Deploy to Cloud Run (API service)
+
+  # Push ML image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/$PROJECT_ID/zoltag-ml:$_COMMIT_SHA']
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/$PROJECT_ID/zoltag-ml:latest']
+
+  # Deploy API service with light image
   - name: 'gcr.io/cloud-builders/gcloud'
     entrypoint: gcloud
     args:
@@ -64,6 +88,7 @@ steps:
 
 images:
   - 'gcr.io/$PROJECT_ID/zoltag:$_COMMIT_SHA'
+  - 'gcr.io/$PROJECT_ID/zoltag-ml:$_COMMIT_SHA'
 
 options:
   machineType: 'E2_MEDIUM'

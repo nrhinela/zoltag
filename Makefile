@@ -11,6 +11,7 @@ ENV ?= prod
 WORKERS ?= 1
 PROJECT_ID = photocat-483622
 REGION = us-central1
+AUTO_CONFIGURE_SENTINEL ?= 1
 DEV_PID_FILE = .dev-pids
 
 help:
@@ -300,7 +301,15 @@ deploy-all:
 	@echo "Region: $(REGION)"
 	@echo ""
 	COMMIT_SHA=$$(git rev-parse --short HEAD) ; \
-	gcloud builds submit --project $(PROJECT_ID) --config=cloudbuild.yaml --substitutions=_COMMIT_SHA=$$COMMIT_SHA
+	LIGHT_IMAGE="gcr.io/$(PROJECT_ID)/zoltag:$$COMMIT_SHA" ; \
+	ML_IMAGE="gcr.io/$(PROJECT_ID)/zoltag-ml:$$COMMIT_SHA" ; \
+	gcloud builds submit --project $(PROJECT_ID) --config=cloudbuild.yaml --substitutions=_COMMIT_SHA=$$COMMIT_SHA ; \
+	if [ "$(AUTO_CONFIGURE_SENTINEL)" = "1" ]; then \
+		echo "Applying sentinel/worker post-deploy config..."; \
+		LIGHT_IMAGE="$$LIGHT_IMAGE" ML_IMAGE="$$ML_IMAGE" $(MAKE) configure-sentinel-workers PROJECT_ID=$(PROJECT_ID) REGION=$(REGION) ; \
+	else \
+		echo "Skipping sentinel/worker post-deploy config (AUTO_CONFIGURE_SENTINEL=$(AUTO_CONFIGURE_SENTINEL))"; \
+	fi
 
 # Alias for backward compatibility
 deploy: deploy-all
@@ -336,7 +345,7 @@ deploy-worker:
 
 configure-sentinel-workers:
 	@echo "Configuring sentinel + burst workers..."
-	PROJECT_ID=$(PROJECT_ID) REGION=$(REGION) ./scripts/configure_sentinel_workers.sh
+	PROJECT_ID=$(PROJECT_ID) REGION=$(REGION) LIGHT_IMAGE="$(LIGHT_IMAGE)" ML_IMAGE="$(ML_IMAGE)" ./scripts/configure_sentinel_workers.sh
 
 status:
 	@echo "Cloud Run Services Status:"

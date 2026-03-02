@@ -20,6 +20,7 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import joinedload
 from zoltag.cli.introspection import build_queue_command_argv
 from zoltag.database import SessionLocal
+from zoltag.job_profiles import RUN_PROFILE_LIGHT, normalize_run_profile
 from zoltag.metadata import Job, JobAttempt, JobDefinition, JobTrigger, JobWorker, WorkflowRun
 from zoltag.metadata import Tenant as TenantModel
 from zoltag.auth.models import UserProfile
@@ -43,6 +44,7 @@ _DEFAULT_LEASE_SECONDS = 300
 _DEFAULT_IDLE_HEARTBEAT_SECONDS = 30.0
 _DEFAULT_LOG_FLUSH_SECONDS = 2.0
 _DEFAULT_CANCEL_CHECK_SECONDS = 1.0
+_DEFAULT_LEASE_HEARTBEAT_SECONDS = 30.0
 _DEFAULT_WORKFLOW_RECONCILE_SECONDS = 60.0
 _DEFAULT_SCHEDULE_TICK_SECONDS = 60.0
 _DEFAULT_LEASE_RECLAIM_SECONDS = 120.0
@@ -56,6 +58,7 @@ class ClaimedJob:
     id: str
     tenant_id: str
     definition_key: str
+    run_profile: str
     payload: dict[str, Any]
     timeout_seconds: int
     max_attempts: int
@@ -218,6 +221,7 @@ def _claim_next_job(
     version: str,
     lease_seconds: int,
     queues: list[str],
+    run_profile: str | None = None,
 ) -> Optional[ClaimedJob]:
     db = SessionLocal()
     try:
@@ -234,6 +238,8 @@ def _claim_next_job(
                 Job.id.asc(),
             )
         )
+        if run_profile:
+            query = query.filter(Job.run_profile == run_profile)
         if db.bind and db.bind.dialect.name == "postgresql":
             query = query.with_for_update(skip_locked=True)
         else:
@@ -298,6 +304,7 @@ def _claim_next_job(
             id=str(job.id),
             tenant_id=str(job.tenant_id),
             definition_key=str(definition.key or ""),
+            run_profile=normalize_run_profile(getattr(job, "run_profile", None), default=RUN_PROFILE_LIGHT, strict=False),
             payload=job.payload or {},
             timeout_seconds=int(definition.timeout_seconds or 3600),
             max_attempts=int(job.max_attempts or 1),
@@ -311,6 +318,8 @@ def _execute_claimed_job(
     job: ClaimedJob,
     on_progress_logs: Optional[Callable[[Optional[str], Optional[str]], None]] = None,
     should_cancel: Optional[Callable[[], bool]] = None,
+    on_lease_heartbeat: Optional[Callable[[], None]] = None,
+    lease_heartbeat_seconds: float = _DEFAULT_LEASE_HEARTBEAT_SECONDS,
 ) -> ExecutionResult:
     process: Optional[subprocess.Popen[str]] = None
     try:
@@ -370,6 +379,7 @@ def _execute_claimed_job(
         started_at = time.monotonic()
         last_flush_at = 0.0
         last_cancel_check_at = 0.0
+        last_lease_heartbeat_at = 0.0
         did_timeout = False
         did_cancel = False
         last_sent_tails: tuple[Optional[str], Optional[str]] = (None, None)
@@ -395,6 +405,14 @@ def _execute_claimed_job(
                     process.kill()
                     break
                 last_cancel_check_at = now
+
+            heartbeat_seconds = max(1.0, float(lease_heartbeat_seconds or _DEFAULT_LEASE_HEARTBEAT_SECONDS))
+            if callable(on_lease_heartbeat) and (now - last_lease_heartbeat_at) >= heartbeat_seconds:
+                try:
+                    on_lease_heartbeat()
+                except Exception:
+                    logger.exception("Lease heartbeat callback failed for job %s", job.id)
+                last_lease_heartbeat_at = now
 
             if now - last_flush_at >= flush_seconds:
                 tails = _snapshot_tails()
@@ -532,6 +550,55 @@ def _update_running_attempt_logs(
     except Exception:
         db.rollback()
         logger.exception("Failed to persist running logs for job %s", claimed_job.id)
+    finally:
+        db.close()
+
+
+def _refresh_running_job_lease(
+    *,
+    claimed_job: ClaimedJob,
+    worker_id: str,
+    lease_seconds: int,
+    hostname: str,
+    version: str,
+    queues: list[str],
+) -> None:
+    """Extend lease while a job is actively executing."""
+    db = SessionLocal()
+    try:
+        job_uuid = uuid.UUID(claimed_job.id)
+        query = db.query(Job).filter(Job.id == job_uuid)
+        if db.bind and db.bind.dialect.name == "postgresql":
+            query = query.with_for_update(skip_locked=False)
+        else:
+            query = query.with_for_update()
+        job = query.first()
+        if job is None:
+            db.rollback()
+            return
+        if str(job.status or "").strip().lower() != "running":
+            db.rollback()
+            return
+        if str(job.claimed_by_worker or "").strip() != worker_id:
+            db.rollback()
+            return
+
+        job.lease_expires_at = _now_utc() + timedelta(
+            seconds=max(30, int(lease_seconds or _DEFAULT_LEASE_SECONDS))
+        )
+        _upsert_worker_heartbeat(
+            db,
+            worker_id=worker_id,
+            hostname=hostname,
+            version=version,
+            queues=queues,
+            running_count=1,
+            metadata_json={"last_job_id": claimed_job.id},
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("Failed to refresh lease for job %s", claimed_job.id)
     finally:
         db.close()
 
@@ -878,6 +945,11 @@ def run_loop(
     hostname = socket.gethostname()
     version = str(os.getenv("K_REVISION") or os.getenv("GIT_SHA") or "").strip()
     queues = [value.strip() for value in str(os.getenv("JOB_WORKER_QUEUES") or "").split(",") if value.strip()]
+    worker_run_profile = normalize_run_profile(
+        os.getenv("JOB_WORKER_PROFILE"),
+        default="",
+        strict=False,
+    ) or None
     idle_heartbeat_interval = float(os.getenv("JOB_WORKER_IDLE_HEARTBEAT_SECONDS") or _DEFAULT_IDLE_HEARTBEAT_SECONDS)
     workflow_reconcile_interval = float(
         os.getenv("JOB_WORKFLOW_RECONCILE_SECONDS") or _DEFAULT_WORKFLOW_RECONCILE_SECONDS
@@ -893,7 +965,12 @@ def run_loop(
     last_schedule_tick_at = 0.0
     last_lease_reclaim_at = 0.0
 
-    logger.info("Job worker started: worker_id=%s lease_seconds=%s", worker_id, lease_seconds)
+    logger.info(
+        "Job worker started: worker_id=%s lease_seconds=%s run_profile=%s",
+        worker_id,
+        lease_seconds,
+        worker_run_profile or "any",
+    )
 
     while not stop.is_set():
         now_monotonic = time.monotonic()
@@ -917,6 +994,7 @@ def run_loop(
                 version=version,
                 lease_seconds=lease_seconds,
                 queues=queues,
+                run_profile=worker_run_profile,
             )
         except Exception as exc:
             if _is_transient_db_disconnect_error(exc):
@@ -943,21 +1021,31 @@ def run_loop(
             continue
 
         logger.info(
-            "Claimed job %s tenant=%s definition=%s attempt=%s",
+            "Claimed job %s tenant=%s definition=%s profile=%s attempt=%s",
             claimed_job.id,
             claimed_job.tenant_id,
             claimed_job.definition_key,
+            claimed_job.run_profile,
             claimed_job.attempt_no,
         )
+        active_job = claimed_job
         result = _execute_claimed_job(
-            claimed_job,
-            on_progress_logs=lambda stdout_tail, stderr_tail: _update_running_attempt_logs(
-                claimed_job=claimed_job,
+            active_job,
+            on_progress_logs=lambda stdout_tail, stderr_tail, job_ref=active_job: _update_running_attempt_logs(
+                claimed_job=job_ref,
                 worker_id=worker_id,
                 stdout_tail=stdout_tail,
                 stderr_tail=stderr_tail,
             ),
-            should_cancel=lambda: _is_job_cancel_requested(claimed_job_id=claimed_job.id),
+            should_cancel=lambda job_ref=active_job: _is_job_cancel_requested(claimed_job_id=job_ref.id),
+            on_lease_heartbeat=lambda job_ref=active_job: _refresh_running_job_lease(
+                claimed_job=job_ref,
+                worker_id=worker_id,
+                lease_seconds=lease_seconds,
+                hostname=hostname,
+                version=version,
+                queues=queues,
+            ),
         )
         _finalize_job(
             claimed_job=claimed_job,

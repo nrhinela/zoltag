@@ -38,6 +38,11 @@ from zoltag.cli.introspection import (
 )
 from zoltag.database import get_db
 from zoltag.dependencies import get_tenant
+from zoltag.job_profiles import (
+    RUN_PROFILE_LIGHT,
+    normalize_run_profile,
+    resolve_definition_run_profile,
+)
 from zoltag.metadata import (
     Job,
     JobAttempt,
@@ -106,6 +111,11 @@ def _serialize_job(job: Job) -> dict:
         "source": job.source,
         "source_ref": job.source_ref,
         "status": job.status,
+        "run_profile": normalize_run_profile(
+            getattr(job, "run_profile", None),
+            default=RUN_PROFILE_LIGHT,
+            strict=False,
+        ),
         "priority": job.priority,
         "payload": job.payload or {},
         "dedupe_key": job.dedupe_key,
@@ -151,6 +161,7 @@ def _serialize_definition(definition: JobDefinition) -> dict:
         "cli_command": cli_command,
         "timeout_seconds": definition.timeout_seconds,
         "max_attempts": definition.max_attempts,
+        "run_profile": resolve_definition_run_profile(definition),
         "is_active": definition.is_active,
         "created_at": definition.created_at,
         "updated_at": definition.updated_at,
@@ -256,6 +267,13 @@ def _parse_iso_datetime(value) -> datetime | None:
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=timezone.utc)
     return parsed
+
+
+def _parse_run_profile_or_400(value, *, default: str = RUN_PROFILE_LIGHT) -> str:
+    try:
+        return normalize_run_profile(value, default=default, strict=True)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 def _to_int(value, *, default: int, minimum: int | None = None, maximum: int | None = None, field_name: str = "value") -> int:
@@ -385,6 +403,7 @@ async def create_job_definition(
     arg_schema = build_payload_schema_for_command(key) or {}
     timeout_seconds = _to_int((body or {}).get("timeout_seconds"), default=3600, minimum=1, maximum=86400, field_name="timeout_seconds")
     max_attempts = _to_int((body or {}).get("max_attempts"), default=3, minimum=1, maximum=100, field_name="max_attempts")
+    run_profile = _parse_run_profile_or_400((body or {}).get("run_profile"), default=RUN_PROFILE_LIGHT)
     is_active = bool((body or {}).get("is_active", True))
 
     row = JobDefinition(
@@ -393,6 +412,7 @@ async def create_job_definition(
         arg_schema=arg_schema,
         timeout_seconds=timeout_seconds,
         max_attempts=max_attempts,
+        run_profile=run_profile,
         is_active=is_active,
     )
     db.add(row)
@@ -431,6 +451,8 @@ async def update_job_definition(
         row.timeout_seconds = _to_int((body or {}).get("timeout_seconds"), default=row.timeout_seconds, minimum=1, maximum=86400, field_name="timeout_seconds")
     if "max_attempts" in (body or {}):
         row.max_attempts = _to_int((body or {}).get("max_attempts"), default=row.max_attempts, minimum=1, maximum=100, field_name="max_attempts")
+    if "run_profile" in (body or {}):
+        row.run_profile = _parse_run_profile_or_400((body or {}).get("run_profile"), default=resolve_definition_run_profile(row))
     if "is_active" in (body or {}):
         row.is_active = bool((body or {}).get("is_active"))
     row.updated_at = _now_utc()
@@ -531,12 +553,14 @@ async def enqueue_job(
     scheduled_for = _parse_iso_datetime((body or {}).get("scheduled_for")) or _now_utc()
     dedupe_key = str((body or {}).get("dedupe_key") or "").strip() or None
     correlation_id = str((body or {}).get("correlation_id") or "").strip() or None
+    run_profile = resolve_definition_run_profile(definition)
 
     job = Job(
         tenant_id=UUID(str(tenant.id)),
         definition_id=definition.id,
         source="manual",
         status="queued",
+        run_profile=run_profile,
         priority=priority,
         payload=payload,
         dedupe_key=dedupe_key,
@@ -1268,6 +1292,7 @@ async def retry_job(
     max_attempts = _to_int((body or {}).get("max_attempts"), default=int(source_job.max_attempts or 3), minimum=1, maximum=100, field_name="max_attempts")
     scheduled_for = _parse_iso_datetime((body or {}).get("scheduled_for")) or _now_utc()
     dedupe_key = str((body or {}).get("dedupe_key") or "").strip() or None
+    run_profile = resolve_definition_run_profile(definition)
 
     retry_job = Job(
         tenant_id=source_job.tenant_id,
@@ -1275,6 +1300,7 @@ async def retry_job(
         source="manual",
         source_ref=f"retry:{source_job.id}",
         status="queued",
+        run_profile=run_profile,
         priority=priority,
         payload=payload,
         dedupe_key=dedupe_key,
@@ -1319,16 +1345,23 @@ async def worker_claim_jobs(
     if not isinstance(queues, list):
         raise HTTPException(status_code=400, detail="queues must be an array")
     queues = [str(value).strip() for value in queues if str(value).strip()]
+    run_profile_raw = (body or {}).get("run_profile")
+    run_profile = None
+    if run_profile_raw not in (None, ""):
+        run_profile = _parse_run_profile_or_400(run_profile_raw, default=RUN_PROFILE_LIGHT)
     metadata_json = (body or {}).get("metadata") or {}
     if not isinstance(metadata_json, dict):
         raise HTTPException(status_code=400, detail="metadata must be an object")
 
     now = _now_utc()
-    claimed_jobs = db.query(Job).options(joinedload(Job.definition)).filter(
+    query = db.query(Job).options(joinedload(Job.definition)).filter(
         tenant_column_filter(Job, tenant),
         Job.status == "queued",
         Job.scheduled_for <= now,
-    ).order_by(
+    )
+    if run_profile:
+        query = query.filter(Job.run_profile == run_profile)
+    claimed_jobs = query.order_by(
         Job.priority.asc(),
         Job.queued_at.asc(),
         Job.id.asc(),

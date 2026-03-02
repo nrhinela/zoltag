@@ -72,22 +72,34 @@ COPY alembic.ini ./
 # Install app code without re-downloading deps
 RUN pip install -e . --no-deps
 
-FROM base AS runtime
+FROM base AS runtime-base
 
 COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 COPY src/ ./src/
 COPY alembic/ ./alembic/
 COPY alembic.ini ./
-COPY --from=model-cache /app/.cache/huggingface /app/.cache/huggingface
-
-ENV HF_HOME=/app/.cache/huggingface \
-    TRANSFORMERS_CACHE=/app/.cache/huggingface/transformers
 
 # Create non-root user and preserve cache ownership
 RUN useradd -m -u 1000 zoltag && chown -R zoltag:zoltag /app
 USER zoltag
 
 EXPOSE 8080
+
+FROM runtime-base AS runtime-light
+
+CMD uvicorn zoltag.api:app --host 0.0.0.0 --port ${PORT:-8080} --workers 2
+
+FROM runtime-base AS runtime-ml
+
+COPY --from=model-cache /app/.cache/huggingface /app/.cache/huggingface
+
+ENV HF_HOME=/app/.cache/huggingface \
+    TRANSFORMERS_CACHE=/app/.cache/huggingface/transformers
+
+CMD uvicorn zoltag.api:app --host 0.0.0.0 --port ${PORT:-8080} --workers 2
+
+# Backward-compatible default target name.
+FROM runtime-light AS runtime
 
 CMD uvicorn zoltag.api:app --host 0.0.0.0 --port ${PORT:-8080} --workers 2

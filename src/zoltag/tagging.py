@@ -3,7 +3,11 @@
 from typing import List, Tuple, Protocol
 from PIL import Image
 import io
+import logging
 import numpy as np
+import os
+
+from zoltag.settings import settings
 
 # torch and transformers are optional — only needed when the AI model is in use.
 # Do not import them at module level so the app starts without them installed.
@@ -430,9 +434,11 @@ class SigLIPTagger:
 
 # Global instances to avoid reloading models on each request
 _tagger_instances = {}
+logger = logging.getLogger(__name__)
 
 
 _SIGLIP_MODEL_ID = "google/siglip-so400m-patch14-384"
+_AUTO_DOWNLOAD_ENV_VAR = "TAGGING_MODEL_AUTO_DOWNLOAD"
 
 
 def is_model_cached(model_type: str = "siglip") -> bool:
@@ -445,6 +451,16 @@ def is_model_cached(model_type: str = "siglip") -> bool:
         return result is not None and result is not _CACHED_NO_EXIST
     except Exception:
         return False
+
+
+def _is_model_auto_download_enabled() -> bool:
+    """Return True when cache misses should trigger an automatic model download."""
+    raw = os.getenv(_AUTO_DOWNLOAD_ENV_VAR)
+    if raw is None:
+        # Workers are ephemeral; bootstrap model cache on demand by default.
+        return bool(getattr(settings, "worker_mode", False))
+    text = str(raw).strip().lower()
+    return text in {"1", "true", "yes", "y", "on"}
 
 
 def get_tagger(model_type: str = "siglip") -> ImageTagger:
@@ -461,12 +477,21 @@ def get_tagger(model_type: str = "siglip") -> ImageTagger:
 
     if model_type not in _tagger_instances:
         if model_type == "siglip":
-            if not is_model_cached(model_type):
+            model_cached = is_model_cached(model_type)
+            auto_download = _is_model_auto_download_enabled()
+            if not model_cached and not auto_download:
                 raise RuntimeError(
                     "AI model not downloaded yet. "
                     "Use 'Download Model' in the app settings to download it first (~1.7 GB)."
                 )
+            if not model_cached and auto_download:
+                logger.warning(
+                    "AI model cache miss for %s; attempting automatic download.",
+                    _SIGLIP_MODEL_ID,
+                )
             _tagger_instances[model_type] = SigLIPTagger()
+            if not model_cached and auto_download:
+                logger.warning("AI model download complete for %s.", _SIGLIP_MODEL_ID)
         else:
             raise ValueError(f"Unknown model type: {model_type}. Currently only 'siglip' is supported")
 

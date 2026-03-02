@@ -22,6 +22,7 @@ from zoltag.exif import (
     parse_exif_int,
     parse_exif_str,
 )
+from zoltag.job_profiles import resolve_definition_run_profile
 from zoltag.tenant import Tenant
 from zoltag.metadata import Asset, ImageMetadata, JobDefinition, MachineTag
 from zoltag.models.config import Keyword
@@ -170,9 +171,9 @@ def _enqueue_build_embeddings(db: Session, tenant: Tenant) -> None:
             return
         now = datetime.now(timezone.utc)
         db.execute(text("""
-            INSERT INTO jobs (tenant_id, definition_id, source, status, priority, payload,
+            INSERT INTO jobs (tenant_id, definition_id, source, status, run_profile, priority, payload,
                               scheduled_for, queued_at, max_attempts)
-            SELECT :tenant_id, :definition_id, 'system', 'queued', 100, '{}',
+            SELECT :tenant_id, :definition_id, 'system', 'queued', :run_profile, 100, '{}',
                    :now, :now, :max_attempts
             WHERE NOT EXISTS (
                 SELECT 1 FROM jobs
@@ -183,6 +184,7 @@ def _enqueue_build_embeddings(db: Session, tenant: Tenant) -> None:
         """), {
             "tenant_id": str(tenant.id),
             "definition_id": str(definition.id),
+            "run_profile": resolve_definition_run_profile(definition),
             "now": now,
             "max_attempts": int(definition.max_attempts or 2),
         })

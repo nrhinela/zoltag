@@ -1553,6 +1553,7 @@ export class LibraryJobsAdmin extends LitElement {
               <tr>
                 <th>Queued</th>
                 <th>Definition</th>
+                <th>Profile</th>
                 <th>Status</th>
                 <th>Attempts</th>
                 <th>Source</th>
@@ -1569,6 +1570,7 @@ export class LibraryJobsAdmin extends LitElement {
                   <tr>
                     <td>${formatDateTime(job.queued_at)}</td>
                     <td class="mono">${job.definition_key || job.definition_id}</td>
+                    <td class="mono">${String(job.run_profile || 'light')}</td>
                     <td><span class="status-pill status-${this._getDisplayStatus(job)}">${this._getDisplayStatus(job)}</span></td>
                     <td>${Number(job.attempt_count || 0)} / ${Number(job.max_attempts || 0)}</td>
                     <td>${job.source || '—'}</td>
@@ -1591,12 +1593,13 @@ export class LibraryJobsAdmin extends LitElement {
                   </tr>
                   ${attemptsExpanded ? html`
                     <tr class="expand-row">
-                      <td colspan="6">
+                      <td colspan="7">
                         ${attemptsLoading ? html`<div class="muted" style="padding: 8px;">Loading attempts...</div>` : html`
                           <div style="padding: 6px 4px;">
                             <div class="row" style="margin-bottom: 6px; flex-wrap: wrap; gap: 16px;">
                               <div><div class="muted" style="margin-bottom: 2px;">Job ID</div><div class="mono">${jobId}</div></div>
                               <div><div class="muted" style="margin-bottom: 2px;">Worker</div><div class="mono">${job.claimed_by_worker || '—'}</div></div>
+                              <div><div class="muted" style="margin-bottom: 2px;">Profile</div><div class="mono">${String(job.run_profile || 'light')}</div></div>
                             </div>
                             <div class="table-wrap">
                               <table>
@@ -1996,6 +1999,7 @@ export class LibraryJobsAdmin extends LitElement {
                 <th>Description</th>
                 <th>Timeout (s)</th>
                 <th>Max Attempts</th>
+                <th>Profile</th>
                 <th>Active</th>
                 <th></th>
               </tr>
@@ -2010,6 +2014,7 @@ export class LibraryJobsAdmin extends LitElement {
                     <td>${definition.description || '—'}</td>
                     <td>${definition.timeout_seconds}</td>
                     <td>${definition.max_attempts}</td>
+                    <td class="mono">${String(definition.run_profile || 'light')}</td>
                     <td>${definition.is_active ? '✓' : '—'}</td>
                     <td>
                       <button
@@ -2027,7 +2032,7 @@ export class LibraryJobsAdmin extends LitElement {
                   </tr>
                   ${isOpen ? html`
                     <tr class="expand-row">
-                      <td colspan="6">
+                      <td colspan="7">
                         <div style="padding: 10px 4px;">
                           <div class="row" style="margin-bottom: 8px; flex-wrap: wrap; gap: 16px;">
                             <div>
@@ -2041,6 +2046,10 @@ export class LibraryJobsAdmin extends LitElement {
                             <div>
                               <div class="muted" style="margin-bottom: 2px;">Max Attempts</div>
                               <div>${definition.max_attempts}</div>
+                            </div>
+                            <div>
+                              <div class="muted" style="margin-bottom: 2px;">Run Profile</div>
+                              <div class="mono">${String(definition.run_profile || 'light')}</div>
                             </div>
                             <div>
                               <div class="muted" style="margin-bottom: 2px;">Active</div>

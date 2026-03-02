@@ -53,10 +53,16 @@ class Settings(BaseSettings):
     sentinel_auth_token: Optional[str] = None
     sentinel_dispatch_enabled: bool = False
     sentinel_worker_job_name: Optional[str] = None
+    sentinel_worker_light_job_name: Optional[str] = None
+    sentinel_worker_ml_job_name: Optional[str] = None
     sentinel_worker_region: Optional[str] = None
     sentinel_worker_project_id: Optional[str] = None
     sentinel_worker_max_parallel: int = 8
     sentinel_worker_max_dispatch_per_tick: int = 4
+    sentinel_worker_light_max_parallel: int = 8
+    sentinel_worker_light_max_dispatch_per_tick: int = 4
+    sentinel_worker_ml_max_parallel: int = 2
+    sentinel_worker_ml_max_dispatch_per_tick: int = 1
     sentinel_dispatch_request_timeout_seconds: int = 20
     sentinel_enable_lease_reclaim: bool = True
     sentinel_enable_workflow_reconcile: bool = True

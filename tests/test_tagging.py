@@ -1,3 +1,6 @@
+import pytest
+
+import zoltag.tagging as tagging
 from zoltag.tagging import calculate_tags
 
 def test_calculate_tags():
@@ -47,3 +50,32 @@ def test_calculate_tags():
     calculated = calculate_tags(machine_tags, permatags)
     assert len(calculated) == 1
     assert any(tag['keyword'] == 'beach' for tag in calculated)
+
+
+def test_get_tagger_raises_on_cache_miss_when_auto_download_disabled(monkeypatch):
+    monkeypatch.setenv("TAGGING_MODEL_AUTO_DOWNLOAD", "false")
+    monkeypatch.setattr(tagging, "is_model_cached", lambda model_type="siglip": False)
+
+    class _ShouldNotInstantiate:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("SigLIPTagger should not be instantiated")
+
+    monkeypatch.setattr(tagging, "SigLIPTagger", _ShouldNotInstantiate)
+    monkeypatch.setattr(tagging, "_tagger_instances", {})
+
+    with pytest.raises(RuntimeError, match="AI model not downloaded yet"):
+        tagging.get_tagger("siglip")
+
+
+def test_get_tagger_auto_downloads_on_cache_miss_when_enabled(monkeypatch):
+    monkeypatch.setenv("TAGGING_MODEL_AUTO_DOWNLOAD", "true")
+    monkeypatch.setattr(tagging, "is_model_cached", lambda model_type="siglip": False)
+
+    class _FakeTagger:
+        pass
+
+    monkeypatch.setattr(tagging, "SigLIPTagger", _FakeTagger)
+    monkeypatch.setattr(tagging, "_tagger_instances", {})
+
+    tagger = tagging.get_tagger("siglip")
+    assert isinstance(tagger, _FakeTagger)

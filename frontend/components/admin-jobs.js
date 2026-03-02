@@ -47,6 +47,7 @@ const _TIMEZONES = [
   'Australia/Melbourne',
   'Pacific/Auckland',
 ];
+const _RUN_PROFILES = ['light', 'ml'];
 
 function parseJsonObject(value, fieldName) {
   const text = String(value || '').trim();
@@ -98,6 +99,7 @@ export class AdminJobs extends LitElement {
     definitionDescription: { type: String },
     definitionTimeoutSeconds: { type: String },
     definitionMaxAttempts: { type: String },
+    definitionRunProfile: { type: String },
     definitionActive: { type: Boolean },
     definitionEdits: { type: Object },
     // new workflow form
@@ -212,6 +214,7 @@ export class AdminJobs extends LitElement {
     this.definitionDescription = '';
     this.definitionTimeoutSeconds = '3600';
     this.definitionMaxAttempts = '3';
+    this.definitionRunProfile = 'light';
     this.definitionActive = true;
     this.definitionEdits = {};
 
@@ -254,6 +257,11 @@ export class AdminJobs extends LitElement {
   _setError(message) {
     this.errorMessage = message || '';
     if (this.errorMessage) this.successMessage = '';
+  }
+
+  _normalizeRunProfile(value) {
+    const candidate = String(value || '').trim().toLowerCase();
+    return _RUN_PROFILES.includes(candidate) ? candidate : 'light';
   }
 
   _setSuccess(message) {
@@ -301,12 +309,14 @@ export class AdminJobs extends LitElement {
         description: String(this.definitionDescription || '').trim(),
         timeout_seconds: Number(this.definitionTimeoutSeconds || 3600),
         max_attempts: Number(this.definitionMaxAttempts || 3),
+        run_profile: this._normalizeRunProfile(this.definitionRunProfile),
         is_active: !!this.definitionActive,
       });
       this._setSuccess('Job created');
       this._stopJobEdit();
       this.definitionKey = '';
       this.definitionDescription = '';
+      this.definitionRunProfile = 'light';
       await this._loadConfig();
     } catch (error) {
       this._setError(error?.message || 'Failed to create definition');
@@ -354,6 +364,7 @@ export class AdminJobs extends LitElement {
         description: Object.prototype.hasOwnProperty.call(cur, 'description') ? String(cur.description ?? '') : String(d?.description ?? ''),
         timeout_seconds: Object.prototype.hasOwnProperty.call(cur, 'timeout_seconds') ? String(cur.timeout_seconds ?? '') : String(d?.timeout_seconds ?? ''),
         max_attempts: Object.prototype.hasOwnProperty.call(cur, 'max_attempts') ? String(cur.max_attempts ?? '') : String(d?.max_attempts ?? ''),
+        run_profile: Object.prototype.hasOwnProperty.call(cur, 'run_profile') ? String(cur.run_profile ?? '') : String(d?.run_profile ?? 'light'),
       };
     }
     this.definitionEdits = next;
@@ -378,6 +389,7 @@ export class AdminJobs extends LitElement {
       || this._getDefinitionEdit(definition, 'description').trim() !== String(definition?.description ?? '').trim()
       || this._getDefinitionEdit(definition, 'timeout_seconds').trim() !== String(definition?.timeout_seconds ?? '').trim()
       || this._getDefinitionEdit(definition, 'max_attempts').trim() !== String(definition?.max_attempts ?? '').trim()
+      || this._normalizeRunProfile(this._getDefinitionEdit(definition, 'run_profile')) !== this._normalizeRunProfile(definition?.run_profile)
     );
   }
 
@@ -400,7 +412,11 @@ export class AdminJobs extends LitElement {
     this.saving = true; this._setError('');
     try {
       const updated = await updateGlobalJobDefinition(definition.id, {
-        key, description: this._getDefinitionEdit(definition, 'description').trim(), timeout_seconds: timeoutSeconds, max_attempts: maxAttempts,
+        key,
+        description: this._getDefinitionEdit(definition, 'description').trim(),
+        timeout_seconds: timeoutSeconds,
+        max_attempts: maxAttempts,
+        run_profile: this._normalizeRunProfile(this._getDefinitionEdit(definition, 'run_profile')),
       });
       this._setSuccess(`Updated ${updated?.key || key}`);
       this._stopJobEdit();
@@ -1266,6 +1282,7 @@ export class AdminJobs extends LitElement {
             this.definitionDescription = '';
             this.definitionTimeoutSeconds = '3600';
             this.definitionMaxAttempts = '3';
+            this.definitionRunProfile = 'light';
             this.definitionActive = true;
             this._startJobEdit('__new__');
           }}>+ New</button>
@@ -1273,7 +1290,7 @@ export class AdminJobs extends LitElement {
         <div class="table-wrap">
           <table>
             <thead>
-              <tr><th>Key</th><th>Timeout (s)</th><th>Max attempts</th><th>Active</th><th>Description</th><th></th></tr>
+              <tr><th>Key</th><th>Timeout (s)</th><th>Max attempts</th><th>Profile</th><th>Active</th><th>Description</th><th></th></tr>
             </thead>
             <tbody>
               ${this.definitions.map((definition) => html`
@@ -1281,6 +1298,7 @@ export class AdminJobs extends LitElement {
                   <td class="mono">${definition.key}</td>
                   <td>${definition.timeout_seconds}</td>
                   <td>${definition.max_attempts}</td>
+                  <td class="mono">${this._normalizeRunProfile(definition.run_profile)}</td>
                   <td>${definition.is_active ? '✓' : '—'}</td>
                   <td class="muted">${definition.description || ''}</td>
                   <td>
@@ -1288,7 +1306,7 @@ export class AdminJobs extends LitElement {
                   </td>
                 </tr>
               `)}
-              ${!this.definitions.length ? html`<tr><td colspan="6" class="muted">${this.loading ? 'Loading…' : 'No jobs found.'}</td></tr>` : ''}
+              ${!this.definitions.length ? html`<tr><td colspan="7" class="muted">${this.loading ? 'Loading…' : 'No jobs found.'}</td></tr>` : ''}
             </tbody>
           </table>
         </div>
@@ -1303,6 +1321,7 @@ export class AdminJobs extends LitElement {
         : field === 'description' ? this.definitionDescription
         : field === 'timeout_seconds' ? this.definitionTimeoutSeconds
         : field === 'max_attempts' ? this.definitionMaxAttempts
+        : field === 'run_profile' ? this.definitionRunProfile
         : '')
       : this._getDefinitionEdit(definition, field);
     const set = (field, value) => {
@@ -1311,6 +1330,7 @@ export class AdminJobs extends LitElement {
         else if (field === 'description') this.definitionDescription = value;
         else if (field === 'timeout_seconds') this.definitionTimeoutSeconds = value;
         else if (field === 'max_attempts') this.definitionMaxAttempts = value;
+        else if (field === 'run_profile') this.definitionRunProfile = value;
       } else {
         this._setDefinitionEdit(definition.id, field, value);
       }
@@ -1348,6 +1368,16 @@ export class AdminJobs extends LitElement {
               .value=${get('max_attempts')}
               ?disabled=${this.saving}
               @input=${(e) => set('max_attempts', e.target.value || '')} />
+          </div>
+          <div class="row" style="margin-top:8px;">
+            <label class="muted" style="min-width:120px;">Run profile</label>
+            <select class="select field"
+              .value=${this._normalizeRunProfile(get('run_profile'))}
+              ?disabled=${this.saving}
+              @change=${(e) => set('run_profile', e.target.value || 'light')}>
+              <option value="light">light</option>
+              <option value="ml">ml</option>
+            </select>
           </div>
           <div class="row" style="margin-top:8px;">
             <label class="muted" style="min-width:120px;">Active</label>

@@ -8,6 +8,7 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from zoltag.cli.introspection import normalize_queue_payload
+from zoltag.job_profiles import resolve_definition_run_profile
 from zoltag.metadata import (
     Job,
     JobDefinition,
@@ -317,6 +318,7 @@ def _enqueue_ready_steps(db: Session, run: WorkflowRun) -> None:
             source="system",
             source_ref=make_workflow_source_ref(run.id, str(step.step_key)),
             status="queued",
+            run_profile=resolve_definition_run_profile(definition),
             priority=int(run.priority or 100),
             payload=normalized_payload,
             dedupe_key=f"workflow-step:{run.id}:{step.step_key}",

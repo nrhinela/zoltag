@@ -552,12 +552,14 @@ class JobDefinition(Base):
     arg_schema = Column(JSONB, nullable=False, default=dict)
     timeout_seconds = Column(Integer, nullable=False, default=3600)
     max_attempts = Column(Integer, nullable=False, default=3)
+    run_profile = Column(Text, nullable=False, default="light")
     is_active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     __table_args__ = (
         Index("idx_job_definitions_active", "is_active"),
+        CheckConstraint("run_profile in ('light','ml')", name="ck_job_definitions_run_profile"),
     )
 
 
@@ -610,6 +612,7 @@ class Job(Base):
     source = Column(Text, nullable=False, default="manual")
     source_ref = Column(Text)
     status = Column(Text, nullable=False, default="queued")
+    run_profile = Column(Text, nullable=False, default="light")
     priority = Column(Integer, nullable=False, default=100)
     payload = Column(JSONB, nullable=False, default=dict)
     dedupe_key = Column(Text, index=True)
@@ -630,11 +633,13 @@ class Job(Base):
 
     __table_args__ = (
         Index("idx_jobs_tenant_status_time", "tenant_id", "status", "queued_at"),
+        Index("idx_jobs_status_profile_schedule", "status", "run_profile", "scheduled_for", "priority", "queued_at"),
         CheckConstraint("source in ('manual','event','schedule','system')", name="ck_jobs_source"),
         CheckConstraint(
             "status in ('queued','running','succeeded','failed','canceled','dead_letter')",
             name="ck_jobs_status",
         ),
+        CheckConstraint("run_profile in ('light','ml')", name="ck_jobs_run_profile"),
     )
 
 

@@ -10,11 +10,13 @@ from typing import Any
 from sqlalchemy import func
 
 from zoltag.database import SessionLocal
+from zoltag.job_profiles import RUN_PROFILE_LIGHT, RUN_PROFILE_ML
 from zoltag.metadata import Job
 from zoltag.settings import settings
 from zoltag.worker import _fire_due_schedule_triggers, _now_utc, _reclaim_stale_leases, _reconcile_workflows_once
 
 logger = logging.getLogger(__name__)
+_RUN_PROFILES = (RUN_PROFILE_LIGHT, RUN_PROFILE_ML)
 
 
 def _resolve_worker_project() -> str:
@@ -73,43 +75,79 @@ def _run_cloud_run_job(*, job_name: str, task_count: int, dry_run: bool = False)
     }
 
 
+def _resolve_worker_job_name(profile: str) -> str:
+    if profile == RUN_PROFILE_ML:
+        return str(settings.sentinel_worker_ml_job_name or settings.sentinel_worker_job_name or "").strip()
+    return str(settings.sentinel_worker_light_job_name or settings.sentinel_worker_job_name or "").strip()
+
+
+def _resolve_profile_limits(profile: str) -> tuple[int, int]:
+    if profile == RUN_PROFILE_ML:
+        max_parallel = int(settings.sentinel_worker_ml_max_parallel or settings.sentinel_worker_max_parallel or 2)
+        max_dispatch = int(
+            settings.sentinel_worker_ml_max_dispatch_per_tick
+            or settings.sentinel_worker_max_dispatch_per_tick
+            or 1
+        )
+    else:
+        max_parallel = int(settings.sentinel_worker_light_max_parallel or settings.sentinel_worker_max_parallel or 8)
+        max_dispatch = int(
+            settings.sentinel_worker_light_max_dispatch_per_tick
+            or settings.sentinel_worker_max_dispatch_per_tick
+            or 4
+        )
+    return max(1, max_parallel), max(1, max_dispatch)
+
+
 def _collect_queue_snapshot() -> dict[str, Any]:
     db = SessionLocal()
     try:
         now = _now_utc()
-        queued_ready = int(
-            db.query(func.count(Job.id))
-            .filter(
-                Job.status == "queued",
-                Job.scheduled_for <= now,
+        by_profile: dict[str, dict[str, Any]] = {}
+        for profile in _RUN_PROFILES:
+            queued_ready = int(
+                db.query(func.count(Job.id))
+                .filter(
+                    Job.status == "queued",
+                    Job.run_profile == profile,
+                    Job.scheduled_for <= now,
+                )
+                .scalar()
+                or 0
             )
-            .scalar()
-            or 0
-        )
-        running = int(
-            db.query(func.count(Job.id))
-            .filter(Job.status == "running")
-            .scalar()
-            or 0
-        )
-        oldest_ready = (
-            db.query(func.min(Job.queued_at))
-            .filter(
-                Job.status == "queued",
-                Job.scheduled_for <= now,
+            running = int(
+                db.query(func.count(Job.id))
+                .filter(
+                    Job.status == "running",
+                    Job.run_profile == profile,
+                )
+                .scalar()
+                or 0
             )
-            .scalar()
-        )
-        oldest_age_seconds: float | None = None
-        if oldest_ready is not None:
-            if getattr(oldest_ready, "tzinfo", None) is None:
-                oldest_ready = oldest_ready.replace(tzinfo=timezone.utc)
-            oldest_age_seconds = max(0.0, (now - oldest_ready).total_seconds())
+            oldest_ready = (
+                db.query(func.min(Job.queued_at))
+                .filter(
+                    Job.status == "queued",
+                    Job.run_profile == profile,
+                    Job.scheduled_for <= now,
+                )
+                .scalar()
+            )
+            oldest_age_seconds: float | None = None
+            if oldest_ready is not None:
+                if getattr(oldest_ready, "tzinfo", None) is None:
+                    oldest_ready = oldest_ready.replace(tzinfo=timezone.utc)
+                oldest_age_seconds = max(0.0, (now - oldest_ready).total_seconds())
+            by_profile[profile] = {
+                "queued_ready": queued_ready,
+                "running": running,
+                "oldest_ready_age_seconds": oldest_age_seconds,
+            }
 
         return {
-            "queued_ready": queued_ready,
-            "running": running,
-            "oldest_ready_age_seconds": oldest_age_seconds,
+            "queued_ready": sum(int(by_profile[p]["queued_ready"]) for p in _RUN_PROFILES),
+            "running": sum(int(by_profile[p]["running"]) for p in _RUN_PROFILES),
+            "profiles": by_profile,
         }
     finally:
         db.close()
@@ -156,31 +194,34 @@ def run_sentinel_tick(*, dry_run: bool = False) -> dict[str, Any]:
             logger.exception("Sentinel schedule tick failed")
 
     queue = _collect_queue_snapshot()
-    max_parallel = max(1, int(settings.sentinel_worker_max_parallel or 8))
-    max_dispatch = max(1, int(settings.sentinel_worker_max_dispatch_per_tick or 4))
-    desired_parallel = min(int(queue["queued_ready"]), max_parallel)
-    requested_dispatch = max(0, desired_parallel - int(queue["running"]))
-    dispatch_count = min(requested_dispatch, max_dispatch)
+    dispatch_profiles: dict[str, dict[str, Any]] = {}
+    enabled = bool(settings.sentinel_dispatch_enabled)
+    for profile in _RUN_PROFILES:
+        queue_snapshot = queue.get("profiles", {}).get(profile, {})
+        queued_ready = int(queue_snapshot.get("queued_ready") or 0)
+        running = int(queue_snapshot.get("running") or 0)
+        max_parallel, max_dispatch = _resolve_profile_limits(profile)
+        desired_parallel = min(queued_ready, max_parallel)
+        requested_dispatch = max(0, desired_parallel - running)
+        dispatch_count = min(requested_dispatch, max_dispatch)
+        worker_job_name = _resolve_worker_job_name(profile)
 
-    dispatch: dict[str, Any] = {
-        "enabled": bool(settings.sentinel_dispatch_enabled),
-        "requested_dispatch": requested_dispatch,
-        "dispatch_count": dispatch_count,
-        "max_parallel": max_parallel,
-        "max_dispatch_per_tick": max_dispatch,
-        "worker_job_name": str(settings.sentinel_worker_job_name or "").strip() or None,
-        "status": "idle",
-    }
-
-    if dispatch_count <= 0:
-        dispatch["status"] = "no_dispatch_needed"
-    elif not bool(settings.sentinel_dispatch_enabled):
-        dispatch["status"] = "dispatch_disabled"
-    else:
-        worker_job_name = str(settings.sentinel_worker_job_name or "").strip()
-        if not worker_job_name:
-            dispatch["status"] = "misconfigured"
-            maintenance_errors.append("dispatch: SENTINEL_WORKER_JOB_NAME is required when dispatch is enabled")
+        dispatch_entry: dict[str, Any] = {
+            "enabled": enabled,
+            "requested_dispatch": requested_dispatch,
+            "dispatch_count": dispatch_count,
+            "max_parallel": max_parallel,
+            "max_dispatch_per_tick": max_dispatch,
+            "worker_job_name": worker_job_name or None,
+            "status": "idle",
+        }
+        if dispatch_count <= 0:
+            dispatch_entry["status"] = "no_dispatch_needed"
+        elif not enabled:
+            dispatch_entry["status"] = "dispatch_disabled"
+        elif not worker_job_name:
+            dispatch_entry["status"] = "misconfigured"
+            maintenance_errors.append(f"dispatch[{profile}]: worker job name is required when dispatch is enabled")
         else:
             try:
                 dispatch_result = _run_cloud_run_job(
@@ -188,12 +229,30 @@ def run_sentinel_tick(*, dry_run: bool = False) -> dict[str, Any]:
                     task_count=dispatch_count,
                     dry_run=bool(dry_run),
                 )
-                dispatch.update(dispatch_result)
+                dispatch_entry.update(dispatch_result)
             except Exception as exc:  # noqa: BLE001
-                dispatch["status"] = "error"
-                dispatch["error"] = str(exc)
-                maintenance_errors.append(f"dispatch: {exc}")
-                logger.exception("Sentinel dispatch failed")
+                dispatch_entry["status"] = "error"
+                dispatch_entry["error"] = str(exc)
+                maintenance_errors.append(f"dispatch[{profile}]: {exc}")
+                logger.exception("Sentinel dispatch failed for profile=%s", profile)
+        dispatch_profiles[profile] = dispatch_entry
+
+    statuses = {str(entry.get("status") or "") for entry in dispatch_profiles.values()}
+    if "error" in statuses:
+        aggregate_status = "error"
+    elif "misconfigured" in statuses:
+        aggregate_status = "misconfigured"
+    elif "launched" in statuses:
+        aggregate_status = "launched"
+    elif statuses == {"dispatch_disabled"}:
+        aggregate_status = "dispatch_disabled"
+    else:
+        aggregate_status = "no_dispatch_needed"
+    dispatch: dict[str, Any] = {
+        "enabled": enabled,
+        "status": aggregate_status,
+        "profiles": dispatch_profiles,
+    }
 
     duration_ms = int((time.monotonic() - started) * 1000)
     result = {
@@ -208,11 +267,13 @@ def run_sentinel_tick(*, dry_run: bool = False) -> dict[str, Any]:
     }
 
     logger.info(
-        "Sentinel tick completed: ok=%s queued_ready=%s running=%s dispatch=%s duration_ms=%s",
+        "Sentinel tick completed: ok=%s queued_ready=%s running=%s dispatch=%s dispatch_light=%s dispatch_ml=%s duration_ms=%s",
         result["ok"],
         queue.get("queued_ready"),
         queue.get("running"),
         dispatch.get("status"),
+        dispatch_profiles.get(RUN_PROFILE_LIGHT, {}).get("status"),
+        dispatch_profiles.get(RUN_PROFILE_ML, {}).get("status"),
         duration_ms,
     )
     return result

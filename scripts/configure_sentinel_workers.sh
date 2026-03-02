@@ -5,30 +5,36 @@ PROJECT_ID="${PROJECT_ID:-photocat-483622}"
 REGION="${REGION:-us-central1}"
 API_SERVICE="${API_SERVICE:-zoltag-api}"
 SENTINEL_SERVICE="${SENTINEL_SERVICE:-zoltag-sentinel}"
-WORKER_JOB="${WORKER_JOB:-zoltag-worker-job}"
+WORKER_LIGHT_JOB="${WORKER_LIGHT_JOB:-${WORKER_JOB:-zoltag-worker-light-job}}"
+WORKER_ML_JOB="${WORKER_ML_JOB:-zoltag-worker-ml-job}"
 SCHEDULER_JOB="${SCHEDULER_JOB:-zoltag-sentinel-tick}"
 SENTINEL_TOKEN_SECRET_NAME="${SENTINEL_TOKEN_SECRET_NAME:-sentinel-auth-token}"
 
-SENTINEL_WORKER_MAX_PARALLEL="${SENTINEL_WORKER_MAX_PARALLEL:-8}"
-SENTINEL_WORKER_MAX_DISPATCH_PER_TICK="${SENTINEL_WORKER_MAX_DISPATCH_PER_TICK:-4}"
+SENTINEL_WORKER_LIGHT_MAX_PARALLEL="${SENTINEL_WORKER_LIGHT_MAX_PARALLEL:-${SENTINEL_WORKER_MAX_PARALLEL:-8}}"
+SENTINEL_WORKER_LIGHT_MAX_DISPATCH_PER_TICK="${SENTINEL_WORKER_LIGHT_MAX_DISPATCH_PER_TICK:-${SENTINEL_WORKER_MAX_DISPATCH_PER_TICK:-4}}"
+SENTINEL_WORKER_ML_MAX_PARALLEL="${SENTINEL_WORKER_ML_MAX_PARALLEL:-2}"
+SENTINEL_WORKER_ML_MAX_DISPATCH_PER_TICK="${SENTINEL_WORKER_ML_MAX_DISPATCH_PER_TICK:-1}"
 SENTINEL_CRON="${SENTINEL_CRON:-* * * * *}"
 
-WORKER_CPU="${WORKER_CPU:-2}"
-WORKER_MEMORY="${WORKER_MEMORY:-8Gi}"
-WORKER_TIMEOUT="${WORKER_TIMEOUT:-3600s}"
-WORKER_MAX_RETRIES="${WORKER_MAX_RETRIES:-0}"
+LIGHT_WORKER_CPU="${LIGHT_WORKER_CPU:-${WORKER_CPU:-1}}"
+LIGHT_WORKER_MEMORY="${LIGHT_WORKER_MEMORY:-${WORKER_MEMORY:-2Gi}}"
+LIGHT_WORKER_TIMEOUT="${LIGHT_WORKER_TIMEOUT:-${WORKER_TIMEOUT:-3600s}}"
+LIGHT_WORKER_MAX_RETRIES="${LIGHT_WORKER_MAX_RETRIES:-${WORKER_MAX_RETRIES:-0}}"
+
+ML_WORKER_CPU="${ML_WORKER_CPU:-2}"
+ML_WORKER_MEMORY="${ML_WORKER_MEMORY:-8Gi}"
+ML_WORKER_TIMEOUT="${ML_WORKER_TIMEOUT:-3600s}"
+ML_WORKER_MAX_RETRIES="${ML_WORKER_MAX_RETRIES:-0}"
 
 SENTINEL_CPU="${SENTINEL_CPU:-1}"
 SENTINEL_MEMORY="${SENTINEL_MEMORY:-512Mi}"
 SENTINEL_TIMEOUT="${SENTINEL_TIMEOUT:-60}"
 SENTINEL_MAX_INSTANCES="${SENTINEL_MAX_INSTANCES:-1}"
 
-IMAGE="${IMAGE:-}"
-if [[ -z "${IMAGE}" ]]; then
-  IMAGE="gcr.io/${PROJECT_ID}/zoltag:latest"
-fi
+LIGHT_IMAGE="${LIGHT_IMAGE:-${IMAGE_LIGHT:-${IMAGE:-}}}"
+ML_IMAGE="${ML_IMAGE:-${IMAGE_ML:-}}"
 
-resolve_image_from_api() {
+resolve_images_from_api() {
   local api_image
   if api_image=$(gcloud run services describe "${API_SERVICE}" \
       --project "${PROJECT_ID}" \
@@ -36,8 +42,20 @@ resolve_image_from_api() {
       --platform managed \
       --format='value(spec.template.spec.containers[0].image)' 2>/dev/null); then
     if [[ -n "${api_image}" ]]; then
-      IMAGE="${api_image}"
+      if [[ -z "${LIGHT_IMAGE}" ]]; then
+        LIGHT_IMAGE="${api_image}"
+      fi
     fi
+  fi
+
+  if [[ -z "${LIGHT_IMAGE}" ]]; then
+    LIGHT_IMAGE="gcr.io/${PROJECT_ID}/zoltag:latest"
+  fi
+  if [[ -z "${ML_IMAGE}" ]]; then
+    ML_IMAGE="$(printf '%s' "${LIGHT_IMAGE}" | sed -E 's#/zoltag([:@])#/zoltag-ml\1#')"
+  fi
+  if [[ "${ML_IMAGE}" == "${LIGHT_IMAGE}" ]]; then
+    ML_IMAGE="gcr.io/${PROJECT_ID}/zoltag-ml:latest"
   fi
 }
 
@@ -114,9 +132,16 @@ ensure_secret_with_token() {
 }
 
 deploy_worker_job() {
+  local job_name="$1"
+  local image="$2"
+  local worker_profile="$3"
+  local worker_cpu="$4"
+  local worker_memory="$5"
+  local worker_timeout="$6"
+  local worker_max_retries="$7"
   local env_vars
   local secrets_map
-  env_vars="GCP_PROJECT_ID=${PROJECT_ID},ENVIRONMENT=prod,WORKER_MODE=true,JOB_WORKER_ONCE=true,JOB_WORKER_ENABLE_MAINTENANCE_TICKS=false"
+  env_vars="GCP_PROJECT_ID=${PROJECT_ID},ENVIRONMENT=prod,WORKER_MODE=true,JOB_WORKER_ONCE=true,JOB_WORKER_ENABLE_MAINTENANCE_TICKS=false,JOB_WORKER_PROFILE=${worker_profile},TAGGING_MODEL_AUTO_DOWNLOAD=false"
   local required_secrets=(
     "DATABASE_URL:supabase-db-url"
     "SUPABASE_SERVICE_ROLE_KEY:supabase-service-role-key"
@@ -139,28 +164,28 @@ deploy_worker_job() {
     secrets_map="${secrets_map},${optional_map}"
   fi
 
-  if gcloud run jobs describe "${WORKER_JOB}" --project "${PROJECT_ID}" --region "${REGION}" >/dev/null 2>&1; then
-    gcloud run jobs update "${WORKER_JOB}" \
+  if gcloud run jobs describe "${job_name}" --project "${PROJECT_ID}" --region "${REGION}" >/dev/null 2>&1; then
+    gcloud run jobs update "${job_name}" \
       --project "${PROJECT_ID}" \
       --region "${REGION}" \
-      --image "${IMAGE}" \
-      --memory "${WORKER_MEMORY}" \
-      --cpu "${WORKER_CPU}" \
-      --task-timeout "${WORKER_TIMEOUT}" \
-      --max-retries "${WORKER_MAX_RETRIES}" \
+      --image "${image}" \
+      --memory "${worker_memory}" \
+      --cpu "${worker_cpu}" \
+      --task-timeout "${worker_timeout}" \
+      --max-retries "${worker_max_retries}" \
       --set-env-vars "${env_vars}" \
       --set-secrets "${secrets_map}" \
       --command python \
       --args="-m,zoltag.worker"
   else
-    gcloud run jobs create "${WORKER_JOB}" \
+    gcloud run jobs create "${job_name}" \
       --project "${PROJECT_ID}" \
       --region "${REGION}" \
-      --image "${IMAGE}" \
-      --memory "${WORKER_MEMORY}" \
-      --cpu "${WORKER_CPU}" \
-      --task-timeout "${WORKER_TIMEOUT}" \
-      --max-retries "${WORKER_MAX_RETRIES}" \
+      --image "${image}" \
+      --memory "${worker_memory}" \
+      --cpu "${worker_cpu}" \
+      --task-timeout "${worker_timeout}" \
+      --max-retries "${worker_max_retries}" \
       --set-env-vars "${env_vars}" \
       --set-secrets "${secrets_map}" \
       --command python \
@@ -171,14 +196,14 @@ deploy_worker_job() {
 deploy_sentinel_service() {
   local env_vars
   local secrets_map
-  env_vars="GCP_PROJECT_ID=${PROJECT_ID},ENVIRONMENT=prod,WORKER_MODE=false,SENTINEL_MODE=true,SENTINEL_DISPATCH_ENABLED=true,SENTINEL_WORKER_JOB_NAME=${WORKER_JOB},SENTINEL_WORKER_REGION=${REGION},SENTINEL_WORKER_PROJECT_ID=${PROJECT_ID},SENTINEL_WORKER_MAX_PARALLEL=${SENTINEL_WORKER_MAX_PARALLEL},SENTINEL_WORKER_MAX_DISPATCH_PER_TICK=${SENTINEL_WORKER_MAX_DISPATCH_PER_TICK}"
+  env_vars="GCP_PROJECT_ID=${PROJECT_ID},ENVIRONMENT=prod,WORKER_MODE=false,SENTINEL_MODE=true,SENTINEL_DISPATCH_ENABLED=true,SENTINEL_WORKER_JOB_NAME=${WORKER_LIGHT_JOB},SENTINEL_WORKER_LIGHT_JOB_NAME=${WORKER_LIGHT_JOB},SENTINEL_WORKER_ML_JOB_NAME=${WORKER_ML_JOB},SENTINEL_WORKER_REGION=${REGION},SENTINEL_WORKER_PROJECT_ID=${PROJECT_ID},SENTINEL_WORKER_MAX_PARALLEL=${SENTINEL_WORKER_LIGHT_MAX_PARALLEL},SENTINEL_WORKER_MAX_DISPATCH_PER_TICK=${SENTINEL_WORKER_LIGHT_MAX_DISPATCH_PER_TICK},SENTINEL_WORKER_LIGHT_MAX_PARALLEL=${SENTINEL_WORKER_LIGHT_MAX_PARALLEL},SENTINEL_WORKER_LIGHT_MAX_DISPATCH_PER_TICK=${SENTINEL_WORKER_LIGHT_MAX_DISPATCH_PER_TICK},SENTINEL_WORKER_ML_MAX_PARALLEL=${SENTINEL_WORKER_ML_MAX_PARALLEL},SENTINEL_WORKER_ML_MAX_DISPATCH_PER_TICK=${SENTINEL_WORKER_ML_MAX_DISPATCH_PER_TICK}"
   secrets_map="$(build_secret_map true \
     "DATABASE_URL:supabase-db-url" \
     "SENTINEL_AUTH_TOKEN:${SENTINEL_TOKEN_SECRET_NAME}")"
 
   gcloud run deploy "${SENTINEL_SERVICE}" \
     --project "${PROJECT_ID}" \
-    --image "${IMAGE}" \
+    --image "${LIGHT_IMAGE}" \
     --region "${REGION}" \
     --platform managed \
     --allow-unauthenticated \
@@ -218,7 +243,7 @@ upsert_scheduler_job() {
       --schedule "${SENTINEL_CRON}" \
       --http-method POST \
       --uri "${target_uri}" \
-      --headers "${headers}" \
+      --update-headers "${headers}" \
       --message-body '{}'
   else
     gcloud scheduler jobs create http "${SCHEDULER_JOB}" \
@@ -241,22 +266,26 @@ print_summary() {
   echo "Configured sentinel + burst workers:" 
   echo "  Project: ${PROJECT_ID}"
   echo "  Region: ${REGION}"
-  echo "  Image: ${IMAGE}"
-  echo "  Worker job: ${WORKER_JOB}"
+  echo "  Light image: ${LIGHT_IMAGE}"
+  echo "  ML image: ${ML_IMAGE}"
+  echo "  Worker light job: ${WORKER_LIGHT_JOB}"
+  echo "  Worker ML job: ${WORKER_ML_JOB}"
   echo "  Sentinel service: ${SENTINEL_SERVICE}"
   echo "  Scheduler job: ${SCHEDULER_JOB}"
   echo
   echo "Quick checks:"
-  echo "  gcloud run jobs describe ${WORKER_JOB} --project ${PROJECT_ID} --region ${REGION}"
+  echo "  gcloud run jobs describe ${WORKER_LIGHT_JOB} --project ${PROJECT_ID} --region ${REGION}"
+  echo "  gcloud run jobs describe ${WORKER_ML_JOB} --project ${PROJECT_ID} --region ${REGION}"
   echo "  gcloud run services describe ${SENTINEL_SERVICE} --project ${PROJECT_ID} --region ${REGION} --format='value(status.url)'"
   echo "  gcloud scheduler jobs describe ${SCHEDULER_JOB} --project ${PROJECT_ID} --location ${REGION}"
 }
 
 main() {
   require_gcloud
-  resolve_image_from_api
+  resolve_images_from_api
   ensure_secret_with_token
-  deploy_worker_job
+  deploy_worker_job "${WORKER_LIGHT_JOB}" "${LIGHT_IMAGE}" "light" "${LIGHT_WORKER_CPU}" "${LIGHT_WORKER_MEMORY}" "${LIGHT_WORKER_TIMEOUT}" "${LIGHT_WORKER_MAX_RETRIES}"
+  deploy_worker_job "${WORKER_ML_JOB}" "${ML_IMAGE}" "ml" "${ML_WORKER_CPU}" "${ML_WORKER_MEMORY}" "${ML_WORKER_TIMEOUT}" "${ML_WORKER_MAX_RETRIES}"
   deploy_sentinel_service
   upsert_scheduler_job
   print_summary
