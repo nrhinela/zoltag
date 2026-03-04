@@ -87,6 +87,15 @@ clean:
 
 dev:
 	@$(MAKE) dev-clean
+	@for port in 8000 5173; do \
+		if command -v lsof >/dev/null 2>&1; then \
+			ids=$$(lsof -tiTCP:$$port -sTCP:LISTEN || true); \
+			if [ -n "$$ids" ]; then \
+				echo "Port $$port still busy after cleanup, force killing: $$ids"; \
+				echo "$$ids" | xargs kill -9 2>/dev/null || true; \
+			fi; \
+		fi; \
+	done
 	@echo "Starting development servers..."
 	@rm -f $(DEV_PID_FILE)
 	@set -e; \
@@ -106,7 +115,7 @@ dev-clean:
 		pids="$$pids $$(cat $(DEV_PID_FILE) 2>/dev/null || true)"; \
 		rm -f $(DEV_PID_FILE); \
 	fi; \
-	for pattern in "uvicorn zoltag.api:app" "zoltag.api:app" "npm run dev" "npm run build:css" "node .*vite" "node .*tailwindcss" "tailwindcss"; do \
+	for pattern in "uvicorn" "uvicorn zoltag.api:app" "python3 -m uvicorn" "python -m uvicorn" "zoltag.api:app" "npm run dev" "npm run build:css" "node .*vite" "node .*tailwindcss" "tailwindcss"; do \
 		if command -v pgrep >/dev/null 2>&1; then \
 			found="$$(pgrep -f "$$pattern" 2>/dev/null || true)"; \
 			if [ -n "$$found" ]; then \
@@ -125,6 +134,20 @@ dev-clean:
 			fi; \
 		fi; \
 	done; \
+	if command -v pgrep >/dev/null 2>&1; then \
+		queue="$$pids"; \
+		while [ -n "$$queue" ]; do \
+			next=""; \
+			for pid in $$queue; do \
+				children="$$(pgrep -P $$pid 2>/dev/null || true)"; \
+				if [ -n "$$children" ]; then \
+					pids="$$pids $$children"; \
+					next="$$next $$children"; \
+				fi; \
+			done; \
+			queue="$$next"; \
+		done; \
+	fi; \
 	uniq_pids=$$(printf '%s\n' $$pids | awk 'NF && !seen[$$1]++ {print $$1}'); \
 	if [ -n "$$uniq_pids" ]; then \
 		echo "Sending SIGTERM to: $$uniq_pids"; \
@@ -140,6 +163,15 @@ dev-clean:
 			echo "Force killing stuck processes: $$still_alive"; \
 			echo "$$still_alive" | xargs kill -9 2>/dev/null || true; \
 		fi; \
+		for port in 8000 5173; do \
+			if command -v lsof >/dev/null 2>&1; then \
+				leftover_ids=$$(lsof -tiTCP:$$port -sTCP:LISTEN || true); \
+				if [ -n "$$leftover_ids" ]; then \
+					echo "Force killing remaining listeners on port $$port: $$leftover_ids"; \
+					echo "$$leftover_ids" | xargs kill -9 2>/dev/null || true; \
+				fi; \
+			fi; \
+		done; \
 	else \
 		echo "No matching dev processes found."; \
 	fi; \
@@ -152,11 +184,18 @@ dev-backend:
 		echo "ERROR: .env file not found. Please create one with DATABASE_URL set."; \
 		exit 1; \
 	fi
+	@PYTHON_BIN="python3"; \
+	if [ -x .venv/bin/python ]; then \
+		PYTHON_BIN=".venv/bin/python"; \
+	elif [ -x venv/bin/python ]; then \
+		PYTHON_BIN="venv/bin/python"; \
+	fi; \
+	echo "Using Python: $$PYTHON_BIN"; \
 	set -a && . ./.env && set +a && \
 	TOKENIZERS_PARALLELISM=false \
 	GRPC_VERBOSITY=ERROR \
 	GLOG_minloglevel=2 \
-	python3 -m uvicorn zoltag.api:app --reload --host 0.0.0.0 --port 8000
+	$$PYTHON_BIN -m uvicorn --app-dir src zoltag.api:app --reload --host 0.0.0.0 --port 8000
 
 dev-frontend:
 	@echo "Starting frontend development server..."

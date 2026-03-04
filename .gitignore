@@ -76,6 +76,7 @@ config/*/credentials.json
 tmp/
 temp/
 *.tmp
+.dev-pids
 
 # Frontend build artifacts
 node_modules/
