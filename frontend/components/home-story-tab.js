@@ -4,8 +4,8 @@ const HERO_IMAGE = new URL('../assets/chaos-to-organized.png', import.meta.url).
 
 const SLIDES = [
   {
-    eyebrow: 'For Creative Teams',
-    title: 'Organize your media',
+    eyebrow: 'Media Organizer',
+    title: 'Organize your photos and vidoes',
     subtitle:
       'Zoltag turns scattered photos and videos into a library you can use.',
     bullets: [
@@ -17,38 +17,38 @@ const SLIDES = [
     visual: 'hero',
   },
   {
-    eyebrow: 'Sync',
+    eyebrow: 'Integrate',
     title: 'Easy Integration',
     subtitle:
-      'One-click integration to your storage providers.',
+      'One-click integration to your storage providers. Zoltag indexes your content and leaves assets in place.',
     bullets: [
-      'Sync Dropbox, Drive, YouTube, Photos, and Flickr',
-      'Fine grained access controls keep your photos secure',
-      'Identify duplicates, calculate total storage requirements',
+      'Reads from common providers including: Dropbox, Google Drive, YouTube, Google Photos, and Flickr',
+      'Fine grained control over what gets accessed',
+      'Presents one searchable view across all your sources',
     ],
     visual: 'setup',
   },
   {
-    eyebrow: 'Curation',
+    eyebrow: 'Curate',
     title: 'Addictive Organization',
     subtitle:
-      'Intuitive drag-and-drop workflows and smart AI suggestion let you move quickly while staying in control.',
+      'Intuitive drag-and-drop workflows and smart AI suggestions.',
     bullets: [
-      'Define and refine the keywords and categories that meet your needs',
-      'Advanced search across all your photo and video storage systems',
-      'Find, share and collaborate seamlessly',
+      'Easily define and refine the tags and categories that work for you',
+      'Apply tags to photos through easy drag and drop interfaces',
+      'AI powered recommendations that learn from your choices',
     ],
     visual: 'curation',
   },
   {
-    eyebrow: 'Find',
-    title: 'Find the perfect photo or video',
+    eyebrow: 'Share',
+    title: 'Sharing and community features',
     subtitle:
       'Search by what you know and surface usable results in seconds.',
     bullets: [
-      'Create and share proofing lists with clients and users',
-      'Download originals or thumbnails',
-      'Save modifications back to the library for reuse',
+      'Securely share collections with coworkers, family members or friends',
+      'Enable presentations and zip file downloads',
+      'Get feedback through ratings and comments',
     ],
     visual: 'search',
   },
@@ -93,7 +93,7 @@ export class HomeStoryTab extends LitElement {
             loading="lazy"
           >
           <div class="absolute inset-x-0 bottom-0 p-4 bg-gradient-to-t from-black/70 to-transparent">
-            <div class="text-white text-sm font-semibold">From library chaos to structured content.</div>
+            <div class="text-white text-sm font-semibold">From chaos to organization</div>
           </div>
         </div>
       `;
