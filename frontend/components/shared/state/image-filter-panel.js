@@ -77,6 +77,8 @@ export class ImageFilterPanel {
       'loading-end': [],
       'error': [],
     };
+    this._requestCounter = 0;
+    this._latestRequestId = 0;
   }
 
   /**
@@ -149,6 +151,8 @@ export class ImageFilterPanel {
       return;
     }
 
+    const requestId = ++this._requestCounter;
+    this._latestRequestId = requestId;
     this._emit('loading-start', { tabId: this.tabId });
     try {
       // Pass the filter object directly to getImages, which will build the params
@@ -160,6 +164,11 @@ export class ImageFilterPanel {
         ? { images, total }
         : { ...result, images, total };
 
+      // Prevent stale responses from older requests from overriding newer results.
+      if (requestId !== this._latestRequestId) {
+        return payload;
+      }
+
       this._emit('images-loaded', {
         tabId: this.tabId,
         images,
@@ -168,6 +177,9 @@ export class ImageFilterPanel {
 
       return payload;
     } catch (error) {
+      if (requestId !== this._latestRequestId) {
+        return;
+      }
       this._emit('error', {
         tabId: this.tabId,
         message: `Failed to fetch images: ${error.message}`,

@@ -1,13 +1,14 @@
 """Router for keyword operations."""
 
-from fastapi import APIRouter, Depends
-from sqlalchemy import func, distinct
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy import func, distinct, and_, or_
 from sqlalchemy.orm import Session
-from typing import Optional
+from typing import Optional, List
 
 from zoltag.dependencies import get_db, get_tenant, get_tenant_setting
 from zoltag.auth.dependencies import get_current_user
 from zoltag.auth.models import UserProfile
+from zoltag.asset_helpers import bulk_preload_thumbnail_urls, load_assets_for_images
 from zoltag.list_visibility import can_view_list, is_tenant_admin_user
 from zoltag.config.db_config import ConfigManager
 from zoltag.tenant import Tenant
@@ -221,6 +222,226 @@ async def get_available_keywords(
         "tenant_id": tenant.id,
         "keywords_by_category": by_category,
         "all_keywords": [kw['keyword'] for kw in all_keywords]
+    }
+
+
+@router.get("/keywords/gallery-previews")
+async def get_keyword_gallery_previews(
+    tenant: Tenant = Depends(get_tenant),
+    _current_user: UserProfile = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    preview_count: int = 3,
+    target: Optional[List[str]] = Query(default=None),
+):
+    """Return keyword counts and representative thumbnail previews in one request."""
+    capped_preview_count = max(1, min(int(preview_count or 3), 6))
+
+    target_pairs = []
+    for value in target or []:
+        raw = str(value or "").strip()
+        if not raw or "::" not in raw:
+            continue
+        category, keyword = raw.split("::", 1)
+        category = category.strip()
+        keyword = keyword.strip()
+        if not category or not keyword:
+            continue
+        target_pairs.append((category, keyword))
+    target_pairs = list(set(target_pairs))
+
+    count_by_keyword = {}
+    keyword_rows = []
+    if target_pairs:
+        keyword_query = db.query(
+            Keyword.id.label("keyword_id"),
+            Keyword.keyword.label("keyword"),
+            KeywordCategory.name.label("category"),
+        ).join(
+            KeywordCategory, Keyword.category_id == KeywordCategory.id
+        ).filter(
+            tenant_column_filter(Keyword, tenant),
+            tenant_column_filter(KeywordCategory, tenant),
+            or_(*[
+                and_(KeywordCategory.name == category, Keyword.keyword == keyword)
+                for category, keyword in target_pairs
+            ]),
+        )
+        keyword_rows = keyword_query.order_by(
+            KeywordCategory.name.asc(),
+            Keyword.keyword.asc(),
+        ).all()
+        if keyword_rows:
+            target_keyword_ids = [int(row.keyword_id) for row in keyword_rows]
+            count_rows = db.query(
+                Permatag.keyword_id,
+                func.count(distinct(Permatag.asset_id)).label("count"),
+            ).filter(
+                tenant_column_filter(Permatag, tenant),
+                Permatag.signum == 1,
+                Permatag.asset_id.is_not(None),
+                Permatag.keyword_id.in_(target_keyword_ids),
+            ).group_by(
+                Permatag.keyword_id
+            ).all()
+            count_by_keyword = {
+                int(keyword_id): int(count or 0)
+                for keyword_id, count in count_rows
+            }
+            keyword_rows = [
+                row for row in keyword_rows
+                if count_by_keyword.get(int(row.keyword_id), 0) > 0
+            ]
+    else:
+        counted_keyword_rows = db.query(
+            Permatag.keyword_id.label("keyword_id"),
+            Keyword.keyword.label("keyword"),
+            KeywordCategory.name.label("category"),
+            func.count(distinct(Permatag.asset_id)).label("count"),
+        ).join(
+            Keyword, Keyword.id == Permatag.keyword_id
+        ).join(
+            KeywordCategory, Keyword.category_id == KeywordCategory.id
+        ).filter(
+            tenant_column_filter(Permatag, tenant),
+            tenant_column_filter(Keyword, tenant),
+            tenant_column_filter(KeywordCategory, tenant),
+            Permatag.signum == 1,
+            Permatag.asset_id.is_not(None),
+        ).group_by(
+            Permatag.keyword_id,
+            Keyword.keyword,
+            KeywordCategory.name,
+        ).order_by(
+            KeywordCategory.name.asc(),
+            Keyword.keyword.asc(),
+        ).all()
+        keyword_rows = counted_keyword_rows
+        count_by_keyword = {
+            int(row.keyword_id): int(row.count or 0)
+            for row in counted_keyword_rows
+        }
+
+    if not keyword_rows:
+        return {
+            "tenant_id": tenant.id,
+            "preview_count": capped_preview_count,
+            "previews": [],
+        }
+
+    keyword_ids = [int(row.keyword_id) for row in keyword_rows]
+
+    previews_by_keyword = {}
+    if len(keyword_ids) <= 24:
+        # Gallery requests are usually a small targeted set.
+        # Per-keyword LIMIT queries stay fast and index-friendly.
+        for keyword_id in keyword_ids:
+            image_rows = db.query(
+                ImageMetadata.id.label("image_id"),
+            ).join(
+                Permatag,
+                and_(
+                    Permatag.asset_id == ImageMetadata.asset_id,
+                    tenant_column_filter(Permatag, tenant),
+                    Permatag.signum == 1,
+                    Permatag.keyword_id == int(keyword_id),
+                    Permatag.asset_id.is_not(None),
+                ),
+            ).filter(
+                tenant_column_filter(ImageMetadata, tenant),
+            ).order_by(
+                Permatag.id.desc(),
+            ).limit(
+                capped_preview_count
+            ).all()
+            if not image_rows:
+                continue
+            previews_by_keyword[int(keyword_id)] = [
+                {
+                    "id": int(image_id),
+                    "rank": rank,
+                }
+                for rank, (image_id,) in enumerate(image_rows, start=1)
+                if image_id is not None
+            ]
+    else:
+        ranked_preview_subquery = db.query(
+            Permatag.keyword_id.label("keyword_id"),
+            Permatag.asset_id.label("asset_id"),
+            func.row_number().over(
+                partition_by=Permatag.keyword_id,
+                order_by=Permatag.id.desc(),
+            ).label("preview_rank"),
+        ).filter(
+            tenant_column_filter(Permatag, tenant),
+            Permatag.signum == 1,
+            Permatag.asset_id.is_not(None),
+            Permatag.keyword_id.in_(keyword_ids),
+        ).subquery()
+
+        preview_rows = db.query(
+            ranked_preview_subquery.c.keyword_id,
+            ImageMetadata.id.label("image_id"),
+            ranked_preview_subquery.c.preview_rank,
+        ).join(
+            ImageMetadata,
+            and_(
+                ImageMetadata.asset_id == ranked_preview_subquery.c.asset_id,
+                tenant_column_filter(ImageMetadata, tenant),
+            ),
+        ).filter(
+            ranked_preview_subquery.c.preview_rank <= capped_preview_count
+        ).order_by(
+            ranked_preview_subquery.c.keyword_id.asc(),
+            ranked_preview_subquery.c.preview_rank.asc(),
+        ).all()
+
+        for keyword_id, image_id, preview_rank in preview_rows:
+            keyword_int = int(keyword_id)
+            image_int = int(image_id)
+            previews_by_keyword.setdefault(keyword_int, []).append({
+                "id": image_int,
+                "rank": int(preview_rank),
+            })
+
+    preview_image_ids = {
+        int(image.get("id"))
+        for images in previews_by_keyword.values()
+        for image in (images or [])
+        if image.get("id") is not None
+    }
+    thumbnail_by_image_id = {}
+    if preview_image_ids:
+        preview_image_rows = db.query(ImageMetadata).filter(
+            ImageMetadata.id.in_(list(preview_image_ids)),
+            tenant_column_filter(ImageMetadata, tenant),
+        ).all()
+        assets_by_id = load_assets_for_images(db, preview_image_rows)
+        thumbnail_by_image_id = bulk_preload_thumbnail_urls(
+            preview_image_rows,
+            tenant,
+            assets_by_id,
+        )
+
+    for images in previews_by_keyword.values():
+        for image in images:
+            image_id = int(image.get("id"))
+            image["thumbnail_url"] = (
+                thumbnail_by_image_id.get(image_id)
+                or f"/api/v1/images/{image_id}/thumbnail"
+            )
+
+    return {
+        "tenant_id": tenant.id,
+        "preview_count": capped_preview_count,
+        "previews": [
+            {
+                "category": row.category,
+                "keyword": row.keyword,
+                "count": count_by_keyword.get(int(row.keyword_id), 0),
+                "images": previews_by_keyword.get(int(row.keyword_id), []),
+            }
+            for row in keyword_rows
+        ],
     }
 
 

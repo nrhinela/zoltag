@@ -20,10 +20,11 @@ const SLIDES = [
     eyebrow: 'Integrate',
     title: 'Easy Integration',
     subtitle:
-      'One-click integration to your storage providers. Zoltag indexes your content and leaves assets in place.',
+      'One-click integration to your storage providers.',
     bullets: [
-      'Reads from common providers including: Dropbox, Google Drive, YouTube, Google Photos, and Flickr',
-      'Fine grained control over what gets accessed',
+      'Secure connections to common providers: Dropbox, Google Drive, YouTube, Google Photos, and Flickr',
+      'Retain full control over what folders are indexed.',
+      'Originals remain in place, only thumbnails are stored in Zotag.',
       'Presents one searchable view across all your sources',
     ],
     visual: 'setup',
@@ -42,12 +43,13 @@ const SLIDES = [
   },
   {
     eyebrow: 'Share',
-    title: 'Sharing and community features',
+    title: 'Find, Share and Collaborate',
     subtitle:
       'Search by what you know and surface usable results in seconds.',
     bullets: [
       'Securely share collections with coworkers, family members or friends',
       'Enable presentations and zip file downloads',
+      'Videos and high res images fully playable and viewable.',
       'Get feedback through ratings and comments',
     ],
     visual: 'search',
@@ -101,77 +103,108 @@ export class HomeStoryTab extends LitElement {
 
     if (type === 'setup') {
       return html`
-        <div class="w-full h-full rounded-2xl border border-slate-200 bg-slate-50 p-5 flex items-center justify-center">
-          <svg class="w-full max-w-[460px]" viewBox="0 0 460 260" role="img" aria-label="Providers to Zoltag to search output flow">
+        <div class="w-full h-full rounded-2xl border border-slate-200 bg-slate-50 p-3 sm:p-4 flex items-center justify-center">
+          <svg class="w-full h-full" viewBox="0 0 520 480" role="img" aria-label="Cloud providers flow into faceted search results">
             <defs>
-              <marker id="syncFlowArrow" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto">
-                <path d="M0,0 L0,8 L8,4 z" fill="#64748b"></path>
+              <marker id="syncFlowArrow" markerWidth="10" markerHeight="10" refX="5" refY="5" orient="auto">
+                <path d="M0,0 L0,10 L10,5 z" fill="#64748b"></path>
               </marker>
             </defs>
 
-            <rect x="10" y="14" width="136" height="232" rx="14" fill="#ffffff" stroke="#cbd5e1"></rect>
-            <text x="78" y="34" text-anchor="middle" font-size="12" fill="#0f172a" font-weight="700">Providers</text>
+            <rect x="24" y="14" width="472" height="124" rx="18" fill="#ffffff" stroke="#cbd5e1"></rect>
+            <text x="260" y="44" text-anchor="middle" font-size="15" fill="#0f172a" font-weight="700">Cloud Providers</text>
 
-            <rect x="22" y="46" width="112" height="26" rx="13" fill="#eef2ff" stroke="#c7d2fe"></rect>
-            <g transform="translate(26 51)" fill="#0061ff">
-              <polygon points="0,4 4,1 8,4 4,7"></polygon>
-              <polygon points="9,4 13,1 17,4 13,7"></polygon>
-              <polygon points="0,10 4,7 8,10 4,13"></polygon>
-              <polygon points="9,10 13,7 17,10 13,13"></polygon>
-            </g>
-            <text x="49" y="63" font-size="11" fill="#0f172a" font-weight="600">Dropbox</text>
+            <rect x="36" y="72" width="84" height="36" rx="18" fill="#eef2ff" stroke="#c7d2fe"></rect>
+            <circle cx="52" cy="90" r="6.5" fill="#0061ff"></circle>
+            <text x="70" y="96" font-size="12.5" fill="#0f172a" font-weight="600">Dropbox</text>
 
-            <rect x="22" y="80" width="112" height="26" rx="13" fill="#ecfeff" stroke="#bae6fd"></rect>
-            <g transform="translate(26 85)">
-              <polygon points="8,0 16,14 11.5,14 4.5,2.5" fill="#34a853"></polygon>
-              <polygon points="8,0 11.5,6 8.8,10.5 4.5,2.5" fill="#4285f4"></polygon>
-              <polygon points="2.2,10.5 8.8,10.5 11.5,14 4.5,14" fill="#fbbc05"></polygon>
-            </g>
-            <text x="49" y="97" font-size="11" fill="#0f172a" font-weight="600">Drive</text>
+            <rect x="130" y="72" width="76" height="36" rx="18" fill="#ecfeff" stroke="#bae6fd"></rect>
+            <circle cx="146" cy="90" r="6.5" fill="#34a853"></circle>
+            <text x="164" y="96" font-size="12.5" fill="#0f172a" font-weight="600">Drive</text>
 
-            <rect x="22" y="114" width="112" height="26" rx="13" fill="#fff7ed" stroke="#fed7aa"></rect>
-            <g transform="translate(26 119)">
-              <rect x="0" y="1" width="18" height="12" rx="4" fill="#ef4444"></rect>
-              <polygon points="7,4 7,10 12,7" fill="#ffffff"></polygon>
-            </g>
-            <text x="49" y="131" font-size="11" fill="#0f172a" font-weight="600">YouTube</text>
+            <rect x="216" y="72" width="94" height="36" rx="18" fill="#fff7ed" stroke="#fed7aa"></rect>
+            <circle cx="232" cy="90" r="6.5" fill="#ef4444"></circle>
+            <text x="250" y="96" font-size="12.5" fill="#0f172a" font-weight="600">YouTube</text>
 
-            <rect x="22" y="148" width="112" height="26" rx="13" fill="#f0fdf4" stroke="#bbf7d0"></rect>
-            <g transform="translate(35 161)">
-              <circle cx="0" cy="-5" r="3.2" fill="#4285f4"></circle>
-              <circle cx="5" cy="0" r="3.2" fill="#ef4444"></circle>
-              <circle cx="0" cy="5" r="3.2" fill="#fbbc05"></circle>
-              <circle cx="-5" cy="0" r="3.2" fill="#22c55e"></circle>
-              <circle cx="0" cy="0" r="1.3" fill="#ffffff"></circle>
-            </g>
-            <text x="49" y="165" font-size="11" fill="#0f172a" font-weight="600">Photos</text>
+            <rect x="320" y="72" width="84" height="36" rx="18" fill="#f0fdf4" stroke="#bbf7d0"></rect>
+            <circle cx="336" cy="90" r="6.5" fill="#22c55e"></circle>
+            <text x="354" y="96" font-size="12.5" fill="#0f172a" font-weight="600">Photos</text>
 
-            <rect x="22" y="182" width="112" height="26" rx="13" fill="#fdf4ff" stroke="#f5d0fe"></rect>
-            <circle cx="32" cy="195" r="3.6" fill="#2563eb"></circle>
-            <circle cx="38" cy="195" r="3.6" fill="#ec4899"></circle>
-            <text x="49" y="199" font-size="11" fill="#0f172a" font-weight="600">Flickr</text>
+            <rect x="414" y="72" width="72" height="36" rx="18" fill="#fdf4ff" stroke="#f5d0fe"></rect>
+            <circle cx="430" cy="90" r="6.5" fill="#ec4899"></circle>
+            <text x="448" y="96" font-size="12.5" fill="#0f172a" font-weight="600">Flickr</text>
 
-            <rect x="176" y="96" width="108" height="68" rx="14" fill="#eff6ff" stroke="#93c5fd"></rect>
-            <text x="230" y="126" text-anchor="middle" font-size="16" fill="#1e3a8a" font-weight="700">Zoltag</text>
-            <text x="230" y="145" text-anchor="middle" font-size="10.5" fill="#1d4ed8">Normalize + index</text>
+            <line x1="260" y1="138" x2="260" y2="180" stroke="#64748b" stroke-width="3" marker-end="url(#syncFlowArrow)"></line>
+            <text x="278" y="169" font-size="12.5" fill="#1d4ed8">Unified index</text>
 
-            <line x1="148" y1="130" x2="176" y2="130" stroke="#64748b" stroke-width="2.4" marker-end="url(#syncFlowArrow)"></line>
+            <rect x="36" y="186" width="448" height="278" rx="18" fill="#ffffff" stroke="#cbd5e1"></rect>
+            <text x="260" y="216" text-anchor="middle" font-size="16" fill="#0f172a" font-weight="700">Search Across All Providers</text>
 
-            <rect x="314" y="42" width="136" height="176" rx="14" fill="#ffffff" stroke="#cbd5e1"></rect>
-            <text x="382" y="62" text-anchor="middle" font-size="12" fill="#0f172a" font-weight="700">Search Output</text>
-            <rect x="326" y="72" width="112" height="20" rx="8" fill="#f8fafc" stroke="#e2e8f0"></rect>
-            <text x="334" y="86" font-size="10" fill="#64748b">aerial silk video...</text>
-            <rect x="326" y="102" width="54" height="16" rx="8" fill="#eef2ff" stroke="#c7d2fe"></rect>
-            <text x="333" y="113" font-size="9.5" fill="#3730a3">Video</text>
-            <rect x="384" y="102" width="54" height="16" rx="8" fill="#ecfeff" stroke="#bae6fd"></rect>
-            <text x="391" y="113" font-size="9.5" fill="#155e75">2+ stars</text>
-            <rect x="326" y="126" width="112" height="80" rx="10" fill="#f8fafc" stroke="#e2e8f0"></rect>
-            <rect x="334" y="134" width="46" height="30" rx="6" fill="#e2e8f0"></rect>
-            <rect x="386" y="134" width="46" height="30" rx="6" fill="#dbeafe"></rect>
-            <rect x="334" y="170" width="98" height="8" rx="4" fill="#e2e8f0"></rect>
-            <rect x="334" y="184" width="76" height="8" rx="4" fill="#e2e8f0"></rect>
+            <text x="54" y="250" font-size="14" fill="#334155" font-weight="700">Filters:</text>
+            <rect x="102" y="234" width="96" height="30" rx="15" fill="#f8fafc" stroke="#cbd5e1"></rect>
+            <text x="114" y="253" font-size="11.5" fill="#475569">+ Add filter</text>
+            <rect x="206" y="234" width="164" height="30" rx="15" fill="#eff6ff" stroke="#bfdbfe"></rect>
+            <text x="219" y="253" font-size="11.5" fill="#1d4ed8">Keywords: aerial-lyra</text>
+            <rect x="376" y="234" width="100" height="30" rx="15" fill="#eff6ff" stroke="#93c5fd"></rect>
+            <text x="388" y="253" font-size="11.5" fill="#1d4ed8">Media: Videos</text>
 
-            <line x1="284" y1="130" x2="314" y2="130" stroke="#64748b" stroke-width="2.4" marker-end="url(#syncFlowArrow)"></line>
+            <line x1="54" y1="270" x2="468" y2="270" stroke="#e2e8f0"></line>
+
+            <text x="54" y="299" font-size="14" fill="#334155" font-weight="700">Sort:</text>
+            <rect x="95" y="282" width="62" height="26" rx="9" fill="#f8fafc" stroke="#cbd5e1"></rect>
+            <text x="109" y="299" font-size="12" fill="#64748b">Rating</text>
+            <rect x="162" y="282" width="118" height="26" rx="9" fill="#0f172a"></rect>
+            <text x="179" y="299" font-size="12" fill="#ffffff">Photo Date</text>
+            <rect x="286" y="282" width="136" height="26" rx="9" fill="#f8fafc" stroke="#cbd5e1"></rect>
+            <text x="304" y="299" font-size="12" fill="#64748b">Process Date</text>
+            <rect x="430" y="282" width="22" height="26" rx="6" fill="#eff6ff" stroke="#93c5fd"></rect>
+            <rect x="436" y="290" width="4" height="4" rx="1" fill="#2563eb"></rect>
+            <rect x="443" y="290" width="4" height="4" rx="1" fill="#2563eb"></rect>
+            <rect x="436" y="297" width="4" height="4" rx="1" fill="#2563eb"></rect>
+            <rect x="443" y="297" width="4" height="4" rx="1" fill="#2563eb"></rect>
+
+            <text x="54" y="322" font-size="12.5" fill="#64748b" font-weight="700">4 ITEMS</text>
+
+            <rect x="54" y="330" width="100" height="100" rx="11" fill="#c7d2fe"></rect>
+            <rect x="62" y="338" width="55" height="16" rx="8" fill="#0f172a"></rect>
+            <text x="69" y="349" font-size="8.2" fill="#e2e8f0">VIDEO 0:22</text>
+            <circle cx="104" cy="380" r="16" fill="#0f172a" opacity="0.55"></circle>
+            <polygon points="101,372 101,388 113,380" fill="#ffffff"></polygon>
+            <rect x="54" y="409" width="100" height="21" rx="8" fill="#0f172a" opacity="0.7"></rect>
+            <text x="62" y="423" font-size="8.8" fill="#f1f5f9">Tags: aerial-lyra</text>
+
+            <rect x="160" y="330" width="100" height="100" rx="11" fill="#bae6fd"></rect>
+            <rect x="168" y="338" width="55" height="16" rx="8" fill="#0f172a"></rect>
+            <text x="175" y="349" font-size="8.2" fill="#e2e8f0">VIDEO 0:02</text>
+            <circle cx="210" cy="380" r="16" fill="#0f172a" opacity="0.55"></circle>
+            <polygon points="207,372 207,388 219,380" fill="#ffffff"></polygon>
+            <rect x="160" y="409" width="100" height="21" rx="8" fill="#0f172a" opacity="0.7"></rect>
+            <text x="168" y="423" font-size="8.8" fill="#f1f5f9">Tags: aerial-lyra</text>
+
+            <rect x="266" y="330" width="100" height="100" rx="11" fill="#fecaca"></rect>
+            <rect x="274" y="338" width="55" height="16" rx="8" fill="#0f172a"></rect>
+            <text x="281" y="349" font-size="8.2" fill="#e2e8f0">VIDEO 0:02</text>
+            <circle cx="316" cy="380" r="16" fill="#0f172a" opacity="0.55"></circle>
+            <polygon points="313,372 313,388 325,380" fill="#ffffff"></polygon>
+            <rect x="266" y="409" width="100" height="21" rx="8" fill="#0f172a" opacity="0.7"></rect>
+            <text x="274" y="423" font-size="8.8" fill="#f1f5f9">Tags: aerial-lyra</text>
+
+            <rect x="372" y="330" width="100" height="100" rx="11" fill="#bbf7d0"></rect>
+            <rect x="380" y="338" width="55" height="16" rx="8" fill="#0f172a"></rect>
+            <text x="387" y="349" font-size="8.2" fill="#e2e8f0">VIDEO 0:24</text>
+            <circle cx="422" cy="380" r="16" fill="#0f172a" opacity="0.55"></circle>
+            <polygon points="419,372 419,388 431,380" fill="#ffffff"></polygon>
+            <rect x="372" y="409" width="100" height="21" rx="8" fill="#0f172a" opacity="0.7"></rect>
+            <text x="380" y="423" font-size="8.8" fill="#f1f5f9">Tags: aerial-lyra</text>
+
+            <text x="248" y="448" font-size="12" fill="#64748b">Results per page:</text>
+            <rect x="342" y="435" width="44" height="20" rx="7" fill="#f8fafc" stroke="#cbd5e1"></rect>
+            <text x="357" y="449" font-size="11" fill="#475569">100</text>
+            <text x="394" y="448" font-size="12" fill="#64748b">1-4 of 4</text>
+            <rect x="451" y="435" width="24" height="20" rx="6" fill="#ffffff" stroke="#93c5fd"></rect>
+            <text x="460" y="449" font-size="11" fill="#2563eb">&lt;</text>
+            <rect x="479" y="435" width="24" height="20" rx="6" fill="#ffffff" stroke="#93c5fd"></rect>
+            <text x="488" y="449" font-size="11" fill="#2563eb">&gt;</text>
           </svg>
         </div>
       `;
@@ -327,6 +360,13 @@ export class HomeStoryTab extends LitElement {
               </ul>
 
               <div class="mt-auto pt-8 flex flex-wrap items-center gap-3">
+                ${this.currentSlide === 0 ? html`
+                  <button
+                    type="button"
+                    class="inline-flex items-center px-4 py-2 rounded-full bg-slate-900 text-white text-sm font-semibold hover:bg-slate-800"
+                    @click=${this._goNext}
+                  >Learn More</button>
+                ` : html``}
                 ${slide.cta ? html`
                   <a
                     href="/signup"

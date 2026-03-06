@@ -293,6 +293,24 @@ export async function getKeywords(tenantId, filters = {}) {
     return data.keywords_by_category || {};
 }
 
+export async function getKeywordGalleryPreviews(tenantId, { previewCount = 3, targets = [] } = {}) {
+  const params = new URLSearchParams();
+  const count = Number(previewCount);
+  if (Number.isFinite(count) && count > 0) {
+    params.append('preview_count', String(Math.min(6, Math.max(1, Math.floor(count)))));
+  }
+  const normalizedTargets = Array.isArray(targets)
+    ? targets.map((value) => String(value || '').trim()).filter(Boolean)
+    : [];
+  normalizedTargets.forEach((value) => params.append('target', value));
+  const suffix = params.toString() ? `?${params.toString()}` : '';
+  return queryRequest(
+    ['keywordGalleryPreviews', tenantId, suffix],
+    () => fetchWithAuth(`/keywords/gallery-previews${suffix}`, { tenantId }),
+    { staleTimeMs: KEYWORDS_CACHE_MS }
+  );
+}
+
 export async function getNlSearchFilters(tenantId, payload) {
   return fetchWithAuth(`/search/nl`, {
     method: 'POST',

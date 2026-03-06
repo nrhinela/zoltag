@@ -6,7 +6,8 @@ import {
   updateList,
   addToList,
   getListItems,
-  getDropboxFolders
+  getDropboxFolders,
+  getKeywordGalleryPreviews,
 } from '../services/api.js';
 import { createHotspotHandlers, parseUtilityKeywordValue } from './shared/hotspot-controls.js';
 import {
@@ -60,9 +61,10 @@ const EXPLORE_RIGHT_PANEL_COLLAPSED_STORAGE_KEY = 'zoltag:app:rightPanelCollapse
  * - Browse by Folder: Browse images grouped by folder
  * - Natural Search: Experimental NL query flow
  * - Explore: Tag chip based navigation
+ * - Gallery: Collection-style topic entry points
  *
  * @property {String} tenant - Current tenant ID
- * @property {String} searchSubTab - Active subtab ('advanced', 'results', 'browse-by-folder', 'natural-search', 'chips')
+ * @property {String} searchSubTab - Active subtab ('advanced', 'results', 'browse-by-folder', 'natural-search', 'chips', 'gallery')
  * @property {Array} searchChipFilters - Current filter chip selections
  * @property {Array} searchDropboxOptions - Dropbox folder options
  * @property {Array} searchImages - Images from filter panel
@@ -165,12 +167,18 @@ export class SearchTab extends LitElement {
     vectorstoreLoading: { type: Boolean, state: true },
     _showRankingBalance: { type: Boolean, state: true },
     vectorstoreHasSearched: { type: Boolean, state: true },
+    galleryCollections: { type: Array, state: true },
+    galleryLoading: { type: Boolean, state: true },
+    galleryTopicQuery: { type: String, state: true },
+    gallerySelectedCategories: { type: Array, state: true },
+    galleryTagSortOrder: { type: String, state: true },
+    galleryTransitionLoading: { type: Boolean, state: true },
   };
 
   constructor() {
     super();
     this.tenant = '';
-    this.searchSubTab = 'advanced';
+    this.searchSubTab = 'gallery';
     this.searchChipFilters = [];
     this.searchFilterPanel = null;
     this.searchDropboxOptions = [];
@@ -255,6 +263,15 @@ export class SearchTab extends LitElement {
     this.vectorstoreLoading = false;
     this.vectorstoreHasSearched = false;
     this._showRankingBalance = false;
+    this.galleryCollections = [];
+    this.galleryLoading = false;
+    this.galleryTopicQuery = '';
+    this.gallerySelectedCategories = [];
+    this.galleryTagSortOrder = 'asc';
+    this.galleryTransitionLoading = false;
+    this._galleryCategorySelectionTouched = false;
+    this._galleryTopicFocused = false;
+    this._galleryLoadToken = 0;
     this._searchHotspotHandlers = createHotspotHandlers(this, {
       targetsProperty: 'searchHotspotTargets',
       dragTargetProperty: '_searchHotspotDragTarget',
@@ -453,6 +470,9 @@ export class SearchTab extends LitElement {
   _finishSearchLoading() {
     this._searchLoadingCount = Math.max(0, (this._searchLoadingCount || 1) - 1);
     this.searchRefreshing = this._searchLoadingCount > 0;
+    if (!this.searchRefreshing && this.galleryTransitionLoading) {
+      this.galleryTransitionLoading = false;
+    }
   }
 
   // ========================================
@@ -569,6 +589,14 @@ export class SearchTab extends LitElement {
       this._searchAdvancedFiltersState = null;
       this._searchResultsFiltersState = null;
       this.searchLists = [];
+      this.galleryCollections = [];
+      this.galleryLoading = false;
+      this.galleryTopicQuery = '';
+      this.gallerySelectedCategories = [];
+      this.galleryTagSortOrder = 'asc';
+      this.galleryTransitionLoading = false;
+      this._galleryCategorySelectionTouched = false;
+      this._galleryLoadToken += 1;
       this._restoreSearchHistorySessionState();
       this._fetchSearchLists({ force: true });
     }
@@ -658,6 +686,13 @@ export class SearchTab extends LitElement {
       if (this.searchSubTab === 'landing' && !this.browseByFolderOptions?.length) {
         this.folderBrowserPanel?.loadFolders();
       }
+      if (this.searchSubTab === 'gallery') {
+        this._loadGalleryCollections();
+      }
+    }
+
+    if ((changedProps.has('keywords') || changedProps.has('tenant')) && this.searchSubTab === 'gallery') {
+      this._loadGalleryCollections();
     }
 
     if (
@@ -1621,11 +1656,446 @@ export class SearchTab extends LitElement {
   _handleSearchSubTabChange(nextTab) {
     if (this.hideSubtabs) return;
     this.searchSubTab = nextTab;
+    if (nextTab === 'gallery') {
+      this.vectorstoreQuery = '';
+      this.vectorstoreHasSearched = false;
+      this.galleryTransitionLoading = false;
+      this._handleChipFiltersChanged({ detail: { filters: [] } });
+    }
     this.dispatchEvent(new CustomEvent('search-subtab-changed', {
       detail: { subtab: nextTab },
       bubbles: true,
       composed: true
     }));
+  }
+
+  _resolveThumbnailUrl(image) {
+    if (!image) return '';
+    if (image.thumbnail_url) return image.thumbnail_url;
+    if (image.thumbnailUrl) return image.thumbnailUrl;
+    if (image?.photo?.thumbnail_url) return image.photo.thumbnail_url;
+    const imageId = Number(image.id ?? image.photo_id ?? image.image_id ?? image?.photo?.id);
+    return Number.isFinite(imageId) ? `/api/v1/images/${imageId}/thumbnail` : '';
+  }
+
+  _getGalleryTopicSuggestions(limit = 10) {
+    const normalizedLimit = Math.max(1, Number(limit) || 10);
+    const query = String(this.galleryTopicQuery || '').trim().toLowerCase();
+    const topics = (this.galleryCollections || []).flatMap((section) => (
+      (section?.items || [])
+        .filter((item) => item?.keyword && item?.category)
+        .map((item) => ({
+          category: String(item.category),
+          keyword: String(item.keyword),
+          count: Number(item.count) || 0,
+          searchable: `${String(item.keyword).toLowerCase()} ${String(item.category).toLowerCase()}`,
+        }))
+    ));
+    if (!topics.length) return [];
+
+    const filtered = query
+      ? topics.filter((topic) => topic.searchable.includes(query))
+      : topics;
+
+    return filtered
+      .sort((a, b) => {
+        const aStarts = query && a.keyword.toLowerCase().startsWith(query) ? 1 : 0;
+        const bStarts = query && b.keyword.toLowerCase().startsWith(query) ? 1 : 0;
+        if (aStarts !== bStarts) return bStarts - aStarts;
+        const countDiff = (b.count || 0) - (a.count || 0);
+        if (countDiff !== 0) return countDiff;
+        const categoryCompare = a.category.localeCompare(b.category);
+        if (categoryCompare !== 0) return categoryCompare;
+        return a.keyword.localeCompare(b.keyword);
+      })
+      .slice(0, normalizedLimit);
+  }
+
+  _handleGalleryTopicInput(event) {
+    this.galleryTopicQuery = event?.target?.value || '';
+  }
+
+  _handleGalleryTopicFocus() {
+    this._galleryTopicFocused = true;
+    this.requestUpdate();
+  }
+
+  _handleGalleryTopicBlur() {
+    setTimeout(() => {
+      this._galleryTopicFocused = false;
+      this.requestUpdate();
+    }, 120);
+  }
+
+  _submitExploreTextSearch(rawQuery) {
+    const query = String(rawQuery || '').trim();
+    if (!query) return;
+    this.vectorstoreQuery = query;
+    this._handleSearchSubTabChange('results');
+    this._runVectorstoreSearch();
+  }
+
+  _handleGalleryTopicSubmit(event) {
+    event?.preventDefault?.();
+    this._submitExploreTextSearch(this.galleryTopicQuery);
+  }
+
+  _handleGalleryTopicSelect(topic) {
+    if (!topic?.category || !topic?.keyword) return;
+    this.galleryTopicQuery = topic.keyword;
+    this._galleryTopicFocused = false;
+    this._handleGalleryCollectionSelect(topic.category, topic.keyword);
+  }
+
+  _applyGalleryTagViewDefaultSort() {
+    this.searchOrderBy = 'rating';
+    this.searchDateOrder = 'desc';
+    this.dispatchEvent(new CustomEvent('sort-changed', {
+      detail: { orderBy: 'rating', dateOrder: 'desc' },
+      bubbles: true,
+      composed: true,
+    }));
+  }
+
+  _startGalleryTransitionLoading() {
+    this.galleryTransitionLoading = true;
+  }
+
+  _handleGalleryChipFiltersChanged(event) {
+    const nextFilters = Array.isArray(event?.detail?.filters) ? event.detail.filters : [];
+    if (nextFilters.length) {
+      this._startGalleryTransitionLoading();
+    }
+    if (nextFilters.some((filter) => filter?.type === 'keyword')) {
+      this._applyGalleryTagViewDefaultSort();
+    }
+    this._handleChipFiltersChanged(event);
+    if (!nextFilters.length) return;
+    this._handleSearchSubTabChange('advanced');
+  }
+
+  _toggleGalleryTagSort() {
+    this.galleryTagSortOrder = this.galleryTagSortOrder === 'desc' ? 'asc' : 'desc';
+  }
+
+  _getGalleryTagSortArrow() {
+    return this.galleryTagSortOrder === 'desc' ? '↓' : '↑';
+  }
+
+  _galleryCategorySectionId(category) {
+    const normalized = String(category || '').trim().toLowerCase();
+    if (!normalized) return 'gallery-category-uncategorized';
+    const slug = normalized
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+    return `gallery-category-${slug || 'uncategorized'}`;
+  }
+
+  _scrollGalleryToCategory(category) {
+    const sectionId = this._galleryCategorySectionId(category);
+    if (!sectionId) return;
+    const section = this.querySelector(`#${sectionId}`);
+    if (!section) return;
+    section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  _setGallerySelectedCategories(nextCategories = [], markTouched = true) {
+    const available = new Set(
+      (this.galleryCollections || [])
+        .map((section) => String(section?.category || '').trim())
+        .filter(Boolean)
+    );
+    const normalized = Array.from(new Set(
+      (nextCategories || [])
+        .map((category) => String(category || '').trim())
+        .filter((category) => category && available.has(category))
+    )).sort((a, b) => a.localeCompare(b));
+    if (markTouched) this._galleryCategorySelectionTouched = true;
+    this.gallerySelectedCategories = normalized;
+  }
+
+  _syncGalleryCategorySelection() {
+    const categories = (this.galleryCollections || [])
+      .map((section) => String(section?.category || '').trim())
+      .filter(Boolean)
+      .sort((a, b) => a.localeCompare(b));
+    if (!categories.length) {
+      this.gallerySelectedCategories = [];
+      return;
+    }
+
+    if (!this._galleryCategorySelectionTouched) {
+      this.gallerySelectedCategories = categories;
+      return;
+    }
+
+    const allowed = new Set(categories);
+    const retained = (this.gallerySelectedCategories || [])
+      .map((category) => String(category || '').trim())
+      .filter((category) => allowed.has(category));
+    this.gallerySelectedCategories = Array.from(new Set(retained)).sort((a, b) => a.localeCompare(b));
+  }
+
+  _toggleGalleryCategory(category) {
+    const normalized = String(category || '').trim();
+    if (!normalized) return;
+    const next = new Set((this.gallerySelectedCategories || []).map((value) => String(value || '').trim()).filter(Boolean));
+    if (next.has(normalized)) {
+      next.delete(normalized);
+    } else {
+      next.add(normalized);
+    }
+    this._setGallerySelectedCategories(Array.from(next));
+  }
+
+  _selectAllGalleryCategories() {
+    const categories = (this.galleryCollections || [])
+      .map((section) => String(section?.category || '').trim())
+      .filter(Boolean);
+    this._setGallerySelectedCategories(categories);
+  }
+
+  _clearGalleryCategories() {
+    this._setGallerySelectedCategories([]);
+  }
+
+  _renderGallerySearchControls() {
+    return html`
+      <filter-chips
+        .tenant=${this.tenant}
+        .tagStatsBySource=${this.tagStatsBySource}
+        .activeCurateTagSource=${this.activeCurateTagSource || 'permatags'}
+        .keywords=${this.keywords}
+        .imageStats=${this.imageStats}
+        .activeFilters=${this.searchChipFilters}
+        .availableFilterTypes=${['keyword', 'rating', 'source', 'media', 'folder', 'list', 'tag_coverage', 'filename', 'text_search']}
+        .dropboxFolders=${this.searchDropboxOptions || []}
+        .lists=${this.searchLists}
+        .renderSortControls=${() => html`
+          <div class="flex items-center gap-2">
+            <span class="text-sm font-semibold text-gray-700">Sort:</span>
+            <div class="curate-audit-toggle">
+              <button type="button" class="active" @click=${() => this._toggleGalleryTagSort()}>
+                Tag ${this._getGalleryTagSortArrow()}
+              </button>
+            </div>
+          </div>
+        `}
+        @filters-changed=${this._handleGalleryChipFiltersChanged}
+        @folder-search=${this._handleSearchDropboxInput}
+        @lists-requested=${this._handleSearchListsRequested}
+      ></filter-chips>
+    `;
+  }
+
+  async _loadGalleryCollections() {
+    this.galleryCollections = [];
+    if (!this.tenant) {
+      this.galleryLoading = false;
+      return;
+    }
+    const token = ++this._galleryLoadToken;
+    this.galleryLoading = true;
+    try {
+      const response = await getKeywordGalleryPreviews(this.tenant, {
+        previewCount: 1,
+      });
+      if (token !== this._galleryLoadToken) return;
+
+      const rows = (Array.isArray(response?.previews) ? response.previews : []).filter((row) => {
+        const count = Number(row?.count);
+        return Number.isFinite(count) && count > 0 && row?.category && row?.keyword;
+      });
+
+      const groupedByCategory = new Map();
+      rows.forEach((row) => {
+        const category = String(row.category || '');
+        if (!groupedByCategory.has(category)) {
+          groupedByCategory.set(category, []);
+        }
+        const previews = (row?.images || [])
+          .map((image) => {
+            const id = Number(image?.id ?? image?.image_id);
+            const thumbnail = image?.thumbnail_url || (Number.isFinite(id) ? `/api/v1/images/${id}/thumbnail` : '');
+            if (!Number.isFinite(id) && !thumbnail) return null;
+            return { id, thumbnail_url: thumbnail };
+          })
+          .filter(Boolean);
+        groupedByCategory.get(category).push({
+          id: `${category}::${row.keyword}`,
+          category,
+          keyword: row.keyword,
+          count: Number(row.count) || 0,
+          previews,
+        });
+      });
+
+      this.galleryCollections = Array.from(groupedByCategory.entries())
+        .map(([category, items]) => ({
+          category,
+          totalCount: items.reduce((sum, item) => sum + (Number(item.count) || 0), 0),
+          items: items.sort((a, b) => {
+            return String(a.keyword || '').localeCompare(String(b.keyword || ''));
+          }),
+        }))
+        .sort((a, b) => {
+          const countDiff = (b.totalCount || 0) - (a.totalCount || 0);
+          if (countDiff !== 0) return countDiff;
+          return String(a.category || '').localeCompare(String(b.category || ''));
+        })
+        .map(({ category, items }) => ({ category, items }));
+      this._syncGalleryCategorySelection();
+    } catch (error) {
+      if (token !== this._galleryLoadToken) return;
+      console.error('Gallery preview fetch failed:', error);
+      this.galleryCollections = [];
+      this.gallerySelectedCategories = [];
+    } finally {
+      if (token === this._galleryLoadToken) {
+        this.galleryLoading = false;
+      }
+    }
+  }
+
+  _handleGalleryCollectionSelect(category, keyword) {
+    this._startGalleryTransitionLoading();
+    this._applyGalleryTagViewDefaultSort();
+    const nextFilters = [{
+      type: 'keyword',
+      category,
+      value: keyword,
+      displayLabel: 'Keywords',
+      displayValue: keyword,
+    }];
+    this._handleSearchSubTabChange('advanced');
+    this._handleChipFiltersChanged({ detail: { filters: nextFilters } });
+  }
+
+  _renderGalleryCollectionCard(item) {
+    const previews = Array.isArray(item?.previews) ? item.previews : [];
+    const front = this._resolveThumbnailUrl(previews[0]);
+    const middle = this._resolveThumbnailUrl(previews[1] || previews[0]);
+    const back = this._resolveThumbnailUrl(previews[2] || previews[1] || previews[0]);
+    const shellStyle = 'position:relative; margin:0 auto; width:100%; max-width:210px; aspect-ratio:4 / 5;';
+    const stackLayer = (url, style) => html`
+      <div
+        style=${style + (url
+          ? ` background-image:url('${url}'); background-size:cover; background-position:center;`
+          : ' background: linear-gradient(145deg, #e2e8f0, #cbd5e1);')}
+      ></div>
+    `;
+    const backStyle = 'position:absolute; inset:0; transform:translate(8px, 8px) rotate(1.8deg); border-radius:8px; border:2px solid #fff; box-shadow:0 6px 14px rgba(15, 23, 42, 0.16);';
+    const middleStyle = 'position:absolute; inset:0; transform:translate(-4px, 4px) rotate(-1.2deg); border-radius:8px; border:2px solid #fff; box-shadow:0 6px 14px rgba(15, 23, 42, 0.16);';
+    const frontStyle = 'position:relative; height:100%; width:100%; border-radius:8px; border:4px solid #fff; box-shadow:0 10px 20px rgba(15, 23, 42, 0.2); overflow:hidden; background:#cbd5e1;';
+    return html`
+      <button
+        type="button"
+        class="group w-full text-left"
+        @click=${() => this._handleGalleryCollectionSelect(item.category, item.keyword)}
+        title=${`Open ${item.category}: ${item.keyword}`}
+      >
+        <div style=${shellStyle}>
+          ${stackLayer(back, backStyle)}
+          ${stackLayer(middle, middleStyle)}
+          <div style=${frontStyle}>
+            ${front
+              ? html`<img src=${front} alt=${`${item.keyword} preview`} style="display:block; width:100%; height:100%; object-fit:cover;" loading="lazy">`
+              : html`<div style="height:100%; width:100%; background:linear-gradient(145deg, #e2e8f0, #cbd5e1);"></div>`}
+          </div>
+        </div>
+        <div class="mt-3 text-center">
+          <div class="text-sm font-semibold text-slate-900">${item.keyword}</div>
+          <div class="text-xs text-slate-500">${item.count} items</div>
+        </div>
+      </button>
+    `;
+  }
+
+  _renderGalleryTransitionSkeleton() {
+    const cards = Array.from({ length: 12 });
+    return html`
+      <div class="p-4 grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-5">
+        ${cards.map(() => html`
+          <div class="rounded-lg border border-gray-200 bg-white p-2 animate-pulse">
+            <div class="w-full rounded-md bg-gray-200" style="aspect-ratio:4 / 5;"></div>
+            <div class="mt-3 h-3 w-2/3 mx-auto rounded bg-gray-200"></div>
+            <div class="mt-2 h-2 w-1/3 mx-auto rounded bg-gray-200"></div>
+          </div>
+        `)}
+      </div>
+    `;
+  }
+
+  _renderGallerySubtab() {
+    const sections = this.galleryCollections || [];
+    const categoryRows = sections.map((section) => ({
+      category: String(section?.category || ''),
+      keywordCount: Number((section?.items || []).length) || 0,
+    }));
+    const direction = this.galleryTagSortOrder === 'desc' ? -1 : 1;
+    const visibleSections = sections
+      .map((section) => ({
+        ...section,
+        items: [...(section.items || [])].sort((a, b) => (
+          String(a?.keyword || '').localeCompare(String(b?.keyword || '')) * direction
+        )),
+      }));
+    if (!sections.length) {
+      return html`
+        <div class="space-y-4">
+          ${this._renderGallerySearchControls()}
+          <div class="bg-white rounded-xl border border-gray-200 p-6 text-sm text-gray-500">
+            ${this.galleryLoading ? 'Building gallery collections...' : 'No keyword collections available yet.'}
+          </div>
+        </div>
+      `;
+    }
+    return html`
+      <div class="space-y-6">
+        ${this._renderGallerySearchControls()}
+        <div class="curate-layout search-layout results-hotspot-layout ${this.rightPanelCollapsed ? 'right-panel-layout-collapsed' : ''}" style="--curate-thumb-size: ${this.curateThumbSize}px;">
+          <div class="space-y-4">
+            ${visibleSections.map((section) => html`
+              <section
+                id=${this._galleryCategorySectionId(section.category)}
+                class="bg-white rounded-xl border border-gray-200 p-4"
+              >
+                <div class="mb-4">
+                  <h3 class="text-sm font-semibold uppercase tracking-wide text-slate-600">${section.category}</h3>
+                </div>
+                <div class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-5">
+                  ${section.items.map((item) => this._renderGalleryCollectionCard(item))}
+                </div>
+              </section>
+            `)}
+          </div>
+          <right-panel
+            .tools=${[]}
+            .activeTool=${''}
+            .collapsible=${true}
+            .collapsed=${this.rightPanelCollapsed}
+            @collapse-changed=${(event) => this._handleRightPanelCollapseChanged(event.detail.collapsed)}
+          >
+            <div slot="default" class="curate-utility-panel">
+              ${categoryRows.map((row) => {
+                return html`
+                  <button
+                    type="button"
+                    class="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-left text-slate-700 transition-colors hover:bg-slate-50"
+                    @click=${() => this._scrollGalleryToCategory(row.category)}
+                  >
+                    <div class="flex items-center justify-between gap-2">
+                      <span class="text-xs font-medium truncate">${row.category}</span>
+                      <span class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600">${row.keywordCount}</span>
+                    </div>
+                  </button>
+                `;
+              })}
+            </div>
+          </right-panel>
+        </div>
+      </div>
+    `;
   }
 
   _handleVectorstoreQueryInput(event) {
@@ -2422,6 +2892,8 @@ export class SearchTab extends LitElement {
     if (this.searchFilterPanel) {
       this.searchFilterPanel.updateFilters(searchFilters);
       this.searchFilterPanel.fetchImages();
+    } else if (this.galleryTransitionLoading) {
+      this.galleryTransitionLoading = false;
     }
   }
 
@@ -2874,11 +3346,7 @@ export class SearchTab extends LitElement {
   }
 
   _ux1SubmitSearch() {
-    const query = (this._ux1Query || '').trim();
-    if (!query) return;
-    this.vectorstoreQuery = query;
-    this._handleSearchSubTabChange('results');
-    this._runVectorstoreSearch();
+    this._submitExploreTextSearch(this._ux1Query);
   }
 
   _ux1ApplyKeyword(keyword) {
@@ -3092,6 +3560,12 @@ export class SearchTab extends LitElement {
           <div class="subnav-strip mb-4">
             <div class="curate-subtabs">
               <button
+                class="curate-subtab ${this.searchSubTab === 'gallery' ? 'active' : ''}"
+                @click=${() => this._handleSearchSubTabChange('gallery')}
+              >
+                Gallery
+              </button>
+              <button
                 class="curate-subtab ${this.searchSubTab === 'browse-by-folder' ? 'active' : ''}"
                 @click=${() => this._handleSearchSubTabChange('browse-by-folder')}
               >
@@ -3294,7 +3768,7 @@ export class SearchTab extends LitElement {
             <!-- Image Grid Layout -->
             <div class="curate-layout search-layout results-hotspot-layout ${this.rightPanelCollapsed ? 'right-panel-layout-collapsed' : ''}" style="--curate-thumb-size: ${this.curateThumbSize}px; ${browseByFolderBlurStyle}">
               <div class="curate-pane" @dragover=${this._handleSearchAvailableDragOver} @drop=${this._handleSearchAvailableDrop}>
-                ${this.searchRefreshing ? html`
+                ${this.searchRefreshing && !this.galleryTransitionLoading ? html`
                   <div class="curate-loading-overlay" aria-label="Loading">
                     <span class="curate-spinner large"></span>
                   </div>
@@ -3302,6 +3776,8 @@ export class SearchTab extends LitElement {
                 <div class="curate-pane-body">
                     ${this.searchResultsView === 'history' ? html`
                     ${this._renderSearchHistoryPane()}
+                  ` : this.galleryTransitionLoading ? html`
+                    ${this._renderGalleryTransitionSkeleton()}
                   ` : html`
                     <div class="p-2">
                       ${searchPaginationTop}
@@ -3574,6 +4050,10 @@ export class SearchTab extends LitElement {
             @image-clicked=${(event) => this._handleSearchImageClick(event.detail.event, event.detail.image, event.detail.imageSet)}
             @image-selected=${(event) => this._handleSearchImageClick(null, event.detail.image, event.detail.imageSet)}
           ></home-chips-tab>
+        ` : html``}
+
+        ${this.searchSubTab === 'gallery' ? html`
+          ${this._renderGallerySubtab()}
         ` : html``}
 
         ${this.searchSubTab === 'landing' ? html`
