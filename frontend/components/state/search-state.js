@@ -76,6 +76,7 @@ export class SearchStateController extends BaseStateController {
   }
 
   handleSortChanged(detail) {
+    const suppressFetch = Boolean(detail?.suppressFetch);
     this.host.searchOrderBy = detail.orderBy;
     this.host.searchOrderDirection = detail.dateOrder;
     const panel = this.host.searchFilterPanel;
@@ -87,7 +88,9 @@ export class SearchStateController extends BaseStateController {
       sortOrder: this.host.searchOrderDirection,
       offset: 0,
     });
-    panel.fetchImages();
+    if (!suppressFetch) {
+      panel.fetchImages();
+    }
   }
 
   handleOptimisticRemove(detail = {}) {

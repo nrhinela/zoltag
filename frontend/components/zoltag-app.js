@@ -188,7 +188,7 @@ class ZoltagApp extends LitElement {
       this.showUploadLibraryModal = false;
       this.activeTab = 'home';
       this.homeSubTab = 'overview';
-      this.activeSearchSubTab = 'advanced';
+      this.activeSearchSubTab = 'gallery';
       this.activeLibrarySubTab = 'assets';
       this.activeAdminSubTab = 'tagging';
       this.activeSystemSubTab = 'cli';

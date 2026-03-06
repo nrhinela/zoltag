@@ -145,7 +145,7 @@ export class AppShellStateController extends BaseStateController {
       this.host.activeLibrarySubTab = 'assets';
     }
     if (tabName === 'search' && !this.host.activeSearchSubTab) {
-      this.host.activeSearchSubTab = 'advanced';
+      this.host.activeSearchSubTab = 'gallery';
     }
     if (tabName === 'curate' && !this.canCurate()) {
       this.host.activeTab = 'home';
@@ -167,7 +167,7 @@ export class AppShellStateController extends BaseStateController {
         this.host.activeLibrarySubTab = subTab;
       }
       if (tab === 'search') {
-        this.host.activeSearchSubTab = subTab || 'advanced';
+        this.host.activeSearchSubTab = subTab || 'gallery';
         this.host.pendingSearchExploreSelection = null;
         this.host.pendingVectorstoreQuery = null;
       }
@@ -181,7 +181,7 @@ export class AppShellStateController extends BaseStateController {
       return;
     }
     if (detail === 'search') {
-      this.host.activeSearchSubTab = 'advanced';
+      this.host.activeSearchSubTab = 'gallery';
       this.host.pendingSearchExploreSelection = null;
       this.host.pendingVectorstoreQuery = null;
     }
@@ -207,7 +207,7 @@ export class AppShellStateController extends BaseStateController {
       this.host.activeLibrarySubTab = subTab;
     }
     if (tab === 'search') {
-      this.host.activeSearchSubTab = subTab || 'advanced';
+      this.host.activeSearchSubTab = subTab || 'gallery';
     }
     if (tab === 'library' && subTab === 'keywords' && adminSubTab) {
       this.host.activeAdminSubTab = adminSubTab;
@@ -380,7 +380,7 @@ export class AppShellStateController extends BaseStateController {
     // Tenant switch always returns to Home and forces a fresh data pull.
     this.host.activeTab = 'home';
     this.host.homeSubTab = 'overview';
-    this.host.activeSearchSubTab = 'advanced';
+    this.host.activeSearchSubTab = 'gallery';
     this.host.pendingSearchExploreSelection = null;
     this.host.pendingVectorstoreQuery = null;
     this.host.pendingVectorstoreQueryToken = 0;

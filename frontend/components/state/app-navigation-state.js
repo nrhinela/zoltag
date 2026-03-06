@@ -2,7 +2,7 @@ import { BaseStateController } from './base-state-controller.js';
 
 const TOP_LEVEL_TABS = new Set(['home', 'search', 'curate', 'library', 'lists']);
 const LIBRARY_SUB_TABS = new Set(['assets', 'keywords', 'providers', 'users', 'jobs', 'templates', 'audit', 'shares']);
-const SEARCH_SUB_TABS = new Set(['landing', 'results', 'advanced', 'browse-by-folder', 'chips']);
+const SEARCH_SUB_TABS = new Set(['gallery', 'landing', 'results', 'advanced', 'browse-by-folder', 'chips']);
 const CURATE_SUB_TABS = new Set(['main', 'browse-folder', 'tag-audit', 'home', 'help']);
 const HOME_SUB_TABS = new Set(['overview', 'chips', 'lab']);
 const ADMIN_SUB_TABS = new Set(['tagging', 'people']);
@@ -48,7 +48,7 @@ export class AppNavigationStateController extends BaseStateController {
       }
     } else if (tab === 'search') {
       const subTab = String(input.subTab || '').trim().toLowerCase();
-      snapshot.subTab = SEARCH_SUB_TABS.has(subTab) ? subTab : 'advanced';
+      snapshot.subTab = SEARCH_SUB_TABS.has(subTab) ? subTab : 'gallery';
     } else if (tab === 'curate') {
       const subTab = String(input.subTab || '').trim().toLowerCase();
       snapshot.subTab = CURATE_SUB_TABS.has(subTab) ? subTab : 'main';
@@ -110,7 +110,7 @@ export class AppNavigationStateController extends BaseStateController {
         this.host.activeAdminSubTab = normalized.adminSubTab || 'tagging';
       }
     } else if (normalized.tab === 'search') {
-      this.host.activeSearchSubTab = normalized.subTab || 'advanced';
+      this.host.activeSearchSubTab = normalized.subTab || 'gallery';
     } else if (normalized.tab === 'curate') {
       this.host.curateSubTab = normalized.subTab || 'main';
     } else if (normalized.tab === 'home') {

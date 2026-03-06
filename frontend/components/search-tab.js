@@ -272,6 +272,7 @@ export class SearchTab extends LitElement {
     this._galleryCategorySelectionTouched = false;
     this._galleryTopicFocused = false;
     this._galleryLoadToken = 0;
+    this._suppressNextAdvancedInitialRefresh = false;
     this._searchHotspotHandlers = createHotspotHandlers(this, {
       targetsProperty: 'searchHotspotTargets',
       dragTargetProperty: '_searchHotspotDragTarget',
@@ -641,6 +642,9 @@ export class SearchTab extends LitElement {
         return;
       }
       const previousSubTab = changedProps.get('searchSubTab');
+      if (this.searchSubTab === 'gallery' && previousSubTab !== 'gallery') {
+        this._clearFiltersForGalleryEntry();
+      }
       const currentFilters = this.searchFilterPanel?.getState?.() || this.searchFilterPanel?.filters || {};
       if (previousSubTab === 'results') {
         this._searchResultsFiltersState = this._cloneSearchFilters(currentFilters);
@@ -675,7 +679,11 @@ export class SearchTab extends LitElement {
           this.searchFilterPanel.fetchImages();
         }
       }
-      this._maybeStartInitialRefresh();
+      if (this.searchSubTab === 'advanced' && this._suppressNextAdvancedInitialRefresh) {
+        this._suppressNextAdvancedInitialRefresh = false;
+      } else {
+        this._maybeStartInitialRefresh();
+      }
       if (this.searchSubTab === 'browse-by-folder') {
         this.browseByFolderOffset = 0;
         this.folderBrowserPanel?.loadFolders();
@@ -1657,16 +1665,43 @@ export class SearchTab extends LitElement {
     if (this.hideSubtabs) return;
     this.searchSubTab = nextTab;
     if (nextTab === 'gallery') {
-      this.vectorstoreQuery = '';
-      this.vectorstoreHasSearched = false;
-      this.galleryTransitionLoading = false;
-      this._handleChipFiltersChanged({ detail: { filters: [] } });
+      this._clearFiltersForGalleryEntry();
     }
     this.dispatchEvent(new CustomEvent('search-subtab-changed', {
       detail: { subtab: nextTab },
       bubbles: true,
       composed: true
     }));
+  }
+
+  _clearFiltersForGalleryEntry() {
+    this.vectorstoreQuery = '';
+    this.vectorstoreHasSearched = false;
+    this.galleryTransitionLoading = false;
+    this.searchChipFilters = [];
+    this.searchListExcludeId = '';
+    this.searchPinnedImageId = null;
+    if (this.searchSimilarityAssetUuid) {
+      this.searchSimilarityAssetUuid = null;
+      this.dispatchEvent(new CustomEvent('search-similarity-context-changed', {
+        detail: { assetUuid: null },
+        bubbles: true,
+        composed: true,
+      }));
+    }
+
+    const nextAdvancedFilters = this._cloneSearchFilters(this._createDefaultSearchFilters({
+      limit: 100,
+      offset: 0,
+      sortOrder: this.searchDateOrder || 'desc',
+      orderBy: this.searchOrderBy || 'photo_creation',
+      hideZeroRating: true,
+    }));
+    this._searchAdvancedFiltersState = nextAdvancedFilters;
+    this._searchResultsFiltersState = this._buildIsolatedResultsFilters(nextAdvancedFilters);
+    if (this.searchFilterPanel) {
+      this.searchFilterPanel.updateFilters(nextAdvancedFilters);
+    }
   }
 
   _resolveThumbnailUrl(image) {
@@ -1751,7 +1786,7 @@ export class SearchTab extends LitElement {
     this.searchOrderBy = 'rating';
     this.searchDateOrder = 'desc';
     this.dispatchEvent(new CustomEvent('sort-changed', {
-      detail: { orderBy: 'rating', dateOrder: 'desc' },
+      detail: { orderBy: 'rating', dateOrder: 'desc', suppressFetch: true },
       bubbles: true,
       composed: true,
     }));
@@ -1771,6 +1806,7 @@ export class SearchTab extends LitElement {
     }
     this._handleChipFiltersChanged(event);
     if (!nextFilters.length) return;
+    this._suppressNextAdvancedInitialRefresh = true;
     this._handleSearchSubTabChange('advanced');
   }
 
@@ -1967,6 +2003,7 @@ export class SearchTab extends LitElement {
       displayLabel: 'Keywords',
       displayValue: keyword,
     }];
+    this._suppressNextAdvancedInitialRefresh = true;
     this._handleSearchSubTabChange('advanced');
     this._handleChipFiltersChanged({ detail: { filters: nextFilters } });
   }
@@ -2026,6 +2063,55 @@ export class SearchTab extends LitElement {
     `;
   }
 
+  _renderGalleryInitialSkeleton() {
+    const sections = Array.from({ length: 3 });
+    const cards = Array.from({ length: 4 });
+    const categoryRows = Array.from({ length: 8 });
+    return html`
+      <div
+        class="curate-layout search-layout results-hotspot-layout ${this.rightPanelCollapsed ? 'right-panel-layout-collapsed' : ''}"
+        style="--curate-thumb-size: ${this.curateThumbSize}px;"
+        aria-live="polite"
+        aria-busy="true"
+      >
+        <div class="space-y-4">
+          ${sections.map(() => html`
+            <section class="bg-white rounded-xl border border-gray-200 p-4 animate-pulse">
+              <div class="mb-4 h-4 w-44 rounded bg-slate-200"></div>
+              <div class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-5">
+                ${cards.map(() => html`
+                  <div class="rounded-lg border border-gray-200 bg-white p-2">
+                    <div class="w-full rounded-md bg-gray-200" style="aspect-ratio:4 / 5;"></div>
+                    <div class="mt-3 h-3 w-2/3 mx-auto rounded bg-gray-200"></div>
+                    <div class="mt-2 h-2 w-1/3 mx-auto rounded bg-gray-200"></div>
+                  </div>
+                `)}
+              </div>
+            </section>
+          `)}
+        </div>
+        <right-panel
+          .tools=${[]}
+          .activeTool=${''}
+          .collapsible=${true}
+          .collapsed=${this.rightPanelCollapsed}
+          @collapse-changed=${(event) => this._handleRightPanelCollapseChanged(event.detail.collapsed)}
+        >
+          <div slot="default" class="curate-utility-panel animate-pulse">
+            ${categoryRows.map(() => html`
+              <div class="w-full rounded-lg border border-gray-200 bg-white px-3 py-2">
+                <div class="flex items-center justify-between gap-2">
+                  <span class="h-3 w-24 rounded bg-slate-200"></span>
+                  <span class="h-4 w-8 rounded-full bg-slate-200"></span>
+                </div>
+              </div>
+            `)}
+          </div>
+        </right-panel>
+      </div>
+    `;
+  }
+
   _renderGallerySubtab() {
     const sections = this.galleryCollections || [];
     const categoryRows = sections.map((section) => ({
@@ -2041,6 +2127,14 @@ export class SearchTab extends LitElement {
         )),
       }));
     if (!sections.length) {
+      if (this.galleryLoading) {
+        return html`
+          <div class="space-y-6">
+            ${this._renderGallerySearchControls()}
+            ${this._renderGalleryInitialSkeleton()}
+          </div>
+        `;
+      }
       return html`
         <div class="space-y-4">
           ${this._renderGallerySearchControls()}
