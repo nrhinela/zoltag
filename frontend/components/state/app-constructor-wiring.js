@@ -159,6 +159,22 @@ function wireFilterPanelListeners(host) {
     if (filters.permatagMissing !== undefined) {
       host.curateAuditMode = filters.permatagMissing ? 'missing' : 'existing';
     }
+    if (filters.mlTagType !== undefined && filters.mlTagType !== null && filters.mlTagType !== '') {
+      const nextModel = String(filters.mlTagType || '').trim().toLowerCase();
+      host.curateAuditAiModel = nextModel || host.curateAuditAiModel;
+    }
+    if (filters.mlMinConfidence !== undefined && filters.mlMinConfidence !== null && filters.mlMinConfidence !== '') {
+      const nextMinConfidence = Number(filters.mlMinConfidence);
+      if (Number.isFinite(nextMinConfidence)) {
+        const normalized = Math.max(0, Math.min(1, nextMinConfidence));
+        const activeModel = String(filters.mlTagType || host.curateAuditAiModel || '').trim().toLowerCase();
+        if (activeModel === 'trained') {
+          host.curateAuditTrainedMinConfidence = normalized;
+        } else if (activeModel === 'siglip') {
+          host.curateAuditZeroShotMinConfidence = normalized;
+        }
+      }
+    }
     if (filters.mlSimilaritySeedCount !== undefined && filters.mlSimilaritySeedCount !== null && filters.mlSimilaritySeedCount !== '') {
       host.curateAuditMlSimilaritySeedCount = Number.isFinite(Number(filters.mlSimilaritySeedCount))
         ? Math.max(1, Math.min(50, Number(filters.mlSimilaritySeedCount)))

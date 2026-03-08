@@ -5,6 +5,7 @@ import {
 } from '../shared/curate-filters.js';
 import { shouldAutoRefreshCurateStats } from '../shared/curate-stats.js';
 import { getSimilarImages } from '../../services/api.js';
+import { setStoredCurateAiConfidenceThresholds } from '../../services/app-storage.js';
 
 export function bindAppDelegateMethods(host) {
   host._getCurateDefaultState = () => host._curateHomeState.getDefaultState();
@@ -104,6 +105,86 @@ export function bindAppDelegateMethods(host) {
   host._refreshCurateHome = async () =>
     host._curateHomeState.refreshCurateHome();
 
+  host._fetchCurateAiTagfinder2Summary = async ({ force = false } = {}) =>
+    host._appDataState.fetchCurateAiTagfinder2Summary({ force });
+
+  host._refreshCurateAiTagfinder2Summary = async () =>
+    host._fetchCurateAiTagfinder2Summary({ force: true });
+
+  host._handleCurateAiTagfinder2ThresholdChanged = (detail = {}) => {
+    const normalize = (value) => {
+      const parsed = Number(value);
+      if (!Number.isFinite(parsed)) return 0;
+      return Math.max(0, Math.min(1, parsed));
+    };
+    const nextZeroShot = normalize(detail.zeroShotMinConfidence);
+    const nextTrained = normalize(detail.trainedMinConfidence);
+    const currentZeroShot = normalize(host.curateAiTagfinder2ZeroShotMinConfidence);
+    const currentTrained = normalize(host.curateAiTagfinder2TrainedMinConfidence);
+    if (nextZeroShot === currentZeroShot && nextTrained === currentTrained) {
+      return;
+    }
+    host.curateAiTagfinder2ZeroShotMinConfidence = nextZeroShot;
+    host.curateAiTagfinder2TrainedMinConfidence = nextTrained;
+    host.curateAuditZeroShotMinConfidence = nextZeroShot;
+    host.curateAuditTrainedMinConfidence = nextTrained;
+    setStoredCurateAiConfidenceThresholds({
+      zeroShotMinConfidence: nextZeroShot,
+      trainedMinConfidence: nextTrained,
+    });
+    host._fetchCurateAiTagfinder2Summary({
+      force: false,
+      zeroShotMinConfidence: nextZeroShot,
+      trainedMinConfidence: nextTrained,
+    });
+  };
+
+  host._handleCurateAiTagfinder2RowSelected = (detail = {}) => {
+    const keyword = String(detail.keyword || '').trim();
+    if (!keyword) return;
+    const category = String(detail.category || '').trim();
+    const tagType = String(detail.tagType || '').trim().toLowerCase();
+    const nextAiModel = tagType === 'trained' ? 'trained' : 'siglip';
+
+    host.curateAuditMode = 'missing';
+    host.curateAuditAiEnabled = true;
+    host.curateAuditAiModel = nextAiModel;
+    host.curateAuditZeroShotMinConfidence = Math.max(
+      0,
+      Math.min(1, Number(host.curateAiTagfinder2ZeroShotMinConfidence || 0))
+    );
+    host.curateAuditTrainedMinConfidence = Math.max(
+      0,
+      Math.min(1, Number(host.curateAiTagfinder2TrainedMinConfidence || 0))
+    );
+    host.curateAuditKeyword = keyword;
+    host.curateAuditCategory = category;
+    // Reset secondary audit filters so click-through reflects AI Tag Finder2 counts.
+    host.curateAuditMediaType = 'all';
+    host.curateAuditHideDeleted = true;
+    host.curateAuditMinRating = null;
+    host.curateAuditNoPositivePermatags = false;
+    host.curateAuditDropboxPathPrefix = '';
+    host.curateAuditFilenameQuery = '';
+    host.curateAuditTextQuery = '';
+    host.curateAuditSourceProvider = '';
+    host.curateAuditSelection = [];
+    host.curateAuditDragSelection = [];
+    host.curateAuditDragTarget = null;
+    host.curateAuditOffset = 0;
+    host.curateAuditTotal = null;
+    host.curateAuditLoadAll = false;
+    host.curateAuditPageOffset = 0;
+    host.curateAuditImages = [];
+    host.curateAuditEmptyState = null;
+    host._handleCurateSubTabChange('tag-audit');
+  };
+
+  host._handleCurateAuditBackToTraining = () => {
+    host._handleCurateSubTabChange('tag-finder2');
+    host._refreshCurateAiTagfinder2Summary();
+  };
+
   host._handleTenantChange = (event) =>
     host._appShellState.handleTenantChange(event);
 
@@ -201,6 +282,18 @@ export function bindAppDelegateMethods(host) {
 
   host._handleCurateAuditAiModelChange = (nextModel) =>
     host._curateAuditState.handleAiModelChange(nextModel);
+
+  host._handleCurateAuditAiMinConfidenceChange = (values = {}) => {
+    host._curateAuditState.handleAiMinConfidenceChange(values);
+    const zeroShot = Math.max(0, Math.min(1, Number(host.curateAuditZeroShotMinConfidence || 0)));
+    const trained = Math.max(0, Math.min(1, Number(host.curateAuditTrainedMinConfidence || 0)));
+    host.curateAiTagfinder2ZeroShotMinConfidence = zeroShot;
+    host.curateAiTagfinder2TrainedMinConfidence = trained;
+    setStoredCurateAiConfidenceThresholds({
+      zeroShotMinConfidence: zeroShot,
+      trainedMinConfidence: trained,
+    });
+  };
 
   host._handleCurateAuditMlSimilaritySettingsChange = (settings) =>
     host._curateAuditState.handleMlSimilaritySettingsChange(settings);

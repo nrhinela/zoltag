@@ -445,6 +445,110 @@ async def get_keyword_gallery_previews(
     }
 
 
+@router.get("/keywords/ai-tagfinder2-summary")
+async def get_ai_tagfinder2_summary(
+    tenant: Tenant = Depends(get_tenant),
+    _current_user: UserProfile = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    zero_shot_min_confidence: float = Query(default=0.0, ge=0.0, le=1.0),
+    trained_min_confidence: float = Query(default=0.0, ge=0.0, le=1.0),
+):
+    """Return per-keyword ML suggestion stats grouped by category and model.
+
+    Includes only zero-shot + trained machine tags and excludes any asset+keyword
+    pairs that already have a positive or negative permatag.
+    """
+    rows = db.query(
+        KeywordCategory.name.label("category"),
+        Keyword.keyword.label("keyword"),
+        MachineTag.tag_type.label("tag_type"),
+        func.count(distinct(MachineTag.asset_id)).label("item_count"),
+        func.min(MachineTag.confidence).label("min_confidence"),
+        func.max(MachineTag.confidence).label("max_confidence"),
+    ).join(
+        Keyword, Keyword.id == MachineTag.keyword_id
+    ).join(
+        ImageMetadata,
+        and_(
+            ImageMetadata.asset_id == MachineTag.asset_id,
+            tenant_column_filter(ImageMetadata, tenant),
+        ),
+    ).join(
+        KeywordCategory, Keyword.category_id == KeywordCategory.id
+    ).outerjoin(
+        Permatag,
+        and_(
+            Permatag.asset_id == MachineTag.asset_id,
+            Permatag.keyword_id == MachineTag.keyword_id,
+            tenant_column_filter(Permatag, tenant),
+            Permatag.asset_id.is_not(None),
+        ),
+    ).filter(
+        tenant_column_filter(MachineTag, tenant),
+        tenant_column_filter(Keyword, tenant),
+        tenant_column_filter(KeywordCategory, tenant),
+        MachineTag.asset_id.is_not(None),
+        or_(ImageMetadata.rating.is_(None), ImageMetadata.rating != 0),
+        MachineTag.tag_type.in_(["siglip", "trained"]),
+        or_(
+            and_(
+                MachineTag.tag_type == "siglip",
+                MachineTag.confidence >= float(zero_shot_min_confidence or 0.0),
+            ),
+            and_(
+                MachineTag.tag_type == "trained",
+                MachineTag.confidence >= float(trained_min_confidence or 0.0),
+            ),
+        ),
+        Permatag.id.is_(None),
+    ).group_by(
+        KeywordCategory.name,
+        Keyword.keyword,
+        MachineTag.tag_type,
+    ).having(
+        func.count(distinct(MachineTag.asset_id)) > 0,
+    ).order_by(
+        KeywordCategory.name.asc(),
+        Keyword.keyword.asc(),
+        MachineTag.tag_type.asc(),
+    ).all()
+
+    grouped: dict[str, dict[str, dict[str, dict]]] = {}
+    for row in rows:
+        category = str(row.category or "Uncategorized")
+        keyword = str(row.keyword or "")
+        if not keyword:
+            continue
+        tag_type = str(row.tag_type or "").strip().lower()
+        if tag_type not in {"siglip", "trained"}:
+            continue
+        grouped.setdefault(category, {}).setdefault(keyword, {})[tag_type] = {
+            "count": int(row.item_count or 0),
+            "min_confidence": float(row.min_confidence) if row.min_confidence is not None else None,
+            "max_confidence": float(row.max_confidence) if row.max_confidence is not None else None,
+        }
+
+    categories = []
+    for category in sorted(grouped.keys(), key=lambda value: value.lower()):
+        tags = []
+        for keyword in sorted(grouped[category].keys(), key=lambda value: value.lower()):
+            tag_stats = grouped[category][keyword]
+            tags.append({
+                "keyword": keyword,
+                "zero_shot": tag_stats.get("siglip"),
+                "trained": tag_stats.get("trained"),
+            })
+        categories.append({
+            "category": category,
+            "tags": tags,
+        })
+
+    return {
+        "tenant_id": tenant.id,
+        "categories": categories,
+    }
+
+
 @router.get("/tag-stats")
 async def get_tag_stats(
     tenant: Tenant = Depends(get_tenant),

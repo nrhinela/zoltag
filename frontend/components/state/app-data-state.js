@@ -4,6 +4,7 @@ import {
   getImageStats,
   getMlTrainingStats,
   getTagStats,
+  getCurateAiTagfinder2Summary,
   getLists,
 } from '../../services/api.js';
 import { shouldIncludeRatingStats } from '../shared/curate-filters.js';
@@ -64,6 +65,62 @@ export class AppDataStateController extends BaseStateController {
     } catch (error) {
       console.error('Error fetching home lists:', error);
       this.host.homeLists = [];
+    }
+  }
+
+  async fetchCurateAiTagfinder2Summary({
+    force = false,
+    zeroShotMinConfidence,
+    trainedMinConfidence,
+  } = {}) {
+    const tenantAtRequest = this.host.tenant;
+    if (!tenantAtRequest) {
+      this.host.curateAiTagfinder2Summary = null;
+      this.host.curateAiTagfinder2Loading = false;
+      this.host.curateAiTagfinder2Error = '';
+      return;
+    }
+    const resolvedZeroShot = Number.isFinite(Number(zeroShotMinConfidence))
+      ? Math.max(0, Math.min(1, Number(zeroShotMinConfidence)))
+      : Math.max(0, Math.min(1, Number(this.host.curateAiTagfinder2ZeroShotMinConfidence || 0)));
+    const resolvedTrained = Number.isFinite(Number(trainedMinConfidence))
+      ? Math.max(0, Math.min(1, Number(trainedMinConfidence)))
+      : Math.max(0, Math.min(1, Number(this.host.curateAiTagfinder2TrainedMinConfidence || 0)));
+    const requestId = (this.host._curateAiTagfinder2RequestId || 0) + 1;
+    this.host._curateAiTagfinder2RequestId = requestId;
+    this.host.curateAiTagfinder2Loading = true;
+    if (force || !this.host.curateAiTagfinder2Summary) {
+      this.host.curateAiTagfinder2Error = '';
+    }
+    try {
+      const summary = await getCurateAiTagfinder2Summary(tenantAtRequest, {
+        force,
+        zeroShotMinConfidence: resolvedZeroShot,
+        trainedMinConfidence: resolvedTrained,
+      });
+      const isStale =
+        this.host._curateAiTagfinder2RequestId !== requestId
+        || this.host.tenant !== tenantAtRequest;
+      if (isStale) return;
+      this.host.curateAiTagfinder2Summary = summary || { categories: [] };
+      this.host.curateAiTagfinder2Error = '';
+    } catch (error) {
+      const isStale =
+        this.host._curateAiTagfinder2RequestId !== requestId
+        || this.host.tenant !== tenantAtRequest;
+      if (isStale) return;
+      console.error('Error fetching Curate AI Training summary:', error);
+      this.host.curateAiTagfinder2Error = error?.message || 'Failed to load AI Training data.';
+      if (!this.host.curateAiTagfinder2Summary) {
+        this.host.curateAiTagfinder2Summary = { categories: [] };
+      }
+    } finally {
+      const isStale =
+        this.host._curateAiTagfinder2RequestId !== requestId
+        || this.host.tenant !== tenantAtRequest;
+      if (!isStale) {
+        this.host.curateAiTagfinder2Loading = false;
+      }
     }
   }
 

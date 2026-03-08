@@ -2686,4 +2686,20 @@ export const zoltagAppStyles = css`
         gap: 8px;
         align-items: center;
     }
+    .ai-training-row--siglip:hover .ai-training-cell--siglip {
+        background-color: #eff6ff;
+    }
+    .ai-training-row--trained:hover .ai-training-cell--trained {
+        background-color: #eff6ff;
+    }
+    .ai-training-row[data-hover-model="siglip"] .ai-training-cell--siglip {
+        background-color: #eff6ff;
+    }
+    .ai-training-row[data-hover-model="trained"] .ai-training-cell--trained {
+        background-color: #eff6ff;
+    }
+    .ai-training-row[data-hover-model="siglip"] .ai-training-cell--trained,
+    .ai-training-row[data-hover-model="trained"] .ai-training-cell--siglip {
+        background-color: transparent;
+    }
 `;

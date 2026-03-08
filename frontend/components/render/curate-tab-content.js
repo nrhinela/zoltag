@@ -19,9 +19,13 @@ export function renderCurateTabContent(host, { formatCurateDate }) {
   const browseFolderTab = host.renderRoot?.querySelector('curate-browse-folder-tab');
   const curateRefreshBusy = host.curateSubTab === 'home'
     ? (host.curateHomeRefreshing || host.curateStatsLoading)
-    : (host.curateSubTab === 'tag-audit'
+    : host.curateSubTab === 'tag-audit'
       ? host.curateAuditLoading
-      : (host.curateSubTab === 'browse-folder' ? !!browseFolderTab?.browseByFolderLoading : host.curateLoading));
+      : host.curateSubTab === 'tag-finder2'
+        ? host.curateAiTagfinder2Loading
+        : host.curateSubTab === 'browse-folder'
+          ? !!browseFolderTab?.browseByFolderLoading
+          : host.curateLoading;
   const showCurateStatsOverlay = host.curateStatsLoading || host.curateHomeRefreshing;
 
   return html`
@@ -29,16 +33,22 @@ export function renderCurateTabContent(host, { formatCurateDate }) {
       <div class="subnav-strip mb-4">
         <div class="curate-subtabs">
           <button
+            class="curate-subtab ${host.curateSubTab === 'main' ? 'active' : ''}"
+            @click=${() => host._handleCurateSubTabChange('main')}
+          >
+            Filter
+          </button>
+          <button
+            class="curate-subtab ${(host.curateSubTab === 'tag-finder2' || host.curateSubTab === 'tag-audit') ? 'active' : ''}"
+            @click=${() => host._handleCurateSubTabChange('tag-finder2')}
+          >
+            AI Training
+          </button>
+          <button
             class="curate-subtab ${host.curateSubTab === 'browse-folder' ? 'active' : ''}"
             @click=${() => host._handleCurateSubTabChange('browse-folder')}
           >
-            Browse by Source Folder
-          </button>
-          <button
-            class="curate-subtab ${host.curateSubTab === 'tag-audit' ? 'active' : ''}"
-            @click=${() => host._handleCurateSubTabChange('tag-audit')}
-          >
-            AI Tag Finder
+            Browse by Folder
           </button>
           <button
             class="curate-subtab ${host.curateSubTab === 'home' ? 'active' : ''}"
@@ -72,6 +82,8 @@ export function renderCurateTabContent(host, { formatCurateDate }) {
           @click=${() => {
             if (host.curateSubTab === 'tag-audit') {
               host._refreshCurateAudit();
+            } else if (host.curateSubTab === 'tag-finder2') {
+              host._refreshCurateAiTagfinder2Summary();
             } else if (host.curateSubTab === 'home') {
               host._refreshCurateHome();
             } else if (host.curateSubTab === 'browse-folder') {
@@ -227,6 +239,8 @@ export function renderCurateTabContent(host, { formatCurateDate }) {
             .mode=${host.curateAuditMode}
             .aiEnabled=${host.curateAuditAiEnabled}
             .aiModel=${host.curateAuditAiModel}
+            .zeroShotMinConfidence=${host.curateAuditZeroShotMinConfidence}
+            .trainedMinConfidence=${host.curateAuditTrainedMinConfidence}
             .mlSimilaritySeedCount=${host.curateAuditMlSimilaritySeedCount}
             .mlSimilaritySimilarCount=${host.curateAuditMlSimilaritySimilarCount}
             .mlSimilarityDedupe=${host.curateAuditMlSimilarityDedupe}
@@ -263,6 +277,7 @@ export function renderCurateTabContent(host, { formatCurateDate }) {
             @audit-mode-changed=${(e) => host._handleCurateAuditModeChange(e.detail.mode)}
             @audit-ai-enabled-changed=${(e) => host._handleCurateAuditAiEnabledChange({ target: { checked: e.detail.enabled } })}
             @audit-ai-model-changed=${(e) => host._handleCurateAuditAiModelChange(e.detail.model)}
+            @audit-ai-min-confidence-changed=${(e) => host._handleCurateAuditAiMinConfidenceChange(e.detail)}
             @audit-ai-ml-similarity-settings-changed=${(e) => host._handleCurateAuditMlSimilaritySettingsChange(e.detail)}
             @audit-save-and-load-more=${(e) => host._handleCurateAuditSaveAndLoadMore(e.detail)}
             @pagination-changed=${(e) => {
@@ -280,8 +295,23 @@ export function renderCurateTabContent(host, { formatCurateDate }) {
             }}
             @rating-drop=${(e) => host._handleCurateAuditRatingDrop(e.detail.event)}
             @curate-audit-filters-changed=${host._handleCurateAuditChipFiltersChanged}
+            @audit-back-to-training=${host._handleCurateAuditBackToTraining}
             @open-similar-in-search=${host._handleOpenSimilarInSearch}
           ></curate-audit-tab>
+        </div>
+      ` : html``}
+
+      ${host.curateSubTab === 'tag-finder2' ? html`
+        <div>
+          <curate-ai-tagfinder2-tab
+            .summary=${host.curateAiTagfinder2Summary}
+            .loading=${host.curateAiTagfinder2Loading}
+            .error=${host.curateAiTagfinder2Error}
+            .zeroShotMinConfidence=${host.curateAiTagfinder2ZeroShotMinConfidence}
+            .trainedMinConfidence=${host.curateAiTagfinder2TrainedMinConfidence}
+            @threshold-changed=${(e) => host._handleCurateAiTagfinder2ThresholdChanged(e.detail)}
+            @row-selected=${(e) => host._handleCurateAiTagfinder2RowSelected(e.detail)}
+          ></curate-ai-tagfinder2-tab>
         </div>
       ` : html``}
 

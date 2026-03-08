@@ -311,6 +311,31 @@ export async function getKeywordGalleryPreviews(tenantId, { previewCount = 3, ta
   );
 }
 
+export async function getCurateAiTagfinder2Summary(
+  tenantId,
+  {
+    force = false,
+    zeroShotMinConfidence = 0,
+    trainedMinConfidence = 0,
+  } = {}
+) {
+  const params = new URLSearchParams();
+  const zeroShot = Number.isFinite(Number(zeroShotMinConfidence))
+    ? Math.max(0, Math.min(1, Number(zeroShotMinConfidence)))
+    : 0;
+  const trained = Number.isFinite(Number(trainedMinConfidence))
+    ? Math.max(0, Math.min(1, Number(trainedMinConfidence)))
+    : 0;
+  params.append('zero_shot_min_confidence', String(zeroShot));
+  params.append('trained_min_confidence', String(trained));
+  const suffix = params.toString() ? `?${params.toString()}` : '';
+  return queryRequest(
+    ['curateAiTagfinder2Summary', tenantId, suffix],
+    () => fetchWithAuth(`/keywords/ai-tagfinder2-summary${suffix}`, { tenantId }),
+    { staleTimeMs: KEYWORDS_CACHE_MS, force }
+  );
+}
+
 export async function getNlSearchFilters(tenantId, payload) {
   return fetchWithAuth(`/search/nl`, {
     method: 'POST',

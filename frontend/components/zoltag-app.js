@@ -34,6 +34,7 @@ import './curate-home-tab.js';
 import './curate-explore-tab.js';
 import './curate-browse-folder-tab.js';
 import './curate-audit-tab.js';
+import './curate-ai-tagfinder2-tab.js';
 import './search-tab.js';
 import { renderCurateTabContent } from './render/curate-tab-content.js';
 import { renderHomeTabContent, renderSearchTabContent } from './render/home-search-tab-content.js';
@@ -123,6 +124,8 @@ class ZoltagApp extends LitElement {
       curateAuditPageOffset: { type: Number },
       curateAuditAiEnabled: { type: Boolean },
       curateAuditAiModel: { type: String },
+      curateAuditZeroShotMinConfidence: { type: Number },
+      curateAuditTrainedMinConfidence: { type: Number },
       curateAuditMlSimilaritySeedCount: { type: Number },
       curateAuditMlSimilaritySimilarCount: { type: Number },
       curateAuditMlSimilarityDedupe: { type: Boolean },
@@ -138,6 +141,11 @@ class ZoltagApp extends LitElement {
       curateAuditFilenameQuery: { type: String },
       curateAuditTextQuery: { type: String },
       curateAuditSourceProvider: { type: String },
+      curateAiTagfinder2Summary: { type: Object },
+      curateAiTagfinder2Loading: { type: Boolean },
+      curateAiTagfinder2Error: { type: String },
+      curateAiTagfinder2ZeroShotMinConfidence: { type: Number },
+      curateAiTagfinder2TrainedMinConfidence: { type: Number },
       curateHomeRefreshing: { type: Boolean },
       curateStatsLoading: { type: Boolean },
       homeSubTab: { type: String },

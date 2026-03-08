@@ -54,6 +54,7 @@ const LEGACY_CURATE_RESULTS_LAYOUT_STORAGE_KEYS = ['curateResultsLayout'];
  * @fires hotspot-changed - When hotspot configuration changes
  * @fires rating-drop - When images dropped on rating zone
  * @fires curate-audit-filters-changed - When filter chips change
+ * @fires audit-back-to-training - When user navigates back to AI Training
  */
 export class CurateAuditTab extends LitElement {
   // Use Light DOM to access Tailwind CSS classes
@@ -67,6 +68,8 @@ export class CurateAuditTab extends LitElement {
     mode: { type: String }, // 'existing' or 'missing'
     aiEnabled: { type: Boolean },
     aiModel: { type: String }, // 'siglip', 'trained', 'ml-similarity', or 'face-recognition'
+    zeroShotMinConfidence: { type: Number },
+    trainedMinConfidence: { type: Number },
     mlSimilaritySeedCount: { type: Number },
     mlSimilaritySimilarCount: { type: Number },
     mlSimilarityDedupe: { type: Boolean },
@@ -134,6 +137,8 @@ export class CurateAuditTab extends LitElement {
     this.mode = 'missing';
     this.aiEnabled = false;
     this.aiModel = 'siglip';
+    this.zeroShotMinConfidence = 0;
+    this.trainedMinConfidence = 0;
     this.mlSimilaritySeedCount = 5;
     this.mlSimilaritySimilarCount = 10;
     this.mlSimilarityDedupe = true;
@@ -470,6 +475,13 @@ export class CurateAuditTab extends LitElement {
     }));
   }
 
+  _handleBackToTraining = () => {
+    this.dispatchEvent(new CustomEvent('audit-back-to-training', {
+      bubbles: true,
+      composed: true,
+    }));
+  };
+
   _handleAiEnabledChange(event) {
     const enabled = event.target.checked;
     this.dispatchEvent(new CustomEvent('audit-ai-enabled-changed', {
@@ -485,6 +497,62 @@ export class CurateAuditTab extends LitElement {
       bubbles: true,
       composed: true
     }));
+  }
+
+  _normalizeConfidenceValue(value, fallback = 0) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return Math.max(0, Math.min(1, Number(fallback) || 0));
+    return Math.max(0, Math.min(1, parsed));
+  }
+
+  _emitAiMinConfidenceChanged({
+    zeroShotMinConfidence = this.zeroShotMinConfidence,
+    trainedMinConfidence = this.trainedMinConfidence,
+  } = {}) {
+    this.dispatchEvent(new CustomEvent('audit-ai-min-confidence-changed', {
+      detail: {
+        zeroShotMinConfidence: this._normalizeConfidenceValue(
+          zeroShotMinConfidence,
+          this.zeroShotMinConfidence
+        ),
+        trainedMinConfidence: this._normalizeConfidenceValue(
+          trainedMinConfidence,
+          this.trainedMinConfidence
+        ),
+      },
+      bubbles: true,
+      composed: true,
+    }));
+  }
+
+  _handleAiMinConfidenceChange(model, event) {
+    const nextValue = this._normalizeConfidenceValue(event?.target?.value, 0);
+    if (event?.target) {
+      event.target.value = nextValue.toFixed(2);
+    }
+    if (model === 'trained') {
+      this._emitAiMinConfidenceChanged({
+        zeroShotMinConfidence: this.zeroShotMinConfidence,
+        trainedMinConfidence: nextValue,
+      });
+      return;
+    }
+    this._emitAiMinConfidenceChanged({
+      zeroShotMinConfidence: nextValue,
+      trainedMinConfidence: this.trainedMinConfidence,
+    });
+  }
+
+  _handleAiMinConfidenceInput(event) {
+    const target = event?.target;
+    if (!target) return;
+    const raw = String(target.value ?? '').trim();
+    if (!raw) return;
+    const normalized = this._normalizeConfidenceValue(raw, 0);
+    const normalizedString = String(normalized);
+    if (target.value !== normalizedString) {
+      target.value = normalizedString;
+    }
   }
 
   _handleSaveAndLoadMoreClick = (leftImages = []) => {
@@ -1590,6 +1658,19 @@ export class CurateAuditTab extends LitElement {
     return html`
       <div>
         <div class="mb-4">
+          <div class="mb-2 flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              class="inline-flex items-center gap-2 rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-semibold text-gray-700 hover:bg-gray-100"
+              @click=${this._handleBackToTraining}
+            >
+              <span aria-hidden="true">←</span>
+              <span>Back</span>
+            </button>
+            <div class="inline-flex items-center rounded-md border border-blue-200 bg-blue-50 px-3 py-1.5 text-sm font-medium text-blue-800">
+              Instructions: Accept or Reject items. Press 'Back' when done
+            </div>
+          </div>
           ${!this.keyword ? html`
             <div class="w-full max-w-xl mx-auto">
               <keyword-dropdown
@@ -1681,6 +1762,29 @@ export class CurateAuditTab extends LitElement {
                           </button>
                         `)}
                       </div>
+                      ${(activeAiModel === 'siglip' || activeAiModel === 'trained') ? html`
+                        <div class="w-full mt-2 text-xs text-gray-700">
+                          <div class="flex items-center justify-center gap-2 whitespace-nowrap overflow-x-auto pb-1">
+                            <label class="inline-flex items-center gap-2">
+                              <span>Minimum confidence</span>
+                              <input
+                                type="number"
+                                min="0"
+                                max="1"
+                                step="0.01"
+                                class="w-20 px-2 py-1 rounded border border-gray-300 text-gray-700 bg-white text-right"
+                                .value=${String(
+                                  activeAiModel === 'trained'
+                                    ? this._normalizeConfidenceValue(this.trainedMinConfidence, 0).toFixed(2)
+                                    : this._normalizeConfidenceValue(this.zeroShotMinConfidence, 0).toFixed(2)
+                                )}
+                                @input=${(event) => this._handleAiMinConfidenceInput(event)}
+                                @change=${(event) => this._handleAiMinConfidenceChange(activeAiModel, event)}
+                              >
+                            </label>
+                          </div>
+                        </div>
+                      ` : html``}
                       ${activeAiModel === 'ml-similarity' ? html`
                         <div class="w-full mt-2 text-xs text-gray-700">
                           <div class="flex items-center justify-center gap-3 whitespace-nowrap overflow-x-auto pb-1">

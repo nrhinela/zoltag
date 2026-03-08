@@ -868,7 +868,8 @@ def apply_ml_tag_type_filter_subquery(
     db: Session,
     tenant: Tenant,
     keyword: str,
-    tag_type: str
+    tag_type: str,
+    min_confidence: Optional[float] = None,
 ) -> Selectable:
     """Return subquery of images with ML tags for specified keyword and tag_type.
 
@@ -912,6 +913,7 @@ def apply_ml_tag_type_filter_subquery(
         MachineTag.tag_type == normalized_tag_type,
         tenant_column_filter(MachineTag, tenant),
         MachineTag.asset_id.is_not(None),
+        *([MachineTag.confidence >= float(min_confidence)] if min_confidence is not None else []),
     ).distinct().subquery()
 
     return db.query(ImageMetadata.id).filter(
@@ -944,6 +946,7 @@ def build_image_query_with_subqueries(
     source_provider: Optional[str] = None,
     ml_keyword: Optional[str] = None,
     ml_tag_type: Optional[str] = None,
+    ml_min_confidence: Optional[float] = None,
     apply_ml_tag_filter: bool = True,
 ) -> tuple:
     """Build a query with combined subquery filters (non-materialized).
@@ -1191,7 +1194,13 @@ def build_image_query_with_subqueries(
 
     # Apply ML tag type filter if both keyword and tag_type provided
     if apply_ml_tag_filter and ml_keyword and ml_tag_type:
-        ml_subquery = apply_ml_tag_type_filter_subquery(db, tenant, ml_keyword, ml_tag_type)
+        ml_subquery = apply_ml_tag_type_filter_subquery(
+            db,
+            tenant,
+            ml_keyword,
+            ml_tag_type,
+            min_confidence=ml_min_confidence,
+        )
         subqueries_list.append(ml_subquery)
 
     # Subqueries are returned for the caller to apply (single application point).

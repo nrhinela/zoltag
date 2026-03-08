@@ -3,7 +3,7 @@ import { BaseStateController } from './base-state-controller.js';
 const TOP_LEVEL_TABS = new Set(['home', 'search', 'curate', 'library', 'lists']);
 const LIBRARY_SUB_TABS = new Set(['assets', 'keywords', 'providers', 'users', 'jobs', 'templates', 'audit', 'shares']);
 const SEARCH_SUB_TABS = new Set(['gallery', 'landing', 'results', 'advanced', 'browse-by-folder', 'chips']);
-const CURATE_SUB_TABS = new Set(['main', 'browse-folder', 'tag-audit', 'home', 'help']);
+const CURATE_SUB_TABS = new Set(['main', 'browse-folder', 'tag-audit', 'tag-finder2', 'home', 'help']);
 const HOME_SUB_TABS = new Set(['overview', 'chips', 'lab']);
 const ADMIN_SUB_TABS = new Set(['tagging', 'people']);
 const SPA_NAV_STATE_KEY = '__zoltagSpaNav';

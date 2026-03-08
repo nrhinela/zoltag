@@ -91,6 +91,12 @@ export function addPermatagParams(params, filters = {}) {
 export function addMlTagParams(params, filters = {}) {
   appendIf(params, 'ml_keyword', filters.mlKeyword, filters.mlKeyword !== undefined && filters.mlKeyword !== null && filters.mlKeyword !== '');
   appendIf(params, 'ml_tag_type', filters.mlTagType, filters.mlTagType !== undefined && filters.mlTagType !== null && filters.mlTagType !== '');
+  appendIf(
+    params,
+    'ml_min_confidence',
+    filters.mlMinConfidence,
+    filters.mlMinConfidence !== undefined && filters.mlMinConfidence !== null && filters.mlMinConfidence !== ''
+  );
 }
 
 /**

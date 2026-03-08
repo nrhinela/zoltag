@@ -1,11 +1,21 @@
 export const APP_AUTH_STORAGE_KEY = 'zoltag:app:auth';
 export const GUEST_AUTH_STORAGE_KEY = 'zoltag:guest:auth';
 export const APP_CURRENT_TENANT_STORAGE_KEY = 'zoltag:app:currentTenant';
+export const CURATE_AI_CONFIDENCE_THRESHOLDS_STORAGE_KEY = 'zoltag:app:curate:aiConfidenceThresholds';
+
+const DEFAULT_ZERO_SHOT_MIN_CONFIDENCE = 0.75;
+const DEFAULT_TRAINED_MIN_CONFIDENCE = 0.53;
 
 const LEGACY_TENANT_STORAGE_KEYS = ['tenantId', 'currentTenant'];
 
 function hasWindowStorage() {
   return typeof window !== 'undefined' && !!window.localStorage;
+}
+
+function clampConfidence(value, fallback) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(0, Math.min(1, parsed));
 }
 
 function normalizeTenantValue(value) {
@@ -86,6 +96,45 @@ export function clearStoredAppTenant() {
     for (const key of LEGACY_TENANT_STORAGE_KEYS) {
       window.localStorage.removeItem(key);
     }
+  } catch (_error) {
+    // Ignore storage access failures.
+  }
+}
+
+export function getStoredCurateAiConfidenceThresholds() {
+  const defaults = {
+    zeroShotMinConfidence: DEFAULT_ZERO_SHOT_MIN_CONFIDENCE,
+    trainedMinConfidence: DEFAULT_TRAINED_MIN_CONFIDENCE,
+  };
+  if (!hasWindowStorage()) return defaults;
+  try {
+    const raw = window.localStorage.getItem(CURATE_AI_CONFIDENCE_THRESHOLDS_STORAGE_KEY);
+    if (!raw) return defaults;
+    const parsed = JSON.parse(raw);
+    return {
+      zeroShotMinConfidence: clampConfidence(parsed?.zeroShotMinConfidence, defaults.zeroShotMinConfidence),
+      trainedMinConfidence: clampConfidence(parsed?.trainedMinConfidence, defaults.trainedMinConfidence),
+    };
+  } catch (_error) {
+    return defaults;
+  }
+}
+
+export function setStoredCurateAiConfidenceThresholds({
+  zeroShotMinConfidence,
+  trainedMinConfidence,
+} = {}) {
+  if (!hasWindowStorage()) return;
+  const current = getStoredCurateAiConfidenceThresholds();
+  const next = {
+    zeroShotMinConfidence: clampConfidence(zeroShotMinConfidence, current.zeroShotMinConfidence),
+    trainedMinConfidence: clampConfidence(trainedMinConfidence, current.trainedMinConfidence),
+  };
+  try {
+    window.localStorage.setItem(
+      CURATE_AI_CONFIDENCE_THRESHOLDS_STORAGE_KEY,
+      JSON.stringify(next),
+    );
   } catch (_error) {
     // Ignore storage access failures.
   }

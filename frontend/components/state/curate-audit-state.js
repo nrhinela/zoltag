@@ -95,6 +95,46 @@ export class CurateAuditStateController extends BaseStateController {
   }
 
   /**
+   * Handle minimum confidence changes for zero-shot and trained models.
+   * @param {Object} values - Confidence settings
+   * @param {number} values.zeroShotMinConfidence - SigLIP minimum confidence
+   * @param {number} values.trainedMinConfidence - Trained minimum confidence
+   */
+  handleAiMinConfidenceChange(values = {}) {
+    const normalize = (value, fallback = 0) => {
+      const parsed = Number(value);
+      if (!Number.isFinite(parsed)) return fallback;
+      return Math.max(0, Math.min(1, parsed));
+    };
+    const nextZeroShot = normalize(values.zeroShotMinConfidence, this.host.curateAuditZeroShotMinConfidence || 0);
+    const nextTrained = normalize(values.trainedMinConfidence, this.host.curateAuditTrainedMinConfidence || 0);
+    const currentZeroShot = normalize(this.host.curateAuditZeroShotMinConfidence || 0, 0);
+    const currentTrained = normalize(this.host.curateAuditTrainedMinConfidence || 0, 0);
+    const changed = nextZeroShot !== currentZeroShot || nextTrained !== currentTrained;
+
+    this.host.curateAuditZeroShotMinConfidence = nextZeroShot;
+    this.host.curateAuditTrainedMinConfidence = nextTrained;
+    if (!changed) {
+      this.requestUpdate();
+      return;
+    }
+    this.host.curateAuditEmptyState = null;
+    this.host.curateAuditOffset = 0;
+    this.host.curateAuditTotal = null;
+    this.host.curateAuditLoadAll = false;
+    this.host.curateAuditPageOffset = 0;
+    const activeModel = String(this.host.curateAuditAiModel || '').trim().toLowerCase();
+    if (
+      this.host.curateAuditKeyword
+      && this.host.curateAuditMode === 'missing'
+      && (activeModel === 'siglip' || activeModel === 'trained')
+    ) {
+      this.host._fetchCurateAuditImages();
+    }
+    this.requestUpdate();
+  }
+
+  /**
    * Handle ML similarity parameter changes.
    * @param {Object} values - Similarity settings
    * @param {number} values.seedCount - Number of seed images (x)
@@ -1025,12 +1065,20 @@ export class CurateAuditStateController extends BaseStateController {
    * @returns {Object} Default state object
    */
   getDefaultState() {
+    const defaultZeroShotMinConfidence = Number.isFinite(Number(this.host.curateAiTagfinder2ZeroShotMinConfidence))
+      ? Math.max(0, Math.min(1, Number(this.host.curateAiTagfinder2ZeroShotMinConfidence)))
+      : 0.75;
+    const defaultTrainedMinConfidence = Number.isFinite(Number(this.host.curateAiTagfinder2TrainedMinConfidence))
+      ? Math.max(0, Math.min(1, Number(this.host.curateAiTagfinder2TrainedMinConfidence)))
+      : 0.53;
     return {
       curateAuditMode: 'missing',
       curateAuditKeyword: null,
       curateAuditCategory: null,
       curateAuditAiEnabled: true,
       curateAuditAiModel: 'siglip',
+      curateAuditZeroShotMinConfidence: defaultZeroShotMinConfidence,
+      curateAuditTrainedMinConfidence: defaultTrainedMinConfidence,
       curateAuditMlSimilaritySeedCount: 5,
       curateAuditMlSimilaritySimilarCount: 10,
       curateAuditMlSimilarityDedupe: true,
@@ -1065,6 +1113,8 @@ export class CurateAuditStateController extends BaseStateController {
       curateAuditCategory: host.curateAuditCategory,
       curateAuditAiEnabled: host.curateAuditAiEnabled,
       curateAuditAiModel: host.curateAuditAiModel,
+      curateAuditZeroShotMinConfidence: host.curateAuditZeroShotMinConfidence,
+      curateAuditTrainedMinConfidence: host.curateAuditTrainedMinConfidence,
       curateAuditMlSimilaritySeedCount: host.curateAuditMlSimilaritySeedCount,
       curateAuditMlSimilaritySimilarCount: host.curateAuditMlSimilaritySimilarCount,
       curateAuditMlSimilarityDedupe: host.curateAuditMlSimilarityDedupe,
@@ -1131,6 +1181,12 @@ export class CurateAuditStateController extends BaseStateController {
     this.host.curateAuditPageOffset = 0;
     this.host.curateAuditAiEnabled = true;
     this.host.curateAuditAiModel = 'siglip';
+    this.host.curateAuditZeroShotMinConfidence = Number.isFinite(Number(this.host.curateAiTagfinder2ZeroShotMinConfidence))
+      ? Math.max(0, Math.min(1, Number(this.host.curateAiTagfinder2ZeroShotMinConfidence)))
+      : 0.75;
+    this.host.curateAuditTrainedMinConfidence = Number.isFinite(Number(this.host.curateAiTagfinder2TrainedMinConfidence))
+      ? Math.max(0, Math.min(1, Number(this.host.curateAiTagfinder2TrainedMinConfidence)))
+      : 0.53;
     this.host.curateAuditMlSimilaritySeedCount = 5;
     this.host.curateAuditMlSimilaritySimilarCount = 10;
     this.host.curateAuditMlSimilarityDedupe = true;

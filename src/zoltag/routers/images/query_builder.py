@@ -146,6 +146,7 @@ class QueryBuilder:
         query: Query,
         ml_keyword_id: int,
         ml_tag_type: Optional[str] = None,
+        ml_min_confidence: Optional[float] = None,
         require_match: bool = False,
     ) -> Tuple[Query, Selectable]:
         """Add ML score ordering to a query via join with scoring subquery.
@@ -193,6 +194,7 @@ class QueryBuilder:
             MachineTag.tag_type == ml_tag_type,
             MachineTag.asset_id.is_not(None),
             *([MachineTag.model_name == model_name] if model_name else []),
+            *([MachineTag.confidence >= float(ml_min_confidence)] if ml_min_confidence is not None else []),
         ]
         ml_scores = self.db.query(
             MachineTag.asset_id.label('asset_id'),

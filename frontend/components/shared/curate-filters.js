@@ -47,6 +47,11 @@ export function buildCurateFilterObject(state, overrides = {}) {
 }
 
 export function buildCurateAuditFilterObject(state, overrides = {}) {
+  const normalizeConfidence = (value) => {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return null;
+    return Math.max(0, Math.min(1, parsed));
+  };
   let aiModel = String(state.curateAuditAiModel || '').trim().toLowerCase() || 'siglip';
   if (aiModel === 'face-recognition') {
     const selectedKeyword = String(state.curateAuditKeyword || '').trim();
@@ -89,6 +94,17 @@ export function buildCurateAuditFilterObject(state, overrides = {}) {
   if (useAiSort) {
     filters.mlKeyword = state.curateAuditKeyword;
     filters.mlTagType = aiModel;
+    if (aiModel === 'siglip') {
+      const minConfidence = normalizeConfidence(state.curateAuditZeroShotMinConfidence);
+      if (minConfidence !== null) {
+        filters.mlMinConfidence = minConfidence;
+      }
+    } else if (aiModel === 'trained') {
+      const minConfidence = normalizeConfidence(state.curateAuditTrainedMinConfidence);
+      if (minConfidence !== null) {
+        filters.mlMinConfidence = minConfidence;
+      }
+    }
     if (aiModel === 'ml-similarity') {
       filters.mlSimilaritySeedCount = state.curateAuditMlSimilaritySeedCount;
       filters.mlSimilaritySimilarCount = state.curateAuditMlSimilaritySimilarCount;

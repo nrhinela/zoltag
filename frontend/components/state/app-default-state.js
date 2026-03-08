@@ -1,6 +1,11 @@
 import { buildCurateFilterObject } from '../shared/curate-filters.js';
+import { getStoredCurateAiConfidenceThresholds } from '../../services/app-storage.js';
 
 export function initializeAppDefaultState(host) {
+  const {
+    zeroShotMinConfidence: storedZeroShotMinConfidence,
+    trainedMinConfidence: storedTrainedMinConfidence,
+  } = getStoredCurateAiConfidenceThresholds();
   host.keywords = [];
   host.queueState = { queuedCount: 0, inProgressCount: 0, failedCount: 0 };
   host.queueNotice = null;
@@ -68,6 +73,8 @@ export function initializeAppDefaultState(host) {
   host.curateAuditPageOffset = 0;
   host.curateAuditAiEnabled = true;
   host.curateAuditAiModel = 'siglip';
+  host.curateAuditZeroShotMinConfidence = storedZeroShotMinConfidence;
+  host.curateAuditTrainedMinConfidence = storedTrainedMinConfidence;
   host.curateAuditMlSimilaritySeedCount = 5;
   host.curateAuditMlSimilaritySimilarCount = 10;
   host.curateAuditMlSimilarityDedupe = true;
@@ -83,6 +90,11 @@ export function initializeAppDefaultState(host) {
   host.curateAuditFilenameQuery = '';
   host.curateAuditTextQuery = '';
   host.curateAuditSourceProvider = '';
+  host.curateAiTagfinder2Summary = null;
+  host.curateAiTagfinder2Loading = false;
+  host.curateAiTagfinder2Error = '';
+  host.curateAiTagfinder2ZeroShotMinConfidence = storedZeroShotMinConfidence;
+  host.curateAiTagfinder2TrainedMinConfidence = storedTrainedMinConfidence;
   host.curateHomeRefreshing = false;
   host.curateStatsLoading = false;
   host.curateAdvancedOpen = false;

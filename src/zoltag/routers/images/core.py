@@ -1322,6 +1322,7 @@ async def list_images(
     order_by: Optional[str] = None,
     ml_keyword: Optional[str] = None,
     ml_tag_type: Optional[str] = None,
+    ml_min_confidence: Optional[float] = Query(default=None, ge=0.0, le=1.0),
     ml_similarity_seed_count: Optional[int] = None,
     ml_similarity_similar_count: Optional[int] = None,
     ml_similarity_dedupe: bool = True,
@@ -1361,6 +1362,12 @@ async def list_images(
     similarity_per_seed_limit_value = max(1, min(similarity_per_seed_limit_value, 50))
     similarity_dedupe_enabled = bool(ml_similarity_dedupe)
     similarity_random_enabled = bool(ml_similarity_random)
+    resolved_ml_min_confidence = (
+        float(ml_min_confidence)
+        if ml_min_confidence is not None
+        and normalized_ml_tag_type in {"siglip", "trained"}
+        else None
+    )
     constrain_to_ml_matches = order_by_value == "ml_score" and ml_keyword_id is not None
     is_face_recognition_audit_mode = (
         constrain_to_ml_matches
@@ -1410,6 +1417,7 @@ async def list_images(
         no_permatag_operator=no_permatag_operator,
         ml_keyword=ml_keyword,
         ml_tag_type=normalized_ml_tag_type,
+        ml_min_confidence=resolved_ml_min_confidence,
         apply_ml_tag_filter=not constrain_to_ml_matches,
     )
     # If any filter resulted in empty set, return empty response
@@ -2239,6 +2247,7 @@ async def list_images(
                         query,
                         ml_keyword_id,
                         normalized_ml_tag_type,
+                        ml_min_confidence=resolved_ml_min_confidence,
                         require_match=require_match,
                     )
                     if order_by_value == "processed":
@@ -2255,16 +2264,13 @@ async def list_images(
                         id_order_clause,
                     )
                     ml_query = ml_query.order_by(*order_clauses)
+                    total_count = builder.get_total_count(ml_query)
                     resolved_offset = resolve_anchor_offset(ml_query, offset)
                     if limit:
-                        rows = ml_query.limit(limit + 1).offset(resolved_offset).all()
-                        has_more = len(rows) > limit
-                        page_rows = rows[:limit] if has_more else rows
-                        estimated_total = resolved_offset + len(page_rows) + (1 if has_more else 0)
+                        page_rows = ml_query.limit(limit).offset(resolved_offset).all()
                     else:
                         page_rows = ml_query.offset(resolved_offset).all()
-                        estimated_total = resolved_offset + len(page_rows)
-                    return ml_query, page_rows, resolved_offset, estimated_total
+                    return ml_query, page_rows, resolved_offset, total_count
 
                 query, images, resolved_offset, total = fetch_ml_score_page(require_match=True)
                 if (
