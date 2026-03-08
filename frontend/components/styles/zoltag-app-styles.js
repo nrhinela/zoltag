@@ -994,6 +994,12 @@ export const zoltagAppStyles = css`
         align-self: start;
         z-index: 12;
     }
+    .results-hotspot-layout > .curate-pane.utility-targets {
+        position: sticky;
+        top: 12px;
+        align-self: start;
+        z-index: 12;
+    }
     .results-hotspot-layout.right-panel-layout-collapsed {
         grid-template-columns: minmax(0, 1fr) 0 !important;
         column-gap: 0 !important;
