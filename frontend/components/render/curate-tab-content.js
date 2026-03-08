@@ -21,7 +21,7 @@ export function renderCurateTabContent(host, { formatCurateDate }) {
     ? (host.curateHomeRefreshing || host.curateStatsLoading)
     : host.curateSubTab === 'tag-audit'
       ? host.curateAuditLoading
-      : host.curateSubTab === 'tag-finder2'
+      : host.curateSubTab === 'ai-tagger'
         ? host.curateAiTagfinder2Loading
         : host.curateSubTab === 'browse-folder'
           ? !!browseFolderTab?.browseByFolderLoading
@@ -39,10 +39,10 @@ export function renderCurateTabContent(host, { formatCurateDate }) {
             Filter
           </button>
           <button
-            class="curate-subtab ${(host.curateSubTab === 'tag-finder2' || host.curateSubTab === 'tag-audit') ? 'active' : ''}"
-            @click=${() => host._handleCurateSubTabChange('tag-finder2')}
+            class="curate-subtab ${(host.curateSubTab === 'ai-tagger' || host.curateSubTab === 'tag-audit') ? 'active' : ''}"
+            @click=${() => host._handleCurateSubTabChange('ai-tagger')}
           >
-            AI Training
+            AI Tagging
           </button>
           <button
             class="curate-subtab ${host.curateSubTab === 'browse-folder' ? 'active' : ''}"
@@ -82,7 +82,7 @@ export function renderCurateTabContent(host, { formatCurateDate }) {
           @click=${() => {
             if (host.curateSubTab === 'tag-audit') {
               host._refreshCurateAudit();
-            } else if (host.curateSubTab === 'tag-finder2') {
+            } else if (host.curateSubTab === 'ai-tagger') {
               host._refreshCurateAiTagfinder2Summary();
             } else if (host.curateSubTab === 'home') {
               host._refreshCurateHome();
@@ -301,9 +301,9 @@ export function renderCurateTabContent(host, { formatCurateDate }) {
         </div>
       ` : html``}
 
-      ${host.curateSubTab === 'tag-finder2' ? html`
+      ${host.curateSubTab === 'ai-tagger' ? html`
         <div>
-          <curate-ai-tagfinder2-tab
+          <curate-ai-tagger
             .summary=${host.curateAiTagfinder2Summary}
             .loading=${host.curateAiTagfinder2Loading}
             .error=${host.curateAiTagfinder2Error}
@@ -311,7 +311,7 @@ export function renderCurateTabContent(host, { formatCurateDate }) {
             .trainedMinConfidence=${host.curateAiTagfinder2TrainedMinConfidence}
             @threshold-changed=${(e) => host._handleCurateAiTagfinder2ThresholdChanged(e.detail)}
             @row-selected=${(e) => host._handleCurateAiTagfinder2RowSelected(e.detail)}
-          ></curate-ai-tagfinder2-tab>
+          ></curate-ai-tagger>
         </div>
       ` : html``}
 

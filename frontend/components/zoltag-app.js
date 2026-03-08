@@ -34,7 +34,7 @@ import './curate-home-tab.js';
 import './curate-explore-tab.js';
 import './curate-browse-folder-tab.js';
 import './curate-audit-tab.js';
-import './curate-ai-tagfinder2-tab.js';
+import './curate-ai-tagger.js';
 import './search-tab.js';
 import { renderCurateTabContent } from './render/curate-tab-content.js';
 import { renderHomeTabContent, renderSearchTabContent } from './render/home-search-tab-content.js';

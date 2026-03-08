@@ -4,7 +4,7 @@ import './shared/widgets/right-panel.js';
 const DEFAULT_ZERO_SHOT_MIN_CONFIDENCE = 0.75;
 const DEFAULT_TRAINED_MIN_CONFIDENCE = 0.53;
 
-export class CurateAiTagfinder2Tab extends LitElement {
+export class CurateAiTagger extends LitElement {
   createRenderRoot() {
     return this;
   }
@@ -81,6 +81,19 @@ export class CurateAiTagfinder2Tab extends LitElement {
   _formatThresholdInput(value) {
     const normalized = this._normalizeThreshold(value);
     return normalized.toFixed(2);
+  }
+
+  _isThresholdChanged(tagType) {
+    const normalizedTagType = String(tagType || '').trim().toLowerCase();
+    const draftRaw = normalizedTagType === 'trained'
+      ? this._draftTrainedMinConfidence
+      : this._draftZeroShotMinConfidence;
+    const currentRaw = normalizedTagType === 'trained'
+      ? this.trainedMinConfidence
+      : this.zeroShotMinConfidence;
+    const draft = this._normalizeThreshold(draftRaw);
+    const current = this._normalizeThreshold(currentRaw);
+    return Math.abs(draft - current) > 0.0001;
   }
 
   _emitThresholdChanged(nextZeroShot, nextTrained) {
@@ -261,7 +274,7 @@ export class CurateAiTagfinder2Tab extends LitElement {
         ? html`
           <div class="bg-white rounded-lg border border-gray-200 p-6 text-sm text-gray-600">
             <span class="curate-spinner mr-2" aria-hidden="true"></span>
-            Loading AI Training...
+            Loading AI Tagging...
           </div>
         `
       : this.error
@@ -324,6 +337,7 @@ export class CurateAiTagfinder2Tab extends LitElement {
                                     <button
                                       type="button"
                                       class="rounded border border-gray-300 px-2 py-0.5 text-xs font-semibold text-gray-700 hover:bg-gray-100"
+                                      ?disabled=${!this._isThresholdChanged('siglip')}
                                       @click=${(event) => {
                                         event.stopPropagation();
                                         this._applyZeroShotThreshold();
@@ -356,6 +370,7 @@ export class CurateAiTagfinder2Tab extends LitElement {
                                     <button
                                       type="button"
                                       class="rounded border border-gray-300 px-2 py-0.5 text-xs font-semibold text-gray-700 hover:bg-gray-100"
+                                      ?disabled=${!this._isThresholdChanged('trained')}
                                       @click=${(event) => {
                                         event.stopPropagation();
                                         this._applyTrainedThreshold();
@@ -445,7 +460,7 @@ export class CurateAiTagfinder2Tab extends LitElement {
         >
           <div slot="default" class="p-4 space-y-4 text-sm text-gray-700">
             <div>
-              <h3 class="text-xs font-semibold uppercase tracking-wide text-slate-700">AI Training Help</h3>
+              <h3 class="text-xs font-semibold uppercase tracking-wide text-slate-700">AI Tagging Help</h3>
             </div>
             <p>
               <strong>Goal:</strong> Train the models by <strong>accepting</strong> or <strong>rejecting</strong> suggestions until suggestion counts are as low as possible.
@@ -477,4 +492,4 @@ export class CurateAiTagfinder2Tab extends LitElement {
   }
 }
 
-customElements.define('curate-ai-tagfinder2-tab', CurateAiTagfinder2Tab);
+customElements.define('curate-ai-tagger', CurateAiTagger);

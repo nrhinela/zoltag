@@ -159,7 +159,7 @@ export function bindAppDelegateMethods(host) {
     );
     host.curateAuditKeyword = keyword;
     host.curateAuditCategory = category;
-    // Reset secondary audit filters so click-through reflects AI Tag Finder2 counts.
+    // Reset secondary audit filters so click-through reflects AI Tagging counts.
     host.curateAuditMediaType = 'all';
     host.curateAuditHideDeleted = true;
     host.curateAuditMinRating = null;
@@ -181,7 +181,7 @@ export function bindAppDelegateMethods(host) {
   };
 
   host._handleCurateAuditBackToTraining = () => {
-    host._handleCurateSubTabChange('tag-finder2');
+    host._handleCurateSubTabChange('ai-tagger');
     host._refreshCurateAiTagfinder2Summary();
   };
 

@@ -484,7 +484,7 @@ export class CurateExploreStateController extends BaseStateController {
       }
     }
 
-    if (nextTab === 'tag-finder2' && !this.host.curateAiTagfinder2Loading) {
+    if (nextTab === 'ai-tagger' && !this.host.curateAiTagfinder2Loading) {
       this.host._refreshCurateAiTagfinder2Summary();
     }
   }
@@ -509,7 +509,7 @@ export class CurateExploreStateController extends BaseStateController {
       if (!this.host._curateAuditLastFetchKey || this.host._curateAuditLastFetchKey !== fetchKey) {
         this.host._fetchCurateAuditImages();
       }
-    } else if (this.host.curateSubTab === 'tag-finder2' && !this.host.curateAiTagfinder2Loading) {
+    } else if (this.host.curateSubTab === 'ai-tagger' && !this.host.curateAiTagfinder2Loading) {
       this.host._refreshCurateAiTagfinder2Summary();
     }
   }

@@ -109,8 +109,8 @@ export class AppDataStateController extends BaseStateController {
         this.host._curateAiTagfinder2RequestId !== requestId
         || this.host.tenant !== tenantAtRequest;
       if (isStale) return;
-      console.error('Error fetching Curate AI Training summary:', error);
-      this.host.curateAiTagfinder2Error = error?.message || 'Failed to load AI Training data.';
+      console.error('Error fetching Curate AI Tagging summary:', error);
+      this.host.curateAiTagfinder2Error = error?.message || 'Failed to load AI Tagging data.';
       if (!this.host.curateAiTagfinder2Summary) {
         this.host.curateAiTagfinder2Summary = { categories: [] };
       }

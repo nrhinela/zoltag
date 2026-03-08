@@ -3,7 +3,7 @@ import { BaseStateController } from './base-state-controller.js';
 const TOP_LEVEL_TABS = new Set(['home', 'search', 'curate', 'library', 'lists']);
 const LIBRARY_SUB_TABS = new Set(['assets', 'keywords', 'providers', 'users', 'jobs', 'templates', 'audit', 'shares']);
 const SEARCH_SUB_TABS = new Set(['gallery', 'landing', 'results', 'advanced', 'browse-by-folder', 'chips']);
-const CURATE_SUB_TABS = new Set(['main', 'browse-folder', 'tag-audit', 'tag-finder2', 'home', 'help']);
+const CURATE_SUB_TABS = new Set(['main', 'browse-folder', 'tag-audit', 'ai-tagger', 'home', 'help']);
 const HOME_SUB_TABS = new Set(['overview', 'chips', 'lab']);
 const ADMIN_SUB_TABS = new Set(['tagging', 'people']);
 const SPA_NAV_STATE_KEY = '__zoltagSpaNav';
@@ -50,7 +50,8 @@ export class AppNavigationStateController extends BaseStateController {
       const subTab = String(input.subTab || '').trim().toLowerCase();
       snapshot.subTab = SEARCH_SUB_TABS.has(subTab) ? subTab : 'gallery';
     } else if (tab === 'curate') {
-      const subTab = String(input.subTab || '').trim().toLowerCase();
+      const rawSubTab = String(input.subTab || '').trim().toLowerCase();
+      const subTab = rawSubTab === 'tag-finder2' ? 'ai-tagger' : rawSubTab;
       snapshot.subTab = CURATE_SUB_TABS.has(subTab) ? subTab : 'main';
     } else if (tab === 'home') {
       const subTab = String(input.subTab || '').trim().toLowerCase();
