@@ -641,6 +641,14 @@ export async function deleteKeyword(tenantId, keywordId) {
   return keywordCrud.delete(tenantId, keywordId);
 }
 
+export async function runKeywordSetupWizard(tenantId, payload = {}) {
+  return fetchWithAuth('/admin/keywords/setup-wizard', {
+    method: 'POST',
+    tenantId,
+    body: JSON.stringify(payload || {}),
+  });
+}
+
 // List CRUD
 const listCrud = createCrudOps('/lists');
 

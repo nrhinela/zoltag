@@ -6,7 +6,7 @@ import './upload-library-modal.js';
 import './tab-container.js';
 import './list-editor.js';
 import './permatag-editor.js';
-import './tagging-admin.js';
+import './tagging-admin2.js';
 import './assets-admin.js';
 import './tenant-users-admin.js';
 import './ml-training.js';

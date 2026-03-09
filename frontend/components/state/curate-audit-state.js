@@ -1067,10 +1067,10 @@ export class CurateAuditStateController extends BaseStateController {
   getDefaultState() {
     const defaultZeroShotMinConfidence = Number.isFinite(Number(this.host.curateAiTagfinder2ZeroShotMinConfidence))
       ? Math.max(0, Math.min(1, Number(this.host.curateAiTagfinder2ZeroShotMinConfidence)))
-      : 0.75;
+      : 0.77;
     const defaultTrainedMinConfidence = Number.isFinite(Number(this.host.curateAiTagfinder2TrainedMinConfidence))
       ? Math.max(0, Math.min(1, Number(this.host.curateAiTagfinder2TrainedMinConfidence)))
-      : 0.53;
+      : 0.55;
     return {
       curateAuditMode: 'missing',
       curateAuditKeyword: null,
@@ -1183,10 +1183,10 @@ export class CurateAuditStateController extends BaseStateController {
     this.host.curateAuditAiModel = 'siglip';
     this.host.curateAuditZeroShotMinConfidence = Number.isFinite(Number(this.host.curateAiTagfinder2ZeroShotMinConfidence))
       ? Math.max(0, Math.min(1, Number(this.host.curateAiTagfinder2ZeroShotMinConfidence)))
-      : 0.75;
+      : 0.77;
     this.host.curateAuditTrainedMinConfidence = Number.isFinite(Number(this.host.curateAiTagfinder2TrainedMinConfidence))
       ? Math.max(0, Math.min(1, Number(this.host.curateAiTagfinder2TrainedMinConfidence)))
-      : 0.53;
+      : 0.55;
     this.host.curateAuditMlSimilaritySeedCount = 5;
     this.host.curateAuditMlSimilaritySimilarCount = 10;
     this.host.curateAuditMlSimilarityDedupe = true;

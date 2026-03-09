@@ -3,8 +3,8 @@ export const GUEST_AUTH_STORAGE_KEY = 'zoltag:guest:auth';
 export const APP_CURRENT_TENANT_STORAGE_KEY = 'zoltag:app:currentTenant';
 export const CURATE_AI_CONFIDENCE_THRESHOLDS_STORAGE_KEY = 'zoltag:app:curate:aiConfidenceThresholds';
 
-const DEFAULT_ZERO_SHOT_MIN_CONFIDENCE = 0.75;
-const DEFAULT_TRAINED_MIN_CONFIDENCE = 0.53;
+const DEFAULT_ZERO_SHOT_MIN_CONFIDENCE = 0.77;
+const DEFAULT_TRAINED_MIN_CONFIDENCE = 0.55;
 
 const LEGACY_TENANT_STORAGE_KEYS = ['tenantId', 'currentTenant'];
 

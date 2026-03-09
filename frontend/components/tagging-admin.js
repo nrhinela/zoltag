@@ -9,6 +9,7 @@ import {
   createKeyword,
   updateKeyword,
   deleteKeyword,
+  runKeywordSetupWizard,
 } from '../services/api.js';
 
 class TaggingAdmin extends LitElement {
@@ -105,6 +106,82 @@ class TaggingAdmin extends LitElement {
       display: grid;
       gap: 6px;
     }
+    .wizard-chat-log {
+      max-height: 50vh;
+      overflow: auto;
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      background: #f8fafc;
+      padding: 12px;
+      display: grid;
+      gap: 10px;
+    }
+    .wizard-msg {
+      border-radius: 8px;
+      padding: 8px 10px;
+      line-height: 1.45;
+      font-size: 13px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .wizard-msg.user {
+      background: #dbeafe;
+      border: 1px solid #bfdbfe;
+      color: #1e3a8a;
+    }
+    .wizard-msg.assistant {
+      background: #ffffff;
+      border: 1px solid #e5e7eb;
+      color: #1f2937;
+    }
+    .wizard-draft-preview {
+      max-height: 50vh;
+      overflow: auto;
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      background: #ffffff;
+      padding: 12px;
+      font-size: 12px;
+      line-height: 1.5;
+      color: #334155;
+      white-space: pre-wrap;
+    }
+    .wizard-category-picker {
+      border: 1px solid #dbeafe;
+      background: #eff6ff;
+      border-radius: 8px;
+      padding: 10px;
+      display: grid;
+      gap: 8px;
+    }
+    .wizard-category-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      color: #1e3a8a;
+    }
+    .wizard-approved-list {
+      border: 1px solid #dbeafe;
+      background: #f8fbff;
+      border-radius: 8px;
+      padding: 10px;
+      display: grid;
+      gap: 6px;
+    }
+    .wizard-approved-chip {
+      display: inline-flex;
+      align-items: center;
+      border: 1px solid #bfdbfe;
+      background: #dbeafe;
+      color: #1e40af;
+      border-radius: 999px;
+      padding: 2px 10px;
+      font-size: 12px;
+      font-weight: 600;
+      margin-right: 6px;
+      margin-bottom: 6px;
+    }
   `];
 
   static properties = {
@@ -117,6 +194,16 @@ class TaggingAdmin extends LitElement {
     isSavingCategory: { type: Boolean },
     dialog: { type: Object },
     error: { type: String },
+    wizardOpen: { type: Boolean },
+    wizardLoading: { type: Boolean },
+    wizardError: { type: String },
+    wizardInput: { type: String },
+    wizardMessages: { type: Array },
+    wizardStage: { type: String },
+    wizardCategories: { type: Array },
+    wizardFormattedDefinition: { type: String },
+    wizardCategorySelections: { type: Object },
+    wizardApprovedCategories: { type: Array },
   };
 
   constructor() {
@@ -130,6 +217,16 @@ class TaggingAdmin extends LitElement {
     this.isSavingCategory = false;
     this.dialog = null;
     this.error = '';
+    this.wizardOpen = false;
+    this.wizardLoading = false;
+    this.wizardError = '';
+    this.wizardInput = '';
+    this.wizardMessages = [];
+    this.wizardStage = 'questions';
+    this.wizardCategories = [];
+    this.wizardFormattedDefinition = '';
+    this.wizardCategorySelections = {};
+    this.wizardApprovedCategories = [];
   }
 
   updated(changedProperties) {
@@ -222,6 +319,259 @@ class TaggingAdmin extends LitElement {
 
   closeDialog() {
     this.dialog = null;
+  }
+
+  _resetWizardState() {
+    this.wizardError = '';
+    this.wizardInput = '';
+    this.wizardMessages = [];
+    this.wizardStage = 'questions';
+    this.wizardCategories = [];
+    this.wizardFormattedDefinition = '';
+    this.wizardCategorySelections = {};
+    this.wizardApprovedCategories = [];
+  }
+
+  _getWizardSuggestedCategoryNames(categories = this.wizardCategories) {
+    const seen = new Set();
+    return (Array.isArray(categories) ? categories : [])
+      .map((category) => String(category?.name || '').trim())
+      .filter((name) => {
+        if (!name) return false;
+        const key = name.toLowerCase();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+  }
+
+  _syncWizardCategorySelections(suggestedCategoryNames = []) {
+    const current = (this.wizardCategorySelections && typeof this.wizardCategorySelections === 'object')
+      ? this.wizardCategorySelections
+      : {};
+    const next = {};
+    (suggestedCategoryNames || []).forEach((name) => {
+      next[name] = Object.prototype.hasOwnProperty.call(current, name)
+        ? Boolean(current[name])
+        : true;
+    });
+    this.wizardCategorySelections = next;
+  }
+
+  _getWizardSelectedCategories(suggestedCategoryNames = this._getWizardSuggestedCategoryNames()) {
+    const selections = this.wizardCategorySelections && typeof this.wizardCategorySelections === 'object'
+      ? this.wizardCategorySelections
+      : {};
+    return (suggestedCategoryNames || []).filter((name) => Boolean(selections[name]));
+  }
+
+  _handleWizardCategoryToggle(categoryName, checked) {
+    this.wizardCategorySelections = {
+      ...(this.wizardCategorySelections || {}),
+      [categoryName]: Boolean(checked),
+    };
+  }
+
+  async _handleApproveSelectedCategories() {
+    if (this.wizardLoading) return;
+    const suggested = this._getWizardSuggestedCategoryNames();
+    const selected = this._getWizardSelectedCategories(suggested);
+    this.wizardApprovedCategories = [...selected];
+    if (!selected.length) return;
+    await this._runWizardTurn(
+      `Approved categories: ${selected.join(', ')}. Continue the setup using only these approved categories and suggest/refine keywords for them.`
+    );
+  }
+
+  async openSetupWizard() {
+    if (this.readOnly) return;
+    this.wizardOpen = true;
+    if (!Array.isArray(this.wizardMessages) || this.wizardMessages.length === 0) {
+      this._resetWizardState();
+      await this._runWizardTurn();
+    }
+  }
+
+  closeSetupWizard() {
+    this.wizardOpen = false;
+    this.wizardError = '';
+    this.wizardInput = '';
+  }
+
+  async _runWizardTurn(userMessage = '') {
+    if (this.readOnly || !this.tenant) return;
+    const trimmed = String(userMessage || '').trim();
+    const currentMessages = Array.isArray(this.wizardMessages) ? this.wizardMessages : [];
+    const outgoingMessages = trimmed
+      ? [...currentMessages, { role: 'user', content: trimmed }]
+      : [...currentMessages];
+
+    this.wizardLoading = true;
+    this.wizardError = '';
+    try {
+      const response = await runKeywordSetupWizard(this.tenant, {
+        messages: outgoingMessages.slice(-24).map((msg) => ({
+          role: String(msg?.role || '').toLowerCase() === 'assistant' ? 'assistant' : 'user',
+          content: String(msg?.content || '').trim(),
+        })).filter((msg) => msg.content),
+      });
+      const assistantMessage = String(response?.assistant_message || '').trim();
+      const nextMessages = [...outgoingMessages];
+      if (assistantMessage) {
+        nextMessages.push({ role: 'assistant', content: assistantMessage });
+      }
+      const nextCategories = Array.isArray(response?.categories) ? response.categories : [];
+      const nextFormattedDefinition = String(response?.formatted_definition || '').trim();
+      this.wizardMessages = nextMessages;
+      this.wizardStage = String(response?.stage || '').trim().toLowerCase() === 'proposal'
+        ? 'proposal'
+        : 'questions';
+      this.wizardCategories = nextCategories.length > 0
+        ? nextCategories
+        : (Array.isArray(this.wizardCategories) ? this.wizardCategories : []);
+      const suggestedCategoryNames = this._getWizardSuggestedCategoryNames(this.wizardCategories);
+      this._syncWizardCategorySelections(suggestedCategoryNames);
+      this.wizardFormattedDefinition = nextFormattedDefinition || this.wizardFormattedDefinition;
+      this.wizardInput = '';
+    } catch (error) {
+      console.error('Keyword setup wizard request failed:', error);
+      this.wizardError = error?.message || 'Failed to run setup wizard.';
+      if (trimmed) {
+        this.wizardMessages = outgoingMessages;
+      }
+    } finally {
+      this.wizardLoading = false;
+    }
+  }
+
+  async _handleWizardSubmit(event) {
+    event.preventDefault();
+    if (this.wizardLoading) return;
+    const text = String(this.wizardInput || '').trim();
+    if (!text) return;
+    await this._runWizardTurn(text);
+  }
+
+  _renderWizardDialog() {
+    if (!this.wizardOpen || this.readOnly) return null;
+    const hasDraft = String(this.wizardFormattedDefinition || '').trim().length > 0;
+    const suggestedCategoryNames = this._getWizardSuggestedCategoryNames();
+    const selectedCategoryNames = this._getWizardSelectedCategories(suggestedCategoryNames);
+    const approvedCategoryNames = Array.isArray(this.wizardApprovedCategories) ? this.wizardApprovedCategories : [];
+    return html`
+      <div class="fixed inset-0 z-50 flex items-center justify-center modal-backdrop">
+        <div class="bg-white rounded-lg shadow-xl w-full max-w-6xl mx-4 p-6">
+          <div class="flex items-start justify-between gap-4 mb-4">
+            <div>
+              <h3 class="text-lg font-semibold text-gray-800">AI Tag Setup Wizard (Optional)</h3>
+              <p class="text-sm text-gray-500">
+                Answer the questions, review the proposed categories and keywords, then refine until you are satisfied.
+              </p>
+            </div>
+            <button class="px-3 py-1.5 border rounded-lg text-sm" @click=${this.closeSetupWizard}>Close</button>
+          </div>
+
+          ${this.wizardError ? html`<div class="text-sm text-red-600 mb-3">${this.wizardError}</div>` : ''}
+
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div class="space-y-3">
+              <div class="text-sm font-semibold text-slate-700">Wizard Chat</div>
+              <div class="wizard-chat-log">
+                ${this.wizardMessages.length === 0 ? html`
+                  <div class="text-sm text-gray-500">Starting wizard…</div>
+                ` : this.wizardMessages.map((msg) => html`
+                  <div class="wizard-msg ${msg.role === 'assistant' ? 'assistant' : 'user'}">
+                    ${msg.content}
+                  </div>
+                `)}
+              </div>
+              ${suggestedCategoryNames.length > 0 ? html`
+                <div class="wizard-category-picker">
+                  <div class="text-xs font-semibold uppercase tracking-wide text-blue-800">
+                    Select Categories To Keep
+                  </div>
+                  ${suggestedCategoryNames.map((name) => html`
+                    <label class="wizard-category-row">
+                      <input
+                        type="checkbox"
+                        .checked=${selectedCategoryNames.includes(name)}
+                        @change=${(event) => this._handleWizardCategoryToggle(name, event?.target?.checked)}
+                        ?disabled=${this.wizardLoading}
+                      />
+                      <span>${name}</span>
+                    </label>
+                  `)}
+                  <div>
+                    <button
+                      type="button"
+                      class="px-3 py-1.5 rounded-lg border border-blue-300 bg-white text-sm font-semibold text-blue-700 hover:bg-blue-50 disabled:opacity-60"
+                      ?disabled=${this.wizardLoading || selectedCategoryNames.length === 0}
+                      @click=${this._handleApproveSelectedCategories}
+                    >
+                      Approve Selected Categories
+                    </button>
+                  </div>
+                </div>
+              ` : html``}
+              <form class="flex gap-2" @submit=${this._handleWizardSubmit}>
+                <input
+                  class="flex-1 border rounded-lg px-3 py-2 text-sm"
+                  .value=${this.wizardInput}
+                  @input=${(e) => { this.wizardInput = e.target.value; }}
+                  placeholder=${hasDraft
+                    ? 'Ask for revisions, add categories/keywords, or confirm you are satisfied...'
+                    : 'Answer the question...'}
+                  ?disabled=${this.wizardLoading}
+                />
+                <button
+                  type="submit"
+                  class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm disabled:opacity-60"
+                  ?disabled=${this.wizardLoading || !String(this.wizardInput || '').trim()}
+                >
+                  ${this.wizardLoading ? 'Thinking…' : 'Send'}
+                </button>
+              </form>
+            </div>
+
+            <div class="space-y-3">
+              <div class="wizard-approved-list">
+                <div class="text-sm font-semibold text-slate-700">Approved Categories</div>
+                ${approvedCategoryNames.length > 0 ? html`
+                  <div>
+                    ${approvedCategoryNames.map((name) => html`
+                      <span class="wizard-approved-chip">${name}</span>
+                    `)}
+                  </div>
+                ` : html`
+                  <div class="text-xs text-gray-500">Approve categories from the left panel to populate this list.</div>
+                `}
+              </div>
+              <div class="text-sm font-semibold text-slate-700">Proposed Definitions</div>
+              ${hasDraft ? html`
+                <div class="wizard-draft-preview">${this.wizardFormattedDefinition}</div>
+                <button
+                  type="button"
+                  class="px-3 py-1.5 rounded-lg border border-blue-200 bg-blue-50 text-sm font-semibold text-blue-700 hover:bg-blue-100 disabled:opacity-60"
+                  ?disabled=${this.wizardLoading}
+                  @click=${() => this._runWizardTurn('I am satisfied with this setup. Please return the final category and keyword definitions.')}
+                >
+                  I am satisfied
+                </button>
+                <p class="text-xs text-gray-500">
+                  Format:
+                  <br>Category Name
+                  <br>keyword, description
+                </p>
+              ` : html`
+                <div class="wizard-draft-preview text-gray-500">
+                  Draft definitions will appear here after the wizard has enough information.
+                </div>
+              `}
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
   }
 
   async handleCategorySubmit(e) {
@@ -627,6 +977,7 @@ class TaggingAdmin extends LitElement {
 
   render() {
     const categories = this._getCategoriesAlphabetical(this.categories || []);
+    const showSetupWizardCta = !this.readOnly;
     return html`
       <div class="w-full">
         <div class="bg-white rounded-lg border border-gray-200 p-6">
@@ -638,6 +989,14 @@ class TaggingAdmin extends LitElement {
                 <p class="text-xs text-gray-500 mt-1">Read-only for your tenant role.</p>
               ` : html``}
             </div>
+            ${showSetupWizardCta ? html`
+              <button
+                class="text-sm text-blue-600 hover:text-blue-700"
+                @click=${() => this.openSetupWizard()}
+              >
+                Optional: AI setup wizard
+              </button>
+            ` : html``}
           </div>
           <details class="help-panel mb-6">
             <summary>How tags and categories work</summary>
@@ -648,6 +1007,11 @@ class TaggingAdmin extends LitElement {
               <li>Tag prompts help AI systems automatically suggest relevant tags to get started.</li>
             </ul>
           </details>
+          ${showSetupWizardCta && categories.length === 0 ? html`
+            <div class="mb-4 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800">
+              New here? Use the optional AI setup wizard to draft categories and keywords before you create them.
+            </div>
+          ` : html``}
 
           ${this.error ? html`<div class="text-sm text-red-600 mb-4">${this.error}</div>` : ''}
           ${this.isLoading ? html`<div class="text-sm text-gray-500">Loading categories…</div>` : ''}
@@ -664,6 +1028,7 @@ class TaggingAdmin extends LitElement {
         </div>
       </div>
       ${this.renderDialog()}
+      ${this._renderWizardDialog()}
     `;
   }
 

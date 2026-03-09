@@ -253,10 +253,10 @@ export function renderAuxTabContent(host, { formatCurateDate }) {
             </div>
           </div>
           ${host.activeAdminSubTab === 'tagging' ? html`
-            <tagging-admin
+            <tagging-admin2
               .tenant=${host.tenant}
               .readOnly=${!canEditKeywords}
-            ></tagging-admin>
+            ></tagging-admin2>
           ` : html``}
           ${host.activeAdminSubTab === 'people' ? html`
             <person-manager
@@ -352,10 +352,10 @@ export function renderAuxTabContent(host, { formatCurateDate }) {
 
     ${host.activeTab === 'tagging' ? html`
       <div slot="tagging" class="container p-4">
-        <tagging-admin
+        <tagging-admin2
           .tenant=${host.tenant}
           .readOnly=${!canEditKeywords}
-        ></tagging-admin>
+        ></tagging-admin2>
       </div>
     ` : html``}
 

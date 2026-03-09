@@ -1,8 +1,8 @@
 import { LitElement, html } from 'lit';
 import './shared/widgets/right-panel.js';
 
-const DEFAULT_ZERO_SHOT_MIN_CONFIDENCE = 0.75;
-const DEFAULT_TRAINED_MIN_CONFIDENCE = 0.53;
+const DEFAULT_ZERO_SHOT_MIN_CONFIDENCE = 0.77;
+const DEFAULT_TRAINED_MIN_CONFIDENCE = 0.55;
 
 export class CurateAiTagger extends LitElement {
   createRenderRoot() {
@@ -414,7 +414,7 @@ export class CurateAiTagger extends LitElement {
                                     ${this._formatCount(tag?.zero_shot)}
                                   </td>
                                   <td
-                                    class="px-4 py-2 text-right tabular-nums border-r border-gray-200 ai-training-cell ai-training-cell--siglip ${hasZero ? 'cursor-pointer text-slate-600' : 'cursor-default text-gray-400'}"
+                                    class="px-4 py-2 text-right tabular-nums text-xs border-r border-gray-200 ai-training-cell ai-training-cell--siglip ${hasZero ? 'cursor-pointer text-slate-600' : 'cursor-default text-gray-400'}"
                                     @mouseenter=${(event) => this._handleModelCellMouseEnter(event, 'siglip', hasZero)}
                                     @click=${(event) => this._handleModelCellClick(event, category, tag, 'siglip', hasZero)}
                                   >
@@ -428,7 +428,7 @@ export class CurateAiTagger extends LitElement {
                                     ${this._formatCount(tag?.trained)}
                                   </td>
                                   <td
-                                    class="px-4 py-2 text-right tabular-nums ai-training-cell ai-training-cell--trained ${hasTrained ? 'cursor-pointer text-slate-600' : 'cursor-default text-gray-400'}"
+                                    class="px-4 py-2 text-right tabular-nums text-xs ai-training-cell ai-training-cell--trained ${hasTrained ? 'cursor-pointer text-slate-600' : 'cursor-default text-gray-400'}"
                                     @mouseenter=${(event) => this._handleModelCellMouseEnter(event, 'trained', hasTrained)}
                                     @click=${(event) => this._handleModelCellClick(event, category, tag, 'trained', hasTrained)}
                                   >

@@ -43,7 +43,8 @@ export class AppNavigationStateController extends BaseStateController {
       const normalizedSubTab = LIBRARY_SUB_TABS.has(subTab) ? subTab : 'assets';
       snapshot.subTab = normalizedSubTab;
       if (normalizedSubTab === 'keywords') {
-        const adminSubTab = String(input.adminSubTab || '').trim().toLowerCase();
+        let adminSubTab = String(input.adminSubTab || '').trim().toLowerCase();
+        if (adminSubTab === 'tagging2') adminSubTab = 'tagging';
         snapshot.adminSubTab = ADMIN_SUB_TABS.has(adminSubTab) ? adminSubTab : 'tagging';
       }
     } else if (tab === 'search') {
