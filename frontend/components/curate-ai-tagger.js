@@ -17,6 +17,7 @@ export class CurateAiTagger extends LitElement {
     trainedMinConfidence: { type: Number },
     _draftZeroShotMinConfidence: { state: true },
     _draftTrainedMinConfidence: { state: true },
+    _expandedThresholdEditor: { state: true },
   };
 
   constructor() {
@@ -28,6 +29,7 @@ export class CurateAiTagger extends LitElement {
     this.trainedMinConfidence = 0;
     this._draftZeroShotMinConfidence = this._formatThresholdInput(0);
     this._draftTrainedMinConfidence = this._formatThresholdInput(0);
+    this._expandedThresholdEditor = '';
   }
 
   _toCategories() {
@@ -38,13 +40,6 @@ export class CurateAiTagger extends LitElement {
     const value = Number(modelStats?.count);
     if (!Number.isFinite(value) || value <= 0) return '-';
     return value.toLocaleString();
-  }
-
-  _formatMaxMin(modelStats) {
-    const min = Number(modelStats?.min_confidence);
-    const max = Number(modelStats?.max_confidence);
-    if (!Number.isFinite(min) || !Number.isFinite(max)) return '-';
-    return `${max.toFixed(2)} - ${min.toFixed(2)}`;
   }
 
   _resolveRowTagType(tag, preferredTagType = '') {
@@ -117,6 +112,7 @@ export class CurateAiTagger extends LitElement {
   _restoreDefaultThresholds() {
     this._draftZeroShotMinConfidence = this._formatThresholdInput(DEFAULT_ZERO_SHOT_MIN_CONFIDENCE);
     this._draftTrainedMinConfidence = this._formatThresholdInput(DEFAULT_TRAINED_MIN_CONFIDENCE);
+    this._expandedThresholdEditor = '';
     this._emitThresholdChanged(
       DEFAULT_ZERO_SHOT_MIN_CONFIDENCE,
       DEFAULT_TRAINED_MIN_CONFIDENCE,
@@ -162,13 +158,21 @@ export class CurateAiTagger extends LitElement {
   _applyZeroShotThreshold() {
     const nextZeroShot = this._normalizeThreshold(this._draftZeroShotMinConfidence);
     this._draftZeroShotMinConfidence = this._formatThresholdInput(nextZeroShot);
+    this._expandedThresholdEditor = '';
     this._emitThresholdChanged(nextZeroShot, this.trainedMinConfidence);
   }
 
   _applyTrainedThreshold() {
     const nextTrained = this._normalizeThreshold(this._draftTrainedMinConfidence);
     this._draftTrainedMinConfidence = this._formatThresholdInput(nextTrained);
+    this._expandedThresholdEditor = '';
     this._emitThresholdChanged(this.zeroShotMinConfidence, nextTrained);
+  }
+
+  _toggleThresholdEditor(tagType, event) {
+    event?.stopPropagation?.();
+    const normalized = String(tagType || '').trim().toLowerCase();
+    this._expandedThresholdEditor = this._expandedThresholdEditor === normalized ? '' : normalized;
   }
 
   _handleThresholdInputKeydown(event, tagType) {
@@ -264,6 +268,64 @@ export class CurateAiTagger extends LitElement {
     return '';
   }
 
+  _renderThresholdHeader(tagType, modelLabel, currentValue, draftValue, borderClass = '') {
+    const normalized = String(tagType || '').trim().toLowerCase();
+    const isExpanded = this._expandedThresholdEditor === normalized;
+    const ariaLabel = `${modelLabel} minimum confidence`;
+    return html`
+      <th class=${`px-4 py-2 text-center font-semibold text-gray-600 ${borderClass}`} colspan="1">
+        <div class="flex flex-col items-center gap-2">
+          <div class="flex flex-wrap items-center justify-center gap-2">
+            <span class="text-xs font-semibold text-gray-600">ML Model: "${modelLabel}"</span>
+            <button
+              type="button"
+              class="rounded border border-gray-300 bg-white px-2 py-0.5 text-xs font-semibold text-gray-700 transition-colors hover:bg-gray-100"
+              @click=${(event) => this._toggleThresholdEditor(normalized, event)}
+            >
+              [${this._formatThresholdInput(currentValue)}]
+            </button>
+          </div>
+          ${isExpanded ? html`
+            <div class="flex flex-col items-center gap-1">
+              <div class="text-[11px] font-medium text-gray-500">Minimum Confidence</div>
+              <div class="inline-flex items-center gap-2">
+                <input
+                  type="number"
+                  min="0"
+                  max="1"
+                  step="0.01"
+                  class="w-16 rounded border border-gray-300 px-1 py-0.5 text-right text-xs font-medium"
+                  .value=${draftValue}
+                  @input=${(event) => this._handleThresholdInputDraft(normalized, event)}
+                  @blur=${(event) => this._handleThresholdInputBlur(normalized, event)}
+                  @keydown=${(event) => this._handleThresholdInputKeydown(event, normalized)}
+                  @click=${(event) => event.stopPropagation()}
+                  aria-label=${ariaLabel}
+                  title=${ariaLabel}
+                >
+                <button
+                  type="button"
+                  class="rounded border border-gray-300 px-2 py-0.5 text-xs font-semibold text-gray-700 hover:bg-gray-100"
+                  ?disabled=${!this._isThresholdChanged(normalized)}
+                  @click=${(event) => {
+                    event.stopPropagation();
+                    if (normalized === 'trained') {
+                      this._applyTrainedThreshold();
+                    } else {
+                      this._applyZeroShotThreshold();
+                    }
+                  }}
+                >
+                  Set
+                </button>
+              </div>
+            </div>
+          ` : null}
+        </div>
+      </th>
+    `;
+  }
+
   render() {
     const categories = this._toCategories();
     const hasRows = categories.some((categoryGroup) =>
@@ -315,78 +377,30 @@ export class CurateAiTagger extends LitElement {
                           <thead class="bg-gray-50">
                             <tr>
                               <th class="px-4 py-2 text-left font-semibold text-gray-600 border-r border-gray-200" rowspan="2">Tag</th>
-                              <th class="px-4 py-2 text-center font-semibold text-gray-600 border-r border-gray-200" colspan="2">
+                              ${this._renderThresholdHeader(
+                                'siglip',
+                                'zero-shot',
+                                this.zeroShotMinConfidence,
+                                this._draftZeroShotMinConfidence,
+                                'border-r border-gray-200'
+                              )}
+                              ${this._renderThresholdHeader(
+                                'trained',
+                                'trained',
+                                this.trainedMinConfidence,
+                                this._draftTrainedMinConfidence,
+                                'border-r border-gray-200'
+                              )}
+                              <th class="px-4 py-2 text-center font-semibold text-gray-600" colspan="1">
                                 <div class="flex flex-col items-center gap-1">
-                                  <div class="text-xs font-semibold text-gray-600">ML Model: "zero-shot"</div>
-                                  <div class="inline-flex items-center gap-2">
-                                    <span class="text-xs font-medium text-gray-600">Minimum Confidence</span>
-                                    <input
-                                      type="number"
-                                      min="0"
-                                      max="1"
-                                      step="0.01"
-                                      class="w-16 rounded border border-gray-300 px-1 py-0.5 text-right text-xs font-medium"
-                                      .value=${this._draftZeroShotMinConfidence}
-                                      @input=${(event) => this._handleThresholdInputDraft('siglip', event)}
-                                      @blur=${(event) => this._handleThresholdInputBlur('siglip', event)}
-                                      @keydown=${(event) => this._handleThresholdInputKeydown(event, 'siglip')}
-                                      @click=${(event) => event.stopPropagation()}
-                                      aria-label="Zero-shot minimum confidence"
-                                      title="Zero-shot minimum confidence"
-                                    >
-                                    <button
-                                      type="button"
-                                      class="rounded border border-gray-300 px-2 py-0.5 text-xs font-semibold text-gray-700 hover:bg-gray-100"
-                                      ?disabled=${!this._isThresholdChanged('siglip')}
-                                      @click=${(event) => {
-                                        event.stopPropagation();
-                                        this._applyZeroShotThreshold();
-                                      }}
-                                    >
-                                      Set
-                                    </button>
-                                  </div>
-                                </div>
-                              </th>
-                              <th class="px-4 py-2 text-center font-semibold text-gray-600" colspan="2">
-                                <div class="flex flex-col items-center gap-1">
-                                  <div class="text-xs font-semibold text-gray-600">ML Model: "trained"</div>
-                                  <div class="inline-flex items-center gap-2">
-                                    <span class="text-xs font-medium text-gray-600">Minimum Confidence</span>
-                                    <input
-                                      type="number"
-                                      min="0"
-                                      max="1"
-                                      step="0.01"
-                                      class="w-16 rounded border border-gray-300 px-1 py-0.5 text-right text-xs font-medium"
-                                      .value=${this._draftTrainedMinConfidence}
-                                      @input=${(event) => this._handleThresholdInputDraft('trained', event)}
-                                      @blur=${(event) => this._handleThresholdInputBlur('trained', event)}
-                                      @keydown=${(event) => this._handleThresholdInputKeydown(event, 'trained')}
-                                      @click=${(event) => event.stopPropagation()}
-                                      aria-label="Trained minimum confidence"
-                                      title="Trained minimum confidence"
-                                    >
-                                    <button
-                                      type="button"
-                                      class="rounded border border-gray-300 px-2 py-0.5 text-xs font-semibold text-gray-700 hover:bg-gray-100"
-                                      ?disabled=${!this._isThresholdChanged('trained')}
-                                      @click=${(event) => {
-                                        event.stopPropagation();
-                                        this._applyTrainedThreshold();
-                                      }}
-                                    >
-                                      Set
-                                    </button>
-                                  </div>
+                                  <div class="text-xs font-semibold text-gray-600">ML Model: "similarity"</div>
                                 </div>
                               </th>
                             </tr>
                             <tr>
-                              <th class="px-4 py-2 text-right font-semibold text-gray-600">Suggestions</th>
-                              <th class="px-4 py-2 text-right font-semibold text-gray-600 border-r border-gray-200">Conf Range</th>
-                              <th class="px-4 py-2 text-right font-semibold text-gray-600">Suggestions</th>
-                              <th class="px-4 py-2 text-right font-semibold text-gray-600">Conf Range</th>
+                              <th class="px-4 py-2 text-right font-semibold text-gray-600 border-r border-gray-200">Suggestions</th>
+                              <th class="px-4 py-2 text-right font-semibold text-gray-600 border-r border-gray-200">Suggestions</th>
+                              <th class="px-4 py-2 text-center font-semibold text-gray-600">Action</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -414,25 +428,21 @@ export class CurateAiTagger extends LitElement {
                                     ${this._formatCount(tag?.zero_shot)}
                                   </td>
                                   <td
-                                    class="px-4 py-2 text-right tabular-nums text-xs border-r border-gray-200 ai-training-cell ai-training-cell--siglip ${hasZero ? 'cursor-pointer text-slate-600' : 'cursor-default text-gray-400'}"
-                                    @mouseenter=${(event) => this._handleModelCellMouseEnter(event, 'siglip', hasZero)}
-                                    @click=${(event) => this._handleModelCellClick(event, category, tag, 'siglip', hasZero)}
-                                  >
-                                    ${this._formatMaxMin(tag?.zero_shot)}
-                                  </td>
-                                  <td
                                     class="px-4 py-2 text-right tabular-nums ai-training-cell ai-training-cell--trained ${hasTrained ? 'cursor-pointer text-indigo-700 font-semibold' : 'cursor-default text-gray-400'}"
                                     @mouseenter=${(event) => this._handleModelCellMouseEnter(event, 'trained', hasTrained)}
                                     @click=${(event) => this._handleModelCellClick(event, category, tag, 'trained', hasTrained)}
                                   >
                                     ${this._formatCount(tag?.trained)}
                                   </td>
-                                  <td
-                                    class="px-4 py-2 text-right tabular-nums text-xs ai-training-cell ai-training-cell--trained ${hasTrained ? 'cursor-pointer text-slate-600' : 'cursor-default text-gray-400'}"
-                                    @mouseenter=${(event) => this._handleModelCellMouseEnter(event, 'trained', hasTrained)}
-                                    @click=${(event) => this._handleModelCellClick(event, category, tag, 'trained', hasTrained)}
-                                  >
-                                    ${this._formatMaxMin(tag?.trained)}
+                                  <td class="px-4 py-2 text-center">
+                                    <button
+                                      type="button"
+                                      class="inline-flex items-center gap-1 text-xs font-semibold text-blue-700 transition-colors hover:text-blue-800 hover:underline"
+                                      @click=${(event) => this._handleModelCellClick(event, category, tag, 'similarity', true)}
+                                    >
+                                      <span aria-hidden="true">🔍</span>
+                                      Check
+                                    </button>
                                   </td>
                                 </tr>
                               `;
@@ -458,15 +468,18 @@ export class CurateAiTagger extends LitElement {
           .collapsible=${false}
           .collapsed=${false}
         >
+          <div slot="header-left" class="text-xs font-semibold uppercase tracking-wide text-slate-700">
+            Tag Suggester Help
+          </div>
           <div slot="default" class="p-4 space-y-4 text-sm text-gray-700">
-            <div>
-              <h3 class="text-xs font-semibold uppercase tracking-wide text-slate-700">AI Tagging Help</h3>
-            </div>
             <p>
-              <strong>Goal:</strong> Train the models by <strong>accepting</strong> or <strong>rejecting</strong> suggestions until suggestion counts are as low as possible.
+              Zoltag uses several ML (machine learning) models to suggest tags. The goal of this page: <strong>Accept or reject suggestions until suggestion counts are as low as possible.</strong> As you do this, the models will learn from you, and the suggestions will become more accurate over time.
             </p>
             <p>
-              AI suggestions have confidence scores. The higher the score, the higher the chance of a match. You can alter the minimum confidence scores to consider a larger or smaller set.
+              When you click into a row, you can accept results by tagging them positively (green) and reject results by tagging them negatively (red). Return to this screen and refresh to see counts decrease.
+            </p>
+            <p>
+              <strong>What are confidence scores?</strong> ML suggestions assign probabilities of matches. The higher the score, the higher the chance of a match. You can alter the minimum confidence scores to consider a larger or smaller set. Or you can just accept the defaults.
             </p>
             ${this._hasNonDefaultThresholds() ? html`
               <p>
@@ -480,10 +493,7 @@ export class CurateAiTagger extends LitElement {
               </p>
             ` : html``}
             <p>
-              When you click into a row, you can accept results by tagging them positive (green) and reject results by tagging them negative (red). Return to this screen and refresh to see counts decrease.
-            </p>
-            <p>
-              As you confirm and reject tags, the models learn from those new tags.
+              Remember, as you confirm and reject tags, the models learn from those new tags.
             </p>
           </div>
         </right-panel>

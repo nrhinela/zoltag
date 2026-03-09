@@ -124,7 +124,9 @@ export class RightPanel extends LitElement {
                   </button>
                 `)}
               </div>
-            ` : html``}
+            ` : html`
+              <div data-slot="header-left"></div>
+            `}
             <div class="right-panel-header-actions">
               <div data-slot="header-right"></div>
             </div>

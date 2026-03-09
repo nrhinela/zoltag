@@ -42,7 +42,7 @@ export function renderCurateTabContent(host, { formatCurateDate }) {
             class="curate-subtab ${(host.curateSubTab === 'ai-tagger' || host.curateSubTab === 'tag-audit') ? 'active' : ''}"
             @click=${() => host._handleCurateSubTabChange('ai-tagger')}
           >
-            AI Tagging
+            Tag Suggester
           </button>
           <button
             class="curate-subtab ${host.curateSubTab === 'browse-folder' ? 'active' : ''}"

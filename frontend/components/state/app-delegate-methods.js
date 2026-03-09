@@ -144,7 +144,11 @@ export function bindAppDelegateMethods(host) {
     if (!keyword) return;
     const category = String(detail.category || '').trim();
     const tagType = String(detail.tagType || '').trim().toLowerCase();
-    const nextAiModel = tagType === 'trained' ? 'trained' : 'siglip';
+    const nextAiModel = tagType === 'trained'
+      ? 'trained'
+      : tagType === 'similarity'
+        ? 'ml-similarity'
+        : 'siglip';
 
     host.curateAuditMode = 'missing';
     host.curateAuditAiEnabled = true;
@@ -177,6 +181,8 @@ export function bindAppDelegateMethods(host) {
     host.curateAuditPageOffset = 0;
     host.curateAuditImages = [];
     host.curateAuditEmptyState = null;
+    // Force a fetch on navigation even if filters resolve to the same cached fetch key.
+    host._curateAuditLastFetchKey = null;
     host._handleCurateSubTabChange('tag-audit');
   };
 

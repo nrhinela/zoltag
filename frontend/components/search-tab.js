@@ -2158,6 +2158,7 @@ export class SearchTab extends LitElement {
           .collapsed=${this.rightPanelCollapsed}
           @collapse-changed=${(event) => this._handleRightPanelCollapseChanged(event.detail.collapsed)}
         >
+          <div slot="header-left" class="text-sm font-semibold uppercase tracking-wide text-slate-600">Tag Counts</div>
           <div slot="default" class="curate-utility-panel animate-pulse">
             ${categoryRows.map(() => html`
               <div class="w-full rounded-lg border border-gray-200 bg-white px-3 py-2">
@@ -2263,6 +2264,7 @@ export class SearchTab extends LitElement {
             .collapsed=${this.rightPanelCollapsed}
             @collapse-changed=${(event) => this._handleRightPanelCollapseChanged(event.detail.collapsed)}
           >
+            <div slot="header-left" class="text-sm font-semibold uppercase tracking-wide text-slate-600">Tag Counts</div>
             <div slot="default" class="curate-utility-panel">
               ${categoryRows.map((row) => {
                 return html`
