@@ -6,6 +6,7 @@ import {
   updateList,
   addToList,
   getListItems,
+  getImages,
   getDropboxFolders,
   getKeywordGalleryPreviews,
 } from '../services/api.js';
@@ -47,6 +48,7 @@ const LEGACY_SEARCH_RIGHT_PANEL_TOOL_STORAGE_KEYS = ['rightPanelTool:search'];
 const SEARCH_RESULTS_LAYOUT_STORAGE_KEY = 'zoltag:app:search:resultsLayout';
 const LEGACY_SEARCH_RESULTS_LAYOUT_STORAGE_KEYS = ['searchResultsLayout'];
 const EXPLORE_RIGHT_PANEL_COLLAPSED_STORAGE_KEY = 'zoltag:app:rightPanelCollapsed:explore';
+const GALLERY_UNTAGGED_PREVIEW_LIMIT = 24;
 
 /**
  * Search Tab Component
@@ -168,6 +170,8 @@ export class SearchTab extends LitElement {
     _showRankingBalance: { type: Boolean, state: true },
     vectorstoreHasSearched: { type: Boolean, state: true },
     galleryCollections: { type: Array, state: true },
+    galleryUntaggedImages: { type: Array, state: true },
+    galleryUntaggedTotal: { type: Number, state: true },
     galleryLoading: { type: Boolean, state: true },
     galleryTopicQuery: { type: String, state: true },
     gallerySelectedCategories: { type: Array, state: true },
@@ -264,6 +268,8 @@ export class SearchTab extends LitElement {
     this.vectorstoreHasSearched = false;
     this._showRankingBalance = false;
     this.galleryCollections = [];
+    this.galleryUntaggedImages = [];
+    this.galleryUntaggedTotal = 0;
     this.galleryLoading = false;
     this.galleryTopicQuery = '';
     this.gallerySelectedCategories = [];
@@ -591,6 +597,8 @@ export class SearchTab extends LitElement {
       this._searchResultsFiltersState = null;
       this.searchLists = [];
       this.galleryCollections = [];
+      this.galleryUntaggedImages = [];
+      this.galleryUntaggedTotal = 0;
       this.galleryLoading = false;
       this.galleryTopicQuery = '';
       this.gallerySelectedCategories = [];
@@ -1926,6 +1934,8 @@ export class SearchTab extends LitElement {
 
   async _loadGalleryCollections() {
     this.galleryCollections = [];
+    this.galleryUntaggedImages = [];
+    this.galleryUntaggedTotal = 0;
     if (!this.tenant) {
       this.galleryLoading = false;
       return;
@@ -1933,9 +1943,19 @@ export class SearchTab extends LitElement {
     const token = ++this._galleryLoadToken;
     this.galleryLoading = true;
     try {
-      const response = await getKeywordGalleryPreviews(this.tenant, {
-        previewCount: 1,
-      });
+      const [response, untaggedResponse] = await Promise.all([
+        getKeywordGalleryPreviews(this.tenant, {
+          previewCount: 1,
+        }),
+        getImages(this.tenant, {
+          limit: GALLERY_UNTAGGED_PREVIEW_LIMIT,
+          offset: 0,
+          hideZeroRating: true,
+          permatagPositiveMissing: true,
+          orderBy: 'photo_creation',
+          sortOrder: 'desc',
+        }),
+      ]);
       if (token !== this._galleryLoadToken) return;
 
       const rows = (Array.isArray(response?.previews) ? response.previews : []).filter((row) => {
@@ -1980,11 +2000,32 @@ export class SearchTab extends LitElement {
           return String(a.category || '').localeCompare(String(b.category || ''));
         })
         .map(({ category, items }) => ({ category, items }));
+      const untaggedImages = Array.isArray(untaggedResponse?.images)
+        ? untaggedResponse.images
+          .map((image) => {
+            const id = Number(image?.id ?? image?.photo_id ?? image?.image_id);
+            const thumbnail = this._resolveThumbnailUrl(image);
+            if (!Number.isFinite(id) || !thumbnail) return null;
+            return {
+              id,
+              filename: String(image?.filename || ''),
+              thumbnail_url: thumbnail,
+            };
+          })
+          .filter(Boolean)
+        : [];
+      const untaggedTotal = Number(untaggedResponse?.total);
+      this.galleryUntaggedImages = untaggedImages;
+      this.galleryUntaggedTotal = Number.isFinite(untaggedTotal)
+        ? Math.max(0, untaggedTotal)
+        : untaggedImages.length;
       this._syncGalleryCategorySelection();
     } catch (error) {
       if (token !== this._galleryLoadToken) return;
       console.error('Gallery preview fetch failed:', error);
       this.galleryCollections = [];
+      this.galleryUntaggedImages = [];
+      this.galleryUntaggedTotal = 0;
       this.gallerySelectedCategories = [];
     } finally {
       if (token === this._galleryLoadToken) {
@@ -2008,11 +2049,31 @@ export class SearchTab extends LitElement {
     this._handleChipFiltersChanged({ detail: { filters: nextFilters } });
   }
 
-  _renderGalleryCollectionCard(item) {
+  _handleGalleryUntaggedSelect() {
+    this._startGalleryTransitionLoading();
+    this._applyGalleryTagViewDefaultSort();
+    const nextFilters = [{
+      type: 'tag_coverage',
+      includeUntagged: true,
+      operator: 'AND',
+      displayLabel: 'Tag Coverage',
+      displayValue: 'Untagged',
+    }];
+    this._suppressNextAdvancedInitialRefresh = true;
+    this._handleSearchSubTabChange('advanced');
+    this._handleChipFiltersChanged({ detail: { filters: nextFilters } });
+  }
+
+  _renderGalleryCollectionCard(item, options = {}) {
     const previews = Array.isArray(item?.previews) ? item.previews : [];
     const front = this._resolveThumbnailUrl(previews[0]);
     const middle = this._resolveThumbnailUrl(previews[1] || previews[0]);
     const back = this._resolveThumbnailUrl(previews[2] || previews[1] || previews[0]);
+    const label = String(options.label || item?.keyword || '').trim() || 'untitled';
+    const title = String(options.title || `Open ${item.category}: ${label}`);
+    const onSelect = typeof options.onSelect === 'function'
+      ? options.onSelect
+      : () => this._handleGalleryCollectionSelect(item.category, item.keyword);
     const shellStyle = 'position:relative; margin:0 auto; width:100%; max-width:210px; aspect-ratio:4 / 5;';
     const stackLayer = (url, style) => html`
       <div
@@ -2028,20 +2089,20 @@ export class SearchTab extends LitElement {
       <button
         type="button"
         class="group w-full text-left"
-        @click=${() => this._handleGalleryCollectionSelect(item.category, item.keyword)}
-        title=${`Open ${item.category}: ${item.keyword}`}
+        @click=${onSelect}
+        title=${title}
       >
         <div style=${shellStyle}>
           ${stackLayer(back, backStyle)}
           ${stackLayer(middle, middleStyle)}
           <div style=${frontStyle}>
             ${front
-              ? html`<img src=${front} alt=${`${item.keyword} preview`} style="display:block; width:100%; height:100%; object-fit:cover;" loading="lazy">`
+              ? html`<img src=${front} alt=${`${label} preview`} style="display:block; width:100%; height:100%; object-fit:cover;" loading="lazy">`
               : html`<div style="height:100%; width:100%; background:linear-gradient(145deg, #e2e8f0, #cbd5e1);"></div>`}
           </div>
         </div>
         <div class="mt-3 text-center">
-          <div class="text-sm font-semibold text-slate-900">${item.keyword}</div>
+          <div class="text-sm font-semibold text-slate-900">${label}</div>
           <div class="text-xs text-slate-500">${item.count} items</div>
         </div>
       </button>
@@ -2114,10 +2175,9 @@ export class SearchTab extends LitElement {
 
   _renderGallerySubtab() {
     const sections = this.galleryCollections || [];
-    const categoryRows = sections.map((section) => ({
-      category: String(section?.category || ''),
-      keywordCount: Number((section?.items || []).length) || 0,
-    }));
+    const untaggedImages = this.galleryUntaggedImages || [];
+    const untaggedTotal = Number(this.galleryUntaggedTotal) || 0;
+    const hasUntagged = untaggedTotal > 0;
     const direction = this.galleryTagSortOrder === 'desc' ? -1 : 1;
     const visibleSections = sections
       .map((section) => ({
@@ -2126,7 +2186,17 @@ export class SearchTab extends LitElement {
           String(a?.keyword || '').localeCompare(String(b?.keyword || '')) * direction
         )),
       }));
-    if (!sections.length) {
+    const categoryRows = [
+      ...visibleSections.map((section) => ({
+        category: String(section?.category || ''),
+        keywordCount: Number((section?.items || []).length) || 0,
+      })),
+      ...(hasUntagged ? [{
+        category: 'Untagged',
+        keywordCount: 1,
+      }] : []),
+    ];
+    if (!visibleSections.length && !hasUntagged) {
       if (this.galleryLoading) {
         return html`
           <div class="space-y-6">
@@ -2162,6 +2232,29 @@ export class SearchTab extends LitElement {
                 </div>
               </section>
             `)}
+            ${hasUntagged ? html`
+              <section
+                id=${this._galleryCategorySectionId('Untagged')}
+                class="bg-white rounded-xl border border-gray-200 p-4"
+              >
+                <div class="mb-4 flex items-baseline justify-between gap-3">
+                  <h3 class="text-sm font-semibold uppercase tracking-wide text-slate-600">Untagged</h3>
+                  <span class="text-xs text-slate-500">${untaggedTotal} items</span>
+                </div>
+                <div class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-5">
+                  ${this._renderGalleryCollectionCard({
+                    category: 'Untagged',
+                    keyword: 'untagged',
+                    count: untaggedTotal,
+                    previews: untaggedImages.length ? [untaggedImages[0]] : [],
+                  }, {
+                    label: 'untagged',
+                    title: 'Open untagged items',
+                    onSelect: () => this._handleGalleryUntaggedSelect(),
+                  })}
+                </div>
+              </section>
+            ` : null}
           </div>
           <right-panel
             .tools=${[]}
