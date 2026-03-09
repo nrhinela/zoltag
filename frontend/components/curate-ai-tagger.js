@@ -42,6 +42,35 @@ export class CurateAiTagger extends LitElement {
     return value.toLocaleString();
   }
 
+  _renderMagnifierIcon(className = '') {
+    return html`
+      <svg
+        aria-hidden="true"
+        viewBox="0 0 20 20"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        class=${className}
+      >
+        <circle cx="8.5" cy="8.5" r="5.5"></circle>
+        <path d="M12.5 12.5L17 17"></path>
+      </svg>
+    `;
+  }
+
+  _renderSuggestionCount(modelStats) {
+    const count = this._formatCount(modelStats);
+    if (count === '-') return '-';
+    return html`
+      <span class="ai-suggestion-count">
+        <span>${count}</span>
+        ${this._renderMagnifierIcon('ai-magnifier-icon ai-magnifier-icon--inline')}
+      </span>
+    `;
+  }
+
   _resolveRowTagType(tag, preferredTagType = '') {
     const zeroCount = Number(tag?.zero_shot?.count || 0);
     const trainedCount = Number(tag?.trained?.count || 0);
@@ -425,23 +454,25 @@ export class CurateAiTagger extends LitElement {
                                     @mouseenter=${(event) => this._handleModelCellMouseEnter(event, 'siglip', hasZero)}
                                     @click=${(event) => this._handleModelCellClick(event, category, tag, 'siglip', hasZero)}
                                   >
-                                    ${this._formatCount(tag?.zero_shot)}
+                                    ${this._renderSuggestionCount(tag?.zero_shot)}
                                   </td>
                                   <td
                                     class="px-4 py-2 text-right tabular-nums ai-training-cell ai-training-cell--trained ${hasTrained ? 'cursor-pointer text-indigo-700 font-semibold' : 'cursor-default text-gray-400'}"
                                     @mouseenter=${(event) => this._handleModelCellMouseEnter(event, 'trained', hasTrained)}
                                     @click=${(event) => this._handleModelCellClick(event, category, tag, 'trained', hasTrained)}
                                   >
-                                    ${this._formatCount(tag?.trained)}
+                                    ${this._renderSuggestionCount(tag?.trained)}
                                   </td>
                                   <td class="px-4 py-2 text-center">
                                     <button
                                       type="button"
-                                      class="inline-flex items-center gap-1 text-xs font-semibold text-blue-700 transition-colors hover:text-blue-800 hover:underline"
+                                      class="ai-similarity-action"
+                                      title="Check"
+                                      aria-label="Check"
                                       @click=${(event) => this._handleModelCellClick(event, category, tag, 'similarity', true)}
                                     >
-                                      <span aria-hidden="true">🔍</span>
-                                      Check
+                                      ${this._renderMagnifierIcon('ai-magnifier-icon')}
+                                      <span class="ai-similarity-action-label">Check</span>
                                     </button>
                                   </td>
                                 </tr>
@@ -457,6 +488,48 @@ export class CurateAiTagger extends LitElement {
             `;
 
     return html`
+      <style>
+        .ai-similarity-action {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          color: #1d4ed8;
+          font-size: 12px;
+          font-weight: 600;
+          transition: color 0.15s ease;
+        }
+        .ai-similarity-action:hover,
+        .ai-similarity-action:focus-visible {
+          color: #1e40af;
+        }
+        .ai-similarity-action-label {
+          max-width: 0;
+          opacity: 0;
+          overflow: hidden;
+          white-space: nowrap;
+          transition: max-width 0.15s ease, opacity 0.15s ease, margin-left 0.15s ease;
+        }
+        .ai-similarity-action:hover .ai-similarity-action-label,
+        .ai-similarity-action:focus-visible .ai-similarity-action-label {
+          max-width: 48px;
+          opacity: 1;
+          margin-left: 4px;
+        }
+        .ai-magnifier-icon {
+          width: 15px;
+          height: 15px;
+          flex: 0 0 15px;
+        }
+        .ai-suggestion-count {
+          display: inline-flex;
+          align-items: center;
+          justify-content: flex-end;
+          white-space: nowrap;
+        }
+        .ai-magnifier-icon--inline {
+          margin-left: 4px;
+        }
+      </style>
       <div class="curate-layout results-hotspot-layout">
         <div class="curate-pane">
           <div class="curate-pane-body p-3">
