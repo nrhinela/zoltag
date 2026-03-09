@@ -571,7 +571,11 @@ class TaggingAdmin2 extends LitElement {
     if (!categoryId) return html``;
     const draft = this.categoryDrafts?.[categoryId] || {};
     const categoryHeadingName = String(draft?.name || category?.name || '').trim() || 'Untitled';
-    const keywords = Array.isArray(this.keywordsByCategory?.[categoryId]) ? this.keywordsByCategory[categoryId] : [];
+    const keywords = Array.isArray(this.keywordsByCategory?.[categoryId])
+      ? [...this.keywordsByCategory[categoryId]].sort((a, b) =>
+        String(a?.keyword || '').localeCompare(String(b?.keyword || ''), undefined, { sensitivity: 'base' })
+      )
+      : [];
     const hasNoTags = keywords.length === 0;
     const keywordDrafts = this.keywordDrafts?.[categoryId] || {};
     const newKeywordDraft = this.newKeywordDrafts?.[categoryId] || { keyword: '', prompt: '' };
