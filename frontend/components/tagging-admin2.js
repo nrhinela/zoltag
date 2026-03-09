@@ -23,6 +23,12 @@ class TaggingAdmin2 extends LitElement {
       gap: 10px;
       align-items: center;
     }
+    .category-adder-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      justify-content: flex-end;
+    }
     .list-grid {
       display: grid;
       gap: 10px;
@@ -235,6 +241,7 @@ class TaggingAdmin2 extends LitElement {
     categoryDrafts: { type: Object },
     keywordDrafts: { type: Object },
     newCategoryDraft: { type: Object },
+    categoryAdderOpen: { type: Boolean },
     newKeywordDrafts: { type: Object },
     keywordAdderOpen: { type: Object },
     busyCategory: { type: Object },
@@ -252,6 +259,7 @@ class TaggingAdmin2 extends LitElement {
     this.categoryDrafts = {};
     this.keywordDrafts = {};
     this.newCategoryDraft = { name: '' };
+    this.categoryAdderOpen = false;
     this.newKeywordDrafts = {};
     this.keywordAdderOpen = {};
     this.busyCategory = {};
@@ -383,6 +391,15 @@ class TaggingAdmin2 extends LitElement {
     };
   }
 
+  _openCategoryAdder() {
+    this.categoryAdderOpen = true;
+  }
+
+  _cancelCategoryAdder() {
+    this.categoryAdderOpen = false;
+    this.newCategoryDraft = { name: '' };
+  }
+
   async _addCategory() {
     if (this.readOnly) return;
     const name = String(this.newCategoryDraft?.name || '').trim();
@@ -392,6 +409,7 @@ class TaggingAdmin2 extends LitElement {
         name,
       });
       this.newCategoryDraft = { name: '' };
+      this.categoryAdderOpen = false;
       await this._loadAll();
     } catch (error) {
       console.error('Failed to add category:', error);
@@ -777,22 +795,42 @@ class TaggingAdmin2 extends LitElement {
           ${this.loading ? html`<div class="text-sm text-gray-500 mb-3">Loading…</div>` : html``}
 
           ${this.readOnly ? html`` : html`
-            <div class="toolbar-grid mb-4">
-              <input
-                class="w-full border rounded px-3 py-2 text-sm"
-                .value=${String(this.newCategoryDraft?.name || '')}
-                @input=${(e) => this._updateNewCategoryDraft('name', e.target.value)}
-                placeholder="Name"
-              />
-              <button
-                class="px-3 py-2 border rounded bg-blue-600 text-white text-sm hover:bg-blue-700 disabled:opacity-60"
-                ?disabled=${!String(this.newCategoryDraft?.name || '').trim()}
-                @click=${() => this._addCategory()}
-                title="Add category"
-              >
-                + Add Category
-              </button>
-            </div>
+            ${this.categoryAdderOpen ? html`
+              <div class="toolbar-grid mb-4">
+                <input
+                  class="w-full border rounded px-3 py-2 text-sm"
+                  .value=${String(this.newCategoryDraft?.name || '')}
+                  @input=${(e) => this._updateNewCategoryDraft('name', e.target.value)}
+                  placeholder="Name"
+                />
+                <div class="category-adder-actions">
+                  <button
+                    class="px-3 py-2 border rounded bg-blue-600 text-white text-sm hover:bg-blue-700 disabled:opacity-60"
+                    ?disabled=${!String(this.newCategoryDraft?.name || '').trim()}
+                    @click=${() => this._addCategory()}
+                    title="Add category"
+                  >
+                    Add
+                  </button>
+                  <button
+                    class="px-3 py-2 text-sm border rounded"
+                    @click=${() => this._cancelCategoryAdder()}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ` : html`
+              <div class="mb-4 flex justify-end">
+                <button
+                  class="px-3 py-2 border rounded bg-blue-600 text-white text-sm hover:bg-blue-700"
+                  @click=${() => this._openCategoryAdder()}
+                  title="Add category"
+                >
+                  + Add Category
+                </button>
+              </div>
+            `}
           `}
 
           <div class="list-grid">
