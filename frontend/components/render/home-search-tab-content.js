@@ -104,6 +104,35 @@ export function renderHomeCtaGlyph(glyphKey) {
   return html`<span class="home-cta-glyph-char">+</span>`;
 }
 
+function renderHomeInfoIcon(size = 16) {
+  return html`
+    <svg
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      style=${`display:block; width:${size}px; height:${size}px;`}
+    >
+      <circle cx="12" cy="12" r="8.2" fill="none" stroke="currentColor" stroke-width="1.9"></circle>
+      <circle cx="12" cy="8.1" r="1.1" fill="currentColor"></circle>
+      <path d="M12 11v5.2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
+    </svg>
+  `;
+}
+
+function renderHomeGalleryIcon(size = 16) {
+  return html`
+    <svg
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      style=${`display:block; width:${size}px; height:${size}px;`}
+    >
+      <rect x="4" y="4" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"></rect>
+      <rect x="13" y="4" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"></rect>
+      <rect x="4" y="13" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"></rect>
+      <rect x="13" y="13" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"></rect>
+    </svg>
+  `;
+}
+
 function formatOriginalSizeGb(bytesValue) {
   const bytes = Number(bytesValue || 0);
   if (!Number.isFinite(bytes) || bytes <= 0) return '0 GB';
@@ -189,6 +218,7 @@ export function renderHomeOverviewContent(host, { formatCurateDate, embedded = f
   const ctaCards = [
     {
       key: 'search',
+      tab: 'home',
       subTab: 'gallery',
       label: 'Explore',
       subtitle: 'Find photos fast with filters and natural-language queries.',
@@ -371,6 +401,11 @@ export function renderHomeOverviewContent(host, { formatCurateDate, embedded = f
       </span>
     `;
   };
+  const homeSubTab = String(host.homeSubTab || '').trim().toLowerCase();
+  const showHomeInfoGlyphRow = homeSubTab === 'info' || homeSubTab === 'overview';
+  const setHomeSubTab = (nextSubTab) => {
+    host.homeSubTab = nextSubTab === 'gallery' ? 'gallery' : 'info';
+  };
   const handleHomeRefresh = async () => {
     if (host.homeLoading) return;
     await Promise.allSettled([
@@ -380,6 +415,36 @@ export function renderHomeOverviewContent(host, { formatCurateDate, embedded = f
     ]);
   };
   const content = html`
+        ${showHomeInfoGlyphRow ? html`
+          <div class="flex justify-start mb-4">
+            <div class="flex items-center gap-2">
+              <button
+                class=${`right-panel-edge-toggle ${homeSubTab === 'info' ? 'active' : ''}`}
+                type="button"
+                title="Information"
+                aria-label="Information"
+                style="position:static; margin-left:0; transform:none;"
+                @click=${() => setHomeSubTab('info')}
+              >
+                <span style="display:inline-flex; align-items:center; justify-content:center;">
+                  ${renderHomeInfoIcon(23)}
+                </span>
+              </button>
+              <button
+                class=${`right-panel-edge-toggle ${homeSubTab === 'gallery' ? 'active' : ''}`}
+                type="button"
+                title="Gallery"
+                aria-label="Gallery"
+                style="position:static; margin-left:0; transform:none;"
+                @click=${() => setHomeSubTab('gallery')}
+              >
+                <span style="display:inline-flex; align-items:center; justify-content:center;">
+                  ${renderHomeGalleryIcon(23)}
+                </span>
+              </button>
+            </div>
+          </div>
+        ` : html``}
         <div class="home-page-actions">
           <button
             type="button"
@@ -742,20 +807,39 @@ export function renderHomeOverviewContent(host, { formatCurateDate, embedded = f
   `;
 }
 
-export function renderHomeTabContent(host, { navCards, formatCurateDate }) {
-  return renderHomeOverviewContent(host, { formatCurateDate, embedded: false });
+export function renderHomeTabContent(host, { formatCurateDate }) {
+  const rawHomeSubTab = String(host.homeSubTab || '').trim().toLowerCase();
+  const homeSubTab = rawHomeSubTab === 'info' || rawHomeSubTab === 'overview' ? 'info' : 'gallery';
+
+  const homeBody = homeSubTab === 'gallery'
+    ? html`${renderSearchTabContent(host, { formatCurateDate, embedded: true })}`
+    : renderHomeOverviewContent(host, { formatCurateDate, embedded: true });
+
+  return html`
+    <div slot="home" class="home-tab-shell">
+      ${homeSubTab === 'gallery' ? homeBody : html`<div class="container">${homeBody}</div>`}
+    </div>
+  `;
 }
 
-export function renderSearchTabContent(host, { formatCurateDate }) {
+export function renderSearchTabContent(host, { formatCurateDate, embedded = false } = {}) {
   const canRate = typeof host._canCurate === 'function' ? host._canCurate() : true;
   const canCurate = typeof host._canCurate === 'function' ? host._canCurate() : true;
+  const requestedSearchSubTab = embedded ? 'gallery' : (host.activeSearchSubTab || 'filter');
+  const normalizedRequestedSearchSubTab = requestedSearchSubTab === 'gallery' && !embedded
+    ? 'filter'
+    : requestedSearchSubTab;
+  const resolvedSearchSubTab = ['filter', 'browse-by-folder', 'lists', 'results', 'info', 'gallery'].includes(normalizedRequestedSearchSubTab)
+    ? normalizedRequestedSearchSubTab
+    : 'filter';
   return html`
     <search-tab
       slot="search"
       .tenant=${host.tenant}
       .currentUser=${host.currentUser}
       .canCurate=${canCurate}
-      .searchSubTab=${host.activeSearchSubTab || 'gallery'}
+      .searchSubTab=${resolvedSearchSubTab}
+      .showGallerySubTab=${embedded}
       .initialSelectedListId=${host.pendingListSelectionId}
       .initialSelectedListToken=${host.pendingListSelectionToken || 0}
       .initialExploreSelection=${host.pendingSearchExploreSelection}
@@ -779,7 +863,12 @@ export function renderSearchTabContent(host, { formatCurateDate }) {
       .formatCurateDate=${formatCurateDate}
       @sort-changed=${host._handleSearchSortChanged}
       @search-subtab-changed=${(event) => {
-        host.activeSearchSubTab = event?.detail?.subtab || 'gallery';
+        const nextSubTab = event?.detail?.subtab || 'filter';
+        if (embedded) {
+          host.homeSubTab = nextSubTab === 'info' ? 'info' : 'gallery';
+          return;
+        }
+        host.activeSearchSubTab = nextSubTab === 'gallery' ? 'filter' : nextSubTab;
       }}
       @explore-selection-applied=${() => {
         host.pendingSearchExploreSelection = null;
