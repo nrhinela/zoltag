@@ -15,7 +15,7 @@ import {
   getKeywordsByCategory,
   getKeywordsByCategoryFromList,
 } from './shared/keyword-utils.js';
-import { formatStatNumber } from './shared/formatting.js';
+import { formatCurateIngestedDate, formatStatNumber } from './shared/formatting.js';
 import { renderCanonicalListDetails } from './shared/image-grid.js';
 import { createSelectionHandlers } from './shared/selection-handlers.js';
 import { renderResultsPagination } from './shared/pagination-controls.js';
@@ -3089,7 +3089,7 @@ export class SearchTab extends LitElement {
 
   _refreshBrowseByFolderData({ force = false, orderBy, sortOrder } = {}) {
     if (!this.folderBrowserPanel) return;
-    const resolvedOrderBy = orderBy || this.searchOrderBy || 'photo_creation';
+    const resolvedOrderBy = this._normalizeSearchOrderBy(orderBy || this.searchOrderBy || 'photo_creation');
     const resolvedSortOrder = sortOrder || this.searchDateOrder || 'desc';
     const appliedSelection = this.browseByFolderAppliedSelection || [];
     if (appliedSelection.length) {
@@ -3151,8 +3151,8 @@ export class SearchTab extends LitElement {
   }
 
   _handleCurateQuickSort(field) {
-    const nextOrderBy = field;
-    const nextDateOrder = this.searchOrderBy === field
+    const nextOrderBy = this._normalizeSearchOrderBy(field);
+    const nextDateOrder = this._normalizeSearchOrderBy(this.searchOrderBy) === nextOrderBy
       ? (this.searchDateOrder === 'desc' ? 'asc' : 'desc')
       : 'desc';
     this.dispatchEvent(new CustomEvent('sort-changed', {
@@ -3170,8 +3170,12 @@ export class SearchTab extends LitElement {
   }
 
   _getCurateQuickSortArrow(field) {
-    if (this.searchOrderBy !== field) return '';
+    if (this._normalizeSearchOrderBy(this.searchOrderBy) !== this._normalizeSearchOrderBy(field)) return '';
     return this.searchDateOrder === 'desc' ? '↓' : '↑';
+  }
+
+  _normalizeSearchOrderBy(orderBy) {
+    return orderBy === 'processed' ? 'created_at' : orderBy;
   }
 
   _getBrowseByFolderSortValue(image, field) {
@@ -3179,8 +3183,8 @@ export class SearchTab extends LitElement {
     if (field === 'rating') {
       return image.rating ?? null;
     }
-    if (field === 'processed') {
-      return image.last_processed || image.created_at || image.processed || image.processed_at || null;
+    if (field === 'created_at' || field === 'processed') {
+      return image.created_at || null;
     }
     if (field === 'photo_creation') {
       return image.photo_creation || image.capture_timestamp || image.modified_time || image.created_at || null;
@@ -3206,7 +3210,7 @@ export class SearchTab extends LitElement {
     if (!Array.isArray(images) || images.length < 2) {
       return images || [];
     }
-    const field = this.searchOrderBy || 'photo_creation';
+    const field = this._normalizeSearchOrderBy(this.searchOrderBy || 'photo_creation');
     const direction = this.searchDateOrder === 'asc' ? 1 : -1;
     const sorted = [...images];
     sorted.sort((a, b) => {
@@ -3246,6 +3250,13 @@ export class SearchTab extends LitElement {
 
   _renderSearchListDetails(image) {
     return renderCanonicalListDetails(image);
+  }
+
+  _formatSearchCardDate(image) {
+    if (this._normalizeSearchOrderBy(this.searchOrderBy) === 'created_at') {
+      return formatCurateIngestedDate(image);
+    }
+    return this.formatCurateDate ? this.formatCurateDate(image) : '';
   }
 
   _buildDropboxHref(path) {
@@ -4198,10 +4209,10 @@ export class SearchTab extends LitElement {
                         Photo Date ${this._getCurateQuickSortArrow('photo_creation')}
                       </button>
                       <button
-                        class=${this.searchOrderBy === 'processed' ? 'active' : ''}
-                        @click=${() => this._handleCurateQuickSort('processed')}
+                        class=${this._normalizeSearchOrderBy(this.searchOrderBy) === 'created_at' ? 'active' : ''}
+                        @click=${() => this._handleCurateQuickSort('created_at')}
                       >
-                        Process Date ${this._getCurateQuickSortArrow('processed')}
+                        Process Date ${this._getCurateQuickSortArrow('created_at')}
                       </button>
                     </div>
                   </div>
@@ -4238,7 +4249,7 @@ export class SearchTab extends LitElement {
                           renderCurateRatingWidget: this.renderCurateRatingWidget,
                           renderCurateRatingStatic: this.renderCurateRatingStatic,
                           renderCuratePermatagSummary: this.renderCuratePermatagSummary || this._renderSearchPermatagSummary.bind(this),
-                          formatCurateDate: this.formatCurateDate,
+                          formatCurateDate: this._formatSearchCardDate.bind(this),
                         },
                         onImageClick: (event, image) => this._handleSearchImageClick(event, image, visibleSearchImages),
                         onDragStart: (event, image) => this._handleSearchDragStart(event, image, visibleSearchImages),
@@ -4387,10 +4398,10 @@ export class SearchTab extends LitElement {
                             Photo Date ${this._getCurateQuickSortArrow('photo_creation')}
                           </button>
                           <button
-                            class=${this.searchOrderBy === 'processed' ? 'active' : ''}
-                            @click=${() => this._handleCurateQuickSort('processed')}
+                            class=${this._normalizeSearchOrderBy(this.searchOrderBy) === 'created_at' ? 'active' : ''}
+                            @click=${() => this._handleCurateQuickSort('created_at')}
                           >
-                            Process Date ${this._getCurateQuickSortArrow('processed')}
+                            Process Date ${this._getCurateQuickSortArrow('created_at')}
                           </button>
                         </div>
                       </div>
@@ -4438,7 +4449,7 @@ export class SearchTab extends LitElement {
                                   renderCurateRatingWidget: this.renderCurateRatingWidget,
                                   renderCurateRatingStatic: this.renderCurateRatingStatic,
                                   renderCuratePermatagSummary: this.renderCuratePermatagSummary || this._renderSearchPermatagSummary.bind(this),
-                                  formatCurateDate: this.formatCurateDate,
+                                  formatCurateDate: this._formatSearchCardDate.bind(this),
                                 },
                                 onImageClick: (event, image) => this._handleSearchImageClick(event, image, sortedImages),
                                 onDragStart: (event, image) => this._handleSearchDragStart(event, image, sortedImages),

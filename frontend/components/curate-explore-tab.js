@@ -48,7 +48,7 @@ const CURATE_RIGHT_PANEL_COLLAPSED_STORAGE_KEY = 'zoltag:app:rightPanelCollapsed
  * @property {String} tenant - Current tenant ID
  * @property {Array} images - Filtered/paginated image list
  * @property {Number} thumbSize - Thumbnail size (80-220px)
- * @property {String} orderBy - Sort field ('photo_creation', 'processed', 'rating')
+ * @property {String} orderBy - Sort field ('photo_creation', 'created_at', 'rating')
  * @property {String} dateOrder - Date sort order ('asc', 'desc')
  * @property {Number} limit - Items per page
  * @property {Number} offset - Pagination offset
@@ -505,19 +505,23 @@ export class CurateExploreTab extends LitElement {
   // ========================================
 
   _handleCurateQuickSort(orderBy) {
-    const newDateOrder = this.orderBy === orderBy
+    const normalizedOrderBy = orderBy === 'processed' ? 'created_at' : orderBy;
+    const currentOrderBy = this.orderBy === 'processed' ? 'created_at' : this.orderBy;
+    const newDateOrder = currentOrderBy === normalizedOrderBy
       ? (this.dateOrder === 'asc' ? 'desc' : 'asc')
       : 'desc';
 
     this.dispatchEvent(new CustomEvent('sort-changed', {
-      detail: { orderBy, dateOrder: newDateOrder },
+      detail: { orderBy: normalizedOrderBy, dateOrder: newDateOrder },
       bubbles: true,
       composed: true
     }));
   }
 
   _getCurateQuickSortArrow(orderBy) {
-    if (this.orderBy !== orderBy) return '';
+    const normalizedOrderBy = orderBy === 'processed' ? 'created_at' : orderBy;
+    const currentOrderBy = this.orderBy === 'processed' ? 'created_at' : this.orderBy;
+    if (currentOrderBy !== normalizedOrderBy) return '';
     return this.dateOrder === 'asc' ? '↑' : '↓';
   }
 
@@ -1611,10 +1615,10 @@ export class CurateExploreTab extends LitElement {
                     Photo Date ${this._getCurateQuickSortArrow('photo_creation')}
                   </button>
                   <button
-                    class=${this.orderBy === 'processed' ? 'active' : ''}
-                    @click=${() => this._handleCurateQuickSort('processed')}
+                    class=${(this.orderBy === 'created_at' || this.orderBy === 'processed') ? 'active' : ''}
+                    @click=${() => this._handleCurateQuickSort('created_at')}
                   >
-                    Process Date ${this._getCurateQuickSortArrow('processed')}
+                    Process Date ${this._getCurateQuickSortArrow('created_at')}
                   </button>
                 </div>
               </div>

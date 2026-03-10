@@ -11,6 +11,10 @@ export class SearchStateController extends BaseStateController {
     super(host);
   }
 
+  normalizeOrderBy(orderBy) {
+    return orderBy === 'processed' ? 'created_at' : orderBy;
+  }
+
   getDefaultNewListTitle() {
     const now = new Date();
     const pad = (value) => String(value).padStart(2, '0');
@@ -77,7 +81,7 @@ export class SearchStateController extends BaseStateController {
 
   handleSortChanged(detail) {
     const suppressFetch = Boolean(detail?.suppressFetch);
-    this.host.searchOrderBy = detail.orderBy;
+    this.host.searchOrderBy = this.normalizeOrderBy(detail.orderBy);
     this.host.searchOrderDirection = detail.dateOrder;
     const panel = this.host.searchFilterPanel;
     if (!panel) return;
@@ -113,10 +117,16 @@ export class SearchStateController extends BaseStateController {
   initializeSearchTab() {
     const panelState = this.host.searchFilterPanel?.getState?.() || this.host.searchFilterPanel?.filters || {};
     if (panelState.orderBy) {
-      this.host.searchOrderBy = panelState.orderBy;
+      this.host.searchOrderBy = this.normalizeOrderBy(panelState.orderBy);
     }
     if (panelState.sortOrder) {
       this.host.searchOrderDirection = panelState.sortOrder;
+    }
+    if (panelState.orderBy === 'processed') {
+      this.host.searchFilterPanel.updateFilters({
+        ...panelState,
+        orderBy: 'created_at',
+      });
     }
 
     this.host.fetchKeywords();

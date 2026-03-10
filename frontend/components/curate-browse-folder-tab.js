@@ -830,8 +830,8 @@ export class CurateBrowseFolderTab extends LitElement {
     if (field === 'rating') {
       return image.rating ?? null;
     }
-    if (field === 'processed') {
-      return image.last_processed || image.created_at || image.processed || image.processed_at || null;
+    if (field === 'created_at' || field === 'processed') {
+      return image.created_at || null;
     }
     if (field === 'photo_creation') {
       return image.photo_creation || image.capture_timestamp || image.modified_time || image.created_at || null;
@@ -889,8 +889,9 @@ export class CurateBrowseFolderTab extends LitElement {
   }
 
   _handleCurateQuickSort(field) {
-    const nextOrderBy = field;
-    const nextDateOrder = this.curateOrderBy === field
+    const nextOrderBy = field === 'processed' ? 'created_at' : field;
+    const currentOrderBy = this.curateOrderBy === 'processed' ? 'created_at' : this.curateOrderBy;
+    const nextDateOrder = currentOrderBy === nextOrderBy
       ? (this.curateDateOrder === 'desc' ? 'asc' : 'desc')
       : 'desc';
     this.dispatchEvent(new CustomEvent('sort-changed', {
@@ -906,7 +907,9 @@ export class CurateBrowseFolderTab extends LitElement {
   }
 
   _getCurateQuickSortArrow(field) {
-    if (this.curateOrderBy !== field) return '';
+    const currentOrderBy = this.curateOrderBy === 'processed' ? 'created_at' : this.curateOrderBy;
+    const normalizedField = field === 'processed' ? 'created_at' : field;
+    if (currentOrderBy !== normalizedField) return '';
     return this.curateDateOrder === 'desc' ? '↓' : '↑';
   }
 
@@ -1362,10 +1365,10 @@ export class CurateBrowseFolderTab extends LitElement {
                     Photo Date ${this._getCurateQuickSortArrow('photo_creation')}
                   </button>
                   <button
-                    class=${this.curateOrderBy === 'processed' ? 'active' : ''}
-                    @click=${() => this._handleCurateQuickSort('processed')}
+                    class=${(this.curateOrderBy === 'created_at' || this.curateOrderBy === 'processed') ? 'active' : ''}
+                    @click=${() => this._handleCurateQuickSort('created_at')}
                   >
-                    Process Date ${this._getCurateQuickSortArrow('processed')}
+                    Process Date ${this._getCurateQuickSortArrow('created_at')}
                   </button>
                 </div>
               </div>

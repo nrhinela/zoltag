@@ -87,6 +87,21 @@ export function formatCurateProcessedDate(image) {
   return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
 }
 
+export function formatCurateIngestedDate(image) {
+  const value = image?.created_at;
+  if (!value) return '';
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const pad = (num) => String(num).padStart(2, '0');
+  const year = date.getFullYear();
+  const month = pad(date.getMonth() + 1);
+  const day = pad(date.getDate());
+  const hours = pad(date.getHours());
+  const minutes = pad(date.getMinutes());
+  const seconds = pad(date.getSeconds());
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+}
+
 export function formatDurationMs(value, { placeholder = '' } = {}) {
   const ms = Number(value);
   if (!Number.isFinite(ms) || ms <= 0) {

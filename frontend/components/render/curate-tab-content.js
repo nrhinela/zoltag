@@ -2,6 +2,7 @@ import { html } from 'lit';
 import { renderCurateAiMLScore, renderCuratePermatagSummary } from './curate-image-fragments.js';
 import { renderCurateRatingWidget, renderCurateRatingStatic } from './curate-rating-widgets.js';
 import { renderSectionGuide } from '../shared/section-guide.js';
+import { formatCurateIngestedDate } from '../shared/formatting.js';
 
 function renderCurateSearchIcon(size = 15) {
   return html`
@@ -111,6 +112,9 @@ function renderCurateInfoGuide(host) {
 }
 
 export function renderCurateTabContent(host, { formatCurateDate }) {
+  const formatCurateCardDate = (host.curateOrderBy === 'created_at' || host.curateOrderBy === 'processed')
+    ? formatCurateIngestedDate
+    : formatCurateDate;
   const leftImages = host.curateImages;
   const selectedKeywordValueMain = (() => {
     const entries = Object.entries(host.curateKeywordFilters || {});
@@ -289,7 +293,7 @@ export function renderCurateTabContent(host, { formatCurateDate }) {
             .renderCurateRatingStatic=${renderCurateRatingStatic}
             .renderCuratePermatagSummary=${renderCuratePermatagSummary}
             .renderCurateAiMLScore=${(image) => renderCurateAiMLScore(host, image)}
-            .formatCurateDate=${formatCurateDate}
+            .formatCurateDate=${formatCurateCardDate}
             .imageStats=${host.imageStats}
             .curateCategoryCards=${host.curateCategoryCards}
             .selectedKeywordValueMain=${selectedKeywordValueMain}
@@ -355,7 +359,7 @@ export function renderCurateTabContent(host, { formatCurateDate }) {
             .renderCurateRatingWidget=${(image) => renderCurateRatingWidget(host, image)}
             .renderCurateRatingStatic=${renderCurateRatingStatic}
             .renderCuratePermatagSummary=${renderCuratePermatagSummary}
-            .formatCurateDate=${formatCurateDate}
+            .formatCurateDate=${formatCurateCardDate}
             .tagStatsBySource=${host.tagStatsBySource}
             .activeCurateTagSource=${host.activeCurateTagSource}
             .keywords=${host.keywords}
