@@ -1363,7 +1363,7 @@ export class CurateAuditTab extends LitElement {
     const modeInfo = this._getAiModeDocumentation();
     if (!modeInfo) return html``;
     const activeModel = this._getActiveAiModel();
-    const keywordAdminHref = '?tab=library&subTab=keywords&adminSubTab=tagging';
+    const keywordAdminHref = '?tab=admin&subTab=keywords&adminSubTab=tagging';
     return html`
       <div class="w-full rounded-md border border-gray-300 bg-gray-50 p-2">
         <div class="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Help</div>

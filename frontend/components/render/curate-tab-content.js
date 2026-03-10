@@ -1,6 +1,114 @@
 import { html } from 'lit';
 import { renderCurateAiMLScore, renderCuratePermatagSummary } from './curate-image-fragments.js';
 import { renderCurateRatingWidget, renderCurateRatingStatic } from './curate-rating-widgets.js';
+import { renderSectionGuide } from '../shared/section-guide.js';
+
+function renderCurateSearchIcon(size = 15) {
+  return html`
+    <svg
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      style=${`display:block; width:${size}px; height:${size}px;`}
+    >
+      <circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="2"></circle>
+      <line x1="16" y1="16" x2="21" y2="21" stroke="currentColor" stroke-width="2" stroke-linecap="round"></line>
+    </svg>
+  `;
+}
+
+function renderCurateFolderIcon(size = 15) {
+  return html`
+    <svg
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      style=${`display:block; width:${size}px; height:${size}px;`}
+    >
+      <path d="M4 8.2a2.2 2.2 0 0 1 2.2-2.2h4.1l1.9 2h5.8A2.2 2.2 0 0 1 20.2 10v7.8A2.2 2.2 0 0 1 18 20H6.2A2.2 2.2 0 0 1 4 17.8z" fill="none" stroke="currentColor" stroke-width="1.8"></path>
+    </svg>
+  `;
+}
+
+function renderCurateStatsIcon(size = 15) {
+  return html`
+    <svg
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      style=${`display:block; width:${size}px; height:${size}px;`}
+    >
+      <line x1="5" y1="20" x2="19.5" y2="20" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></line>
+      <rect x="6.2" y="11" width="2.8" height="7" rx="0.8" fill="currentColor"></rect>
+      <rect x="10.9" y="8" width="2.8" height="10" rx="0.8" fill="currentColor"></rect>
+      <rect x="15.6" y="5" width="2.8" height="13" rx="0.8" fill="currentColor"></rect>
+    </svg>
+  `;
+}
+
+function renderCurateAiTagIcon(size = 15) {
+  return html`
+    <svg
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      style=${`display:block; width:${size}px; height:${size}px;`}
+    >
+      <path d="M12 4.6l1.6 4.1 4.1 1.6-4.1 1.6L12 16l-1.6-4.1-4.1-1.6 4.1-1.6z" fill="currentColor"></path>
+      <path d="M18.2 4.8l.6 1.5 1.5.6-1.5.6-.6 1.5-.6-1.5-1.5-.6 1.5-.6z" fill="currentColor" opacity="0.75"></path>
+      <path d="M18 14.8l.5 1.2 1.2.5-1.2.5-.5 1.2-.5-1.2-1.2-.5 1.2-.5z" fill="currentColor" opacity="0.75"></path>
+    </svg>
+  `;
+}
+
+function renderCurateInfoIcon(size = 15) {
+  return html`
+    <svg
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      style=${`display:block; width:${size}px; height:${size}px;`}
+    >
+      <circle cx="12" cy="12" r="8.4" fill="none" stroke="currentColor" stroke-width="1.8"></circle>
+      <circle cx="12" cy="8" r="1.1" fill="currentColor"></circle>
+      <path d="M12 11.2v5.4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path>
+    </svg>
+  `;
+}
+
+function renderCurateInfoGuide(host) {
+  return renderSectionGuide({
+    rows: [
+      {
+        label: 'Filter',
+        description: 'Open the main Curate workspace to filter images and organize them directly.',
+        glyphChar: 'F',
+        accentClass: 'home-cta-explore',
+        icon: renderCurateSearchIcon(21),
+        onClick: () => host._handleCurateSubTabChange('filter'),
+      },
+      {
+        label: 'Tag Suggester',
+        description: 'Review AI-generated tag suggestions and accept or reject them.',
+        glyphChar: 'A',
+        accentClass: 'home-cta-curate',
+        icon: renderCurateAiTagIcon(21),
+        onClick: () => host._handleCurateSubTabChange('tag-suggester'),
+      },
+      {
+        label: 'Browse by Folder',
+        description: 'Work through assets grouped by source folder.',
+        glyphChar: 'B',
+        accentClass: 'home-cta-assets',
+        icon: renderCurateFolderIcon(21),
+        onClick: () => host._handleCurateSubTabChange('browse-by-folder'),
+      },
+      {
+        label: 'Stats',
+        description: 'Monitor collection coverage, tagging, and curation metrics.',
+        glyphChar: 'S',
+        accentClass: 'home-cta-upload',
+        icon: renderCurateStatsIcon(21),
+        onClick: () => host._handleCurateSubTabChange('stats'),
+      },
+    ],
+  });
+}
 
 export function renderCurateTabContent(host, { formatCurateDate }) {
   const leftImages = host.curateImages;
@@ -17,53 +125,83 @@ export function renderCurateTabContent(host, { formatCurateDate }) {
     return '';
   })();
   const browseFolderTab = host.renderRoot?.querySelector('curate-browse-folder-tab');
-  const curateRefreshBusy = host.curateSubTab === 'home'
+  const curateRefreshBusy = host.curateSubTab === 'stats'
     ? (host.curateHomeRefreshing || host.curateStatsLoading)
     : host.curateSubTab === 'tag-audit'
       ? host.curateAuditLoading
-      : host.curateSubTab === 'ai-tagger'
+      : host.curateSubTab === 'tag-suggester'
         ? host.curateAiTagfinder2Loading
-        : host.curateSubTab === 'browse-folder'
+        : host.curateSubTab === 'browse-by-folder'
           ? !!browseFolderTab?.browseByFolderLoading
           : host.curateLoading;
   const showCurateStatsOverlay = host.curateStatsLoading || host.curateHomeRefreshing;
 
   return html`
     <div slot="curate" class="container">
-      <div class="subnav-strip mb-4">
-        <div class="curate-subtabs">
+      <div class="flex items-center justify-between gap-3 mb-4">
+        <div class="flex items-center gap-2">
           <button
-            class="curate-subtab ${host.curateSubTab === 'main' ? 'active' : ''}"
-            @click=${() => host._handleCurateSubTabChange('main')}
+            class=${`right-panel-edge-toggle ${host.curateSubTab === 'info' ? 'active' : ''}`}
+            type="button"
+            title="Information"
+            aria-label="Information"
+            style="position:static; margin-left:0; transform:none;"
+            @click=${() => host._handleCurateSubTabChange('info')}
           >
-            Filter
+            <span style="display:inline-flex; align-items:center; justify-content:center;">
+              ${renderCurateInfoIcon(23)}
+            </span>
           </button>
           <button
-            class="curate-subtab ${(host.curateSubTab === 'ai-tagger' || host.curateSubTab === 'tag-audit') ? 'active' : ''}"
-            @click=${() => host._handleCurateSubTabChange('ai-tagger')}
+            class=${`right-panel-edge-toggle ${host.curateSubTab === 'filter' ? 'active' : ''}`}
+            type="button"
+            title="Filter"
+            aria-label="Filter"
+            style="position:static; margin-left:0; transform:none;"
+            @click=${() => host._handleCurateSubTabChange('filter')}
           >
-            Tag Suggester
+            <span style="display:inline-flex; align-items:center; justify-content:center;">
+              ${renderCurateSearchIcon(23)}
+            </span>
           </button>
           <button
-            class="curate-subtab ${host.curateSubTab === 'browse-folder' ? 'active' : ''}"
-            @click=${() => host._handleCurateSubTabChange('browse-folder')}
+            class=${`right-panel-edge-toggle ${(host.curateSubTab === 'tag-suggester' || host.curateSubTab === 'tag-audit') ? 'active' : ''}`}
+            type="button"
+            title="Tag Suggester"
+            aria-label="Tag Suggester"
+            style="position:static; margin-left:0; transform:none;"
+            @click=${() => host._handleCurateSubTabChange('tag-suggester')}
           >
-            Browse by Folder
+            <span style="display:inline-flex; align-items:center; justify-content:center;">
+              ${renderCurateAiTagIcon(23)}
+            </span>
           </button>
           <button
-            class="curate-subtab ${host.curateSubTab === 'home' ? 'active' : ''}"
-            @click=${() => host._handleCurateSubTabChange('home')}
+            class=${`right-panel-edge-toggle ${host.curateSubTab === 'browse-by-folder' ? 'active' : ''}`}
+            type="button"
+            title="Browse by Folder"
+            aria-label="Browse by Folder"
+            style="position:static; margin-left:0; transform:none;"
+            @click=${() => host._handleCurateSubTabChange('browse-by-folder')}
           >
-            Stats
+            <span style="display:inline-flex; align-items:center; justify-content:center;">
+              ${renderCurateFolderIcon(23)}
+            </span>
           </button>
           <button
-            class="curate-subtab ${host.curateSubTab === 'help' ? 'active' : ''}"
-            @click=${() => host._handleCurateSubTabChange('help')}
+            class=${`right-panel-edge-toggle ${host.curateSubTab === 'stats' ? 'active' : ''}`}
+            type="button"
+            title="Stats"
+            aria-label="Stats"
+            style="position:static; margin-left:0; transform:none;"
+            @click=${() => host._handleCurateSubTabChange('stats')}
           >
-            <i class="fas fa-question-circle mr-1"></i>Help
+            <span style="display:inline-flex; align-items:center; justify-content:center;">
+              ${renderCurateStatsIcon(23)}
+            </span>
           </button>
         </div>
-        <div class="ml-auto flex items-center gap-4 text-xs text-gray-600 mr-4">
+        <div class="flex items-center gap-3 text-xs text-gray-600">
           <label class="font-semibold text-gray-600">Thumb</label>
           <input
             type="range"
@@ -75,34 +213,35 @@ export function renderCurateTabContent(host, { formatCurateDate }) {
             class="w-24"
           >
           <span class="w-12 text-right text-xs">${host.curateThumbSize}px</span>
+          <button
+            class="right-panel-edge-toggle"
+            style="position:static; margin-left:0; transform:none;"
+            ?disabled=${curateRefreshBusy}
+            @click=${() => {
+              if (host.curateSubTab === 'tag-audit') {
+                host._refreshCurateAudit();
+              } else if (host.curateSubTab === 'tag-suggester') {
+                host._refreshCurateAiTagfinder2Summary();
+              } else if (host.curateSubTab === 'stats') {
+                host._refreshCurateHome();
+              } else if (host.curateSubTab === 'browse-by-folder') {
+                const panel = host.renderRoot?.querySelector('curate-browse-folder-tab');
+                panel?.refresh?.();
+              } else {
+                const curateFilters = host._buildCurateFilters();
+                host.curateHomeFilterPanel.updateFilters(curateFilters);
+                host._fetchCurateHomeImages();
+              }
+            }}
+            title="Refresh"
+            aria-label="Refresh"
+          >
+            ${curateRefreshBusy ? html`<span class="curate-spinner"></span>` : html`<span aria-hidden="true">↻</span>`}
+          </button>
         </div>
-        <button
-          class="inline-flex items-center gap-2 border rounded-lg px-4 py-2 text-xs text-gray-600 hover:bg-gray-50"
-          ?disabled=${curateRefreshBusy}
-          @click=${() => {
-            if (host.curateSubTab === 'tag-audit') {
-              host._refreshCurateAudit();
-            } else if (host.curateSubTab === 'ai-tagger') {
-              host._refreshCurateAiTagfinder2Summary();
-            } else if (host.curateSubTab === 'home') {
-              host._refreshCurateHome();
-            } else if (host.curateSubTab === 'browse-folder') {
-              const panel = host.renderRoot?.querySelector('curate-browse-folder-tab');
-              panel?.refresh?.();
-            } else {
-              const curateFilters = host._buildCurateFilters();
-              host.curateHomeFilterPanel.updateFilters(curateFilters);
-              host._fetchCurateHomeImages();
-            }
-          }}
-          title="Refresh"
-        >
-          ${curateRefreshBusy ? html`<span class="curate-spinner"></span>` : html`<span aria-hidden="true">↻</span>`}
-          ${curateRefreshBusy ? 'Refreshing' : 'Refresh'}
-        </button>
       </div>
 
-      ${host.curateSubTab === 'home' ? html`
+      ${host.curateSubTab === 'stats' ? html`
         <div>
           ${showCurateStatsOverlay ? html`
             <div class="curate-loading-overlay" aria-label="Loading">
@@ -122,7 +261,7 @@ export function renderCurateTabContent(host, { formatCurateDate }) {
         </div>
       ` : html``}
 
-      ${host.curateSubTab === 'main' ? html`
+      ${host.curateSubTab === 'filter' ? html`
         <div>
           <curate-explore-tab
             .tenant=${host.tenant}
@@ -206,7 +345,7 @@ export function renderCurateTabContent(host, { formatCurateDate }) {
         </div>
       ` : html``}
 
-      ${host.curateSubTab === 'browse-folder' ? html`
+      ${host.curateSubTab === 'browse-by-folder' ? html`
         <div>
           <curate-browse-folder-tab
             .tenant=${host.tenant}
@@ -301,7 +440,7 @@ export function renderCurateTabContent(host, { formatCurateDate }) {
         </div>
       ` : html``}
 
-      ${host.curateSubTab === 'ai-tagger' ? html`
+      ${host.curateSubTab === 'tag-suggester' ? html`
         <div>
           <curate-ai-tagger
             .summary=${host.curateAiTagfinder2Summary}
@@ -315,56 +454,9 @@ export function renderCurateTabContent(host, { formatCurateDate }) {
         </div>
       ` : html``}
 
-      ${host.curateSubTab === 'help' ? html`
+      ${host.curateSubTab === 'info' ? html`
         <div>
-          <div class="space-y-6">
-            <div class="bg-white rounded-lg shadow p-6">
-              <h2 class="text-2xl font-bold text-gray-900 mb-6">Curate Your Collection</h2>
-
-              <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
-                <h3 class="text-lg font-semibold text-blue-900 mb-3">Getting Started</h3>
-                <p class="text-blue-800 text-sm mb-4">
-                  Welcome to the Curation interface! Here's how to organize your collection:
-                </p>
-                <ol class="space-y-3 text-sm text-blue-800">
-                  <li class="flex gap-3">
-                    <span class="font-bold flex-shrink-0">1.</span>
-                    <span><button @click=${() => host._handleCurateSubTabChange('main')} class="font-bold text-blue-600 hover:text-blue-800 hover:underline cursor-pointer">Explore Tab</button>: Browse, select, and organize images by dragging them between panes. Use filters and keywords to find exactly what you need.</span>
-                  </li>
-                  <li class="flex gap-3">
-                    <span class="font-bold flex-shrink-0">2.</span>
-                    <span><button @click=${() => host._handleCurateSubTabChange('tag-audit')} class="font-bold text-blue-600 hover:text-blue-800 hover:underline cursor-pointer">AI Tag Finder</button>: Review and validate machine-generated tags. Ensure your automated tags are accurate and complete.</span>
-                  </li>
-                  <li class="flex gap-3">
-                    <span class="font-bold flex-shrink-0">3.</span>
-                    <span><button @click=${() => host._handleCurateSubTabChange('home')} class="font-bold text-blue-600 hover:text-blue-800 hover:underline cursor-pointer">Stats</button>: Monitor tag statistics and understand your collection's tagging patterns at a glance.</span>
-                  </li>
-                </ol>
-              </div>
-
-              <div class="bg-green-50 border border-green-200 rounded-lg p-4">
-                <h3 class="text-lg font-semibold text-green-900 mb-3">Quick Tips</h3>
-                <ul class="space-y-2 text-sm text-green-800">
-                  <li class="flex gap-2">
-                    <span>📌</span>
-                    <span>Click and drag images to move them between left and right panes</span>
-                  </li>
-                  <li class="flex gap-2">
-                    <span>🏷️</span>
-                    <span>Drag images into hotspots to add or remove tags</span>
-                  </li>
-                  <li class="flex gap-2">
-                    <span>🔍</span>
-                    <span>Filter by keywords, ratings, and lists to focus on specific images</span>
-                  </li>
-                  <li class="flex gap-2">
-                    <span>⚙️</span>
-                    <span>Switch between Permatags, Keyword-Model, and Zero-Shot in the histogram</span>
-                  </li>
-                </ul>
-              </div>
-            </div>
-          </div>
+          ${renderCurateInfoGuide(host)}
         </div>
       ` : html``}
     </div>

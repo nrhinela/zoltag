@@ -153,7 +153,7 @@ export class CurateExploreStateController extends BaseStateController {
     if (!imageId) return;
 
     this.host.activeTab = 'curate';
-    this.host.curateSubTab = 'main';
+    this.host.curateSubTab = 'filter';
     this.host.curateOrderBy = 'photo_creation';
     this.host.curateOrderDirection = 'desc';
     this.host.curateMediaType = 'all';
@@ -439,14 +439,14 @@ export class CurateExploreStateController extends BaseStateController {
     }
 
     const prevTab = this.host.curateSubTab;
-    if (prevTab === 'main') {
+    if (prevTab === 'filter') {
       this.host._curateSubTabState[prevTab] = this.host._snapshotCurateState();
       this.host._curateActiveWorkingTab = prevTab;
     }
 
     this.host.curateSubTab = nextTab;
 
-    if (nextTab === 'main') {
+    if (nextTab === 'filter') {
       const saved = this.host._curateSubTabState[nextTab];
       if (saved) {
         this.host._restoreCurateState(saved);
@@ -461,7 +461,7 @@ export class CurateExploreStateController extends BaseStateController {
       }
     }
 
-    if (nextTab === 'home') {
+    if (nextTab === 'stats') {
       const fetchKey = this.host._getCurateHomeFetchKey();
       if (!this.host._curateHomeLastFetchKey || this.host._curateHomeLastFetchKey !== fetchKey) {
         this.host.fetchStats({ includeRatings: true }).finally(() => {
@@ -484,18 +484,18 @@ export class CurateExploreStateController extends BaseStateController {
       }
     }
 
-    if (nextTab === 'ai-tagger' && !this.host.curateAiTagfinder2Loading) {
+    if (nextTab === 'tag-suggester' && !this.host.curateAiTagfinder2Loading) {
       this.host._refreshCurateAiTagfinder2Summary();
     }
   }
 
   initializeCurateTab() {
     this.host.fetchKeywords();
-    this.host.fetchStats({ includeTagStats: this.host.curateSubTab === 'home' }).finally(() => {
+    this.host.fetchStats({ includeTagStats: this.host.curateSubTab === 'stats' }).finally(() => {
       this.host._curateHomeLastFetchKey = this.host._getCurateHomeFetchKey();
     });
 
-    if (this.host.curateSubTab === 'main') {
+    if (this.host.curateSubTab === 'filter') {
       const curateFilters = this.host._buildCurateFilters();
       this.host.curateHomeFilterPanel.updateFilters(curateFilters);
       if (!this.host.curateImages?.length && !this.host.curateLoading) {
@@ -509,7 +509,7 @@ export class CurateExploreStateController extends BaseStateController {
       if (!this.host._curateAuditLastFetchKey || this.host._curateAuditLastFetchKey !== fetchKey) {
         this.host._fetchCurateAuditImages();
       }
-    } else if (this.host.curateSubTab === 'ai-tagger' && !this.host.curateAiTagfinder2Loading) {
+    } else if (this.host.curateSubTab === 'tag-suggester' && !this.host.curateAiTagfinder2Loading) {
       this.host._refreshCurateAiTagfinder2Summary();
     }
   }

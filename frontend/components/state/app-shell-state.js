@@ -137,12 +137,12 @@ export class AppShellStateController extends BaseStateController {
   }
 
   setActiveTab(tabName) {
-    if (!tabName || !['home', 'search', 'curate', 'library', 'lists'].includes(tabName)) {
+    if (!tabName || !['home', 'search', 'curate', 'library'].includes(tabName)) {
       this.host.activeTab = 'home';
       return;
     }
     if (tabName === 'library' && !this.host.activeLibrarySubTab) {
-      this.host.activeLibrarySubTab = 'assets';
+      this.host.activeLibrarySubTab = 'overview';
     }
     if (tabName === 'search' && !this.host.activeSearchSubTab) {
       this.host.activeSearchSubTab = 'gallery';
@@ -152,7 +152,7 @@ export class AppShellStateController extends BaseStateController {
       return;
     }
     if (tabName === 'curate' && this.host.curateSubTab === 'lists') {
-      this.host.curateSubTab = 'main';
+      this.host.curateSubTab = 'filter';
     }
     this.host.activeTab = tabName;
   }
@@ -172,7 +172,7 @@ export class AppShellStateController extends BaseStateController {
         this.host.pendingVectorstoreQuery = null;
       }
       if (tab === 'curate') {
-        this.host.curateSubTab = subTab || 'main';
+        this.host.curateSubTab = subTab || 'filter';
       }
       if (tab === 'library' && subTab === 'keywords' && adminSubTab) {
         this.host.activeAdminSubTab = adminSubTab;
@@ -186,10 +186,7 @@ export class AppShellStateController extends BaseStateController {
       this.host.pendingVectorstoreQuery = null;
     }
     if (detail === 'curate') {
-      this.host.curateSubTab = 'main';
-    }
-    if (detail === 'lists') {
-      this.host.pendingListSelectionId = null;
+      this.host.curateSubTab = 'filter';
     }
     this.setActiveTab(detail);
   }
@@ -222,7 +219,7 @@ export class AppShellStateController extends BaseStateController {
         this.host.pendingVectorstoreQueryToken = (this.host.pendingVectorstoreQueryToken || 0) + 1;
       }
     }
-    if (tab === 'lists') {
+    if (tab === 'search' && (subTab || '') === 'lists') {
       const listId = listSelection?.listId ?? null;
       this.host.pendingListSelectionId = listId;
       this.host.pendingListSelectionToken = (this.host.pendingListSelectionToken || 0) + 1;
@@ -359,7 +356,7 @@ export class AppShellStateController extends BaseStateController {
     this.host.providerAdminError = '';
 
     this.host._curateHomeState.resetForTenantChange();
-    this.host.curateSubTab = 'main';
+    this.host.curateSubTab = 'filter';
     this.host.curatePinnedImageId = null;
     this.host.curateSimilarityAssetUuid = null;
     this.host._curateAuditState.resetForTenantChange();
@@ -391,7 +388,7 @@ export class AppShellStateController extends BaseStateController {
   }
 
   handleUpdated(changedProperties) {
-    if (this.host.activeTab === 'curate' && this.host.curateSubTab === 'home') {
+    if (this.host.activeTab === 'curate' && this.host.curateSubTab === 'stats') {
       if (shouldAutoRefreshCurateStats(this.host)) {
         this.host._curateStatsAutoRefreshDone = true;
         this.host._refreshCurateHome();

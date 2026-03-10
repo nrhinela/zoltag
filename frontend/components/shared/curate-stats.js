@@ -20,7 +20,7 @@ export function scheduleStatsRefresh(state, { delay = 400 } = {}) {
     state._statsRefreshTimer = null;
     state.fetchStats({
       force: true,
-      includeTagStats: state.activeTab === 'curate' && state.curateSubTab === 'home',
+      includeTagStats: state.activeTab === 'curate' && state.curateSubTab === 'stats',
     });
   }, delay);
 }

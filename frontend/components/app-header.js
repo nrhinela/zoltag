@@ -291,9 +291,8 @@ class AppHeader extends LitElement {
     const libraryActive = this.activeTab === 'library';
     const topNavItems = [
       { tab: 'search', label: 'Explore', active: this.activeTab === 'search' },
-      { tab: 'lists', label: 'Lists', active: this.activeTab === 'lists' },
       ...(canCurate ? [{ tab: 'curate', label: 'Curate', active: this.activeTab === 'curate' }] : []),
-      { tab: 'library', label: 'Admin', active: libraryActive },
+      { tab: 'library', label: 'Admin', active: libraryActive, subTab: 'overview' },
     ];
     const userDisplayName = this._getUserDisplayName();
     const userEmail = this._getUserEmail();
@@ -328,7 +327,7 @@ class AppHeader extends LitElement {
                                 style=${`text-decoration:none;border-bottom:4px solid ${item.active ? '#2563eb' : 'transparent'};`}
                                 @click=${(event) => {
                                   event.preventDefault();
-                                  this._handleTabChange(item.tab);
+                                  this._handleTabChange(item.tab, item.subTab);
                                 }}
                               >
                                 <span>${item.label}</span>
@@ -425,7 +424,15 @@ class AppHeader extends LitElement {
     `;
   }
 
-  _handleTabChange(tabName) {
+  _handleTabChange(tabName, subTab = '') {
+      if (subTab) {
+          this.dispatchEvent(new CustomEvent('tab-change', {
+              detail: { tab: tabName, subTab },
+              bubbles: true,
+              composed: true,
+          }));
+          return;
+      }
       this.dispatchEvent(new CustomEvent('tab-change', { detail: tabName, bubbles: true, composed: true }));
   }
 }

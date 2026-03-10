@@ -1,12 +1,18 @@
 import { BaseStateController } from './base-state-controller.js';
 
-const TOP_LEVEL_TABS = new Set(['home', 'search', 'curate', 'library', 'lists']);
-const LIBRARY_SUB_TABS = new Set(['assets', 'keywords', 'providers', 'users', 'jobs', 'templates', 'audit', 'shares']);
-const SEARCH_SUB_TABS = new Set(['gallery', 'landing', 'results', 'advanced', 'browse-by-folder', 'chips']);
-const CURATE_SUB_TABS = new Set(['main', 'browse-folder', 'tag-audit', 'ai-tagger', 'home', 'help']);
+const TOP_LEVEL_TABS = new Set(['home', 'search', 'curate', 'library']);
+const LIBRARY_SUB_TABS = new Set(['overview', 'assets', 'keywords', 'providers', 'users', 'jobs', 'templates', 'audit', 'shares']);
+const SEARCH_SUB_TABS = new Set(['filter', 'gallery', 'browse-by-folder', 'lists', 'info', 'results']);
+const CURATE_SUB_TABS = new Set(['filter', 'browse-by-folder', 'tag-suggester', 'stats', 'info', 'tag-audit']);
 const HOME_SUB_TABS = new Set(['overview', 'chips', 'lab']);
 const ADMIN_SUB_TABS = new Set(['tagging', 'people']);
 const SPA_NAV_STATE_KEY = '__zoltagSpaNav';
+
+function publicTabName(tab) {
+  if (tab === 'search') return 'explore';
+  if (tab === 'library') return 'admin';
+  return tab;
+}
 
 export class AppNavigationStateController extends BaseStateController {
   constructor(host) {
@@ -32,6 +38,8 @@ export class AppNavigationStateController extends BaseStateController {
 
   _normalizeTopLevelTab(value) {
     const tab = String(value || '').trim().toLowerCase();
+    if (tab === 'explore') return 'search';
+    if (tab === 'admin') return 'library';
     return TOP_LEVEL_TABS.has(tab) ? tab : 'home';
   }
 
@@ -40,20 +48,18 @@ export class AppNavigationStateController extends BaseStateController {
     const snapshot = { tab };
     if (tab === 'library') {
       const subTab = String(input.subTab || '').trim().toLowerCase();
-      const normalizedSubTab = LIBRARY_SUB_TABS.has(subTab) ? subTab : 'assets';
+      const normalizedSubTab = LIBRARY_SUB_TABS.has(subTab) ? subTab : 'overview';
       snapshot.subTab = normalizedSubTab;
       if (normalizedSubTab === 'keywords') {
-        let adminSubTab = String(input.adminSubTab || '').trim().toLowerCase();
-        if (adminSubTab === 'tagging2') adminSubTab = 'tagging';
+        const adminSubTab = String(input.adminSubTab || '').trim().toLowerCase();
         snapshot.adminSubTab = ADMIN_SUB_TABS.has(adminSubTab) ? adminSubTab : 'tagging';
       }
     } else if (tab === 'search') {
       const subTab = String(input.subTab || '').trim().toLowerCase();
       snapshot.subTab = SEARCH_SUB_TABS.has(subTab) ? subTab : 'gallery';
     } else if (tab === 'curate') {
-      const rawSubTab = String(input.subTab || '').trim().toLowerCase();
-      const subTab = rawSubTab === 'tag-finder2' ? 'ai-tagger' : rawSubTab;
-      snapshot.subTab = CURATE_SUB_TABS.has(subTab) ? subTab : 'main';
+      const subTab = String(input.subTab || '').trim().toLowerCase();
+      snapshot.subTab = CURATE_SUB_TABS.has(subTab) ? subTab : 'filter';
     } else if (tab === 'home') {
       const subTab = String(input.subTab || '').trim().toLowerCase();
       snapshot.subTab = HOME_SUB_TABS.has(subTab) ? subTab : 'overview';
@@ -81,7 +87,7 @@ export class AppNavigationStateController extends BaseStateController {
     params.delete('subTab');
     params.delete('adminSubTab');
 
-    params.set('tab', snapshot.tab);
+    params.set('tab', publicTabName(snapshot.tab));
     if (snapshot.subTab) {
       params.set('subTab', snapshot.subTab);
     }
@@ -114,7 +120,7 @@ export class AppNavigationStateController extends BaseStateController {
     } else if (normalized.tab === 'search') {
       this.host.activeSearchSubTab = normalized.subTab || 'gallery';
     } else if (normalized.tab === 'curate') {
-      this.host.curateSubTab = normalized.subTab || 'main';
+      this.host.curateSubTab = normalized.subTab || 'filter';
     } else if (normalized.tab === 'home') {
       this.host.homeSubTab = normalized.subTab || 'overview';
     }

@@ -153,5 +153,5 @@ export function getCurateQuickSortArrow(state, orderBy) {
 }
 
 export function shouldIncludeRatingStats(state) {
-  return state.activeTab === 'curate' && state.curateSubTab === 'home';
+  return state.activeTab === 'curate' && state.curateSubTab === 'stats';
 }

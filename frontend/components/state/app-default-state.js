@@ -54,7 +54,7 @@ export function initializeAppDefaultState(host) {
   host.curateEditorOpen = false;
   host.curateEditorImageSet = [];
   host.curateEditorImageIndex = -1;
-  host.curateSubTab = 'main';
+  host.curateSubTab = 'filter';
   host.curateAuditMode = 'missing';
   host.curateAuditKeyword = '';
   host.curateAuditCategory = '';
@@ -140,9 +140,9 @@ export function initializeAppDefaultState(host) {
   host._curateRatingModalActive = false;
   host._curateRatingModalImageIds = null;
   host._curateRatingModalSource = null;
-  host._curateSubTabState = { main: null };
-  host._curateActiveWorkingTab = 'main';
-  host._curateSubTabState.main = host._snapshotCurateState();
+  host._curateSubTabState = { filter: null };
+  host._curateActiveWorkingTab = 'filter';
+  host._curateSubTabState.filter = host._snapshotCurateState();
   host._statsRefreshTimer = null;
   host._curateStatsLoadingCount = 0;
   host._curatePressTimer = null;

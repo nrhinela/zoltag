@@ -1097,10 +1097,10 @@ export const zoltagAppStyles = css`
         left: 100%;
         right: auto;
         margin-left: 4px;
-        width: 24px;
-        height: 24px;
+        width: 30px;
+        height: 30px;
         border: 1px solid #d1d5db;
-        border-radius: 8px;
+        border-radius: 10px;
         background: #ffffff;
         color: #2563eb;
         font-size: 18px;
@@ -1117,6 +1117,12 @@ export const zoltagAppStyles = css`
         background: #f8fafc;
         border-color: #9ca3af;
         color: #1d4ed8;
+    }
+    .right-panel-edge-toggle.active {
+        background: #eff6ff;
+        border-color: #93c5fd;
+        color: #1d4ed8;
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7), 0 1px 2px rgba(37, 99, 235, 0.12);
     }
     .curate-pane-header-row {
         display: flex;

@@ -1557,6 +1557,66 @@ class ListEditor extends LitElement {
     this.thumbSize = nextSize;
   }
 
+  _dispatchTabChange(tab, subTab = null) {
+    const detail = subTab ? { tab, subTab } : { tab };
+    this.dispatchEvent(new CustomEvent('tab-change', {
+      detail,
+      bubbles: true,
+      composed: true,
+    }));
+  }
+
+  _renderSearchIcon(size = 16) {
+    return html`
+      <svg viewBox="0 0 24 24" aria-hidden="true" style=${`width:${size}px; height:${size}px;`}>
+        <circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="2"></circle>
+        <line x1="16" y1="16" x2="21" y2="21" stroke="currentColor" stroke-width="2" stroke-linecap="round"></line>
+      </svg>
+    `;
+  }
+
+  _renderInfoIcon(size = 16) {
+    return html`
+      <svg viewBox="0 0 24 24" aria-hidden="true" style=${`width:${size}px; height:${size}px;`}>
+        <circle cx="12" cy="12" r="8.4" fill="none" stroke="currentColor" stroke-width="1.8"></circle>
+        <circle cx="12" cy="8" r="1.1" fill="currentColor"></circle>
+        <path d="M12 11.2v5.4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path>
+      </svg>
+    `;
+  }
+
+  _renderFolderIcon(size = 16) {
+    return html`
+      <svg viewBox="0 0 24 24" aria-hidden="true" style=${`width:${size}px; height:${size}px;`}>
+        <path d="M4 8.2a2.2 2.2 0 0 1 2.2-2.2h4.1l1.9 2h5.8A2.2 2.2 0 0 1 20.2 10v7.8A2.2 2.2 0 0 1 18 20H6.2A2.2 2.2 0 0 1 4 17.8z" fill="none" stroke="currentColor" stroke-width="1.8"></path>
+      </svg>
+    `;
+  }
+
+  _renderGalleryIcon(size = 16) {
+    return html`
+      <svg viewBox="0 0 24 24" aria-hidden="true" style=${`width:${size}px; height:${size}px;`}>
+        <rect x="4" y="4" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"></rect>
+        <rect x="13" y="4" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"></rect>
+        <rect x="4" y="13" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"></rect>
+        <rect x="13" y="13" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"></rect>
+      </svg>
+    `;
+  }
+
+  _renderListIcon(size = 16) {
+    return html`
+      <svg viewBox="0 0 24 24" aria-hidden="true" style=${`width:${size}px; height:${size}px;`}>
+        <circle cx="6" cy="7" r="1.2" fill="currentColor"></circle>
+        <circle cx="6" cy="12" r="1.2" fill="currentColor"></circle>
+        <circle cx="6" cy="17" r="1.2" fill="currentColor"></circle>
+        <line x1="9" y1="7" x2="19" y2="7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></line>
+        <line x1="9" y1="12" x2="19" y2="12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></line>
+        <line x1="9" y1="17" x2="19" y2="17" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></line>
+      </svg>
+    `;
+  }
+
   _getListImagesForView() {
     const items = Array.isArray(this.listItems) ? this.listItems : [];
     const images = items
@@ -1953,7 +2013,92 @@ class ListEditor extends LitElement {
 
     return html`
       <div>
-        <div class="subnav-strip mb-4">
+        <div class="flex items-center justify-between gap-3 mb-4">
+          <div class="flex items-center gap-2">
+            <button
+              class="right-panel-edge-toggle"
+              style="position:static; margin-left:0; transform:none;"
+              title="Information"
+              aria-label="Information"
+              @click=${() => this._dispatchTabChange('search', 'info')}
+            >
+              <span style="display:inline-flex; align-items:center; justify-content:center;">
+                ${this._renderInfoIcon(23)}
+              </span>
+            </button>
+            <button
+              class="right-panel-edge-toggle"
+              style="position:static; margin-left:0; transform:none;"
+              title="Filter"
+              aria-label="Filter"
+              @click=${() => this._dispatchTabChange('search', 'filter')}
+            >
+              <span style="display:inline-flex; align-items:center; justify-content:center;">
+                ${this._renderSearchIcon(23)}
+              </span>
+            </button>
+            <button
+              class="right-panel-edge-toggle"
+              style="position:static; margin-left:0; transform:none;"
+              title="Gallery"
+              aria-label="Gallery"
+              @click=${() => this._dispatchTabChange('search', 'gallery')}
+            >
+              <span style="display:inline-flex; align-items:center; justify-content:center;">
+                ${this._renderGalleryIcon(23)}
+              </span>
+            </button>
+            <button
+              class="right-panel-edge-toggle"
+              style="position:static; margin-left:0; transform:none;"
+              title="Browse by Source Folder"
+              aria-label="Browse by Source Folder"
+              @click=${() => this._dispatchTabChange('search', 'browse-by-folder')}
+            >
+              <span style="display:inline-flex; align-items:center; justify-content:center;">
+                ${this._renderFolderIcon(23)}
+              </span>
+            </button>
+            <button
+              class="right-panel-edge-toggle active"
+              style="position:static; margin-left:0; transform:none;"
+              title="Lists"
+              aria-label="Lists"
+              @click=${() => this._dispatchTabChange('search', 'lists')}
+            >
+              <span style="display:inline-flex; align-items:center; justify-content:center;">
+                ${this._renderListIcon(23)}
+              </span>
+            </button>
+          </div>
+          <div class="flex items-center gap-3 text-xs text-gray-600">
+            ${this.selectedList ? html`
+              <label class="font-semibold text-gray-600">Thumb</label>
+              <input
+                type="range"
+                min="80"
+                max="220"
+                step="10"
+                .value=${String(this.thumbSize)}
+                @input=${this._handleThumbSizeChange}
+                class="w-24"
+              >
+              <span class="w-12 text-right text-sm">${this.thumbSize}px</span>
+            ` : html``}
+            <button
+              @click=${() => this.fetchLists({ force: true })}
+              class="right-panel-edge-toggle"
+              style="position:static; margin-left:0; transform:none;"
+              title="Refresh"
+              ?disabled=${this.isLoadingLists}
+              aria-busy=${this.isLoadingLists ? 'true' : 'false'}
+            >
+              <span aria-hidden="true" class=${this.isLoadingLists ? 'animate-spin' : ''}>↻</span>
+            </button>
+          </div>
+        </div>
+        ${!this.selectedList ? html`
+          <div class="subnav-strip mb-0 rounded-b-none border-b-0 bg-white border-gray-200">
             <div class="curate-subtabs">
               ${visibilityTabs.map((tab) => html`
                 <button
@@ -1964,46 +2109,17 @@ class ListEditor extends LitElement {
                 </button>
               `)}
             </div>
-            <div class="ml-auto flex items-center gap-4 text-sm text-gray-600">
-              ${this.selectedList ? html`
-                <label class="font-semibold text-gray-600">Thumb</label>
-                <input
-                  type="range"
-                  min="80"
-                  max="220"
-                  step="10"
-                  .value=${String(this.thumbSize)}
-                  @input=${this._handleThumbSizeChange}
-                  class="w-24"
-                >
-                <span class="w-12 text-right text-sm">${this.thumbSize}px</span>
-              ` : html``}
-              <div class="flex items-center gap-2">
+            ${!this.selectedList ? html`
+              <div class="flex items-center gap-2 ml-auto">
                 <button
-                  @click=${() => this.fetchLists({ force: true })}
-                  class="inline-flex items-center gap-2 border rounded-lg px-4 py-2 text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-60 disabled:cursor-not-allowed"
-                  title="Refresh"
-                  ?disabled=${this.isLoadingLists}
-                  aria-busy=${this.isLoadingLists ? 'true' : 'false'}
+                  @click=${this._createList}
+                  class="inline-flex items-center gap-2 rounded-full border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-600 transition hover:bg-gray-50 hover:border-gray-400 hover:text-gray-700"
                 >
-                  <span aria-hidden="true" class=${this.isLoadingLists ? 'animate-spin' : ''}>↻</span>
-                  ${this.isLoadingLists ? 'Refreshing…' : 'Refresh'}
+                  <span aria-hidden="true">+</span>
+                  Add New List
                 </button>
               </div>
-            </div>
-        </div>
-        <div class="text-xs text-gray-600 mb-4">
-          <span class="font-semibold">${selectedVisibilityLabel}:</span> ${selectedVisibilityDescription}
-        </div>
-        ${!this.selectedList ? html`
-          <div class="flex justify-end mb-4">
-            <button
-              @click=${this._createList}
-              class="inline-flex items-center gap-2 border rounded-lg px-4 py-2 text-sm text-gray-600 hover:bg-gray-50"
-            >
-              <span aria-hidden="true">+</span>
-              Add New List
-            </button>
+            ` : html``}
           </div>
         ` : html``}
         ${this.selectedList ? html`
@@ -2268,12 +2384,14 @@ class ListEditor extends LitElement {
               })()}
             `}
           </div>
-        ` : (this.isLoadingLists
-          ? this._renderListSkeleton()
-          : this.lists.length === 0
-          ? html`<p class="text-base text-gray-600">No lists found.</p>`
-          : html`
-            <table class="min-w-full bg-white border border-gray-300">
+        ` : html`
+          <div class="rounded-b-xl border border-gray-200 bg-white ${this.selectedList ? '' : 'border-t-0'} overflow-hidden">
+            ${this.isLoadingLists
+              ? html`<div class="p-4">${this._renderListSkeleton()}</div>`
+              : this.lists.length === 0
+                ? html`<div class="p-6 text-base text-gray-600">No lists found.</div>`
+                : html`
+            <table class="min-w-full bg-white">
               <thead>
                 <tr class="bg-gray-50">
                   <th class="py-2 px-4 border-b left-justified-header text-sm font-semibold text-gray-700">
@@ -2339,7 +2457,9 @@ class ListEditor extends LitElement {
                 `)}
               </tbody>
             </table>
-          `)}
+                `}
+          </div>
+        `}
       </div>
 
       ${this.editingList ? html`

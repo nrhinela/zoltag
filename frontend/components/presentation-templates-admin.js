@@ -63,10 +63,6 @@ export class PresentationTemplatesAdmin extends LitElement {
     `,
   ];
 
-  createRenderRoot() {
-    return this;
-  }
-
   constructor() {
     super();
     this.tenant = '';
@@ -189,7 +185,7 @@ export class PresentationTemplatesAdmin extends LitElement {
       this.uploadVisibility = 'private';
       this.uploadFileName = '';
       this._uploadFile = null;
-      const input = this.querySelector('[data-template-upload-input]');
+      const input = this.renderRoot?.querySelector('[data-template-upload-input]');
       if (input) input.value = '';
       await this._loadTemplates();
     } catch (error) {

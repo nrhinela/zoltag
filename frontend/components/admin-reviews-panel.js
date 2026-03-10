@@ -350,7 +350,7 @@ export class AdminReviewsPanel extends LitElement {
                     </td>
                     <td class="px-3 py-3">
                       <div class="font-medium text-gray-900">${row.list_title || `List #${row.list_id}`}</div>
-                      <a class="text-blue-600 hover:underline text-xs" href="?tab=lists">Open Lists</a>
+                      <a class="text-blue-600 hover:underline text-xs" href="?tab=explore&subTab=lists">Open Lists</a>
                     </td>
                     <td class="px-3 py-3">
                       <div class="text-gray-900">${row.guest_email || '--'}</div>

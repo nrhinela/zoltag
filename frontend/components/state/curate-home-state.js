@@ -154,7 +154,7 @@ export class CurateHomeStateController extends BaseStateController {
 
     // Refresh the currently active tab only
     const curateSubTab = this.getHostProperty('curateSubTab');
-    if (curateSubTab === 'main') {
+    if (curateSubTab === 'filter') {
       const curateFilters = buildCurateFilterObject(this.host, { resetOffset: true });
       const curateHomeFilterPanel = this.getHostProperty('curateHomeFilterPanel');
       if (curateHomeFilterPanel) {
@@ -182,7 +182,7 @@ export class CurateHomeStateController extends BaseStateController {
 
     // Refresh the currently active tab only
     const curateSubTab = this.getHostProperty('curateSubTab');
-    if (curateSubTab === 'main') {
+    if (curateSubTab === 'filter') {
       const curateFilters = buildCurateFilterObject(this.host, {
         rating: newRating,
         resetOffset: true,
@@ -375,7 +375,7 @@ export class CurateHomeStateController extends BaseStateController {
 
     // Refresh the currently active tab only
     const curateSubTab = this.getHostProperty('curateSubTab');
-    if (curateSubTab === 'main') {
+    if (curateSubTab === 'filter') {
       const curateFilters = buildCurateFilterObject(this.host, { resetOffset: true });
       const curateHomeFilterPanel = this.getHostProperty('curateHomeFilterPanel');
       if (curateHomeFilterPanel) {
@@ -399,7 +399,7 @@ export class CurateHomeStateController extends BaseStateController {
 
     // Refresh the currently active tab only
     const curateSubTab = this.getHostProperty('curateSubTab');
-    if (curateSubTab === 'main') {
+    if (curateSubTab === 'filter') {
       const curateFilters = buildCurateFilterObject(this.host, { resetOffset: true });
       const curateHomeFilterPanel = this.getHostProperty('curateHomeFilterPanel');
       if (curateHomeFilterPanel) {
@@ -437,7 +437,7 @@ export class CurateHomeStateController extends BaseStateController {
 
     // Refresh the currently active tab only
     const curateSubTab = this.getHostProperty('curateSubTab');
-    if (curateSubTab === 'main') {
+    if (curateSubTab === 'filter') {
       const curateFilters = buildCurateFilterObject(this.host, { resetOffset: true });
       const curateHomeFilterPanel = this.getHostProperty('curateHomeFilterPanel');
       if (curateHomeFilterPanel) {

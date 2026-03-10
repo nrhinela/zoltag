@@ -130,7 +130,7 @@ export class AppDataStateController extends BaseStateController {
     const requestId = (this.host._statsRequestId || 0) + 1;
     this.host._statsRequestId = requestId;
     const include = includeRatings ?? shouldIncludeRatingStats(this.host);
-    const showCurateLoading = this.host.activeTab === 'curate' && this.host.curateSubTab === 'home';
+    const showCurateLoading = this.host.activeTab === 'curate' && this.host.curateSubTab === 'stats';
     const showHomeLoading = this.host.activeTab === 'home';
     if (showCurateLoading) {
       this.host._curateStatsLoadingCount = (this.host._curateStatsLoadingCount || 0) + 1;
@@ -206,7 +206,7 @@ export class AppDataStateController extends BaseStateController {
     console.log(`Sync complete: ${event.detail.count} total images processed`);
     this.fetchStats({
       force: true,
-      includeTagStats: this.host.activeTab === 'curate' && this.host.curateSubTab === 'home',
+      includeTagStats: this.host.activeTab === 'curate' && this.host.curateSubTab === 'stats',
     });
   }
 

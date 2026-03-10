@@ -19,6 +19,7 @@ import { formatStatNumber } from './shared/formatting.js';
 import { renderCanonicalListDetails } from './shared/image-grid.js';
 import { createSelectionHandlers } from './shared/selection-handlers.js';
 import { renderResultsPagination } from './shared/pagination-controls.js';
+import { renderSectionGuide } from './shared/section-guide.js';
 import { renderSelectableImageGrid } from './shared/selectable-image-grid.js';
 import { renderSimilarityModeHeader } from './shared/similarity-mode-header.js';
 import {
@@ -39,6 +40,7 @@ import './shared/widgets/right-panel.js';
 import './shared/widgets/list-targets-panel.js';
 import './shared/widgets/hotspot-targets-panel.js';
 import './shared/widgets/rating-target-panel.js';
+import './list-editor.js';
 import ImageFilterPanel from './shared/state/image-filter-panel.js';
 import FolderBrowserPanel from './folder-browser-panel.js';
 
@@ -66,7 +68,7 @@ const GALLERY_UNTAGGED_PREVIEW_LIMIT = 24;
  * - Gallery: Collection-style topic entry points
  *
  * @property {String} tenant - Current tenant ID
- * @property {String} searchSubTab - Active subtab ('advanced', 'results', 'browse-by-folder', 'natural-search', 'chips', 'gallery')
+ * @property {String} searchSubTab - Active subtab ('filter', 'results', 'browse-by-folder', 'lists', 'gallery', 'info')
  * @property {Array} searchChipFilters - Current filter chip selections
  * @property {Array} searchDropboxOptions - Dropbox folder options
  * @property {Array} searchImages - Images from filter panel
@@ -149,6 +151,9 @@ export class SearchTab extends LitElement {
     rightPanelCollapsed: { type: Boolean, state: true },
     searchResultsLayout: { type: String, state: true },
     canCurate: { type: Boolean },
+    currentUser: { type: Object },
+    initialSelectedListId: { type: [String, Number] },
+    initialSelectedListToken: { type: Number },
     searchHotspotTargets: { type: Array },
     searchHotspotRatingEnabled: { type: Boolean },
     searchHotspotRatingCount: { type: Number },
@@ -176,6 +181,7 @@ export class SearchTab extends LitElement {
     galleryTopicQuery: { type: String, state: true },
     gallerySelectedCategories: { type: Array, state: true },
     galleryTagSortOrder: { type: String, state: true },
+    galleryControlsOpen: { type: Boolean, state: true },
     galleryTransitionLoading: { type: Boolean, state: true },
   };
 
@@ -232,6 +238,9 @@ export class SearchTab extends LitElement {
     this.rightPanelCollapsed = false;
     this.searchResultsLayout = 'thumb';
     this.canCurate = true;
+    this.currentUser = null;
+    this.initialSelectedListId = null;
+    this.initialSelectedListToken = 0;
     this.searchHotspotTargets = [{ id: 1, type: 'keyword', count: 0 }];
     this.searchHotspotRatingEnabled = false;
     this.searchHotspotRatingCount = 0;
@@ -274,6 +283,7 @@ export class SearchTab extends LitElement {
     this.galleryTopicQuery = '';
     this.gallerySelectedCategories = [];
     this.galleryTagSortOrder = 'asc';
+    this.galleryControlsOpen = false;
     this.galleryTransitionLoading = false;
     this._galleryCategorySelectionTouched = false;
     this._galleryTopicFocused = false;
@@ -452,7 +462,7 @@ export class SearchTab extends LitElement {
     this._startSearchLoading();
     try {
       const tasks = [];
-      if (this.searchSubTab === 'advanced' || (this.searchSubTab === 'results' && this.vectorstoreHasSearched)) {
+      if (this.searchSubTab === 'filter' || (this.searchSubTab === 'results' && this.vectorstoreHasSearched)) {
         tasks.push(this.searchFilterPanel?.fetchImages());
       }
       if (this.searchSubTab === 'browse-by-folder') {
@@ -645,8 +655,8 @@ export class SearchTab extends LitElement {
     }
 
     if (changedProps.has('searchSubTab')) {
-      if (this.hideSubtabs && this.searchSubTab !== 'advanced') {
-        this.searchSubTab = 'advanced';
+      if (this.hideSubtabs && this.searchSubTab !== 'filter') {
+        this.searchSubTab = 'filter';
         return;
       }
       const previousSubTab = changedProps.get('searchSubTab');
@@ -683,11 +693,11 @@ export class SearchTab extends LitElement {
         );
         this.searchFilterPanel.updateFilters(nextAdvancedFilters);
         this._syncChipFiltersFromFilterState(nextAdvancedFilters);
-        if (this.searchSubTab === 'advanced') {
+        if (this.searchSubTab === 'filter') {
           this.searchFilterPanel.fetchImages();
         }
       }
-      if (this.searchSubTab === 'advanced' && this._suppressNextAdvancedInitialRefresh) {
+      if (this.searchSubTab === 'filter' && this._suppressNextAdvancedInitialRefresh) {
         this._suppressNextAdvancedInitialRefresh = false;
       } else {
         this._maybeStartInitialRefresh();
@@ -698,9 +708,6 @@ export class SearchTab extends LitElement {
         if (this.browseByFolderAppliedSelection?.length) {
           this._refreshBrowseByFolderData();
         }
-      }
-      if (this.searchSubTab === 'landing' && !this.browseByFolderOptions?.length) {
-        this.folderBrowserPanel?.loadFolders();
       }
       if (this.searchSubTab === 'gallery') {
         this._loadGalleryCollections();
@@ -1671,12 +1678,19 @@ export class SearchTab extends LitElement {
 
   _handleSearchSubTabChange(nextTab) {
     if (this.hideSubtabs) return;
-    this.searchSubTab = nextTab;
-    if (nextTab === 'gallery') {
+    const normalizedTab = nextTab === 'advanced'
+      ? 'filter'
+      : nextTab === 'landing'
+        ? 'info'
+        : nextTab === 'chips'
+          ? 'filter'
+          : nextTab;
+    this.searchSubTab = normalizedTab;
+    if (normalizedTab === 'gallery') {
       this._clearFiltersForGalleryEntry();
     }
     this.dispatchEvent(new CustomEvent('search-subtab-changed', {
-      detail: { subtab: nextTab },
+      detail: { subtab: normalizedTab },
       bubbles: true,
       composed: true
     }));
@@ -1685,6 +1699,7 @@ export class SearchTab extends LitElement {
   _clearFiltersForGalleryEntry() {
     this.vectorstoreQuery = '';
     this.vectorstoreHasSearched = false;
+    this.galleryControlsOpen = false;
     this.galleryTransitionLoading = false;
     this.searchChipFilters = [];
     this.searchListExcludeId = '';
@@ -1719,6 +1734,103 @@ export class SearchTab extends LitElement {
     if (image?.photo?.thumbnail_url) return image.photo.thumbnail_url;
     const imageId = Number(image.id ?? image.photo_id ?? image.image_id ?? image?.photo?.id);
     return Number.isFinite(imageId) ? `/api/v1/images/${imageId}/thumbnail` : '';
+  }
+
+  _toggleGalleryControlsOpen() {
+    this.galleryControlsOpen = !this.galleryControlsOpen;
+  }
+
+  _renderSearchIcon(size = 16) {
+    return html`
+      <svg
+        viewBox="0 0 24 24"
+        aria-hidden="true"
+        style=${`display:block; width:${size}px; height:${size}px;`}
+      >
+        <circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="2"></circle>
+        <line x1="16" y1="16" x2="21" y2="21" stroke="currentColor" stroke-width="2" stroke-linecap="round"></line>
+      </svg>
+    `;
+  }
+
+  _renderFolderIcon(size = 16) {
+    return html`
+      <svg
+        viewBox="0 0 24 24"
+        aria-hidden="true"
+        style=${`display:block; width:${size}px; height:${size}px;`}
+      >
+        <path d="M4 8.2a2.2 2.2 0 0 1 2.2-2.2h4.1l1.9 2h5.8A2.2 2.2 0 0 1 20.2 10v7.8A2.2 2.2 0 0 1 18 20H6.2A2.2 2.2 0 0 1 4 17.8z" fill="none" stroke="currentColor" stroke-width="1.8"></path>
+      </svg>
+    `;
+  }
+
+  _renderRefreshIcon(size = 16) {
+    return html`
+      <svg
+        viewBox="0 0 24 24"
+        aria-hidden="true"
+        style=${`display:block; width:${size}px; height:${size}px;`}
+      >
+        <path d="M20 6v5h-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+        <path d="M20 11a8 8 0 1 1-2.34-5.66L20 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+      </svg>
+    `;
+  }
+
+  _renderGalleryIcon(size = 16) {
+    return html`
+      <svg
+        viewBox="0 0 24 24"
+        aria-hidden="true"
+        style=${`display:block; width:${size}px; height:${size}px;`}
+      >
+        <rect x="4" y="4" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"></rect>
+        <rect x="13" y="4" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"></rect>
+        <rect x="4" y="13" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"></rect>
+        <rect x="13" y="13" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"></rect>
+      </svg>
+    `;
+  }
+
+  _renderListIcon(size = 16) {
+    return html`
+      <svg
+        viewBox="0 0 24 24"
+        aria-hidden="true"
+        style=${`display:block; width:${size}px; height:${size}px;`}
+      >
+        <circle cx="6" cy="7" r="1.2" fill="currentColor"></circle>
+        <circle cx="6" cy="12" r="1.2" fill="currentColor"></circle>
+        <circle cx="6" cy="17" r="1.2" fill="currentColor"></circle>
+        <line x1="9" y1="7" x2="19" y2="7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></line>
+        <line x1="9" y1="12" x2="19" y2="12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></line>
+        <line x1="9" y1="17" x2="19" y2="17" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></line>
+      </svg>
+    `;
+  }
+
+  _renderInfoIcon(size = 16) {
+    return html`
+      <svg
+        viewBox="0 0 24 24"
+        aria-hidden="true"
+        style=${`display:block; width:${size}px; height:${size}px;`}
+      >
+        <circle cx="12" cy="12" r="8.2" fill="none" stroke="currentColor" stroke-width="1.9"></circle>
+        <circle cx="12" cy="8.1" r="1.1" fill="currentColor"></circle>
+        <path d="M12 11v5.2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
+      </svg>
+    `;
+  }
+
+  _dispatchTabChange(tab, subTab = null) {
+    const detail = subTab ? { tab, subTab } : { tab };
+    this.dispatchEvent(new CustomEvent('tab-change', {
+      detail,
+      bubbles: true,
+      composed: true,
+    }));
   }
 
   _getGalleryTopicSuggestions(limit = 10) {
@@ -1815,7 +1927,7 @@ export class SearchTab extends LitElement {
     this._handleChipFiltersChanged(event);
     if (!nextFilters.length) return;
     this._suppressNextAdvancedInitialRefresh = true;
-    this._handleSearchSubTabChange('advanced');
+    this._handleSearchSubTabChange('filter');
   }
 
   _toggleGalleryTagSort() {
@@ -1932,6 +2044,172 @@ export class SearchTab extends LitElement {
     `;
   }
 
+  _renderGalleryTopControlsRow(showPanelToggle = false) {
+    return this._renderExploreTopControlsRow({
+      activeView: 'gallery',
+      showRefresh: true,
+      showPanelToggle,
+    });
+  }
+
+  _renderExploreTopControlsRow({
+    activeView = 'gallery',
+    showRefresh = true,
+    showPanelToggle = false,
+  } = {}) {
+    const isGallery = activeView === 'gallery';
+    const isBrowseByFolder = activeView === 'browse-by-folder';
+    const isLists = activeView === 'lists';
+    const isSearchExplore = activeView === 'filter' || activeView === 'results';
+    const isInfo = activeView === 'info';
+    return html`
+      <div class="flex items-center justify-between gap-3">
+        <div class="flex items-center gap-2">
+          <button
+            class=${`right-panel-edge-toggle ${isInfo ? 'active' : ''}`}
+            type="button"
+            title="Information"
+            aria-label="Information"
+            style="position:static; margin-left:0; transform:none;"
+            @click=${() => this._handleSearchSubTabChange('info')}
+          >
+            <span style="display:inline-flex; align-items:center; justify-content:center;">
+              ${this._renderInfoIcon(23)}
+            </span>
+          </button>
+          <button
+            class=${`right-panel-edge-toggle ${isSearchExplore ? 'active' : ''}`}
+            type="button"
+            title="Filter"
+            aria-label="Filter"
+            style="position:static; margin-left:0; transform:none;"
+            @click=${() => this._handleSearchSubTabChange('filter')}
+          >
+            <span style="display:inline-flex; align-items:center; justify-content:center;">
+              ${this._renderSearchIcon(23)}
+            </span>
+          </button>
+          <button
+            class=${`right-panel-edge-toggle ${isGallery ? 'active' : ''}`}
+            type="button"
+            title="Gallery"
+            aria-label="Gallery"
+            style="position:static; margin-left:0; transform:none;"
+            @click=${() => this._handleSearchSubTabChange('gallery')}
+          >
+            <span style="display:inline-flex; align-items:center; justify-content:center;">
+              ${this._renderGalleryIcon(23)}
+            </span>
+          </button>
+          <button
+            class=${`right-panel-edge-toggle ${isBrowseByFolder ? 'active' : ''}`}
+            type="button"
+            title="Browse by Source Folder"
+            aria-label="Browse by Source Folder"
+            style="position:static; margin-left:0; transform:none;"
+            @click=${() => this._handleSearchSubTabChange('browse-by-folder')}
+          >
+            <span style="display:inline-flex; align-items:center; justify-content:center;">
+              ${this._renderFolderIcon(23)}
+            </span>
+          </button>
+          <button
+            class=${`right-panel-edge-toggle ${isLists ? 'active' : ''}`}
+            type="button"
+            title="Lists"
+            aria-label="Lists"
+            style="position:static; margin-left:0; transform:none;"
+            @click=${() => this._handleSearchSubTabChange('lists')}
+          >
+            <span style="display:inline-flex; align-items:center; justify-content:center;">
+              ${this._renderListIcon(23)}
+            </span>
+          </button>
+        </div>
+        <div class="flex items-center gap-3 text-xs text-gray-600">
+          <label class="font-semibold text-gray-600">Thumb</label>
+          <input
+            type="range"
+            min="80"
+            max="220"
+            step="10"
+            .value=${String(this.curateThumbSize)}
+            @input=${this._handleCurateThumbSizeChange}
+            class="w-24"
+          >
+          <span class="w-12 text-right text-xs">${this.curateThumbSize}px</span>
+          ${showRefresh ? html`
+            <button
+              type="button"
+              class="right-panel-edge-toggle"
+              style="position:static; margin-left:0; transform:none;"
+              ?disabled=${this.searchRefreshing}
+              title=${this.searchRefreshing ? 'Refreshing' : 'Refresh'}
+              aria-label=${this.searchRefreshing ? 'Refreshing' : 'Refresh'}
+              @click=${this._refreshSearch}
+            >
+              ${this.searchRefreshing
+                ? html`<span class="curate-spinner"></span>`
+                : html`<span aria-hidden="true">↻</span>`}
+            </button>
+          ` : null}
+          ${showPanelToggle ? html`
+            <button
+              type="button"
+              class="right-panel-edge-toggle"
+              style="position:static; margin-left:0; transform:none;"
+              title=${this.rightPanelCollapsed ? 'Show tag counts panel' : 'Hide tag counts panel'}
+              aria-label=${this.rightPanelCollapsed ? 'Show tag counts panel' : 'Hide tag counts panel'}
+              aria-expanded=${this.rightPanelCollapsed ? 'false' : 'true'}
+              @click=${() => this._handleRightPanelCollapseChanged(!this.rightPanelCollapsed)}
+            >
+              <span aria-hidden="true">${this.rightPanelCollapsed ? '‹' : '›'}</span>
+            </button>
+          ` : null}
+        </div>
+      </div>
+    `;
+  }
+
+  _renderExploreInfoGuide() {
+    return renderSectionGuide({
+      rows: [
+        {
+          label: 'Filter',
+          description: 'Open the filter workspace to build Explore searches with filters and sort controls.',
+          glyphChar: 'F',
+          accentClass: 'home-cta-explore',
+          icon: this._renderSearchIcon(21),
+          onClick: () => this._handleSearchSubTabChange('filter'),
+        },
+        {
+          label: 'Gallery',
+          description: 'Browse tag collections visually through representative thumbnails.',
+          glyphChar: 'G',
+          accentClass: 'home-cta-curate',
+          icon: this._renderGalleryIcon(21),
+          onClick: () => this._handleSearchSubTabChange('gallery'),
+        },
+        {
+          label: 'Browse by Source Folder',
+          description: 'Review assets grouped by their original source folders.',
+          glyphChar: 'B',
+          accentClass: 'home-cta-assets',
+          icon: this._renderFolderIcon(21),
+          onClick: () => this._handleSearchSubTabChange('browse-by-folder'),
+        },
+        {
+          label: 'Lists',
+          description: 'Jump to saved and shared lists from the same navigation toolbar.',
+          glyphChar: 'L',
+          accentClass: 'home-cta-upload',
+          icon: this._renderListIcon(21),
+          onClick: () => this._handleSearchSubTabChange('lists'),
+        },
+      ],
+    });
+  }
+
   async _loadGalleryCollections() {
     this.galleryCollections = [];
     this.galleryUntaggedImages = [];
@@ -2045,7 +2323,7 @@ export class SearchTab extends LitElement {
       displayValue: keyword,
     }];
     this._suppressNextAdvancedInitialRefresh = true;
-    this._handleSearchSubTabChange('advanced');
+    this._handleSearchSubTabChange('filter');
     this._handleChipFiltersChanged({ detail: { filters: nextFilters } });
   }
 
@@ -2060,7 +2338,7 @@ export class SearchTab extends LitElement {
       displayValue: 'Untagged',
     }];
     this._suppressNextAdvancedInitialRefresh = true;
-    this._handleSearchSubTabChange('advanced');
+    this._handleSearchSubTabChange('filter');
     this._handleChipFiltersChanged({ detail: { filters: nextFilters } });
   }
 
@@ -2152,19 +2430,32 @@ export class SearchTab extends LitElement {
           `)}
         </div>
         <right-panel
+          class="gallery-summary-panel"
           .tools=${[]}
           .activeTool=${''}
-          .collapsible=${true}
+          .collapsible=${false}
           .collapsed=${this.rightPanelCollapsed}
           @collapse-changed=${(event) => this._handleRightPanelCollapseChanged(event.detail.collapsed)}
         >
           <div slot="header-left" class="text-sm font-semibold uppercase tracking-wide text-slate-600">Tag Counts</div>
           <div slot="default" class="curate-utility-panel animate-pulse">
+            <div
+              class="items-center gap-3 px-3 pb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400"
+              style="display:grid; grid-template-columns:minmax(0,1fr) 72px 72px;"
+            >
+              <span class="truncate">Category</span>
+              <span class="text-right">#tags</span>
+              <span class="text-right">#items</span>
+            </div>
             ${categoryRows.map(() => html`
               <div class="w-full rounded-lg border border-gray-200 bg-white px-3 py-2">
-                <div class="flex items-center justify-between gap-2">
+                <div
+                  class="items-center gap-3"
+                  style="display:grid; grid-template-columns:minmax(0,1fr) 72px 72px;"
+                >
                   <span class="h-3 w-24 rounded bg-slate-200"></span>
-                  <span class="h-4 w-8 rounded-full bg-slate-200"></span>
+                  <span class="h-3 w-12 justify-self-end rounded bg-slate-200"></span>
+                  <span class="h-3 w-12 justify-self-end rounded bg-slate-200"></span>
                 </div>
               </div>
             `)}
@@ -2190,25 +2481,29 @@ export class SearchTab extends LitElement {
     const categoryRows = [
       ...visibleSections.map((section) => ({
         category: String(section?.category || ''),
-        keywordCount: Number((section?.items || []).length) || 0,
+        tagCount: Number((section?.items || []).length) || 0,
+        itemCount: (section?.items || []).reduce((sum, item) => sum + (Number(item?.count) || 0), 0),
       })),
       ...(hasUntagged ? [{
         category: 'Untagged',
-        keywordCount: 1,
+        tagCount: '-',
+        itemCount: untaggedTotal,
       }] : []),
     ];
     if (!visibleSections.length && !hasUntagged) {
       if (this.galleryLoading) {
         return html`
           <div class="space-y-6">
-            ${this._renderGallerySearchControls()}
+            ${this._renderGalleryTopControlsRow(true)}
+            ${this.galleryControlsOpen ? this._renderGallerySearchControls() : null}
             ${this._renderGalleryInitialSkeleton()}
           </div>
         `;
       }
       return html`
         <div class="space-y-4">
-          ${this._renderGallerySearchControls()}
+          ${this._renderGalleryTopControlsRow(false)}
+          ${this.galleryControlsOpen ? this._renderGallerySearchControls() : null}
           <div class="bg-white rounded-xl border border-gray-200 p-6 text-sm text-gray-500">
             ${this.galleryLoading ? 'Building gallery collections...' : 'No keyword collections available yet.'}
           </div>
@@ -2217,7 +2512,8 @@ export class SearchTab extends LitElement {
     }
     return html`
       <div class="space-y-6">
-        ${this._renderGallerySearchControls()}
+        ${this._renderGalleryTopControlsRow(true)}
+        ${this.galleryControlsOpen ? this._renderGallerySearchControls() : null}
         <div class="curate-layout search-layout results-hotspot-layout ${this.rightPanelCollapsed ? 'right-panel-layout-collapsed' : ''}" style="--curate-thumb-size: ${this.curateThumbSize}px;">
           <div class="space-y-4">
             ${visibleSections.map((section) => html`
@@ -2258,14 +2554,23 @@ export class SearchTab extends LitElement {
             ` : null}
           </div>
           <right-panel
+            class="gallery-summary-panel"
             .tools=${[]}
             .activeTool=${''}
-            .collapsible=${true}
+            .collapsible=${false}
             .collapsed=${this.rightPanelCollapsed}
             @collapse-changed=${(event) => this._handleRightPanelCollapseChanged(event.detail.collapsed)}
           >
             <div slot="header-left" class="text-sm font-semibold uppercase tracking-wide text-slate-600">Tag Counts</div>
             <div slot="default" class="curate-utility-panel">
+              <div
+                class="items-center gap-3 px-3 pb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500"
+                style="display:grid; grid-template-columns:minmax(0,1fr) 72px 72px;"
+              >
+                <span class="truncate">Category</span>
+                <span class="text-right">#tags</span>
+                <span class="text-right">#items</span>
+              </div>
               ${categoryRows.map((row) => {
                 return html`
                   <button
@@ -2273,9 +2578,13 @@ export class SearchTab extends LitElement {
                     class="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-left text-slate-700 transition-colors hover:bg-slate-50"
                     @click=${() => this._scrollGalleryToCategory(row.category)}
                   >
-                    <div class="flex items-center justify-between gap-2">
+                    <div
+                      class="items-center gap-3"
+                      style="display:grid; grid-template-columns:minmax(0,1fr) 72px 72px;"
+                    >
                       <span class="text-xs font-medium truncate">${row.category}</span>
-                      <span class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600">${row.keywordCount}</span>
+                      <span class="text-right text-xs font-semibold tabular-nums text-slate-600">${row.tagCount === '-' ? '-' : formatStatNumber(row.tagCount)}</span>
+                      <span class="text-right text-xs font-semibold tabular-nums text-slate-600">${formatStatNumber(row.itemCount)}</span>
                     </div>
                   </button>
                 `;
@@ -2762,7 +3071,7 @@ export class SearchTab extends LitElement {
 
   _maybeStartInitialRefresh() {
     if (this._searchInitialLoadComplete || this._searchInitialLoadPending) return;
-    if (this.searchSubTab !== 'advanced') return;
+    if (this.searchSubTab !== 'filter') return;
     if (!this.searchFilterPanel) return;
     if ((this.searchImages || []).length > 0) {
       this._searchInitialLoadComplete = true;
@@ -3431,8 +3740,8 @@ export class SearchTab extends LitElement {
 
     const navRows = [
       {
-        key: 'advanced',
-        label: 'Explore',
+        key: 'filter',
+        label: 'Filter',
         subtitle: 'Filter by keyword, rating, list, media type, date, and more. The fastest way to find exactly what you need.',
         accentClass: 'home-cta-search',
         glyphChar: 'F',
@@ -3454,12 +3763,12 @@ export class SearchTab extends LitElement {
         ],
       },
       {
-        key: 'chips',
-        label: 'Browse Tags',
-        subtitle: 'See your entire tag vocabulary at a glance. Click any tag to explore all images with that tag.',
+        key: 'gallery',
+        label: 'Gallery',
+        subtitle: 'Open representative keyword collections grouped by category.',
         accentClass: 'home-cta-keywords',
-        glyphChar: 'K',
-        iconSvg: html`<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.2 7.2h15.6M6.5 12h11M8.6 16.8h6.8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path><circle cx="5.2" cy="7.2" r="1" fill="currentColor"></circle><circle cx="7.6" cy="12" r="1" fill="currentColor"></circle><circle cx="9.7" cy="16.8" r="1" fill="currentColor"></circle></svg>`,
+        glyphChar: 'G',
+        iconSvg: html`<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"></rect><rect x="13" y="4" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"></rect><rect x="4" y="13" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"></rect><rect x="13" y="13" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"></rect></svg>`,
         metrics: [
           { label: 'Tags', value: keywordCount },
         ],
@@ -3539,7 +3848,7 @@ export class SearchTab extends LitElement {
   }
 
   _ux1ApplyKeyword(keyword) {
-    this._handleSearchSubTabChange('chips');
+    this._handleSearchSubTabChange('filter');
     this.dispatchEvent(new CustomEvent('ux1-keyword-selected', {
       detail: { keyword },
       bubbles: true,
@@ -3567,7 +3876,7 @@ export class SearchTab extends LitElement {
     const activeVectorstoreQuery = String(activeFilterState.textQuery || this.vectorstoreQuery || '').trim();
     const shouldShowVectorstoreResults = this.searchSubTab !== 'results' || this.vectorstoreHasSearched;
     const visibleSearchImages = shouldShowVectorstoreResults ? (this.searchImages || []) : [];
-    const searchPaginationTop = (this.searchSubTab === 'advanced' || this.searchSubTab === 'results')
+    const searchPaginationTop = (this.searchSubTab === 'filter' || this.searchSubTab === 'results')
       ? (() => {
         if (this.searchSubTab === 'results' && !this.vectorstoreHasSearched) {
           return html``;
@@ -3588,7 +3897,7 @@ export class SearchTab extends LitElement {
         });
       })()
       : html``;
-    const searchPaginationBottom = (this.searchSubTab === 'advanced' || this.searchSubTab === 'results')
+    const searchPaginationBottom = (this.searchSubTab === 'filter' || this.searchSubTab === 'results')
       ? (() => {
         if (this.searchSubTab === 'results' && !this.vectorstoreHasSearched) {
           return html``;
@@ -3667,7 +3976,7 @@ export class SearchTab extends LitElement {
       <right-panel
         .tools=${rightPanelTools}
         .activeTool=${this.rightPanelTool}
-        .collapsible=${true}
+        .collapsible=${false}
         .collapsed=${this.rightPanelCollapsed}
         @tool-changed=${(event) => this._handleRightPanelToolChange(event.detail.tool)}
         @collapse-changed=${(event) => this._handleRightPanelCollapseChanged(event.detail.collapsed)}
@@ -3745,70 +4054,18 @@ export class SearchTab extends LitElement {
       ${ratingModal}
       <div class="container">
         <!-- Search Tab Header -->
-        ${this.hideSubtabs ? html`` : html`
-          <div class="subnav-strip mb-4">
-            <div class="curate-subtabs">
-              <button
-                class="curate-subtab ${this.searchSubTab === 'gallery' ? 'active' : ''}"
-                @click=${() => this._handleSearchSubTabChange('gallery')}
-              >
-                Gallery
-              </button>
-              <button
-                class="curate-subtab ${this.searchSubTab === 'browse-by-folder' ? 'active' : ''}"
-                @click=${() => this._handleSearchSubTabChange('browse-by-folder')}
-              >
-                Browse by Source Folder
-              </button>
-              <button
-                class="curate-subtab ${this.searchSubTab === 'chips' ? 'active' : ''}"
-                @click=${() => this._handleSearchSubTabChange('chips')}
-              >
-                Browse by Tag
-              </button>
-              <button
-                class="curate-subtab ${this.searchSubTab === 'results' ? 'active' : ''}"
-                @click=${() => this._handleSearchSubTabChange('results')}
-              >
-                Text Search
-              </button>
-              <button
-                class="curate-subtab ${this.searchSubTab === 'landing' ? 'active' : ''}"
-                @click=${() => this._handleSearchSubTabChange('landing')}
-              >
-                Help
-              </button>
-            </div>
-
-            <div class="ml-auto flex items-center gap-4 text-xs text-gray-600 mr-4">
-              <label class="font-semibold text-gray-600">Thumb</label>
-              <input
-                type="range"
-                min="80"
-                max="220"
-                step="10"
-                .value=${String(this.curateThumbSize)}
-                @input=${this._handleCurateThumbSizeChange}
-                class="w-24"
-              >
-              <span class="w-12 text-right text-xs">${this.curateThumbSize}px</span>
-            </div>
-
-            <button
-              class="inline-flex items-center gap-2 border rounded-lg px-4 py-2 text-xs text-gray-600 hover:bg-gray-50 disabled:opacity-60 disabled:cursor-not-allowed"
-              ?disabled=${this.searchRefreshing}
-              @click=${this._refreshSearch}
-              title="Refresh"
-            >
-              ${this.searchRefreshing ? html`<span class="curate-spinner"></span>` : html`<span aria-hidden="true">↻</span>`}
-              ${this.searchRefreshing ? 'Refreshing' : 'Refresh'}
-            </button>
-          </div>
-        `}
+        ${this.hideSubtabs ? html`` : html``}
 
         <!-- Search Home / Vectorstore Subtab -->
-        ${(this.searchSubTab === 'advanced' || this.searchSubTab === 'results') ? html`
+        ${(this.searchSubTab === 'filter' || this.searchSubTab === 'results') ? html`
           <div>
+            ${this.searchSubTab === 'results' || this.searchSubTab === 'filter' ? html`
+              ${this._renderExploreTopControlsRow({
+                activeView: this.searchSubTab,
+                showRefresh: true,
+                showPanelToggle: true,
+              })}
+            ` : html``}
             ${this.searchSubTab === 'results' ? html`
               <div class="bg-white rounded-lg p-4">
                 <div class="flex flex-wrap items-center gap-2">
@@ -4026,6 +4283,11 @@ export class SearchTab extends LitElement {
         <!-- Browse by Folder Subtab -->
         ${this.searchSubTab === 'browse-by-folder' ? html`
           <div>
+            ${this._renderExploreTopControlsRow({
+              activeView: 'browse-by-folder',
+              showRefresh: true,
+              showPanelToggle: true,
+            })}
             <div class="curate-layout search-layout results-hotspot-layout ${this.rightPanelCollapsed ? 'right-panel-layout-collapsed' : ''}" style="--curate-thumb-size: ${this.curateThumbSize}px;">
               <div class="curate-pane" @dragover=${this._handleSearchAvailableDragOver} @drop=${this._handleSearchAvailableDrop}>
                 <div class="curate-pane-header">
@@ -4222,32 +4484,65 @@ export class SearchTab extends LitElement {
           </div>
         ` : ''}
 
-        ${this.searchSubTab === 'chips' ? html`
-          <home-chips-tab
-            .tenant=${this.tenant}
-            .canCurate=${this.canCurate}
-            .initialSelection=${this.initialExploreSelection}
-            .tagStatsBySource=${this.tagStatsBySource}
-            .activeCurateTagSource=${this.activeCurateTagSource}
-            .keywords=${this.keywords}
-            .imageStats=${this.imageStats}
-            .curateOrderBy=${this.searchOrderBy}
-            .curateDateOrder=${this.searchDateOrder}
-            .renderCurateRatingWidget=${this.renderCurateRatingWidget}
-            .renderCurateRatingStatic=${this.renderCurateRatingStatic}
-            .formatCurateDate=${this.formatCurateDate}
-            @image-clicked=${(event) => this._handleSearchImageClick(event.detail.event, event.detail.image, event.detail.imageSet)}
-            @image-selected=${(event) => this._handleSearchImageClick(null, event.detail.image, event.detail.imageSet)}
-          ></home-chips-tab>
-        ` : html``}
-
         ${this.searchSubTab === 'gallery' ? html`
           ${this._renderGallerySubtab()}
         ` : html``}
 
-        ${this.searchSubTab === 'landing' ? html`
-          ${this._renderUx1Landing()}
+        ${this.searchSubTab === 'lists' ? html`
+          <div>
+            <list-editor
+              .tenant=${this.tenant}
+              .currentUser=${this.currentUser}
+              .initialSelectedListId=${this.initialSelectedListId}
+              .initialSelectedListToken=${this.initialSelectedListToken || 0}
+              .thumbSize=${this.curateThumbSize}
+              .renderCurateRatingWidget=${this.renderCurateRatingWidget}
+              .renderCurateRatingStatic=${this.renderCurateRatingStatic}
+              .renderCuratePermatagSummary=${this.renderCuratePermatagSummary}
+              .formatCurateDate=${this.formatCurateDate}
+              @initial-list-selection-applied=${() => {
+                this.dispatchEvent(new CustomEvent('initial-list-selection-applied', {
+                  bubbles: true,
+                  composed: true,
+                }));
+              }}
+              @thumb-size-changed=${(e) => this.dispatchEvent(new CustomEvent('thumb-size-changed', {
+                detail: e.detail,
+                bubbles: true,
+                composed: true,
+              }))}
+              @image-selected=${(e) => this.dispatchEvent(new CustomEvent('image-selected', {
+                detail: e.detail,
+                bubbles: true,
+                composed: true,
+              }))}
+              @open-similar-in-search=${(e) => this.dispatchEvent(new CustomEvent('open-similar-in-search', {
+                detail: e.detail,
+                bubbles: true,
+                composed: true,
+              }))}
+              @tab-change=${(e) => this.dispatchEvent(new CustomEvent('tab-change', {
+                detail: e.detail,
+                bubbles: true,
+                composed: true,
+              }))}
+            ></list-editor>
+          </div>
         ` : html``}
+
+        ${this.searchSubTab === 'info' ? html`
+          <div>
+            ${this._renderExploreTopControlsRow({
+              activeView: 'info',
+              showRefresh: false,
+              showPanelToggle: false,
+            })}
+            <div class="mt-4">
+              ${this._renderExploreInfoGuide()}
+            </div>
+          </div>
+        ` : html``}
+
       </div>
     `;
   }

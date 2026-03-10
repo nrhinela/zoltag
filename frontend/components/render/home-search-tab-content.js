@@ -5,7 +5,7 @@ import { formatStatNumber } from '../shared/formatting.js';
 import { getKeywordsByCategoryFromList } from '../shared/keyword-utils.js';
 import { renderResultsPagination } from '../shared/pagination-controls.js';
 
-function renderCtaIcon(iconKey) {
+export function renderHomeCtaIcon(iconKey) {
   if (iconKey === 'search') {
     return html`
       <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -79,7 +79,7 @@ function renderCtaIcon(iconKey) {
   `;
 }
 
-function renderCtaGlyph(glyphKey) {
+export function renderHomeCtaGlyph(glyphKey) {
   if (glyphKey === 'search') {
     return html`<span class="home-cta-glyph-char">S</span>`;
   }
@@ -112,7 +112,7 @@ function formatOriginalSizeGb(bytesValue) {
   return `${gb.toLocaleString('en-US', { minimumFractionDigits: fractionDigits, maximumFractionDigits: fractionDigits })} GB`;
 }
 
-export function renderHomeTabContent(host, { navCards, formatCurateDate }) {
+export function renderHomeOverviewContent(host, { formatCurateDate, embedded = false } = {}) {
   const imageStats = host.imageStats || {};
   const totalImages = Number(imageStats.image_count || 0);
   const taggedImages = Number(imageStats.positive_permatag_image_count || 0);
@@ -197,7 +197,9 @@ export function renderHomeTabContent(host, { navCards, formatCurateDate }) {
       glyphKey: 'search',
     },
     {
-      key: 'lists',
+      key: 'search',
+      tab: 'search',
+      subTab: 'lists',
       label: 'Lists',
       subtitle: 'Create and download collections of content',
       iconKey: 'lists',
@@ -216,8 +218,8 @@ export function renderHomeTabContent(host, { navCards, formatCurateDate }) {
     {
       key: 'tagging-stats',
       tab: 'curate',
-      subTab: 'home',
-      label: 'Tagging Stats',
+      subTab: 'stats',
+      label: 'Curate Stats',
       subtitle: 'View tagging coverage and distribution metrics.',
       iconKey: 'stats',
       accentClass: 'home-cta-admin',
@@ -260,7 +262,7 @@ export function renderHomeTabContent(host, { navCards, formatCurateDate }) {
     host._handleHomeNavigate({
       detail: {
         tab: 'search',
-        subTab: 'chips',
+        subTab: 'filter',
         exploreSelection: {
           category,
           keyword,
@@ -273,7 +275,8 @@ export function renderHomeTabContent(host, { navCards, formatCurateDate }) {
     if (!list?.id) return;
     host._handleHomeNavigate({
       detail: {
-        tab: 'lists',
+        tab: 'search',
+        subTab: 'lists',
         listSelection: {
           listId: list.id,
         },
@@ -376,9 +379,7 @@ export function renderHomeTabContent(host, { navCards, formatCurateDate }) {
       host.fetchKeywords(),
     ]);
   };
-  return html`
-    <div slot="home" class="home-tab-shell">
-      <div class="container">
+  const content = html`
         <div class="home-page-actions">
           <button
             type="button"
@@ -400,10 +401,10 @@ export function renderHomeTabContent(host, { navCards, formatCurateDate }) {
                 >
                   <div class="home-cta-backdrop" aria-hidden="true"></div>
                   <div class="home-cta-glyph" aria-hidden="true">
-                    ${renderCtaGlyph(card.glyphKey)}
+                    ${renderHomeCtaGlyph(card.glyphKey)}
                   </div>
                   <div class="home-cta-icon-wrap" aria-hidden="true">
-                    ${renderCtaIcon(card.iconKey)}
+                    ${renderHomeCtaIcon(card.iconKey)}
                   </div>
                   <div class="home-cta-content">
                     <div class="home-cta-title">${card.label}</div>
@@ -726,8 +727,23 @@ export function renderHomeTabContent(host, { navCards, formatCurateDate }) {
           </div>
         </div>
       ` : html``}
+  `;
+
+  if (embedded) {
+    return html`<div class="home-tab-shell">${content}</div>`;
+  }
+
+  return html`
+    <div slot="home" class="home-tab-shell">
+      <div class="container">
+        ${content}
+      </div>
     </div>
   `;
+}
+
+export function renderHomeTabContent(host, { navCards, formatCurateDate }) {
+  return renderHomeOverviewContent(host, { formatCurateDate, embedded: false });
 }
 
 export function renderSearchTabContent(host, { formatCurateDate }) {
@@ -737,8 +753,11 @@ export function renderSearchTabContent(host, { formatCurateDate }) {
     <search-tab
       slot="search"
       .tenant=${host.tenant}
+      .currentUser=${host.currentUser}
       .canCurate=${canCurate}
       .searchSubTab=${host.activeSearchSubTab || 'gallery'}
+      .initialSelectedListId=${host.pendingListSelectionId}
+      .initialSelectedListToken=${host.pendingListSelectionToken || 0}
       .initialExploreSelection=${host.pendingSearchExploreSelection}
       .initialVectorstoreQuery=${host.pendingVectorstoreQuery || ''}
       .initialVectorstoreQueryToken=${host.pendingVectorstoreQueryToken || 0}
@@ -768,6 +787,9 @@ export function renderSearchTabContent(host, { formatCurateDate }) {
       @vectorstore-query-applied=${() => {
         host.pendingVectorstoreQuery = null;
       }}
+      @initial-list-selection-applied=${() => {
+        host.pendingListSelectionId = null;
+      }}
       @search-similarity-context-changed=${(event) => {
         host.searchSimilarityAssetUuid = event?.detail?.assetUuid || null;
       }}
@@ -776,6 +798,7 @@ export function renderSearchTabContent(host, { formatCurateDate }) {
       @image-clicked=${(e) => host._handleCurateImageClick(e.detail.event, e.detail.image, e.detail.imageSet)}
       @image-selected=${(e) => host._handleCurateImageClick(null, e.detail.image, e.detail.imageSet)}
       @open-similar-in-search=${host._handleOpenSimilarInSearch}
+      @tab-change=${host._handleTabChange}
     ></search-tab>
   `;
 }

@@ -813,7 +813,7 @@ class FilterChips extends LitElement {
               </div>
               <a
                 class="mt-2 inline-flex items-center gap-1 text-sm font-semibold text-blue-700 hover:text-blue-800 underline underline-offset-2"
-                href="?tab=library&subTab=keywords&adminSubTab=tagging"
+                href="?tab=admin&subTab=keywords&adminSubTab=tagging"
               >
                 Click here for tag setup
               </a>

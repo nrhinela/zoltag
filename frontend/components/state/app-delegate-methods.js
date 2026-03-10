@@ -187,7 +187,7 @@ export function bindAppDelegateMethods(host) {
   };
 
   host._handleCurateAuditBackToTraining = () => {
-    host._handleCurateSubTabChange('ai-tagger');
+    host._handleCurateSubTabChange('tag-suggester');
     host._refreshCurateAiTagfinder2Summary();
   };
 
@@ -225,7 +225,7 @@ export function bindAppDelegateMethods(host) {
     host._fetchCurateHomeImages();
     host.fetchStats({
       force: true,
-      includeTagStats: host.activeTab === 'curate' && host.curateSubTab === 'home',
+      includeTagStats: host.activeTab === 'curate' && host.curateSubTab === 'stats',
     });
     host.showUploadModal = false;
   };
@@ -236,7 +236,7 @@ export function bindAppDelegateMethods(host) {
     host._fetchCurateHomeImages();
     host.fetchStats({
       force: true,
-      includeTagStats: host.activeTab === 'curate' && host.curateSubTab === 'home',
+      includeTagStats: host.activeTab === 'curate' && host.curateSubTab === 'stats',
     });
     host.assetsRefreshToken = (host.assetsRefreshToken || 0) + 1;
     host.showUploadLibraryModal = false;
@@ -383,7 +383,7 @@ export function bindAppDelegateMethods(host) {
       ? Number(sourceImage.id)
       : null;
     host.searchSimilarityAssetUuid = sourceAssetUuid || null;
-    host.activeSearchSubTab = 'advanced';
+    host.activeSearchSubTab = 'filter';
     host.pendingSearchExploreSelection = null;
     host._handleCurateEditorClose?.();
     host.curateEditorImageSet = [];
@@ -396,7 +396,7 @@ export function bindAppDelegateMethods(host) {
     const { sourceImage, sourceAssetUuid, dedupedImages } = _buildSimilarOpenPayload(event);
     if (!dedupedImages.length) return;
 
-    host.curateSubTab = 'main';
+    host.curateSubTab = 'filter';
     host.curateImages = dedupedImages.map((image) => ({ ...image }));
     host.curateTotal = host.curateImages.length;
     host.curatePinnedImageId = Number.isFinite(Number(sourceImage?.id))

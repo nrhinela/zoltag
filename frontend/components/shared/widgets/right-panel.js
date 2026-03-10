@@ -92,7 +92,7 @@ export class RightPanel extends LitElement {
   render() {
     const tools = Array.isArray(this.tools) ? this.tools : [];
     const activeTool = this.activeTool || tools[0]?.id || '';
-    const isCollapsed = this.collapsible && this.collapsed;
+    const isCollapsed = Boolean(this.collapsed);
     return html`
       <div class=${`right-panel-shell ${isCollapsed ? 'is-collapsed' : 'is-expanded'}`}>
         ${this.collapsible ? html`

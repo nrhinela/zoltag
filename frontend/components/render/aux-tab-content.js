@@ -1,6 +1,7 @@
 import { html } from 'lit';
 import { renderCuratePermatagSummary } from './curate-image-fragments.js';
 import { renderCurateRatingWidget, renderCurateRatingStatic } from './curate-rating-widgets.js';
+import { renderHomeCtaGlyph } from './home-search-tab-content.js';
 import {
   allowByPermissionOrRole,
   canViewTenantAudit,
@@ -24,6 +25,226 @@ function getTenantSelectionOptions(currentUser) {
     });
   }
   return options;
+}
+
+function renderAdminNavIcon(kind, size = 23) {
+  const style = `display:block; width:${size}px; height:${size}px;`;
+  if (kind === 'overview') {
+    return html`
+      <svg viewBox="0 0 24 24" aria-hidden="true" style=${style}>
+        <circle cx="12" cy="12" r="8.2" fill="none" stroke="currentColor" stroke-width="1.9"></circle>
+        <circle cx="12" cy="8.1" r="1.1" fill="currentColor"></circle>
+        <path d="M12 11v5.2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
+      </svg>
+    `;
+  }
+  if (kind === 'assets') {
+    return html`
+      <svg viewBox="0 0 24 24" aria-hidden="true" style=${style}>
+        <path d="M5.4 6.2a1.8 1.8 0 0 1 1.8-1.8h2.4a1.8 1.8 0 0 1 1.8 1.8v11.6a1.8 1.8 0 0 1-1.8 1.8H7.2a1.8 1.8 0 0 1-1.8-1.8z" fill="none" stroke="currentColor" stroke-width="1.8"></path>
+        <path d="M11.2 6.2A1.8 1.8 0 0 1 13 4.4h2.4a1.8 1.8 0 0 1 1.8 1.8v11.6a1.8 1.8 0 0 1-1.8 1.8H13a1.8 1.8 0 0 1-1.8-1.8z" fill="none" stroke="currentColor" stroke-width="1.8"></path>
+        <path d="M16.9 7.3a1.7 1.7 0 0 1 2.1-1.2l1.3.4a1.7 1.7 0 0 1 1.2 2.1l-3 10.7a1.7 1.7 0 0 1-2.1 1.2l-1.3-.4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"></path>
+      </svg>
+    `;
+  }
+  if (kind === 'tags') {
+    return html`
+      <svg viewBox="0 0 24 24" aria-hidden="true" style=${style}>
+        <path d="M5.2 6.2A2.2 2.2 0 0 1 7.4 4h5l6.4 6.4a1.8 1.8 0 0 1 0 2.6l-5.8 5.8a1.8 1.8 0 0 1-2.6 0L4 12.4v-5A2.2 2.2 0 0 1 5.2 6.2z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"></path>
+        <circle cx="9" cy="8.8" r="1.2" fill="currentColor"></circle>
+      </svg>
+    `;
+  }
+  if (kind === 'users') {
+    return html`
+      <svg viewBox="0 0 24 24" aria-hidden="true" style=${style}>
+        <circle cx="9" cy="9" r="3" fill="none" stroke="currentColor" stroke-width="1.8"></circle>
+        <path d="M4.5 18c.7-2.6 2.6-4.2 4.5-4.2s3.8 1.6 4.5 4.2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path>
+        <circle cx="16.8" cy="10" r="2.3" fill="none" stroke="currentColor" stroke-width="1.6"></circle>
+        <path d="M14.5 18c.4-1.8 1.8-3 3.4-3 1.1 0 2.1.6 2.8 1.7" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"></path>
+      </svg>
+    `;
+  }
+  if (kind === 'activity') {
+    return html`
+      <svg viewBox="0 0 24 24" aria-hidden="true" style=${style}>
+        <circle cx="12" cy="12" r="7.6" fill="none" stroke="currentColor" stroke-width="1.8"></circle>
+        <path d="M12 7.7v4.6l3.3 1.9" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
+      </svg>
+    `;
+  }
+  if (kind === 'providers') {
+    return html`
+      <svg viewBox="0 0 24 24" aria-hidden="true" style=${style}>
+        <path d="M8.4 8.2V5.6M15.6 8.2V5.6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path>
+        <path d="M8 8.2h8a2.6 2.6 0 0 1 2.6 2.6v1.4a2.6 2.6 0 0 1-2.6 2.6h-1.4v2.1a1.2 1.2 0 0 1-2 1l-1.6-1.4-1.6 1.4a1.2 1.2 0 0 1-2-1v-2.1H8a2.6 2.6 0 0 1-2.6-2.6v-1.4A2.6 2.6 0 0 1 8 8.2z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"></path>
+      </svg>
+    `;
+  }
+  if (kind === 'jobs') {
+    return html`
+      <svg viewBox="0 0 24 24" aria-hidden="true" style=${style}>
+        <path d="M10.4 3.8h3.2l.6 1.9a6.9 6.9 0 0 1 1.4.6l1.7-1 2.2 2.2-1 1.7c.25.45.46.92.6 1.42l1.9.58v3.16l-1.9.58a6.9 6.9 0 0 1-.6 1.42l1 1.7-2.2 2.2-1.7-1a6.9 6.9 0 0 1-1.4.6l-.6 1.9h-3.2l-.6-1.9a6.9 6.9 0 0 1-1.4-.6l-1.7 1-2.2-2.2 1-1.7a6.9 6.9 0 0 1-.6-1.42l-1.9-.58v-3.16l1.9-.58c.14-.5.35-.97.6-1.42l-1-1.7 2.2-2.2 1.7 1c.45-.25.92-.46 1.4-.6z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"></path>
+        <circle cx="12" cy="12" r="2.7" fill="none" stroke="currentColor" stroke-width="1.8"></circle>
+      </svg>
+    `;
+  }
+  if (kind === 'templates') {
+    return html`
+      <svg viewBox="0 0 24 24" aria-hidden="true" style=${style}>
+        <path d="M7 5.2h10a1.8 1.8 0 0 1 1.8 1.8v10A1.8 1.8 0 0 1 17 18.8H7A1.8 1.8 0 0 1 5.2 17V7A1.8 1.8 0 0 1 7 5.2z" fill="none" stroke="currentColor" stroke-width="1.8"></path>
+        <path d="M8.5 9h7M8.5 12h7M8.5 15h4.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path>
+      </svg>
+    `;
+  }
+  if (kind === 'shares') {
+    return html`
+      <svg viewBox="0 0 24 24" aria-hidden="true" style=${style}>
+        <circle cx="7" cy="12" r="2" fill="none" stroke="currentColor" stroke-width="1.8"></circle>
+        <circle cx="17" cy="7" r="2" fill="none" stroke="currentColor" stroke-width="1.8"></circle>
+        <circle cx="17" cy="17" r="2" fill="none" stroke="currentColor" stroke-width="1.8"></circle>
+        <path d="M8.8 11.1l6.1-3.1M8.8 12.9l6.1 3.1" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path>
+      </svg>
+    `;
+  }
+  return html``;
+}
+
+function renderAdminOverview(host, {
+  canReadKeywords,
+  canViewUsers,
+  canViewAudit,
+  canManageProviders,
+  canManageJobs,
+  canManageTemplates,
+  canManageShares,
+} = {}) {
+  const cards = [
+    {
+      key: 'tags',
+      label: 'Tags',
+      subtitle: 'Define categories, tags, prompts, and person links.',
+      subTab: 'keywords',
+      adminSubTab: 'tagging',
+      navIcon: 'tags',
+      glyphKey: 'K',
+      accentClass: 'home-cta-keywords',
+      disabled: !canReadKeywords,
+      disabledReason: 'Requires keywords.read permission',
+    },
+    {
+      key: 'assets',
+      label: 'Assets',
+      subtitle: 'Browse uploaded files and review asset records.',
+      subTab: 'assets',
+      navIcon: 'assets',
+      glyphKey: 'B',
+      accentClass: 'home-cta-assets',
+    },
+    {
+      key: 'providers',
+      label: 'Providers',
+      subtitle: 'Configure provider integrations and sync connections.',
+      subTab: 'providers',
+      navIcon: 'providers',
+      glyphKey: 'P',
+      accentClass: 'home-cta-search',
+      disabled: !canManageProviders,
+      disabledReason: 'Requires provider.manage permission',
+    },
+    {
+      key: 'shares',
+      label: 'Shares',
+      subtitle: 'Inspect guest shares and clean up expired access.',
+      subTab: 'shares',
+      navIcon: 'shares',
+      glyphKey: 'S',
+      accentClass: 'home-cta-upload',
+      disabled: !canManageShares,
+      disabledReason: 'Requires list.edit.shared permission',
+    },
+    {
+      key: 'templates',
+      label: 'Templates',
+      subtitle: 'Manage presentation and export templates.',
+      subTab: 'templates',
+      navIcon: 'templates',
+      glyphKey: 'T',
+      accentClass: 'home-cta-admin',
+      disabled: !canManageTemplates,
+      disabledReason: 'Requires list.edit.shared permission',
+    },
+    {
+      key: 'jobs',
+      label: 'Jobs',
+      subtitle: 'Monitor processing jobs, attempts, and queue status.',
+      subTab: 'jobs',
+      navIcon: 'jobs',
+      glyphKey: 'J',
+      accentClass: 'home-cta-admin',
+      disabled: !canManageJobs,
+      disabledReason: 'Requires tenant.jobs.view permission',
+    },
+    {
+      key: 'user-activity',
+      label: 'User Activity',
+      subtitle: 'Review audit history and recent activity by user.',
+      subTab: 'audit',
+      navIcon: 'activity',
+      glyphKey: 'A',
+      accentClass: 'home-cta-upload',
+      disabled: !canViewAudit,
+      disabledReason: 'Requires tenant.audit.view permission',
+    },
+    {
+      key: 'users',
+      label: 'Users',
+      subtitle: 'Manage tenant users, access, and membership details.',
+      subTab: 'users',
+      navIcon: 'users',
+      glyphKey: 'U',
+      accentClass: 'home-cta-curate',
+      disabled: !canViewUsers,
+      disabledReason: 'Requires tenant user permissions',
+    },
+  ];
+
+  const openCard = (card) => {
+    if (card.disabled) return;
+    host.activeLibrarySubTab = card.subTab;
+    if (card.adminSubTab) host.activeAdminSubTab = card.adminSubTab;
+  };
+
+  return html`
+    <div class="mt-2">
+      <div class="home-cta-grid" style="grid-template-columns: 1fr;">
+        ${cards.map((card) => html`
+          <button
+            type="button"
+            class="home-cta-card ${card.accentClass} ${card.disabled ? 'opacity-60 cursor-not-allowed' : ''}"
+            title=${card.disabled ? card.disabledReason : card.label}
+            ?disabled=${card.disabled}
+            @click=${() => openCard(card)}
+          >
+            <div class="home-cta-backdrop" aria-hidden="true"></div>
+            <div class="home-cta-glyph" aria-hidden="true">
+              ${renderHomeCtaGlyph(card.glyphKey)}
+            </div>
+            <div class="home-cta-icon-wrap" aria-hidden="true">
+              ${renderAdminNavIcon(card.navIcon, 21)}
+            </div>
+            <div class="home-cta-content">
+              <div class="home-cta-title">${card.label}</div>
+              <div class="home-cta-subtitle">${card.subtitle}</div>
+            </div>
+            <div class="home-cta-arrow" aria-hidden="true">
+              <span class="home-cta-arrow-char">${card.disabled ? '•' : '→'}</span>
+            </div>
+          </button>
+        `)}
+      </div>
+    </div>
+  `;
 }
 
 export function renderRatingModal(host) {
@@ -136,9 +357,10 @@ export function renderAuxTabContent(host, { formatCurateDate }) {
     !canManageShares ? 'Shares' : null,
   ].filter(Boolean);
   const libraryTabActive = host.activeTab === 'library';
-  const defaultLibrarySubTab = 'assets';
+  const defaultLibrarySubTab = 'overview';
   const rawLibrarySubTab = host.activeLibrarySubTab || defaultLibrarySubTab;
-  const librarySubTab = (rawLibrarySubTab === 'assets'
+  const librarySubTab = (rawLibrarySubTab === 'overview'
+    || rawLibrarySubTab === 'assets'
     || (rawLibrarySubTab === 'keywords' && canReadKeywords)
     || (rawLibrarySubTab === 'users' && canViewUsers)
     || (rawLibrarySubTab === 'audit' && canViewAudit)
@@ -148,81 +370,55 @@ export function renderAuxTabContent(host, { formatCurateDate }) {
     || (rawLibrarySubTab === 'shares' && canManageShares))
     ? rawLibrarySubTab
     : defaultLibrarySubTab;
+  const adminNavItems = [
+    { key: 'overview', label: 'Overview', icon: 'overview', disabled: false, title: 'Admin Overview' },
+    { key: 'keywords', label: 'Tags', icon: 'tags', disabled: !canReadKeywords, title: canReadKeywords ? 'Tags' : 'Requires keywords.read permission' },
+    { key: 'assets', label: 'Assets', icon: 'assets', disabled: false, title: 'Assets' },
+    { key: 'providers', label: 'Providers', icon: 'providers', disabled: !canManageProviders, title: canManageProviders ? 'Providers' : 'Requires provider.manage permission' },
+    { key: 'shares', label: 'Shares', icon: 'shares', disabled: !canManageShares, title: canManageShares ? 'Shares' : 'Requires list.edit.shared permission' },
+    { key: 'templates', label: 'Templates', icon: 'templates', disabled: !canManageTemplates, title: canManageTemplates ? 'Templates' : 'Requires list.edit.shared permission' },
+    { key: 'jobs', label: 'Jobs', icon: 'jobs', disabled: !canManageJobs, title: canManageJobs ? 'Jobs' : 'Requires tenant.jobs.view permission' },
+    { key: 'audit', label: 'User Activity', icon: 'activity', disabled: !canViewAudit, title: canViewAudit ? 'User Activity' : 'Requires tenant.audit.view permission' },
+    { key: 'users', label: 'Users', icon: 'users', disabled: !canViewUsers, title: canViewUsers ? 'Users' : 'Requires tenant user permissions' },
+  ];
 
   return html`
     ${libraryTabActive ? html`
       <div slot="library" class="container">
-        <div class="subnav-strip mb-4">
-          <div class="admin-subtabs">
+        <div class="flex items-center gap-2 mb-4">
+          ${adminNavItems.map((item) => html`
             <button
-              class="admin-subtab ${librarySubTab === 'assets' ? 'active' : ''}"
-              @click=${() => host.activeLibrarySubTab = 'assets'}
+              class=${`right-panel-edge-toggle ${librarySubTab === item.key ? 'active' : ''} ${item.disabled ? 'opacity-40 cursor-not-allowed' : ''}`}
+              type="button"
+              title=${item.title}
+              aria-label=${item.label}
+              style="position:static; margin-left:0; transform:none;"
+              ?disabled=${item.disabled}
+              @click=${() => {
+                if (item.disabled) return;
+                host.activeLibrarySubTab = item.key;
+              }}
             >
-              Assets
+              <span style="display:inline-flex; align-items:center; justify-content:center;">
+                ${renderAdminNavIcon(item.icon, 23)}
+              </span>
             </button>
-            <button
-              class="admin-subtab ${librarySubTab === 'keywords' ? 'active' : ''}"
-              ?disabled=${!canReadKeywords}
-              title=${canReadKeywords ? 'View and manage tags' : 'Requires keywords.read permission'}
-              @click=${() => host.activeLibrarySubTab = 'keywords'}
-            >
-              Tags
-            </button>
-            <button
-              class="admin-subtab ${librarySubTab === 'users' ? 'active' : ''}"
-              ?disabled=${!canViewUsers}
-              title=${canViewUsers ? 'Manage tenant users' : 'Requires tenant user permissions'}
-              @click=${() => host.activeLibrarySubTab = 'users'}
-            >
-              Users
-            </button>
-            <button
-              class="admin-subtab ${librarySubTab === 'audit' ? 'active' : ''}"
-              ?disabled=${!canViewAudit}
-              title=${canViewAudit ? 'View user activity' : 'Requires tenant.audit.view permission'}
-              @click=${() => host.activeLibrarySubTab = 'audit'}
-            >
-              User Activity
-            </button>
-            <button
-              class="admin-subtab ${librarySubTab === 'providers' ? 'active' : ''}"
-              ?disabled=${!canManageProviders}
-              title=${canManageProviders ? 'Manage provider integrations' : 'Requires provider.manage permission'}
-              @click=${() => host.activeLibrarySubTab = 'providers'}
-            >
-              Providers
-            </button>
-            <button
-              class="admin-subtab ${librarySubTab === 'jobs' ? 'active' : ''}"
-              ?disabled=${!canManageJobs}
-              title=${canManageJobs ? 'View and manage tenant jobs' : 'Requires tenant.jobs.view permission'}
-              @click=${() => host.activeLibrarySubTab = 'jobs'}
-            >
-              Jobs
-            </button>
-            <button
-              class="admin-subtab ${librarySubTab === 'templates' ? 'active' : ''}"
-              ?disabled=${!canManageTemplates}
-              title=${canManageTemplates ? 'Manage presentation templates' : 'Requires list.edit.shared permission'}
-              @click=${() => host.activeLibrarySubTab = 'templates'}
-            >
-              Templates
-            </button>
-            <button
-              class="admin-subtab ${librarySubTab === 'shares' ? 'active' : ''}"
-              ?disabled=${!canManageShares}
-              title=${canManageShares ? 'Manage guest shares' : 'Requires list.edit.shared permission'}
-              @click=${() => host.activeLibrarySubTab = 'shares'}
-            >
-              Shares
-            </button>
-          </div>
+          `)}
         </div>
         ${unavailableLibraryTabs.length ? html`
           <div class="admin-subtabs-hint">
             Some tabs are unavailable for your role: ${unavailableLibraryTabs.join(', ')}
           </div>
         ` : html``}
+        ${librarySubTab === 'overview' ? renderAdminOverview(host, {
+          canReadKeywords,
+          canViewUsers,
+          canViewAudit,
+          canManageProviders,
+          canManageJobs,
+          canManageTemplates,
+          canManageShares,
+        }) : html``}
         ${librarySubTab === 'assets' ? html`
           <assets-admin
             .tenant=${host.tenant}
@@ -318,28 +514,6 @@ export function renderAuxTabContent(host, { formatCurateDate }) {
         ` : html``}
       </div>
     ` : html``}
-
-    ${host.activeTab === 'lists' ? html`
-      <div slot="lists" class="container">
-        <list-editor
-          .tenant=${host.tenant}
-          .currentUser=${host.currentUser}
-          .initialSelectedListId=${host.pendingListSelectionId}
-          .initialSelectedListToken=${host.pendingListSelectionToken || 0}
-          .thumbSize=${host.curateThumbSize}
-          .renderCurateRatingWidget=${(image) => renderCurateRatingWidget(host, image)}
-          .renderCurateRatingStatic=${renderCurateRatingStatic}
-          .renderCuratePermatagSummary=${renderCuratePermatagSummary}
-          .formatCurateDate=${formatCurateDate}
-          @initial-list-selection-applied=${() => {
-            host.pendingListSelectionId = null;
-          }}
-          @image-selected=${(e) => host._handleCurateImageClick(null, e.detail.image, e.detail.imageSet)}
-          @open-similar-in-search=${host._handleOpenSimilarInSearch}
-        ></list-editor>
-      </div>
-    ` : html``}
-
     ${host.activeTab === 'people' ? html`
       <div slot="people" class="container p-4">
         <person-manager
